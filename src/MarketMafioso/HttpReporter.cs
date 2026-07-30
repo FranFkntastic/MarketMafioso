@@ -26,6 +26,9 @@ public class HttpReporter : IDisposable
     private readonly InventoryScanner scanner;
     private readonly DalamudServiceAccountIdentitySource serviceAccountIdentity;
     private readonly QuartermasterIpcClient quartermaster;
+    private InventoryReport? lastAcknowledgedReport;
+    private string? lastAcknowledgedSnapshotId;
+    private bool lastCaptureHasRetainerEvidence;
 
     private static readonly JsonSerializerOptions SerialiserOptions = new()
     {
@@ -71,179 +74,312 @@ public class HttpReporter : IDisposable
         }
     }
 
+    public async Task SendDeltaReportAsync(bool quiet = false)
+    {
+        await sendGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!TryValidateEndpoint(quiet, out var endpoint))
+                return;
+
+            var report = BuildReport();
+            if (!lastCaptureHasRetainerEvidence && lastAcknowledgedReport is not null)
+            {
+                report = report with
+                {
+                    Retainers = lastAcknowledgedReport.Retainers,
+                    RetainerManagement = lastAcknowledgedReport.RetainerManagement,
+                };
+                log.Debug("[MarketMafioso] Quartermaster evidence is unavailable; preserving the last acknowledged retainer state in the delta baseline.");
+            }
+            var result = InventoryReportDeltaBuilder.Build(
+                lastAcknowledgedSnapshotId,
+                lastAcknowledgedReport,
+                report);
+            if (result.Disposition == InventoryDeltaBuildDisposition.Unchanged)
+            {
+                LastStatus = "No inventory changes";
+                log.Debug("[MarketMafioso] Quartermaster revision produced no semantic inventory changes; upload skipped.");
+                return;
+            }
+
+            if (result.Disposition == InventoryDeltaBuildDisposition.FullSnapshotRequired)
+            {
+                log.Information(
+                    "[MarketMafioso] Inventory delta requires a reconciliation snapshot: {Reason}",
+                    result.Reason ?? "unspecified");
+                await SendFullReportCoreAsync(report, endpoint, quiet).ConfigureAwait(false);
+                return;
+            }
+
+            var delta = result.Delta!;
+            var deltaUrl = ReceiverEndpointClassifier.BuildInventoryDeltaUrl(config.ServerUrl)
+                ?? throw new InvalidOperationException("Could not derive the inventory delta endpoint.");
+            LastPayload = JsonSerializer.Serialize(delta, PrettySerialiserOptions);
+            using var request = CreateRequest(deltaUrl, delta);
+            using var response = await httpClient.SendAsync(request).ConfigureAwait(false);
+            var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            LastSentAt = DateTime.Now;
+            LastStatus = $"{(int)response.StatusCode} {response.ReasonPhrase}";
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                log.Warning(
+                    "[MarketMafioso] Receiver rejected inventory delta base {BaseSnapshotId}; sending one reconciliation snapshot.",
+                    delta.BaseSnapshotId);
+                await SendFullReportCoreAsync(report, endpoint, quiet).ConfigureAwait(false);
+                return;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                HandleFailure(endpoint, response.StatusCode, body, quiet);
+                return;
+            }
+
+            var reportResponse = ParseReportResponse(body);
+            if (string.IsNullOrWhiteSpace(reportResponse.ReportId))
+            {
+                LastStatus = "Receiver omitted snapshot ID";
+                log.Warning("[MarketMafioso] Inventory delta was accepted, but the receiver omitted the new snapshot ID; the next change will reconcile in full.");
+                lastAcknowledgedReport = null;
+                lastAcknowledgedSnapshotId = null;
+                return;
+            }
+
+            AcceptSnapshot(report, reportResponse);
+            var changedBagCount = delta.UpsertedPlayerBags.Count +
+                                  delta.RetainerChanges.Sum(change => change.UpsertedBags.Count);
+            log.Information(
+                "[MarketMafioso] Inventory delta sent - {Status}; {ChangedBags} changed bag(s), {ChangedRetainers} retainer patch(es).",
+                LastStatus,
+                changedBagCount,
+                delta.RetainerChanges.Count);
+        }
+        catch (Exception ex)
+        {
+            HandleException(ex, quiet);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
     private async Task SendReportCoreAsync(bool quiet)
     {
+        if (!TryValidateEndpoint(quiet, out var endpoint))
+            return;
+        try
+        {
+            await SendFullReportCoreAsync(BuildReport(), endpoint, quiet).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            HandleException(ex, quiet);
+        }
+    }
+
+    private async Task SendFullReportCoreAsync(
+        InventoryReport report,
+        ReceiverEndpointInfo endpoint,
+        bool quiet)
+    {
+        LastPayload = JsonSerializer.Serialize(report, PrettySerialiserOptions);
+        using var request = CreateRequest(config.ServerUrl, report);
+        using var response = await httpClient.SendAsync(request).ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        LastSentAt = DateTime.Now;
+        LastStatus = $"{(int)response.StatusCode} {response.ReasonPhrase}";
+        if (!response.IsSuccessStatusCode)
+        {
+            HandleFailure(endpoint, response.StatusCode, body, quiet);
+            return;
+        }
+
+        var reportResponse = ParseReportResponse(body);
+        if (string.IsNullOrWhiteSpace(reportResponse.ReportId))
+        {
+            LastStatus = "Receiver omitted snapshot ID";
+            lastAcknowledgedReport = null;
+            lastAcknowledgedSnapshotId = null;
+            log.Warning("[MarketMafioso] Full inventory report was accepted, but the receiver omitted its snapshot ID; deltas remain disabled.");
+            return;
+        }
+
+        AcceptSnapshot(report, reportResponse);
+        var itemCount = report.PlayerInventory.Sum(bag => bag.Items.Count);
+        var dashboardSuffix = DashboardSuffix();
+        if (!quiet)
+        {
+            chatGui.Print(
+                $"[MarketMafioso] Sent {itemCount} player items + {report.Retainers.Count} retainer(s). " +
+                $"Status: {LastStatus}. {LastRetainerSourceStatus}{dashboardSuffix}");
+        }
+        log.Information($"[MarketMafioso] Reconciliation report sent - {LastStatus}.{dashboardSuffix}");
+    }
+
+    private InventoryReport BuildReport()
+    {
+        lastCaptureHasRetainerEvidence = false;
+        var ownerScope = new QuartermasterOwnerScope(
+            playerState.ContentId == 0 ? null : playerState.ContentId,
+            playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.RowId : null,
+            playerState.CharacterName,
+            playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
+        var charName = config.IncludeCharacterInfo ? ownerScope.CharacterName : null;
+        var homeWorld = config.IncludeCharacterInfo ? ownerScope.HomeWorldName : null;
+        var playerCapture = scanner.CapturePlayerInventory(config);
+        var retainers = new List<RetainerReport>();
+        QuartermasterSnapshot? quartermasterSnapshotForReport = null;
+        if (quartermaster.TryGetSnapshot(out var quartermasterSnapshot, out var quartermasterError))
+        {
+            if (ownerScope.Matches(quartermasterSnapshot!.Owner))
+            {
+                lastCaptureHasRetainerEvidence = true;
+                quartermasterSnapshotForReport = quartermasterSnapshot;
+                retainers = BuildRetainerReports(
+                    quartermasterSnapshot,
+                    ownerScope,
+                    config.IncludeCharacterInfo,
+                    scanner.ResolveItemMetadata,
+                    config.IncludeItemNames);
+                LastRetainerSourceStatus =
+                    $"Quartermaster supplied {retainers.Count} owner-scoped retainer(s).";
+            }
+            else
+            {
+                LastRetainerSourceStatus =
+                    "Quartermaster snapshot owner does not match the current character; retainer inventory omitted.";
+            }
+        }
+        else
+        {
+            LastRetainerSourceStatus =
+                $"Quartermaster unavailable; report contains player inventory only. {quartermasterError}";
+        }
+
+        var generatedAtUtc = DateTime.UtcNow.ToString("o");
+        return new InventoryReport
+        {
+            Metadata = new InventoryReportMetadata
+            {
+                SchemaVersion = 4,
+                SourcePlugin = "MarketMafioso",
+                PluginVersion = PluginBuildInfo.DisplayVersion,
+                GeneratedAtUtc = generatedAtUtc,
+            },
+            CharacterName = charName,
+            HomeWorld = homeWorld,
+            ServiceAccountKey = config.IncludeCharacterInfo
+                ? serviceAccountIdentity.Resolve(playerState.ContentId)
+                : null,
+            PlayerGil = scanner.ScanPlayerGil(),
+            Timestamp = generatedAtUtc,
+            PlayerInventory = playerCapture.Bags,
+            Retainers = retainers,
+            PlayerStorage = new StorageSourceEvidence
+            {
+                RequestedSources = playerCapture.RequestedSources.ToList(),
+                ObservedSources = playerCapture.ObservedSources.ToList(),
+            },
+            RetainerManagement = quartermasterSnapshotForReport is null
+                ? null
+                : BuildStowageReport(quartermasterSnapshotForReport, config.IncludeItemNames),
+        };
+    }
+
+    private bool TryValidateEndpoint(bool quiet, out ReceiverEndpointInfo endpoint)
+    {
+        endpoint = ReceiverEndpointClassifier.Classify(config.ServerUrl);
         if (string.IsNullOrWhiteSpace(config.ServerUrl))
         {
             if (!quiet)
                 chatGui.PrintError("[MarketMafioso] No server URL configured. Use /mmf to set one.");
-            return;
+            return false;
         }
-
-        var endpoint = ReceiverEndpointClassifier.Classify(config.ServerUrl);
         if (endpoint.Kind == ReceiverEndpointKind.Invalid)
         {
             LastStatus = "Invalid server URL";
             if (!quiet)
                 chatGui.PrintError("[MarketMafioso] Server URL is not a valid HTTP or HTTPS endpoint.");
-            return;
+            return false;
         }
-
         if (endpoint.RequiresApiKey && string.IsNullOrWhiteSpace(config.ApiKey))
         {
             LastStatus = "API key required";
             if (!quiet)
                 chatGui.PrintError("[MarketMafioso] This hosted receiver requires a MarketMafioso Client Key. Open /mmf and set it under Server Connection.");
-            return;
+            return false;
         }
-
         if (endpoint.RequiresApiKey && WorkshopHostApiKeyRouting.IsCraftArchitectKey(config.ApiKey))
         {
             LastStatus = "Wrong API key type";
             if (!quiet)
                 chatGui.PrintError("[MarketMafioso] A Craft Architect key cannot upload inventory. Move it to the Acquisition Key field and add a MarketMafioso Client Key.");
+            return false;
+        }
+        return true;
+    }
+
+    private HttpRequestMessage CreateRequest<T>(string url, T payload)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = JsonContent.Create(payload, options: SerialiserOptions),
+        };
+        if (!string.IsNullOrWhiteSpace(config.ApiKey))
+            request.Headers.Add("X-Api-Key", config.ApiKey);
+        return request;
+    }
+
+    private void AcceptSnapshot(InventoryReport report, HttpReportResponse response)
+    {
+        lastAcknowledgedReport = report;
+        lastAcknowledgedSnapshotId = response.ReportId;
+        LastDashboardUrl = ResolveDashboardUrlForDisplay(response.DashboardUrl, config.ServerUrl);
+        LastDashboardReportUrl = response.ResolveReportUrl(config.ServerUrl);
+    }
+
+    private void HandleFailure(
+        ReceiverEndpointInfo endpoint,
+        System.Net.HttpStatusCode statusCode,
+        string body,
+        bool quiet)
+    {
+        if (endpoint.RequiresApiKey && statusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            if (!quiet)
+                chatGui.PrintError("[MarketMafioso] The hosted receiver rejected the MarketMafioso Client Key. Check the saved key for this endpoint.");
+            log.Warning($"[MarketMafioso] Hosted receiver rejected API key - {LastStatus}: {body}");
             return;
         }
 
-        try
-        {
-            var ownerScope = new QuartermasterOwnerScope(
-                playerState.ContentId == 0 ? null : playerState.ContentId,
-                playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.RowId : null,
-                playerState.CharacterName,
-                playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
-            string? charName = null;
-            string? homeWorld = null;
-
-            if (config.IncludeCharacterInfo)
-            {
-                charName = ownerScope.CharacterName;
-                homeWorld = ownerScope.HomeWorldName;
-            }
-
-            var playerCapture = scanner.CapturePlayerInventory(config);
-            var playerInventory = playerCapture.Bags;
-            var playerGil = scanner.ScanPlayerGil();
-            var retainers = new List<RetainerReport>();
-            QuartermasterSnapshot? quartermasterSnapshotForReport = null;
-            if (quartermaster.TryGetSnapshot(out var quartermasterSnapshot, out var quartermasterError))
-            {
-                if (ownerScope.Matches(quartermasterSnapshot!.Owner))
-                {
-                    quartermasterSnapshotForReport = quartermasterSnapshot;
-                    retainers = BuildRetainerReports(
-                        quartermasterSnapshot,
-                        ownerScope,
-                        config.IncludeCharacterInfo,
-                        scanner.ResolveItemMetadata,
-                        config.IncludeItemNames);
-                    LastRetainerSourceStatus =
-                        $"Quartermaster supplied {retainers.Count} owner-scoped retainer(s).";
-                }
-                else
-                {
-                    LastRetainerSourceStatus =
-                        "Quartermaster snapshot owner does not match the current character; retainer inventory omitted.";
-                }
-            }
-            else
-            {
-                LastRetainerSourceStatus =
-                    $"Quartermaster unavailable; report contains player inventory only. {quartermasterError}";
-            }
-
-            var generatedAtUtc = DateTime.UtcNow.ToString("o");
-            var report = new InventoryReport
-            {
-                Metadata = new InventoryReportMetadata
-                {
-                    SchemaVersion = 4,
-                    SourcePlugin = "MarketMafioso",
-                    PluginVersion = PluginBuildInfo.DisplayVersion,
-                    GeneratedAtUtc = generatedAtUtc,
-                },
-                CharacterName = charName,
-                HomeWorld = homeWorld,
-                ServiceAccountKey = config.IncludeCharacterInfo
-                    ? serviceAccountIdentity.Resolve(playerState.ContentId)
-                    : null,
-                PlayerGil = playerGil,
-                Timestamp = generatedAtUtc,
-                PlayerInventory = playerInventory,
-                Retainers = retainers,
-                PlayerStorage = new StorageSourceEvidence
-                {
-                    RequestedSources = playerCapture.RequestedSources.ToList(),
-                    ObservedSources = playerCapture.ObservedSources.ToList(),
-                },
-                RetainerManagement = quartermasterSnapshotForReport is null
-                    ? null
-                    : BuildStowageReport(quartermasterSnapshotForReport, config.IncludeItemNames),
-            };
-
-            LastPayload = JsonSerializer.Serialize(report, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            });
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, config.ServerUrl)
-            {
-                Content = JsonContent.Create(report, options: SerialiserOptions),
-            };
-
-            if (!string.IsNullOrWhiteSpace(config.ApiKey))
-                request.Headers.Add("X-Api-Key", config.ApiKey);
-
-            var response = await httpClient.SendAsync(request).ConfigureAwait(false);
-
-            LastSentAt = DateTime.Now;
-            LastStatus = $"{(int)response.StatusCode} {response.ReasonPhrase}";
-
-            if (response.IsSuccessStatusCode)
-            {
-                var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                var reportResponse = ParseReportResponse(body);
-                LastDashboardUrl = ResolveDashboardUrlForDisplay(reportResponse.DashboardUrl, config.ServerUrl);
-                LastDashboardReportUrl = reportResponse.ResolveReportUrl(config.ServerUrl);
-                var itemCount = playerInventory.Sum(b => b.Items.Count);
-                var dashboardSuffix = string.IsNullOrWhiteSpace(LastDashboardReportUrl)
-                    ? string.IsNullOrWhiteSpace(LastDashboardUrl)
-                        ? string.Empty
-                        : $" Dashboard: {LastDashboardUrl}"
-                    : $" View: {LastDashboardReportUrl}";
-                if (!quiet)
-                {
-                    chatGui.Print(
-                        $"[MarketMafioso] Sent {itemCount} player items + {retainers.Count} retainer(s). " +
-                        $"Status: {LastStatus}. {LastRetainerSourceStatus}{dashboardSuffix}");
-                }
-                log.Information($"[MarketMafioso] Report sent - {LastStatus}.{dashboardSuffix}");
-            }
-            else
-            {
-                var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                if (endpoint.RequiresApiKey && response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-                {
-                    if (!quiet)
-                        chatGui.PrintError("[MarketMafioso] The hosted receiver rejected the MarketMafioso Client Key. Check the saved key for this endpoint.");
-                    log.Warning($"[MarketMafioso] Hosted receiver rejected API key - {LastStatus}: {body}");
-                    return;
-                }
-
-                if (!quiet)
-                    chatGui.PrintError($"[MarketMafioso] Server error {LastStatus}: {body[..Math.Min(body.Length, 200)]}");
-                log.Warning($"[MarketMafioso] Server returned {LastStatus}: {body}");
-            }
-        }
-        catch (Exception ex)
-        {
-            LastStatus = $"Error: {ex.Message}";
-            if (!quiet)
-                chatGui.PrintError($"[MarketMafioso] Failed to send: {ex.Message}");
-            log.Error(ex, "[MarketMafioso] Error sending report");
-        }
+        if (!quiet)
+            chatGui.PrintError($"[MarketMafioso] Server error {LastStatus}: {body[..Math.Min(body.Length, 200)]}");
+        log.Warning($"[MarketMafioso] Server returned {LastStatus}: {body}");
     }
+
+    private void HandleException(Exception ex, bool quiet)
+    {
+        LastStatus = $"Error: {ex.Message}";
+        if (!quiet)
+            chatGui.PrintError($"[MarketMafioso] Failed to send: {ex.Message}");
+        log.Error(ex, "[MarketMafioso] Error sending report");
+    }
+
+    private string DashboardSuffix() =>
+        string.IsNullOrWhiteSpace(LastDashboardReportUrl)
+            ? string.IsNullOrWhiteSpace(LastDashboardUrl)
+                ? string.Empty
+                : $" Dashboard: {LastDashboardUrl}"
+            : $" View: {LastDashboardReportUrl}";
+
+    private static readonly JsonSerializerOptions PrettySerialiserOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     public void Dispose()
     {

@@ -73,7 +73,9 @@ public sealed class DashboardSessionAuthMiddleware
     private static bool IsPluginInventoryIngestRoute(HttpRequest request) =>
         HttpMethods.IsPost(request.Method) &&
         (request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
-         request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase));
+         request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase) ||
+         request.Path.Equals("/inventory/delta", StringComparison.OrdinalIgnoreCase) ||
+         request.Path.Equals("/api/inventory/delta", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsPluginMarketDiagnosticIngestRoute(HttpRequest request) =>
         HttpMethods.IsPost(request.Method) &&
