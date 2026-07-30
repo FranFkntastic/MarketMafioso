@@ -36,6 +36,8 @@ builder.Services.AddSingleton<MarketDiagnosticCollector>();
 if (builder.Configuration.GetValue<bool>("MarketMafioso:MarketDiagnostics:Enabled"))
     builder.Services.AddHostedService<MarketDiagnosticBackgroundService>();
 builder.Services.AddWorkshopHostCraftAppraisal();
+builder.Services.AddSingleton<WorkshopHostCraftQuoteCache>();
+builder.Services.AddSingleton<CraftAppraisalPlanStore>();
 builder.Services.AddScoped<IWorkshopHostCraftQuoteService, CraftArchitectWorkshopHostCraftQuoteService>();
 builder.Services.AddHttpClient();
 

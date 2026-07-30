@@ -28,6 +28,7 @@ public sealed class WorkshopHostProviderClientServerContractTests
                     QuotedAtUtc = quotedAt,
                     Source = "WorkshopHostCraftArchitect",
                     Confidence = "Medium",
+                    PlanId = "0123456789abcdef0123456789abcdef",
                     Warnings = ["Quote is advisory evidence."],
                 })));
         using var client = application.CreateClient();
@@ -54,6 +55,9 @@ public sealed class WorkshopHostProviderClientServerContractTests
         Assert.Equal(80m, quote.EstimatedUnitCost);
         Assert.Equal(quotedAt, quote.QuotedAtUtc);
         Assert.Equal("WorkshopHostCraftArchitect", quote.Source);
+        Assert.Equal(
+            "http://localhost/?appraisalPlan=%2Fmarketmafioso%2Fapi%2Fcraft%2Fplans%2F0123456789abcdef0123456789abcdef",
+            quote.PlanUrl);
     }
 
     private static WebApplicationFactory<Program> CreateHostedApplication(
