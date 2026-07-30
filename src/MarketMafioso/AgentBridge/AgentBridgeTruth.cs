@@ -92,6 +92,10 @@ public sealed record AgentBridgeRemoteMarketTruth
 {
     public required bool Available { get; init; }
     public required bool ResultVisible { get; init; }
+    public bool NativeResultAddonVisible { get; init; }
+    public bool NativeAgentActive { get; init; }
+    public uint NativeListingCount { get; init; }
+    public byte? NativeRequestId { get; init; }
     public required long ViewRevision { get; init; }
     public required int ListingCount { get; init; }
     public required uint? ItemId { get; init; }

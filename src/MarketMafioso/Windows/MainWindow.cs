@@ -511,6 +511,7 @@ public class MainWindow : Window, IDisposable
         var workshopReview = workshopMaterials.BuildReview();
         var workshopRun = workshopVendorRestockRunner.ActiveRun;
         var remoteMarket = remoteMarketController.GetView();
+        var remoteMarketNative = remoteMarketController.GetNativePresentationState();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -571,7 +572,11 @@ public class MainWindow : Window, IDisposable
             RemoteMarket = new AgentBridgeRemoteMarketTruth
             {
                 Available = remoteMarketController.IsAvailable,
-                ResultVisible = remoteMarketController.IsMarketBoardResultVisible(),
+                ResultVisible = remoteMarketNative.MatchesSnapshot,
+                NativeResultAddonVisible = remoteMarketNative.ResultAddonVisible,
+                NativeAgentActive = remoteMarketNative.AgentActive,
+                NativeListingCount = remoteMarketNative.ListingCount,
+                NativeRequestId = remoteMarketNative.RequestId,
                 ViewRevision = remoteMarket.Revision,
                 ListingCount = remoteMarket.Listings.Count,
                 ItemId = remoteMarket.Listings.FirstOrDefault()?.ItemId,

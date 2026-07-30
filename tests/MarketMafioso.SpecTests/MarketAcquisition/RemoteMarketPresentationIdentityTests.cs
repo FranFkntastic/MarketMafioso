@@ -59,6 +59,77 @@ public sealed class RemoteMarketPresentationIdentityTests
     }
 
     [Fact]
+    public void ConfirmedPurchase_AdvancesTheVerifiedBrowseInPlace()
+    {
+        var browse = CompletedBrowse();
+        var identity = NativeIdentity(OperationId);
+
+        var advanced = RemoteMarketController.AdvanceConfirmedPurchase(identity);
+
+        Assert.NotNull(advanced);
+        Assert.Equal(ListingCount - 1, advanced.CurrentListingCount);
+        Assert.Equal(ListingCount - 1, advanced.CapturedListingCount);
+        Assert.Equal(ListingCount, advanced.BrowseListingCount);
+        Assert.True(IsCurrent(advanced, nativeListingCount: ListingCount - 1));
+        Assert.True(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(advanced, browse));
+        Assert.False(RemoteMarketController.RequiresAutomaticPurchaseVerification(advanced, browse));
+    }
+
+    [Fact]
+    public void UnverifiedOrPartialSnapshot_CannotAdvanceAfterPurchase()
+    {
+        Assert.Null(RemoteMarketController.AdvanceConfirmedPurchase(NativeIdentity()));
+        Assert.Null(RemoteMarketController.AdvanceConfirmedPurchase(
+            NativeIdentity(OperationId, capturedListingCount: ListingCount - 1)));
+    }
+
+    [Fact]
+    public void NativeRefresh_PreservesVerifiedLineageAcrossRowReordering()
+    {
+        var identity = new RemoteMarketListingSnapshotIdentity(
+            ItemId,
+            RequestId,
+            2,
+            2,
+            OperationId,
+            3);
+        var nativeIdentity = new RemoteMarketNativeListingIdentity(ItemId, RequestId, 2);
+
+        Assert.True(RemoteMarketController.PreservesVerifiedListingLineage(
+            identity,
+            [Listing(10), Listing(20)],
+            nativeIdentity,
+            [Listing(20), Listing(10)]));
+        Assert.False(RemoteMarketController.PreservesVerifiedListingLineage(
+            identity,
+            [Listing(10), Listing(20)],
+            nativeIdentity,
+            [Listing(10), Listing(30)]));
+    }
+
+    [Fact]
+    public void InconsistentSameRequestRefresh_RetainsTheConfirmedDerivedRevision()
+    {
+        var identity = new RemoteMarketListingSnapshotIdentity(
+            ItemId,
+            RequestId,
+            2,
+            2,
+            OperationId,
+            3);
+
+        Assert.True(RemoteMarketController.RetainsDerivedListingLineage(
+            identity,
+            new RemoteMarketNativeListingIdentity(ItemId, RequestId, 2)));
+        Assert.False(RemoteMarketController.RetainsDerivedListingLineage(
+            identity,
+            new RemoteMarketNativeListingIdentity(ItemId, RequestId + 1, 2)));
+        Assert.False(RemoteMarketController.RetainsDerivedListingLineage(
+            NativeIdentity(OperationId),
+            new RemoteMarketNativeListingIdentity(ItemId, RequestId, ListingCount)));
+    }
+
+    [Fact]
     public void ManualNativeSearch_RemainsVisibleButIsNotVerifiedForPurchase()
     {
         var identity = NativeIdentity();
@@ -94,27 +165,6 @@ public sealed class RemoteMarketPresentationIdentityTests
 
         Assert.True(IsCurrent(identity));
         Assert.False(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(identity, browse));
-    }
-
-    [Fact]
-    public void PostPurchaseRefresh_RequiresANewVerifiedBrowseOperation()
-    {
-        var browse = CompletedBrowse();
-        var identity = NativeIdentity(OperationId);
-
-        Assert.False(
-            RemoteMarketController.IsFreshListingSnapshotVerifiedForPurchase(
-                identity,
-                browse,
-                OperationId));
-
-        var refreshedBrowse = browse with { OperationId = "market-browse:2" };
-        var refreshedIdentity = NativeIdentity(refreshedBrowse.OperationId);
-        Assert.True(
-            RemoteMarketController.IsFreshListingSnapshotVerifiedForPurchase(
-                refreshedIdentity,
-                refreshedBrowse,
-                OperationId));
     }
 
     [Fact]
@@ -173,8 +223,16 @@ public sealed class RemoteMarketPresentationIdentityTests
 
     private static RemoteMarketListingSnapshotIdentity NativeIdentity(
         string? operationId = null,
-        int capturedListingCount = ListingCount) =>
-        new(ItemId, RequestId, ListingCount, capturedListingCount, operationId);
+        int capturedListingCount = ListingCount,
+        int currentListingCount = ListingCount,
+        int browseListingCount = ListingCount) =>
+        new(
+            ItemId,
+            RequestId,
+            currentListingCount,
+            capturedListingCount,
+            operationId,
+            browseListingCount);
 
     private static MarketBoardBrowseSnapshot CompletedBrowse() =>
         new()
@@ -196,4 +254,19 @@ public sealed class RemoteMarketPresentationIdentityTests
             HistoryObserved = true,
             HistoryItemId = ItemId,
         };
+
+    private static RemoteMarketListingView Listing(ulong listingId) =>
+        new(
+            listingId,
+            ItemId,
+            "Test Item",
+            false,
+            1,
+            1,
+            0,
+            1,
+            0,
+            "Test Retainer",
+            false,
+            null);
 }

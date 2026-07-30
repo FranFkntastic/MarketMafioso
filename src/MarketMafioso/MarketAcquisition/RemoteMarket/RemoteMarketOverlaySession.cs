@@ -6,8 +6,6 @@ internal sealed class RemoteMarketOverlaySession
 
     public void ObserveSnapshot() => IsActive = true;
 
-    public void BeginRecovery() => IsActive = true;
-
     public void ObserveNativeState(
         bool resultVisible,
         bool resultMatchesSnapshot,
