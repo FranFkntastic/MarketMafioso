@@ -295,7 +295,7 @@ public class MainWindow : Window, IDisposable
             Plugin.Condition,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "ui-state-captures"));
         squirePanel = new StandaloneSquirePanel(standaloneSquire, AgentReviewRegistry);
-        statusTab = new StatusTabPanel(reporter);
+        statusTab = new StatusTabPanel(config, reporter);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
             requestId =>

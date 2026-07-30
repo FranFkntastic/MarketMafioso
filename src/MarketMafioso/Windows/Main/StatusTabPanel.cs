@@ -5,10 +5,12 @@ namespace MarketMafioso.Windows.Main;
 
 internal sealed class StatusTabPanel
 {
+    private readonly Configuration config;
     private readonly HttpReporter reporter;
 
-    public StatusTabPanel(HttpReporter reporter)
+    public StatusTabPanel(Configuration config, HttpReporter reporter)
     {
+        this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
     }
 
@@ -41,5 +43,17 @@ internal sealed class StatusTabPanel
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Status: {reporter.LastStatus}");
         }
+
+        if (!MarketAcquisition.MarketAcquisitionUnlock.IsUnlocked(config) ||
+            !config.EnableRetainerListingRefresh)
+        {
+            return;
+        }
+
+        ImGui.Spacing();
+        var refresh = config.RetainerListingRefresh;
+        ImGui.TextColored(
+            refresh.NeedsAttention ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted,
+            $"Retainer listing refresh: {refresh.StatusMessage}");
     }
 }
