@@ -1,186 +1,150 @@
 using System;
 using System.Collections.Generic;
-using System.Net;
+using System.Linq;
 using System.Net.Http;
-using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Franthropy.FFXIV.Market;
 
 namespace MarketMafioso.MarketAcquisition;
 
 public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionListingSource
 {
-    private static readonly Uri DefaultBaseUri = new("https://universalis.app/api/v2/");
-    private readonly HttpClient httpClient;
-    private readonly Uri baseUri;
+    private readonly UniversalisBulkClient bulkClient;
 
     public UniversalisMarketAcquisitionPlanSource(HttpClient httpClient)
-        : this(httpClient, DefaultBaseUri)
+        : this(new UniversalisBulkClient(httpClient))
     {
     }
 
     public UniversalisMarketAcquisitionPlanSource(HttpClient httpClient, Uri baseUri)
+        : this(new UniversalisBulkClient(httpClient, baseUri))
     {
-        this.httpClient = httpClient;
-        this.baseUri = baseUri;
     }
 
-    public async Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsAsync(
-        string region,
-        uint itemId,
+    internal UniversalisMarketAcquisitionPlanSource(UniversalisBulkClient bulkClient)
+    {
+        this.bulkClient = bulkClient ?? throw new ArgumentNullException(nameof(bulkClient));
+    }
+
+    public async Task<IReadOnlyDictionary<uint, IReadOnlyList<MarketAcquisitionListing>>> FetchListingsAsync(
+        string worldDataCenterOrRegion,
+        IReadOnlyCollection<uint> itemIds,
         int listingLimit,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(region))
-            throw new InvalidOperationException("Region is required to fetch market listings.");
+        if (string.IsNullOrWhiteSpace(worldDataCenterOrRegion))
+            throw new InvalidOperationException("A world, data center, or region is required to fetch market listings.");
+        if (itemIds.Count == 0)
+            return new Dictionary<uint, IReadOnlyList<MarketAcquisitionListing>>();
+        if (itemIds.Any(itemId => itemId == 0))
+            throw new InvalidOperationException("Item IDs are required to fetch market listings.");
 
-        if (itemId == 0)
-            throw new InvalidOperationException("Item id is required to fetch market listings.");
-
-        var normalizedRegion = NormalizeRegion(region);
-        return await FetchListingsFromEndpointAsync(normalizedRegion, itemId, listingLimit, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    public async Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsForWorldAsync(
-        string worldName,
-        uint itemId,
-        int listingLimit,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(worldName))
-            throw new InvalidOperationException("World name is required to fetch market listings.");
-
-        if (itemId == 0)
-            throw new InvalidOperationException("Item id is required to fetch market listings.");
-
-        return await FetchListingsFromEndpointAsync(worldName.Trim(), itemId, listingLimit, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsFromEndpointAsync(
-        string worldOrRegion,
-        uint itemId,
-        int listingLimit,
-        CancellationToken cancellationToken)
-    {
-        var limit = Math.Clamp(listingLimit, 1, 100);
-        var requestUri = new Uri(baseUri, $"{Uri.EscapeDataString(worldOrRegion)}/{itemId}?listings={limit}");
-
-        using var response = await httpClient.GetAsync(requestUri, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-            throw await CreateHttpExceptionAsync(response, requestUri, cancellationToken).ConfigureAwait(false);
-
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        if (!json.RootElement.TryGetProperty("listings", out var listingsElement) ||
-            listingsElement.ValueKind != JsonValueKind.Array)
-            throw new InvalidOperationException("Universalis response did not include a listings array.");
-
-        var listings = new List<MarketAcquisitionListing>();
-        foreach (var listingElement in listingsElement.EnumerateArray())
-        {
-            var listingId = RequiredString(listingElement, "listingID");
-            var worldName = RequiredString(listingElement, "worldName");
-            var retainerName = RequiredString(listingElement, "retainerName");
-            var retainerId = RequiredString(listingElement, "retainerID");
-            var lastReviewTime = RequiredLong(listingElement, "lastReviewTime");
-
-            listings.Add(new MarketAcquisitionListing
+        var result = await bulkClient.FetchAsync<UniversalisItemResponse>(
+            new UniversalisBulkRequest
             {
-                ItemId = itemId,
-                ListingId = listingId,
-                WorldName = worldName,
-                WorldId = RequiredUInt(listingElement, "worldID"),
-                RetainerName = retainerName,
-                RetainerId = retainerId,
-                Quantity = RequiredUInt(listingElement, "quantity"),
-                UnitPrice = RequiredUInt(listingElement, "pricePerUnit"),
-                IsHq = RequiredBool(listingElement, "hq"),
-                LastReviewTimeUtc = DateTimeOffset.FromUnixTimeSeconds(lastReviewTime),
-            });
-        }
+                WorldOrDataCenter = worldDataCenterOrRegion,
+                ItemIds = itemIds,
+                ListingsPerItem = Math.Clamp(listingLimit, 1, 100),
+                HistoryEntriesPerItem = 0,
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        return listings;
+        if (result.MissingItemIds.Count > 0)
+            throw new UniversalisMarketListingsUnavailableException(result.MissingItemIds, result.Failures);
+
+        return result.Items.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyList<MarketAcquisitionListing>)pair.Value.Listings
+                .Select(listing => MapListing(pair.Key, listing))
+                .ToArray());
     }
 
-    private static string NormalizeRegion(string region) =>
-        region.Trim().Replace(' ', '-');
-
-    private static async Task<UniversalisMarketListingsHttpException> CreateHttpExceptionAsync(
-        HttpResponseMessage response,
-        Uri requestUri,
-        CancellationToken cancellationToken)
+    private static MarketAcquisitionListing MapListing(uint itemId, UniversalisListingResponse listing)
     {
-        var body = response.Content == null
-            ? null
-            : await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        var retryAfterUtc = response.Headers.RetryAfter?.Date ??
-            (response.Headers.RetryAfter?.Delta is { } delta ? DateTimeOffset.UtcNow.Add(delta) : null);
-        return new UniversalisMarketListingsHttpException(response.StatusCode, requestUri, body, retryAfterUtc);
+        if (string.IsNullOrWhiteSpace(listing.ListingId))
+            throw new InvalidOperationException($"Universalis listing for item {itemId} had no listing ID.");
+        if (string.IsNullOrWhiteSpace(listing.WorldName))
+            throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no world name.");
+        if (string.IsNullOrWhiteSpace(listing.RetainerName))
+            throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no retainer name.");
+        if (string.IsNullOrWhiteSpace(listing.RetainerId))
+            throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no retainer ID.");
+
+        return new MarketAcquisitionListing
+        {
+            ItemId = itemId,
+            ListingId = listing.ListingId,
+            WorldName = listing.WorldName,
+            WorldId = listing.WorldId,
+            RetainerName = listing.RetainerName,
+            RetainerId = listing.RetainerId,
+            Quantity = listing.Quantity,
+            UnitPrice = listing.UnitPrice,
+            IsHq = listing.IsHq,
+            LastReviewTimeUtc = DateTimeOffset.FromUnixTimeSeconds(listing.LastReviewTime),
+        };
     }
 
-    private static string RequiredString(JsonElement element, string propertyName)
+    private sealed record UniversalisItemResponse
     {
-        if (!element.TryGetProperty(propertyName, out var property) ||
-            property.ValueKind != JsonValueKind.String)
-            throw new InvalidOperationException($"Universalis listing is missing required string field {propertyName}.");
-
-        var value = property.GetString();
-        return string.IsNullOrWhiteSpace(value)
-            ? throw new InvalidOperationException($"Universalis listing field {propertyName} was empty.")
-            : value;
+        [JsonPropertyName("listings")]
+        public IReadOnlyList<UniversalisListingResponse> Listings { get; init; } = [];
     }
 
-    private static uint RequiredUInt(JsonElement element, string propertyName)
+    private sealed record UniversalisListingResponse
     {
-        if (!element.TryGetProperty(propertyName, out var property) ||
-            !property.TryGetUInt32(out var value))
-            throw new InvalidOperationException($"Universalis listing is missing required unsigned integer field {propertyName}.");
+        [JsonPropertyName("listingID")]
+        public string ListingId { get; init; } = string.Empty;
 
-        return value;
-    }
+        [JsonPropertyName("worldName")]
+        public string WorldName { get; init; } = string.Empty;
 
-    private static long RequiredLong(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property) ||
-            !property.TryGetInt64(out var value))
-            throw new InvalidOperationException($"Universalis listing is missing required integer field {propertyName}.");
+        [JsonPropertyName("worldID")]
+        public uint WorldId { get; init; }
 
-        return value;
-    }
+        [JsonPropertyName("retainerName")]
+        public string RetainerName { get; init; } = string.Empty;
 
-    private static bool RequiredBool(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property) ||
-            property.ValueKind is not JsonValueKind.True and not JsonValueKind.False)
-            throw new InvalidOperationException($"Universalis listing is missing required boolean field {propertyName}.");
+        [JsonPropertyName("retainerID")]
+        public string RetainerId { get; init; } = string.Empty;
 
-        return property.GetBoolean();
+        [JsonPropertyName("quantity")]
+        public uint Quantity { get; init; }
+
+        [JsonPropertyName("pricePerUnit")]
+        public uint UnitPrice { get; init; }
+
+        [JsonPropertyName("hq")]
+        public bool IsHq { get; init; }
+
+        [JsonPropertyName("lastReviewTime")]
+        public long LastReviewTime { get; init; }
     }
 }
 
-public sealed class UniversalisMarketListingsHttpException : HttpRequestException
+public sealed class UniversalisMarketListingsUnavailableException : HttpRequestException
 {
-    public UniversalisMarketListingsHttpException(
-        HttpStatusCode statusCode,
-        Uri requestUri,
-        string? responseBody,
-        DateTimeOffset? retryAfterUtc = null)
-        : base(BuildMessage(statusCode, requestUri), null, statusCode)
+    public UniversalisMarketListingsUnavailableException(
+        IReadOnlyList<uint> missingItemIds,
+        IReadOnlyList<UniversalisBulkFailure> failures)
+        : base(BuildMessage(missingItemIds, failures))
     {
-        RequestUri = requestUri;
-        ResponseBody = responseBody;
-        RetryAfterUtc = retryAfterUtc;
+        MissingItemIds = missingItemIds;
+        Failures = failures;
     }
 
-    public Uri RequestUri { get; }
+    public IReadOnlyList<uint> MissingItemIds { get; }
 
-    public string? ResponseBody { get; }
+    public IReadOnlyList<UniversalisBulkFailure> Failures { get; }
 
-    public DateTimeOffset? RetryAfterUtc { get; }
-
-    private static string BuildMessage(HttpStatusCode statusCode, Uri requestUri) =>
-        $"Universalis listings failed with {(int)statusCode} {statusCode} at {requestUri}.";
+    private static string BuildMessage(
+        IReadOnlyList<uint> missingItemIds,
+        IReadOnlyList<UniversalisBulkFailure> failures)
+    {
+        var message = $"Universalis did not return item(s) {string.Join(", ", missingItemIds)} after retry.";
+        var detail = failures.FirstOrDefault()?.Message;
+        return string.IsNullOrWhiteSpace(detail) ? message : $"{message} {detail}";
+    }
 }
