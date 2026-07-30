@@ -44,6 +44,7 @@ public sealed class RenderPathBoundaryTests
         var body = ExtractMethodBody(source, "IsMarketBoardResultVisible");
 
         Assert.Contains("IsListingSnapshotCurrent(", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetNativePresentationState", body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -55,8 +56,23 @@ public sealed class RenderPathBoundaryTests
 
         Assert.Contains("controller.ShouldPresentOverlay()", drawConditions, StringComparison.Ordinal);
         Assert.DoesNotContain("IsMarketBoardResultVisible()", drawConditions, StringComparison.Ordinal);
-        Assert.Contains("BeginPostPurchaseRefresh(", controller, StringComparison.Ordinal);
-        Assert.Contains("TryCompletePendingPostPurchaseRefresh(", controller, StringComparison.Ordinal);
+        Assert.Contains("RemoteMarketOverlaySession overlaySession", controller, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RemoteMarketConfirmedPurchaseReconcilesInPlace()
+    {
+        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
+        var confirmation = ExtractMethodBody(source, "OnItemPurchased");
+        var completion = ExtractMethodBody(source, "Complete");
+
+        Assert.Contains("purchasedListingIds.Add(pending.Selection.ListingId)", confirmation, StringComparison.Ordinal);
+        Assert.Contains("ReconcileConfirmedPurchase(pending.Selection.ListingId)", confirmation, StringComparison.Ordinal);
+        Assert.Contains("framework.RunOnTick(AdvanceBatch, BatchPacingDelay)", completion, StringComparison.Ordinal);
+        Assert.Contains("proxy->SetLastPurchasedItem", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("BeginPostPurchaseRefresh", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("pendingPostPurchaseRefresh", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequireFreshBrowse", confirmation, StringComparison.Ordinal);
     }
 
     [Fact]

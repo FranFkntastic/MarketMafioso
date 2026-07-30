@@ -5,11 +5,10 @@ namespace MarketMafioso.SpecTests.MarketAcquisition;
 public sealed class RemoteMarketOverlaySessionTests
 {
     [Fact]
-    public void PurchaseRecoveryKeepsOverlayActiveWhileNativeResultIsHidden()
+    public void AutomaticVerificationKeepsOverlayActiveWhileNativeResultIsHidden()
     {
         var session = ActiveSession();
 
-        session.BeginRecovery();
         session.ObserveNativeState(
             resultVisible: false,
             resultMatchesSnapshot: false,
