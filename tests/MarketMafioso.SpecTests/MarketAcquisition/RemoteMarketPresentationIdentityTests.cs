@@ -97,6 +97,27 @@ public sealed class RemoteMarketPresentationIdentityTests
     }
 
     [Fact]
+    public void PostPurchaseRefresh_RequiresANewVerifiedBrowseOperation()
+    {
+        var browse = CompletedBrowse();
+        var identity = NativeIdentity(OperationId);
+
+        Assert.False(
+            RemoteMarketController.IsFreshListingSnapshotVerifiedForPurchase(
+                identity,
+                browse,
+                OperationId));
+
+        var refreshedBrowse = browse with { OperationId = "market-browse:2" };
+        var refreshedIdentity = NativeIdentity(refreshedBrowse.OperationId);
+        Assert.True(
+            RemoteMarketController.IsFreshListingSnapshotVerifiedForPurchase(
+                refreshedIdentity,
+                refreshedBrowse,
+                OperationId));
+    }
+
+    [Fact]
     public void ForeignBrowseOwner_CannotVerifyNativeListingsForPurchase()
     {
         var browse = CompletedBrowse() with { Owner = MarketBoardBrowseOwner.MarketAcquisition };

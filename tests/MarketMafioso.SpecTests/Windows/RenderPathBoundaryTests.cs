@@ -60,6 +60,20 @@ public sealed class RenderPathBoundaryTests
     }
 
     [Fact]
+    public void RemoteMarketOverlayExposesItsRealPurchaseStepsForReviewedAutomation()
+    {
+        var overlay = ReadSource("src", "MarketMafioso", "Windows", "RemoteMarketOverlayWindow.cs");
+        var bridge = ReadSource("src", "MarketMafioso", "AgentBridge", "MarketMafiosoBridgeProvider.cs");
+
+        Assert.Contains("\"remote-market.select-cheapest\"", overlay, StringComparison.Ordinal);
+        Assert.Contains("\"remote-market.arm-purchase\"", overlay, StringComparison.Ordinal);
+        Assert.Contains("\"remote-market.confirm-purchase\"", overlay, StringComparison.Ordinal);
+        Assert.Contains("surfaceId: \"remote-market\"", overlay, StringComparison.Ordinal);
+        Assert.Contains("new(\"remote-market\", \"Remote Market Overlay\"", bridge, StringComparison.Ordinal);
+        Assert.Contains("reviewRegistry.ActionCatalog()", bridge, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RemoteMarketListingCacheRefreshesFromNativeLifecycleEvents()
     {
         var source = ReadSource(

@@ -48,7 +48,7 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly INotificationManager notificationManager;
     private readonly IPluginLog log;
     private readonly Func<uint, string?> resolveItemName;
-    private readonly Func<uint, string?, MarketBoardItemSearchResult> searchDriver;
+    private readonly Func<uint, string?, MarketBoardItemSearchIntent, string?, MarketBoardItemSearchResult> searchDriver;
     private readonly IMarketBoardBrowseRuntime browseRuntime;
     private readonly CmbMarketContextClient cmbContext;
     private readonly string evidenceDirectory;
@@ -91,6 +91,8 @@ internal sealed class RemoteMarketController : IDisposable
     private string? trackedBrowseItemName;
     private bool trackedBrowseTerminalReported;
     private bool trackedBrowseSearchActive;
+    private MarketBoardItemSearchIntent trackedBrowseSearchIntent;
+    private string? trackedBrowsePreviousOperationId;
     private DateTimeOffset nextTrackedBrowsePollUtc;
 
     public RemoteMarketController(
@@ -107,7 +109,7 @@ internal sealed class RemoteMarketController : IDisposable
         IAddonLifecycle addonLifecycle,
         IPluginLog log,
         Func<uint, string?> resolveItemName,
-        Func<uint, string?, MarketBoardItemSearchResult> searchDriver,
+        Func<uint, string?, MarketBoardItemSearchIntent, string?, MarketBoardItemSearchResult> searchDriver,
         IMarketBoardBrowseRuntime browseRuntime,
         Dalamud.Plugin.IDalamudPluginInterface pluginInterface,
         string pluginConfigDirectory)
@@ -339,10 +341,16 @@ internal sealed class RemoteMarketController : IDisposable
         RebuildView();
     }
 
-    public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName)
+    public MarketBoardItemSearchResult SearchItem(
+        uint itemId,
+        string? itemName,
+        MarketBoardItemSearchIntent intent = MarketBoardItemSearchIntent.PresentOrBrowse,
+        string? previousOperationId = null)
     {
         trackedBrowseItemId = itemId;
         trackedBrowseItemName = itemName;
+        trackedBrowseSearchIntent = intent;
+        trackedBrowsePreviousOperationId = previousOperationId;
         trackedBrowseSearchActive = true;
         nextTrackedBrowsePollUtc = DateTimeOffset.UtcNow;
         return AdvanceTrackedBrowseSearch();
@@ -350,7 +358,11 @@ internal sealed class RemoteMarketController : IDisposable
 
     private MarketBoardItemSearchResult AdvanceTrackedBrowseSearch()
     {
-        var result = searchDriver(trackedBrowseItemId, trackedBrowseItemName);
+        var result = searchDriver(
+            trackedBrowseItemId,
+            trackedBrowseItemName,
+            trackedBrowseSearchIntent,
+            trackedBrowsePreviousOperationId);
         nextTrackedBrowsePollUtc = DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(500);
         if (result.BrowseEvidence is { } browse &&
             !string.IsNullOrWhiteSpace(browse.OperationId))
@@ -650,17 +662,23 @@ internal sealed class RemoteMarketController : IDisposable
             .Where(item => item.Status == RemoteMarketBatchItemStatus.Queued)
             .Select(item => item.Selection)
             .ToArray();
+        var previousOperationId = browseRuntime.Snapshot.OperationId;
         pendingPostPurchaseRefresh = new RemoteMarketPendingPostPurchaseRefresh(
             itemId,
             itemName,
             remaining,
+            previousOperationId,
             DateTimeOffset.UtcNow + PurchaseVerificationDeadline);
         overlaySession.BeginRecovery();
         lastOutcome = "Refreshing listings after purchase...";
         RebuildView();
 
         OpenMarketBoard();
-        var search = SearchItem(itemId, itemName);
+        var search = SearchItem(
+            itemId,
+            itemName,
+            MarketBoardItemSearchIntent.RequireFreshBrowse,
+            previousOperationId);
         if (search.IsInProgress || search.ReadyForListings)
         {
             log.Information(
@@ -679,7 +697,10 @@ internal sealed class RemoteMarketController : IDisposable
             listingSnapshotIdentity is not { } identity ||
             identity.ItemId != pending.ItemId ||
             identity.CapturedListingCount != identity.ListingCount ||
-            !IsListingSnapshotVerifiedForPurchase(identity, browseRuntime.Snapshot))
+            !IsFreshListingSnapshotVerifiedForPurchase(
+                identity,
+                browseRuntime.Snapshot,
+                pending.PreviousOperationId))
         {
             return false;
         }
@@ -1366,6 +1387,13 @@ internal sealed class RemoteMarketController : IDisposable
             identity.RequestId,
             identity.ListingCount,
             identity.CapturedListingCount) is not null;
+
+    internal static bool IsFreshListingSnapshotVerifiedForPurchase(
+        RemoteMarketListingSnapshotIdentity? identity,
+        MarketBoardBrowseSnapshot browse,
+        string? previousOperationId) =>
+        IsListingSnapshotVerifiedForPurchase(identity, browse) &&
+        !string.Equals(identity!.VerifiedBrowseOperationId, previousOperationId, StringComparison.Ordinal);
 
     internal static bool RequiresAutomaticPurchaseVerification(
         RemoteMarketListingSnapshotIdentity? identity,

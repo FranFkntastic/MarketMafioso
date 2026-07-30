@@ -14,6 +14,7 @@ internal sealed record RemoteMarketPendingPostPurchaseRefresh(
     uint ItemId,
     string ItemName,
     IReadOnlyList<RemoteMarketSelectionView> RemainingSelections,
+    string? PreviousOperationId,
     DateTimeOffset DeadlineAtUtc);
 
 internal sealed record RemoteMarketPurchaseVerificationResult(
