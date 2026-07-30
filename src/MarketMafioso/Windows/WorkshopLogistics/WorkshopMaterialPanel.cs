@@ -128,7 +128,10 @@ internal sealed class WorkshopMaterialPanel
             return;
 
         materialTable.DrawFilterRow();
-        var active = runner.ActiveRun;
+        var active = runner.ActiveRun is { } candidate &&
+                     (runner.IsRunning || candidate.Phase == WorkshopVendorRestockPhase.Paused)
+            ? candidate
+            : null;
         var rows = OrderForDisplay(filtered)
             .Select(line => new MaterialTableRow(
                 line,
