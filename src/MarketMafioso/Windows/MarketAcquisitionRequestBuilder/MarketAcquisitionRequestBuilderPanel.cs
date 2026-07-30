@@ -258,12 +258,23 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGui.SameLine();
         }
 
-        if (ImGuiUi.Button(showAddLineEditor ? "Cancel" : "Add item", canEdit))
+        void ToggleAddLineEditor()
         {
             showAddLineEditor = !showAddLineEditor;
             if (!showAddLineEditor)
                 ResetLineEditor();
         }
+
+        var toggleLabel = showAddLineEditor ? "Cancel" : "Add item";
+        if (ImGuiUi.Button(toggleLabel, canEdit))
+            ToggleAddLineEditor();
+        RegisterLastControl(
+            "acquisition.workbench.add-editor",
+            showAddLineEditor ? "Close the add-item editor" : "Open the add-item editor",
+            canEdit,
+            showAddLineEditor,
+            itemAutocomplete.SelectedItem?.ItemId.ToString(),
+            ToggleAddLineEditor);
     }
 
     private void DrawSelectedLineWorkspace(
@@ -634,6 +645,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGuiUi.SameLineRight(closeWidth);
         if (ImGuiUi.Button("Close details", enabled: true))
             selectedLineInspectorRequested = false;
+        RegisterLastControl(
+            $"acquisition.workbench.line.{selection.ItemId}.details.close",
+            $"Close pricing evidence for {selection.ItemName}",
+            enabled: true,
+            selected: true,
+            value: selection.ItemId.ToString(),
+            () => selectedLineInspectorRequested = false);
         ImGui.Separator();
 
         ImGui.TextColored(MainWindow.ColMuted, "CRAFT ARCHITECT QUOTE");
