@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Network.Structures;
 using Dalamud.Plugin.Services;
@@ -54,6 +55,21 @@ internal sealed class RemoteMarketController : IDisposable
     private string? lastOutcome;
     private readonly HashSet<ulong> purchasedListingIds = [];
     private readonly Dictionary<uint, Dictionary<ulong, string>> retainerNamesByItem = [];
+    private RemoteMarketListingView[] listingSnapshot = [];
+    private int listingCaptureQueued;
+    private CmbMarketContext? marketContext;
+    private long viewRevision;
+    private RemoteMarketView cachedView = new(
+        0,
+        false,
+        Array.Empty<RemoteMarketListingView>(),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
     private uint? pendingSelectionMaxPrice;
     private DateTimeOffset pendingSelectionExpiresAtUtc;
 
@@ -88,6 +104,8 @@ internal sealed class RemoteMarketController : IDisposable
         marketBoard.PurchaseRequested += OnPurchaseRequested;
         marketBoard.ItemPurchased += OnItemPurchased;
         marketBoard.OfferingsReceived += OnOfferingsReceived;
+        cmbContext.ContextChanged += OnMarketContextChanged;
+        condition.ConditionChange += OnConditionChange;
         openRemoteMarketProvider = pluginInterface.GetIpcProvider<uint, uint?, bool>("MarketMafioso.OpenRemoteMarket");
         openRemoteMarketProvider.RegisterFunc(OpenRemoteMarketIpc);
         remoteMarketAvailableProvider = pluginInterface.GetIpcProvider<bool>("MarketMafioso.IsRemoteMarketAvailable");
@@ -102,6 +120,9 @@ internal sealed class RemoteMarketController : IDisposable
         marketBoard.PurchaseRequested -= OnPurchaseRequested;
         marketBoard.ItemPurchased -= OnItemPurchased;
         marketBoard.OfferingsReceived -= OnOfferingsReceived;
+        cmbContext.ContextChanged -= OnMarketContextChanged;
+        cmbContext.Dispose();
+        condition.ConditionChange -= OnConditionChange;
         openRemoteMarketProvider.UnregisterFunc();
         remoteMarketAvailableProvider.UnregisterFunc();
     }
@@ -138,15 +159,82 @@ internal sealed class RemoteMarketController : IDisposable
     private void OnOfferingsReceived(IMarketBoardCurrentOfferings offerings)
     {
         var itemId = offerings.ItemListings.Count > 0 ? offerings.ItemListings[0].ItemId : 0u;
-        if (itemId == 0)
-            return;
-        if (!retainerNamesByItem.TryGetValue(itemId, out var byListing))
+        if (itemId != 0)
         {
-            byListing = [];
-            retainerNamesByItem[itemId] = byListing;
+            if (!retainerNamesByItem.TryGetValue(itemId, out var byListing))
+            {
+                byListing = [];
+                retainerNamesByItem[itemId] = byListing;
+            }
+            foreach (var listing in offerings.ItemListings)
+                byListing[listing.ListingId] = listing.RetainerName;
         }
-        foreach (var listing in offerings.ItemListings)
-            byListing[listing.ListingId] = listing.RetainerName;
+
+        if (Interlocked.Exchange(ref listingCaptureQueued, 1) != 0)
+            return;
+        framework.RunOnTick(CaptureListingSnapshot);
+    }
+
+    private unsafe void CaptureListingSnapshot()
+    {
+        Volatile.Write(ref listingCaptureQueued, 0);
+        var itemNames = new Dictionary<uint, string>();
+        var listings = new List<RemoteMarketListingView>();
+        var proxy = GetItemSearchProxy();
+        if (proxy != null)
+        {
+            var count = (int)Math.Min(proxy->ListingCount, 50);
+            for (var index = 0; index < count; index++)
+            {
+                var listing = proxy->Listings[index];
+                if (!itemNames.TryGetValue(listing.ItemId, out var itemName))
+                {
+                    itemName = resolveItemName(listing.ItemId) ?? $"Item {listing.ItemId}";
+                    itemNames[listing.ItemId] = itemName;
+                }
+
+                listings.Add(new RemoteMarketListingView(
+                    listing.ListingId,
+                    listing.ItemId,
+                    itemName,
+                    listing.IsHqItem,
+                    listing.Quantity,
+                    listing.UnitPrice,
+                    listing.TotalTax,
+                    (listing.UnitPrice * (ulong)listing.Quantity) + listing.TotalTax,
+                    listing.MateriaCount,
+                    retainerNamesByItem.TryGetValue(listing.ItemId, out var byListing) &&
+                    byListing.TryGetValue(listing.ListingId, out var retainerName)
+                        ? retainerName
+                        : string.Empty,
+                    false,
+                    null));
+            }
+        }
+
+        listingSnapshot = listings.ToArray();
+        marketContext = listingSnapshot.Length == 0
+            ? null
+            : cmbContext.Request(listingSnapshot[0].ItemId, listingSnapshot[0].IsHighQuality);
+        RebuildView();
+    }
+
+    private void OnMarketContextChanged(uint itemId, bool highQuality, CmbMarketContext? context) =>
+        framework.RunOnTick(() =>
+        {
+            if (listingSnapshot.Length == 0 ||
+                listingSnapshot[0].ItemId != itemId ||
+                listingSnapshot[0].IsHighQuality != highQuality)
+                return;
+
+            marketContext = context;
+            RebuildView();
+        });
+
+    private void OnConditionChange(ConditionFlag flag, bool value)
+    {
+        if (PurchaseBlockingConditions.Contains(flag))
+            RebuildView();
     }
 
     public string? GetPurchaseContextBlockReason()
@@ -180,36 +268,17 @@ internal sealed class RemoteMarketController : IDisposable
         }
     }
 
-    public RemoteMarketView GetView()
+    public RemoteMarketView GetView() => cachedView;
+
+    private void RebuildView()
     {
-        var listings = new List<RemoteMarketListingView>();
-        unsafe
-        {
-            var proxy = GetItemSearchProxy();
-            if (proxy != null)
+        var listings = listingSnapshot
+            .Select(listing => listing with
             {
-                var count = (int)Math.Min(proxy->ListingCount, 50);
-                for (var index = 0; index < count; index++)
-                {
-                    var listing = proxy->Listings[index];
-                    listings.Add(new RemoteMarketListingView(
-                        listing.ListingId,
-                        listing.ItemId,
-                        resolveItemName(listing.ItemId) ?? $"Item {listing.ItemId}",
-                        listing.IsHqItem,
-                        listing.Quantity,
-                        listing.UnitPrice,
-                        listing.TotalTax,
-                        (listing.UnitPrice * (ulong)listing.Quantity) + listing.TotalTax,
-                        listing.MateriaCount,
-                        retainerNamesByItem.TryGetValue(listing.ItemId, out var byListing) && byListing.TryGetValue(listing.ListingId, out var retainerName)
-                            ? retainerName
-                            : string.Empty,
-                        purchasedListingIds.Contains(listing.ListingId),
-                        batchItems.FirstOrDefault(item => item.ListingId == listing.ListingId)?.Status));
-                }
-            }
-        }
+                AlreadyPurchased = purchasedListingIds.Contains(listing.ListingId),
+                BatchStatus = batchItems.FirstOrDefault(item => item.ListingId == listing.ListingId)?.Status,
+            })
+            .ToArray();
 
         var batch = batchItems.Count == 0
             ? null
@@ -219,18 +288,62 @@ internal sealed class RemoteMarketController : IDisposable
                 batchItems.Count(item => item.Status == RemoteMarketBatchItemStatus.Failed),
                 attempt is not null);
 
-        CmbMarketContext? context = null;
-        if (listings.Count > 0)
-            context = cmbContext.Get(listings[0].ItemId, listings[0].IsHighQuality);
-
-        return new RemoteMarketView(
+        cachedView = new RemoteMarketView(
+            ++viewRevision,
             IsAvailable,
             listings,
             batch,
             lastOutcome,
             GetPurchaseContextBlockReason(),
             GetCurrentGil(),
-            context);
+            marketContext,
+            BuildEconomics(listings, marketContext),
+            BuildMarketContextSummary(listings, marketContext));
+    }
+
+    private static RemoteMarketEconomicsView? BuildEconomics(
+        IReadOnlyCollection<RemoteMarketListingView> listings,
+        CmbMarketContext? context)
+    {
+        var buyable = listings.Where(listing => !listing.AlreadyPurchased).ToArray();
+        if (buyable.Length == 0)
+            return null;
+
+        var sortedPrices = buyable.Select(listing => listing.UnitPrice).OrderBy(price => price).ToArray();
+        var cheapest = sortedPrices[0];
+        var median = sortedPrices[sortedPrices.Length / 2];
+        var mean = buyable.Average(listing => (double)listing.UnitPrice);
+        double? trendDelta = null;
+        if (context?.TrendAveragePrice is { } trend && trend > 0)
+            trendDelta = (cheapest - trend) / trend;
+        return new RemoteMarketEconomicsView(cheapest, median, mean, trendDelta);
+    }
+
+    private static string? BuildMarketContextSummary(
+        IReadOnlyCollection<RemoteMarketListingView> listings,
+        CmbMarketContext? context)
+    {
+        if (context is null || listings.Count == 0)
+            return null;
+
+        var parts = new List<string>(3);
+        if (context.DatacenterBestPrice is { } dcBest &&
+            !string.IsNullOrWhiteSpace(context.DatacenterBestWorld))
+        {
+            var cheapestLocal = listings.Min(listing => listing.UnitPrice);
+            var delta = cheapestLocal > 0 ? ((double)cheapestLocal - dcBest) / cheapestLocal : 0;
+            var deltaText = delta > 0.005
+                ? $" (-{delta:P0})"
+                : delta < -0.005
+                    ? $" (+{-delta:P0})"
+                    : string.Empty;
+            parts.Add($"DC best {dcBest:N0}p ({context.DatacenterBestWorld}{deltaText})");
+        }
+        if (context.VelocityPerDay is { } velocity)
+            parts.Add($"~{velocity:0.#}/day");
+        if (context.TrendAveragePrice is { } trend)
+            parts.Add($"sale avg {trend:0}p");
+        return parts.Count == 0 ? null : string.Join(" · ", parts);
     }
 
     public string? BeginBatch(IReadOnlyCollection<ulong> selectedListingIds)
@@ -261,9 +374,13 @@ internal sealed class RemoteMarketController : IDisposable
 
         if (staged.Count == 0)
             return "Select at least one listing.";
+        var stagedTotal = staged.Aggregate(0UL, (sum, selection) => sum + selection.TotalGil);
+        if (GetCurrentGil() is { } gilOnHand && gilOnHand < stagedTotal)
+            return $"Insufficient gil for this selection ({gilOnHand:N0} on hand).";
 
         foreach (var selection in staged)
             batchItems.Add(new RemoteMarketBatchItem(selection.ListingId, selection, RemoteMarketBatchItemStatus.Queued));
+        RebuildView();
         AdvanceBatch();
         return null;
     }
@@ -274,6 +391,8 @@ internal sealed class RemoteMarketController : IDisposable
             item.Status = RemoteMarketBatchItemStatus.Skipped;
         if (attempt is null)
             FinishBatch("Batch cancelled.");
+        else
+            RebuildView();
     }
 
     private void AdvanceBatch()
@@ -301,6 +420,7 @@ internal sealed class RemoteMarketController : IDisposable
             objectTable.LocalPlayer?.Position.ToString() ?? "unavailable",
             DateTimeOffset.UtcNow);
         attempt = pending;
+        RebuildView();
 
         string? failure = null;
         unsafe
@@ -360,6 +480,7 @@ internal sealed class RemoteMarketController : IDisposable
         log.Information("[MarketMafioso] Remote market {Outcome}", lastOutcome);
         chatGui.Print($"[MMF] Remote market: {lastOutcome}");
         batchItems.Clear();
+        RebuildView();
     }
 
     private void OnPurchaseRequested(IMarketBoardPurchaseHandler purchase)
@@ -458,6 +579,7 @@ internal sealed class RemoteMarketController : IDisposable
             ClearStagedPurchase();
         pending.FailureReason = message;
         attempt = null;
+        RebuildView();
         log.Information(
             "[MarketMafioso] Remote market purchase {Phase}. ListingId={ListingId} PacketObserved={PacketObserved} PacketMatchesIntent={PacketMatchesIntent} Message={Message}",
             pending.Phase,
@@ -648,14 +770,23 @@ internal sealed record RemoteMarketBatchView(
     int FailedCount,
     bool Active);
 
+internal sealed record RemoteMarketEconomicsView(
+    uint CheapestUnitPrice,
+    uint MedianUnitPrice,
+    double MeanUnitPrice,
+    double? TrendDelta);
+
 internal sealed record RemoteMarketView(
+    long Revision,
     bool Available,
     IReadOnlyList<RemoteMarketListingView> Listings,
     RemoteMarketBatchView? Batch,
     string? LastOutcome,
     string? ContextBlockReason,
     uint? GilOnHand,
-    CmbMarketContext? MarketContext);
+    CmbMarketContext? MarketContext,
+    RemoteMarketEconomicsView? Economics,
+    string? MarketContextSummary);
 
 internal sealed class RemoteMarketPurchaseAttempt(
     RemoteMarketSelectionView selection,
