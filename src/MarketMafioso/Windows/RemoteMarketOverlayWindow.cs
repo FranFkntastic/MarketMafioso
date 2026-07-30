@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Interface.Textures.TextureWraps;
+using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using Franthropy.Dalamud.UI.Tables;
 using Lumina.Excel.Sheets;
@@ -23,7 +23,7 @@ public sealed class RemoteMarketOverlayWindow : Window
     private bool pinned = true;
     private long observedRevision = -1;
     private uint cachedIconItemId;
-    private IDalamudTextureWrap? cachedIcon;
+    private ISharedImmediateTexture? cachedIcon;
     private IReadOnlyList<RemoteMarketListingView> projectedListings = Array.Empty<RemoteMarketListingView>();
     private long projectedRevision = -1;
     private readonly string[] projectedFilters = new string[7];
@@ -132,9 +132,9 @@ public sealed class RemoteMarketOverlayWindow : Window
     private void DrawHeader(RemoteMarketView view)
     {
         var first = view.Listings[0];
-        if (cachedIcon is not null)
+        if (cachedIcon?.TryGetWrap(out var icon, out _) == true)
         {
-            ImGui.Image(cachedIcon.Handle, new Vector2(28, 28));
+            ImGui.Image(icon.Handle, new Vector2(28, 28));
             ImGui.SameLine();
         }
 
@@ -357,14 +357,14 @@ public sealed class RemoteMarketOverlayWindow : Window
         selectedGil = selectedListings.Aggregate(0UL, (sum, listing) => sum + listing.TotalGil);
     }
 
-    private static IDalamudTextureWrap? ResolveItemIcon(uint itemId)
+    private static ISharedImmediateTexture? ResolveItemIcon(uint itemId)
     {
         try
         {
             var item = Plugin.DataManager.GetExcelSheet<Item>()?.GetRowOrDefault(itemId);
             if (item is null)
                 return null;
-            return Plugin.TextureProvider.GetFromGameIcon(new Dalamud.Interface.Textures.GameIconLookup(item.Value.Icon)).GetWrapOrEmpty();
+            return Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(item.Value.Icon));
         }
         catch
         {
