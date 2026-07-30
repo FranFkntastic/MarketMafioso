@@ -850,8 +850,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             gilCapBuffer);
         if (ImGuiUi.PrimaryButton("Add", canAdd))
         {
-            ApplyEditorLine();
-            ResetLineEditor();
+            AddEditorLine();
+            ClearLineEditor();
         }
         RegisterLastControl(
             "acquisition.workbench.add",
@@ -861,8 +861,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             itemAutocomplete.SelectedItem?.ItemId.ToString(),
             () =>
             {
-                ApplyEditorLine();
-                ResetLineEditor();
+                AddEditorLine();
+                ClearLineEditor();
             });
 
         if (!canEdit)
@@ -991,7 +991,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
     }
 
-    private void ApplyEditorLine()
+    private void AddEditorLine()
     {
         if (itemAutocomplete.SelectedItem is not { } item)
             return;
@@ -1007,7 +1007,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             MaxUnitPrice = ParseUInt(maxUnitPriceBuffer),
             GilCap = ParseUInt(gilCapBuffer),
         };
-        controller.ApplyEditorLine(line);
+        controller.AddEditorLine(line);
     }
 
     private void RemoveLine(int index)
