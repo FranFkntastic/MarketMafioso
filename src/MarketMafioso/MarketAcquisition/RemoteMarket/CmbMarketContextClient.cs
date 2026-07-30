@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Text.Json;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using Dalamud.Plugin.Services;
@@ -17,38 +17,47 @@ internal sealed record CmbMarketContext(
     long FreshnessUtcMs,
     string Source);
 
-internal sealed class CmbMarketContextClient
+internal sealed class CmbMarketContextClient : IDisposable
 {
-    private static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(60);
+    private const string GetMarketContextChannel = "ComplicatedMarketBoard.GetMarketContext.v2";
+    private const string MarketContextChangedChannel = "ComplicatedMarketBoard.MarketContextChanged";
 
-    private readonly ICallGateSubscriber<uint, bool, CmbMarketContext?> subscriber;
+    private readonly ICallGateSubscriber<uint, bool, string?> getter;
+    private readonly ICallGateSubscriber<uint, bool, object> changed;
     private readonly IPluginLog log;
-    private readonly Dictionary<(uint ItemId, bool Hq), (DateTimeOffset CachedAt, CmbMarketContext? Context)> cache = [];
 
     public CmbMarketContextClient(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
         this.log = log;
-        subscriber = pluginInterface.GetIpcSubscriber<uint, bool, CmbMarketContext?>(
-            "ComplicatedMarketBoard.GetMarketContext");
+        getter = pluginInterface.GetIpcSubscriber<uint, bool, string?>(GetMarketContextChannel);
+        changed = pluginInterface.GetIpcSubscriber<uint, bool, object>(MarketContextChangedChannel);
+        changed.Subscribe(OnContextChanged);
     }
 
-    public CmbMarketContext? Get(uint itemId, bool highQuality)
-    {
-        var key = (itemId, highQuality);
-        if (cache.TryGetValue(key, out var cached) && DateTimeOffset.UtcNow - cached.CachedAt < CacheLifetime)
-            return cached.Context;
+    public event Action<uint, bool, CmbMarketContext?>? ContextChanged;
 
-        CmbMarketContext? context = null;
+    public void Dispose() => changed.Unsubscribe(OnContextChanged);
+
+    public CmbMarketContext? Request(uint itemId, bool highQuality)
+    {
         try
         {
-            context = subscriber.InvokeFunc(itemId, highQuality);
+            var json = getter.InvokeFunc(itemId, highQuality);
+            return json is null ? null : JsonSerializer.Deserialize<CmbMarketContext>(json);
         }
         catch (Exception exception)
         {
-            log.Verbose("[MarketMafioso] CMB market context unavailable for {ItemId}: {Message}", itemId, exception.Message);
+            log.Verbose(
+                "[MarketMafioso] CMB market context unavailable for {ItemId}: {Message}",
+                itemId,
+                exception.Message);
+            return null;
         }
+    }
 
-        cache[key] = (DateTimeOffset.UtcNow, context);
-        return context;
+    private void OnContextChanged(uint itemId, bool highQuality)
+    {
+        var context = Request(itemId, highQuality);
+        ContextChanged?.Invoke(itemId, highQuality, context);
     }
 }
