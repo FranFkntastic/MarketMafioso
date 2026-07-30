@@ -109,6 +109,34 @@ public sealed class RemoteMarketPresentationIdentityTests
             ListingCount));
     }
 
+    [Theory]
+    [InlineData((int)RemoteMarketPurchasePhase.Sending, true)]
+    [InlineData((int)RemoteMarketPurchasePhase.Sent, true)]
+    [InlineData((int)RemoteMarketPurchasePhase.AwaitingConfirmation, false)]
+    [InlineData((int)RemoteMarketPurchasePhase.Confirmed, false)]
+    [InlineData((int)RemoteMarketPurchasePhase.Failed, false)]
+    public void PurchasePacketCorrelationIncludesTheSynchronousSendPhase(
+        int phase,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            RemoteMarketController.IsPurchaseRequestCorrelatablePhase(
+                (RemoteMarketPurchasePhase)phase));
+
+    [Theory]
+    [InlineData(null, "market-browse:1", true)]
+    [InlineData("market-browse:1", "market-browse:1", false)]
+    [InlineData("market-browse:1", "market-browse:2", true)]
+    public void TerminalBrowseLatchOnlyResetsForANewOperation(
+        string? previousOperationId,
+        string nextOperationId,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            RemoteMarketController.ShouldResetTrackedBrowseTerminalLatch(
+                previousOperationId,
+                nextOperationId));
+
     private static bool IsCurrent(
         RemoteMarketListingSnapshotIdentity? identity,
         bool resultVisible = true,

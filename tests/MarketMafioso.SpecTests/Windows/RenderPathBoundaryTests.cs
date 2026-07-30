@@ -47,6 +47,19 @@ public sealed class RenderPathBoundaryTests
     }
 
     [Fact]
+    public void RemoteMarketOverlayUsesControllerOwnedSessionInsteadOfTransientAddonVisibility()
+    {
+        var overlay = ReadSource("src", "MarketMafioso", "Windows", "RemoteMarketOverlayWindow.cs");
+        var controller = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
+        var drawConditions = ExtractMethodBody(overlay, "DrawConditions");
+
+        Assert.Contains("controller.ShouldPresentOverlay()", drawConditions, StringComparison.Ordinal);
+        Assert.DoesNotContain("IsMarketBoardResultVisible()", drawConditions, StringComparison.Ordinal);
+        Assert.Contains("BeginPostPurchaseRefresh(", controller, StringComparison.Ordinal);
+        Assert.Contains("TryCompletePendingPostPurchaseRefresh(", controller, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RemoteMarketListingCacheRefreshesFromNativeLifecycleEvents()
     {
         var source = ReadSource(

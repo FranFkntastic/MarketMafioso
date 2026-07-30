@@ -59,7 +59,7 @@ public sealed class RemoteMarketOverlayWindow : Window
         IsOpen = true;
     }
 
-    public override bool DrawConditions() => controller.IsAvailable && controller.IsMarketBoardResultVisible();
+    public override bool DrawConditions() => controller.ShouldPresentOverlay();
 
     public override void PreDraw()
     {
