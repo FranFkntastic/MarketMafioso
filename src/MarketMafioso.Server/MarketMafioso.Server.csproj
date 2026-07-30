@@ -4,7 +4,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
-    <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
     <UsesFranthropy>true</UsesFranthropy>
   </PropertyGroup>
   <ItemGroup>
@@ -13,7 +12,6 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="$(CraftArchitectCoreProject)" />
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
     <ProjectReference Include="..\MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj" />
     <ProjectReference Include="$(FranthropyFfxivProject)" />
@@ -30,9 +28,6 @@
            Text="Release build resolved Debug project output: @(_DebugProjectReference). Publish the server project directly with tools\Publish-ServerRelease.ps1." />
   </Target>
 
-  <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(CraftArchitectCoreProject)')">
-    <Error Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Check out the sibling 'FFXIV Craft Architect C# Edition' repository or set /p:CraftArchitectCoreProject=&quot;path/to/FFXIV Craft Architect.Core.csproj&quot;." />
-  </Target>
   <Target Name="CopyDashboardSourceMapsToPublish" AfterTargets="Publish">
     <ItemGroup>
       <DashboardSourceMapFiles Include="..\MarketMafioso.Dashboard\bin\$(Configuration)\$(TargetFramework)\wwwroot\_framework\*.map" />

@@ -1,4 +1,3 @@
-using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.WorkshopHost;
 
@@ -24,7 +23,6 @@ internal static class WorkshopHostEndpoints
                 requireApiKey,
                 token));
         app.MapPost("/api/craft/appraise", AppraiseCraft);
-        app.MapGet("/api/craft/plans/{planId}", OpenCraftPlan);
     }
 
     private static async Task<IResult> GetCapabilitiesAsync(
@@ -108,8 +106,6 @@ internal static class WorkshopHostEndpoints
     private static async Task<IResult> AppraiseCraft(
         CraftAppraisalRequest quoteRequest,
         IWorkshopHostCraftQuoteService quoteService,
-        HttpRequest request,
-        IConfiguration configuration,
         CancellationToken token)
     {
         if (quoteRequest.SchemaVersion != 1)
@@ -125,46 +121,36 @@ internal static class WorkshopHostEndpoints
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        var quote = await quoteService.AppraiseAsync(quoteRequest, token);
-        if (quote == null)
-            return Results.NotFound(new { error = "craft_appraisal_not_found" });
+        CraftAppraisalQuote? quote;
+        try
+        {
+            quote = await quoteService.AppraiseAsync(quoteRequest, token);
+            if (quote == null)
+                return Results.NotFound(new { error = "craft_appraisal_not_found" });
+        }
+        catch (TaskCanceledException) when (!token.IsCancellationRequested)
+        {
+            return Results.Json(
+                new { error = "craft_architect_api_timeout" },
+                statusCode: StatusCodes.Status504GatewayTimeout);
+        }
+        catch (CraftArchitectApiException ex)
+            when (ex.StatusCode == System.Net.HttpStatusCode.GatewayTimeout)
+        {
+            return Results.Json(
+                new { error = "craft_architect_api_timeout" },
+                statusCode: StatusCodes.Status504GatewayTimeout);
+        }
+        catch (HttpRequestException)
+        {
+            return Results.Json(
+                new { error = "craft_architect_api_error" },
+                statusCode: StatusCodes.Status502BadGateway);
+        }
 
         var response = string.IsNullOrWhiteSpace(quote.Source)
-            ? quote with { Source = "WorkshopHostCraftArchitect" }
+            ? quote with { Source = "CraftArchitectHosted" }
             : quote;
-        if (!string.IsNullOrWhiteSpace(response.PlanId))
-            response = response with { PlanUrl = BuildPlanUrl(request, configuration, response.PlanId) };
         return Results.Ok(response);
-    }
-
-    private static async Task<IResult> OpenCraftPlan(
-        string planId,
-        CraftAppraisalPlanStore planStore,
-        CancellationToken cancellationToken)
-    {
-        var json = await planStore.ReadAsync(planId, cancellationToken);
-        return json == null
-            ? Results.NotFound(new { error = "craft_appraisal_plan_not_found" })
-            : Results.Text(json, "application/json");
-    }
-
-    private static string BuildPlanUrl(
-        HttpRequest request,
-        IConfiguration configuration,
-        string planId)
-    {
-        var configuredOrigin = configuration["MarketMafioso:PublicOrigin"]?.Trim().TrimEnd('/');
-        var workshopOrigin = string.IsNullOrWhiteSpace(configuredOrigin)
-            ? $"{request.Scheme}://{request.Host}"
-            : configuredOrigin;
-        var snapshotPath = $"{request.PathBase}/api/craft/plans/{Uri.EscapeDataString(planId)}";
-        var snapshotUrl = $"{workshopOrigin}{snapshotPath}";
-        var configuredAppOrigin = configuration["MarketMafioso:CraftArchitectAppOrigin"]?.Trim().TrimEnd('/');
-        if (!string.IsNullOrWhiteSpace(configuredAppOrigin))
-            return $"{configuredAppOrigin}/?appraisalPlan={Uri.EscapeDataString(snapshotUrl)}";
-
-        return request.PathBase.HasValue
-            ? $"{workshopOrigin}/?appraisalPlan={Uri.EscapeDataString(snapshotPath)}"
-            : snapshotUrl;
     }
 }

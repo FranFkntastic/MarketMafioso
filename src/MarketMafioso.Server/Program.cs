@@ -1,4 +1,3 @@
-using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.Server;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.Dashboard;
@@ -35,10 +34,8 @@ builder.Services.AddSingleton<MarketDiagnosticAlertSink>();
 builder.Services.AddSingleton<MarketDiagnosticCollector>();
 if (builder.Configuration.GetValue<bool>("MarketMafioso:MarketDiagnostics:Enabled"))
     builder.Services.AddHostedService<MarketDiagnosticBackgroundService>();
-builder.Services.AddWorkshopHostCraftAppraisal();
-builder.Services.AddSingleton<WorkshopHostCraftQuoteCache>();
-builder.Services.AddSingleton<CraftAppraisalPlanStore>();
-builder.Services.AddScoped<IWorkshopHostCraftQuoteService, CraftArchitectWorkshopHostCraftQuoteService>();
+builder.Services.AddHttpClient<IWorkshopHostCraftQuoteService, CraftArchitectWorkshopHostCraftQuoteService>(
+    client => client.Timeout = TimeSpan.FromSeconds(60));
 builder.Services.AddHttpClient();
 
 var app = builder.Build();

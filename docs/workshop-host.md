@@ -34,7 +34,7 @@ Workshop Host exposes a machine-readable capabilities endpoint:
 GET /api/capabilities
 ```
 
-MMF uses this endpoint before enabling Workshop Host craft quote lookup. Current source builds advertise `craft.appraise` by default because the receiver directly references Craft Architect Core for appraisal. If an older or custom host does not advertise `craft.appraise`, MMF skips the Workshop Host quote provider and continues to quote-file or manual evidence.
+MMF uses this endpoint before enabling hosted Craft Architect quote lookup. Workshop Host advertises `craft.appraise` only when `MarketMafioso__CraftArchitectAppraiseUrl` names a valid loopback CA service. If it is absent, MMF keeps the quote action unavailable instead of silently substituting another computation path.
 
 ## Craft Quote API
 
@@ -44,7 +44,7 @@ Workshop Host reserves the private craft appraisal route:
 POST /api/craft/appraise
 ```
 
-The route requires the client API key when API-key auth is enabled. The current receiver implementation delegates directly to Craft Architect Core. MMF treats configured quote API failures as visible evidence-provider failures, not as a silent fallback to stale or manual costs.
+The route requires the client API key when API-key auth is enabled. Workshop Host forwards the versioned wire contract to CA's loopback API; it does not reference or invoke Craft Architect Core. MMF treats configured quote API failures as visible evidence-provider failures, not as a silent fallback to stale or manual costs.
 
 MMF keeps an in-memory last-good quote cache per appraisal signature while the plugin session is alive. If live quote evidence fails, the cached quote is labeled with `(last-good)` and warning text. Route creation still uses the user's explicit buy threshold, not the cached quote cost.
 
