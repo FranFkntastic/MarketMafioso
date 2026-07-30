@@ -171,7 +171,8 @@ internal sealed class RemoteMarketController : IDisposable
     {
         if (!IsAvailable || itemId == 0 || !clientState.IsLoggedIn)
             return false;
-        OpenMarketBoard();
+        if (!HasReusableVisibleBrowse(itemId))
+            OpenMarketBoard();
         var result = SearchItem(itemId, resolveItemName(itemId));
         if (!result.IsInProgress && !result.ReadyForListings)
             return false;
@@ -193,11 +194,29 @@ internal sealed class RemoteMarketController : IDisposable
         if (string.IsNullOrWhiteSpace(itemName))
             return "The requested item name could not be resolved.";
 
-        OpenMarketBoard();
+        if (!HasReusableVisibleBrowse(itemId))
+            OpenMarketBoard();
         var result = SearchItem(itemId, itemName);
         return result.IsInProgress || result.ReadyForListings
             ? $"Listing search queued for {itemName}."
             : result.Message;
+    }
+
+    private unsafe bool HasReusableVisibleBrowse(uint itemId)
+    {
+        var itemSearchResult = gameGui.GetAddonByName<AddonItemSearchResult>("ItemSearchResult", 1);
+        var resultVisible =
+            itemSearchResult != null &&
+            itemSearchResult->AtkUnitBase.IsReady &&
+            itemSearchResult->AtkUnitBase.IsVisible;
+        var infoProxy = resultVisible ? InfoProxyItemSearch.Instance() : null;
+        var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
+        return MarketBoardItemSearchDriver.ShouldReuseOwnedTerminalResult(
+            browseRuntime.Snapshot,
+            MarketBoardBrowseOwner.RemoteMarketController,
+            itemId,
+            resultVisible,
+            openResultItemId);
     }
 
     private void OnOfferingsReceived(IMarketBoardCurrentOfferings offerings)

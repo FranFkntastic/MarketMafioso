@@ -349,6 +349,75 @@ public sealed class MarketBoardBrowseOperationGateTests
             MarketBoardItemSearchDriver.GetResultActivationEventSequence());
     }
 
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    [InlineData(false, false, false)]
+    public void ResultListInteractionReadiness_AcceptsEitherNativeInteractionFlag(
+        bool isItemInteractionEnabled,
+        bool isItemClickEnabled,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            MarketBoardItemSearchDriver.IsResultListInteractionReady(
+                isItemInteractionEnabled,
+                isItemClickEnabled));
+    }
+
+    [Fact]
+    public void CompletedSameItemBrowse_ReusesVisibleListingsOnReentry()
+    {
+        var browse = CompletedBrowse(ItemId, listingCount: 31, pageCount: 4, requestId: 3);
+
+        Assert.True(
+            MarketBoardItemSearchDriver.ShouldReuseOwnedTerminalResult(
+                browse,
+                MarketBoardBrowseOwner.MarketAcquisition,
+                ItemId,
+                resultVisible: true,
+                openResultItemId: ItemId));
+    }
+
+    [Fact]
+    public void FailedSameItemBrowse_PreservesVisibleListingsForReadOnlyConsumers()
+    {
+        var browse = CompletedBrowse(ItemId, listingCount: 0, pageCount: 0, requestId: null) with
+        {
+            Phase = MarketBoardBrowsePhase.Failed,
+            FailureCode = "BrowseTimeout",
+        };
+
+        Assert.True(
+            MarketBoardItemSearchDriver.ShouldReuseOwnedTerminalResult(
+                browse,
+                MarketBoardBrowseOwner.MarketAcquisition,
+                ItemId,
+                resultVisible: true,
+                openResultItemId: ItemId));
+    }
+
+    [Theory]
+    [InlineData(false, ItemId, MarketBoardBrowseOwner.MarketAcquisition)]
+    [InlineData(true, ItemId + 1, MarketBoardBrowseOwner.MarketAcquisition)]
+    [InlineData(true, ItemId, MarketBoardBrowseOwner.RemoteAccessProbe)]
+    public void TerminalBrowse_DoesNotReuseMissingMismatchedOrForeignListings(
+        bool resultVisible,
+        uint openResultItemId,
+        MarketBoardBrowseOwner owner)
+    {
+        var browse = CompletedBrowse(ItemId, listingCount: 31, pageCount: 4, requestId: 3);
+
+        Assert.False(
+            MarketBoardItemSearchDriver.ShouldReuseOwnedTerminalResult(
+                browse,
+                owner,
+                ItemId,
+                resultVisible,
+                openResultItemId));
+    }
+
     [Fact]
     public void ListingRowsWithoutCompletedBrowseEvidence_AreUnavailable()
     {

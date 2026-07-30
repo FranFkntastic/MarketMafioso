@@ -62,6 +62,21 @@ public sealed class RenderPathBoundaryTests
             Assert.DoesNotContain(forbidden, body, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RemoteMarketIconCacheDoesNotRetainAFrameScopedTextureWrap()
+    {
+        var source = ReadSource("src", "MarketMafioso", "Windows", "RemoteMarketOverlayWindow.cs");
+        var resolver = ExtractMethodBody(source, "ResolveItemIcon");
+        var header = ExtractMethodBody(source, "DrawHeader");
+
+        Assert.Contains("private ISharedImmediateTexture? cachedIcon;", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("private IDalamudTextureWrap? cachedIcon;", source, StringComparison.Ordinal);
+        Assert.Contains("cachedIcon?.TryGetWrap(", header, StringComparison.Ordinal);
+        Assert.Contains("GetFromGameIcon(", resolver, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetWrapOrEmpty(", resolver, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetWrapOrDefault(", resolver, StringComparison.Ordinal);
+    }
+
     private static string ReadSource(params string[] segments)
         => File.ReadAllText(Path.Combine([FindRepositoryRoot(), .. segments]));
 

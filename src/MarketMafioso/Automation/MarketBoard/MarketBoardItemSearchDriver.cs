@@ -50,6 +50,13 @@ public sealed class MarketBoardItemSearchDriver
             };
         }
 
+        var itemSearchResult = gameGui.GetAddonByName<AddonItemSearchResult>(ItemSearchResultAddon, 1);
+        var itemSearchResultVisible =
+            itemSearchResult != null &&
+            IsAddonReady(&itemSearchResult->AtkUnitBase);
+        var infoProxy = itemSearchResultVisible ? InfoProxyItemSearch.Instance() : null;
+        var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
+
         var observedBrowse = browseRuntime.Snapshot;
         if (IsOwnedBrowse(observedBrowse, owner, itemId))
         {
@@ -58,6 +65,16 @@ public sealed class MarketBoardItemSearchDriver
             {
                 if (observedBrowse.IsTerminal)
                     lastReturnedTerminalOperationId = observedBrowse.OperationId;
+                return BuildBrowseResult(itemName.Trim(), observedBrowse);
+            }
+
+            if (ShouldReuseOwnedTerminalResult(
+                    observedBrowse,
+                    owner,
+                    itemId,
+                    itemSearchResultVisible,
+                    openResultItemId))
+            {
                 return BuildBrowseResult(itemName.Trim(), observedBrowse);
             }
 
@@ -78,11 +95,8 @@ public sealed class MarketBoardItemSearchDriver
             ClearSubmittedSearch();
         }
 
-        var itemSearchResult = gameGui.GetAddonByName<AddonItemSearchResult>(ItemSearchResultAddon, 1);
-        if (itemSearchResult != null && IsAddonReady(&itemSearchResult->AtkUnitBase))
+        if (itemSearchResultVisible)
         {
-            var infoProxy = InfoProxyItemSearch.Instance();
-            var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
             itemSearchResult->AtkUnitBase.Close(true);
             ClearSubmittedSearch();
             return new MarketBoardItemSearchResult
@@ -301,6 +315,17 @@ public sealed class MarketBoardItemSearchDriver
         return requestedItemId != 0 && openResultItemId == requestedItemId;
     }
 
+    internal static bool ShouldReuseOwnedTerminalResult(
+        MarketBoardBrowseSnapshot browse,
+        MarketBoardBrowseOwner owner,
+        uint requestedItemId,
+        bool resultVisible,
+        uint openResultItemId) =>
+        browse.IsTerminal &&
+        IsOwnedBrowse(browse, owner, requestedItemId) &&
+        resultVisible &&
+        IsOpenListingResultForRequestedItem(requestedItemId, openResultItemId);
+
     internal static IReadOnlyList<MarketBoardItemSearchSubmitCallback> GetSearchSubmitCallbackSequence()
     {
         return
@@ -372,6 +397,11 @@ public sealed class MarketBoardItemSearchDriver
             MarketBoardItemSearchResultActivationEvent.ListItemClick,
         ];
     }
+
+    internal static bool IsResultListInteractionReady(
+        bool isItemInteractionEnabled,
+        bool isItemClickEnabled) =>
+        isItemInteractionEnabled || isItemClickEnabled;
 
     internal static MarketBoardItemSearchFocusTarget ChooseTextInputFocusTarget(bool hasCollisionNode, bool hasOwnerNode)
     {
@@ -640,8 +670,9 @@ public sealed class MarketBoardItemSearchDriver
                 return false;
             }
 
-            if (!addon->ResultsList->IsItemInteractionEnabled ||
-                !addon->ResultsList->IsItemClickEnabled)
+            if (!IsResultListInteractionReady(
+                    addon->ResultsList->IsItemInteractionEnabled,
+                    addon->ResultsList->IsItemClickEnabled))
             {
                 details["itemResultSelectStatus"] = "ResultInteractionDisabled";
                 return false;
