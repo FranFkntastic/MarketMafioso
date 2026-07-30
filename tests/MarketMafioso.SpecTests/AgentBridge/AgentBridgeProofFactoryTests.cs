@@ -49,6 +49,21 @@ public sealed class AgentBridgeProofFactoryTests
         Assert.DoesNotContain("listing-1", json, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Serialize_ExposesObservableCraftAppraisalCompletion()
+    {
+        var receipt = AgentBridgeProofFactory.Create(CreateTruth(), 1);
+
+        var json = AgentBridgeProofFactory.Serialize(receipt);
+
+        Assert.Contains("\"craftAppraisal\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"isFetching\":false", json, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"Opened the quoted Craft Architect plan.\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"quoteUnitCost\":8427", json, StringComparison.Ordinal);
+        Assert.Contains("\"planId\":\"plan-1\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"canOpenPlan\":true", json, StringComparison.Ordinal);
+    }
+
     private static AgentBridgeTruth CreateTruth() => new()
     {
         SchemaVersion = 1,
@@ -66,6 +81,26 @@ public sealed class AgentBridgeProofFactoryTests
         WorkspaceBusy = false,
         ClaimedRequestId = "request-1",
         PreparedPlanStatus = "Ready",
+        CraftAppraisal = new AgentBridgeCraftAppraisalTruth
+        {
+            IsFetching = false,
+            Status = "Opened the quoted Craft Architect plan.",
+            WorkshopHostEnabled = true,
+            WorkshopHostAvailable = true,
+            SelectedItemId = 11953,
+            SelectedItemName = "Adamantite Scythe",
+            RequestedQuantity = 1,
+            HqPolicy = "HQOnly",
+            Region = "North America",
+            HasQuote = true,
+            QuoteComplete = true,
+            QuoteUnitCost = 8427m,
+            QuoteSource = "CraftArchitectHosted",
+            QuoteConfidence = "Medium",
+            WarningCount = 16,
+            PlanId = "plan-1",
+            CanOpenPlan = true,
+        },
         RemoteMarket = new AgentBridgeRemoteMarketTruth
         {
             Available = true,

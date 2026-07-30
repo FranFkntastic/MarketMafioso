@@ -25,10 +25,32 @@ public sealed record AgentBridgeTruth
     public required bool WorkspaceBusy { get; init; }
     public required string? ClaimedRequestId { get; init; }
     public required string? PreparedPlanStatus { get; init; }
+    public AgentBridgeCraftAppraisalTruth? CraftAppraisal { get; init; }
     public AgentBridgeWorkshopRestockTruth? WorkshopRestock { get; init; }
     public required AgentBridgeRemoteMarketTruth RemoteMarket { get; init; }
     public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+}
+
+public sealed record AgentBridgeCraftAppraisalTruth
+{
+    public required bool IsFetching { get; init; }
+    public required string Status { get; init; }
+    public required bool WorkshopHostEnabled { get; init; }
+    public required bool WorkshopHostAvailable { get; init; }
+    public uint? SelectedItemId { get; init; }
+    public string? SelectedItemName { get; init; }
+    public uint? RequestedQuantity { get; init; }
+    public string? HqPolicy { get; init; }
+    public string? Region { get; init; }
+    public required bool HasQuote { get; init; }
+    public bool QuoteComplete { get; init; }
+    public decimal? QuoteUnitCost { get; init; }
+    public string? QuoteSource { get; init; }
+    public string? QuoteConfidence { get; init; }
+    public int WarningCount { get; init; }
+    public string? PlanId { get; init; }
+    public required bool CanOpenPlan { get; init; }
 }
 
 public sealed record AgentBridgeWorkshopRestockTruth
