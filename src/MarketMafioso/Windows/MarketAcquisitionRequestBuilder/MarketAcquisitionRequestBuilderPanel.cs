@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
@@ -418,6 +419,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             SetLineMaxUnitPrice(index, threshold.Value, "Unit ceiling set from Craft Architect quote.");
         }
 
+        var quote = craftAppraisal.State.GetLineQuote(identity)?.Quote;
+        if (!string.IsNullOrWhiteSpace(quote?.PlanUrl) &&
+            ImGuiUi.MenuItem("Open Craft Architect plan", enabled: true))
+        {
+            OpenCraftArchitectPlan(quote.PlanUrl);
+        }
+
         ImGui.EndPopup();
     }
 
@@ -549,9 +557,35 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 threshold.Value.ToString(),
                 () => SetLineMaxUnitPrice(index, threshold.Value, "Unit ceiling set from Craft Architect quote."));
         }
+        if (!string.IsNullOrWhiteSpace(quote?.PlanUrl))
+        {
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Open plan", enabled: true))
+                OpenCraftArchitectPlan(quote.PlanUrl);
+            RegisterLastControl(
+                $"acquisition.workbench.line.{line.ItemId}.quote.open-plan",
+                $"Open quoted Craft Architect plan for {FormatLineItemName(line)}",
+                enabled: true,
+                selected: false,
+                value: quote.PlanId,
+                () => OpenCraftArchitectPlan(quote.PlanUrl));
+        }
 
         ImGui.TableNextColumn();
         ImGui.TextUnformatted(string.Empty);
+    }
+
+    private void OpenCraftArchitectPlan(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            craftAppraisal.State.CraftQuoteStatus = "Opened the quoted Craft Architect plan.";
+        }
+        catch (Exception ex)
+        {
+            craftAppraisal.State.CraftQuoteStatus = $"Could not open the Craft Architect plan: {ex.Message}";
+        }
     }
 
     private void DrawCompactAddRow(MarketAcquisitionRequestBuilderContext context)

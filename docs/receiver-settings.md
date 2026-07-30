@@ -30,6 +30,18 @@ This is the public browser address for Workshop Host. The server uses it when it
 
 Why it matters: if this points to the wrong address, uploads may still work but links shown by the plugin can open the wrong site.
 
+### `MarketMafioso__CraftArchitectAppOrigin`
+
+Example:
+
+```text
+MarketMafioso__CraftArchitectAppOrigin=https://craft.example.com
+```
+
+Set this to the Craft Architect browser application when it is hosted separately from Workshop Host. Leave it blank when Craft Architect owns the domain root and Workshop Host is mounted below it, such as `/marketmafioso`; a root-hosted Workshop Host without this setting returns the exact `.craftplan` snapshot directly instead of opening the wrong dashboard.
+
+Why it matters: quote responses can link to the precise priced plan, but only the Craft Architect application knows how to load that snapshot into an editable workspace.
+
 ### `MarketMafioso__BasePath`
 
 Example:
