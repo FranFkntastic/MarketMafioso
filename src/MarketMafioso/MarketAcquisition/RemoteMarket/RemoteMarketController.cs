@@ -12,6 +12,7 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MarketMafioso.MarketAcquisition.RemoteMarket;
 
@@ -19,6 +20,7 @@ internal sealed class RemoteMarketController : IDisposable
 {
     private const string ItemSearchResultAddon = "ItemSearchResult";
     private static readonly TimeSpan PurchaseDeadline = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan PurchaseVerificationDeadline = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan BatchPacingDelay = TimeSpan.FromMilliseconds(1600);
 
     private static readonly ConditionFlag[] PurchaseBlockingConditions =
@@ -46,7 +48,7 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly INotificationManager notificationManager;
     private readonly IPluginLog log;
     private readonly Func<uint, string?> resolveItemName;
-    private readonly Func<uint, string?, MarketBoardItemSearchResult> searchDriver;
+    private readonly Func<uint, string?, MarketBoardItemSearchIntent, string?, MarketBoardItemSearchResult> searchDriver;
     private readonly IMarketBoardBrowseRuntime browseRuntime;
     private readonly CmbMarketContextClient cmbContext;
     private readonly string evidenceDirectory;
@@ -54,9 +56,13 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly Dalamud.Plugin.Ipc.ICallGateProvider<bool> remoteMarketAvailableProvider;
     private readonly RemoteMarketNativePurchaseGuard nativePurchaseGuard;
     private readonly RemoteMarketNativeListingCache nativeListingCache;
+    private readonly RemoteMarketOverlaySession overlaySession = new();
 
     private readonly List<RemoteMarketBatchItem> batchItems = [];
     private RemoteMarketPurchaseAttempt? attempt;
+    private RemoteMarketPendingPurchaseVerification? pendingPurchaseVerification;
+    private RemoteMarketPendingPostPurchaseRefresh? pendingPostPurchaseRefresh;
+    private ulong[] pendingSelectionRestoreIds = [];
     private string? lastOutcome;
     private readonly HashSet<ulong> purchasedListingIds = [];
     private RemoteMarketListingView[] listingSnapshot = [];
@@ -75,6 +81,7 @@ internal sealed class RemoteMarketController : IDisposable
         null,
         null,
         null,
+        null,
         string.Empty);
     private uint? pendingSelectionMaxPrice;
     private DateTimeOffset pendingSelectionExpiresAtUtc;
@@ -84,6 +91,8 @@ internal sealed class RemoteMarketController : IDisposable
     private string? trackedBrowseItemName;
     private bool trackedBrowseTerminalReported;
     private bool trackedBrowseSearchActive;
+    private MarketBoardItemSearchIntent trackedBrowseSearchIntent;
+    private string? trackedBrowsePreviousOperationId;
     private DateTimeOffset nextTrackedBrowsePollUtc;
 
     public RemoteMarketController(
@@ -100,7 +109,7 @@ internal sealed class RemoteMarketController : IDisposable
         IAddonLifecycle addonLifecycle,
         IPluginLog log,
         Func<uint, string?> resolveItemName,
-        Func<uint, string?, MarketBoardItemSearchResult> searchDriver,
+        Func<uint, string?, MarketBoardItemSearchIntent, string?, MarketBoardItemSearchResult> searchDriver,
         IMarketBoardBrowseRuntime browseRuntime,
         Dalamud.Plugin.IDalamudPluginInterface pluginInterface,
         string pluginConfigDirectory)
@@ -172,6 +181,13 @@ internal sealed class RemoteMarketController : IDisposable
         }
         var value = pendingSelectionMaxPrice;
         pendingSelectionMaxPrice = null;
+        return value;
+    }
+
+    public IReadOnlyList<ulong> ConsumePendingSelectionRestoreIds()
+    {
+        var value = pendingSelectionRestoreIds;
+        pendingSelectionRestoreIds = [];
         return value;
     }
 
@@ -250,6 +266,7 @@ internal sealed class RemoteMarketController : IDisposable
                 nativeIdentity.RequestId,
                 nativeIdentity.ListingCount,
                 listingSnapshot.Length));
+        overlaySession.ObserveSnapshot();
         if (listingSnapshot.Length == 0)
         {
             marketContext = null;
@@ -260,7 +277,11 @@ internal sealed class RemoteMarketController : IDisposable
             marketContext = cmbContext.Request(listingSnapshot[0].ItemId, listingSnapshot[0].IsHighQuality);
         }
 
-        RebuildView();
+        if (!TryCompletePendingPurchaseVerification() &&
+            !TryCompletePendingPostPurchaseRefresh())
+        {
+            RebuildView();
+        }
     }
 
     private void OnMarketContextChanged(uint itemId, bool highQuality, CmbMarketContext? context) =>
@@ -283,19 +304,18 @@ internal sealed class RemoteMarketController : IDisposable
 
     public string? GetPurchaseContextBlockReason()
     {
+        if (pendingPurchaseVerification is not null)
+            return "Verifying prices...";
+        if (pendingPostPurchaseRefresh is not null)
+            return "Refreshing listings after purchase...";
         if (!browseRuntime.IsAvailable)
             return browseRuntime.AvailabilityMessage;
-        var browse = browseRuntime.Snapshot;
         if (listingSnapshotIdentity is { } partial &&
             partial.CapturedListingCount < partial.ListingCount)
         {
             return $"Loading listings ({partial.CapturedListingCount} of {partial.ListingCount}).";
         }
 
-        if (!IsListingSnapshotVerifiedForPurchase(listingSnapshotIdentity, browse))
-            return listingSnapshotIdentity is null
-                ? $"Remote listings are not verified: {browse.Message}"
-                : "Open this item through MMF before purchasing.";
         if (!nativePurchaseGuard.IsAvailable)
             return "The native-purchase guard is unavailable, so remote purchases are blocked.";
         foreach (var flag in PurchaseBlockingConditions)
@@ -321,10 +341,16 @@ internal sealed class RemoteMarketController : IDisposable
         RebuildView();
     }
 
-    public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName)
+    public MarketBoardItemSearchResult SearchItem(
+        uint itemId,
+        string? itemName,
+        MarketBoardItemSearchIntent intent = MarketBoardItemSearchIntent.PresentOrBrowse,
+        string? previousOperationId = null)
     {
         trackedBrowseItemId = itemId;
         trackedBrowseItemName = itemName;
+        trackedBrowseSearchIntent = intent;
+        trackedBrowsePreviousOperationId = previousOperationId;
         trackedBrowseSearchActive = true;
         nextTrackedBrowsePollUtc = DateTimeOffset.UtcNow;
         return AdvanceTrackedBrowseSearch();
@@ -332,13 +358,18 @@ internal sealed class RemoteMarketController : IDisposable
 
     private MarketBoardItemSearchResult AdvanceTrackedBrowseSearch()
     {
-        var result = searchDriver(trackedBrowseItemId, trackedBrowseItemName);
+        var result = searchDriver(
+            trackedBrowseItemId,
+            trackedBrowseItemName,
+            trackedBrowseSearchIntent,
+            trackedBrowsePreviousOperationId);
         nextTrackedBrowsePollUtc = DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(500);
         if (result.BrowseEvidence is { } browse &&
             !string.IsNullOrWhiteSpace(browse.OperationId))
         {
+            if (ShouldResetTrackedBrowseTerminalLatch(trackedBrowseOperationId, browse.OperationId))
+                trackedBrowseTerminalReported = false;
             trackedBrowseOperationId = browse.OperationId;
-            trackedBrowseTerminalReported = false;
         }
 
         if (!result.IsInProgress && !result.ReadyForListings)
@@ -388,6 +419,7 @@ internal sealed class RemoteMarketController : IDisposable
 
         agent->Hide();
         AbandonTrackedBrowse("Remote market board closed during testing.");
+        overlaySession.Close();
         nativePurchaseGuard.ObserveMarketAgentActive(false);
         ClearStagedPurchase();
         DismissLingeringConfirmationDialogs();
@@ -417,6 +449,11 @@ internal sealed class RemoteMarketController : IDisposable
 
     public RemoteMarketView GetView() => cachedView;
 
+    public bool ShouldPresentOverlay() =>
+        IsAvailable &&
+        overlaySession.IsActive &&
+        listingSnapshotIdentity is not null;
+
     private void RebuildView()
     {
         var browse = browseRuntime.Snapshot;
@@ -434,16 +471,26 @@ internal sealed class RemoteMarketController : IDisposable
                 batchItems.Count,
                 batchItems.Count(item => item.Status is RemoteMarketBatchItemStatus.Confirmed or RemoteMarketBatchItemStatus.Failed or RemoteMarketBatchItemStatus.Skipped),
                 batchItems.Count(item => item.Status == RemoteMarketBatchItemStatus.Failed),
-                attempt is not null);
+                attempt is not null || pendingPostPurchaseRefresh is not null);
+        var verification = pendingPurchaseVerification is null
+            ? null
+            : new RemoteMarketPurchaseVerificationView(
+                pendingPurchaseVerification.IntendedSelections.Count,
+                pendingPurchaseVerification.IntendedSelections.Sum(selection => (long)selection.Quantity),
+                pendingPurchaseVerification.IntendedSelections.Aggregate(
+                    0UL,
+                    (sum, selection) => sum + selection.TotalGil));
+        var contextBlockReason = GetPurchaseContextBlockReason();
 
         cachedView = new RemoteMarketView(
             ++viewRevision,
-            IsAvailable && IsListingSnapshotVerifiedForPurchase(listingSnapshotIdentity, browse),
+            IsAvailable && contextBlockReason is null,
             listings,
             listingSnapshotIdentity?.ListingCount ?? listings.Length,
             batch,
+            verification,
             lastOutcome,
-            GetPurchaseContextBlockReason(),
+            contextBlockReason,
             GetCurrentGil(),
             marketContext,
             BuildEconomics(listings, marketContext),
@@ -500,28 +547,238 @@ internal sealed class RemoteMarketController : IDisposable
     {
         if (!IsAvailable)
             return "Remote market is locked.";
+        if (pendingPurchaseVerification is not null)
+            return "Prices are already being verified.";
+        if (pendingPostPurchaseRefresh is not null)
+            return "Listings are being refreshed after a purchase.";
         if (batchItems.Count > 0)
             return "A purchase batch is already in progress.";
         if (GetPurchaseContextBlockReason() is { } contextBlock)
             return contextBlock;
 
-        var staged = new List<RemoteMarketSelectionView>();
-        unsafe
+        if (!TryReadSelections(selectedListingIds, out var staged, out var selectionError))
+            return selectionError;
+
+        if (RequiresAutomaticPurchaseVerification(listingSnapshotIdentity, browseRuntime.Snapshot))
+            return BeginPendingPurchaseVerification(staged);
+
+        return StartBatch(staged);
+    }
+
+    private string? BeginPendingPurchaseVerification(IReadOnlyList<RemoteMarketSelectionView> selections)
+    {
+        var itemId = selections[0].ItemId;
+        if (selections.Any(selection => selection.ItemId != itemId))
+            return "A purchase batch cannot span multiple items.";
+
+        var itemName = resolveItemName(itemId) ?? selections[0].ItemName;
+        pendingPurchaseVerification = new RemoteMarketPendingPurchaseVerification(
+            itemId,
+            itemName,
+            selections.ToArray(),
+            DateTimeOffset.UtcNow + PurchaseVerificationDeadline);
+        lastOutcome = null;
+        RebuildView();
+
+        var search = SearchItem(itemId, itemName);
+        if (search.IsInProgress || search.ReadyForListings)
         {
-            var proxy = GetItemSearchProxy();
-            if (proxy == null)
-                return "ItemSearch proxy is unavailable.";
-            foreach (var listingId in selectedListingIds)
-            {
-                var listing = FindListing(proxy, listingId);
-                if (listing is null)
-                    return "A selected listing is no longer in the results. Re-search to refresh.";
-                if (purchasedListingIds.Contains(listingId))
-                    return "One of the selected listings was already purchased. Re-search to refresh.";
-                staged.Add(ToSelection(listing.Value, resolveItemName(listing.Value.ItemId) ?? $"Item {listing.Value.ItemId}"));
-            }
+            log.Information(
+                "[MarketMafioso] Verifying {ListingCount} selected native listing(s) through one correlated browse for item {ItemId}.",
+                selections.Count,
+                itemId);
+            return null;
         }
 
+        FailPendingPurchaseVerification($"Price verification could not start: {search.Message}");
+        return lastOutcome;
+    }
+
+    private bool TryCompletePendingPurchaseVerification()
+    {
+        if (pendingPurchaseVerification is not { } pending ||
+            listingSnapshotIdentity is not { } identity ||
+            identity.ItemId != pending.ItemId ||
+            identity.CapturedListingCount != identity.ListingCount ||
+            !IsListingSnapshotVerifiedForPurchase(identity, browseRuntime.Snapshot))
+        {
+            return false;
+        }
+
+        var listingIds = pending.IntendedSelections
+            .Select(selection => selection.ListingId)
+            .ToArray();
+        if (!TryReadSelections(listingIds, out var refreshed, out var selectionError))
+        {
+            FailPendingPurchaseVerification(selectionError ?? "The refreshed listings could not be read.");
+            return true;
+        }
+
+        var reconciliation = RemoteMarketPurchaseVerification.Reconcile(
+            pending.IntendedSelections,
+            refreshed);
+        if (!reconciliation.Succeeded)
+        {
+            FailPendingPurchaseVerification(
+                $"{reconciliation.FailureReason} Review the refreshed results before purchasing.");
+            return true;
+        }
+
+        pendingPurchaseVerification = null;
+        var startError = StartBatch(reconciliation.RefreshedSelections);
+        if (startError is not null)
+        {
+            RestoreVerifiedSelection(listingIds);
+            lastOutcome = startError;
+            RebuildView();
+            return true;
+        }
+
+        log.Information(
+            "[MarketMafioso] Price verification preserved {ListingCount} selected listing(s); continuing the requested purchase.",
+            reconciliation.RefreshedSelections.Count);
+        return true;
+    }
+
+    private void FailPendingPurchaseVerification(string reason)
+    {
+        if (pendingPurchaseVerification is not { } pending)
+            return;
+
+        RestoreVerifiedSelection(pending.IntendedSelections.Select(selection => selection.ListingId));
+        pendingPurchaseVerification = null;
+        lastOutcome = reason;
+        log.Warning("[MarketMafioso] Remote market price verification stopped: {Reason}", reason);
+        StopTrackedBrowse(reason);
+        RebuildView();
+    }
+
+    private void BeginPostPurchaseRefresh(uint itemId, string itemName)
+    {
+        if (batchItems.Count == 0)
+            return;
+
+        var remaining = batchItems
+            .Where(item => item.Status == RemoteMarketBatchItemStatus.Queued)
+            .Select(item => item.Selection)
+            .ToArray();
+        var previousOperationId = browseRuntime.Snapshot.OperationId;
+        pendingPostPurchaseRefresh = new RemoteMarketPendingPostPurchaseRefresh(
+            itemId,
+            itemName,
+            remaining,
+            previousOperationId,
+            DateTimeOffset.UtcNow + PurchaseVerificationDeadline);
+        overlaySession.BeginRecovery();
+        lastOutcome = "Refreshing listings after purchase...";
+        RebuildView();
+
+        OpenMarketBoard();
+        var search = SearchItem(
+            itemId,
+            itemName,
+            MarketBoardItemSearchIntent.RequireFreshBrowse,
+            previousOperationId);
+        if (search.IsInProgress || search.ReadyForListings)
+        {
+            log.Information(
+                "[MarketMafioso] Refreshing item {ItemId} after a confirmed purchase before continuing {RemainingCount} queued listing(s).",
+                itemId,
+                remaining.Length);
+            return;
+        }
+
+        FailPendingPostPurchaseRefresh($"Listing refresh could not start: {search.Message}");
+    }
+
+    private bool TryCompletePendingPostPurchaseRefresh()
+    {
+        if (pendingPostPurchaseRefresh is not { } pending ||
+            listingSnapshotIdentity is not { } identity ||
+            identity.ItemId != pending.ItemId ||
+            identity.CapturedListingCount != identity.ListingCount ||
+            !IsFreshListingSnapshotVerifiedForPurchase(
+                identity,
+                browseRuntime.Snapshot,
+                pending.PreviousOperationId))
+        {
+            return false;
+        }
+
+        pendingPostPurchaseRefresh = null;
+        if (pending.RemainingSelections.Count == 0)
+        {
+            log.Information(
+                "[MarketMafioso] Refreshed item {ItemId} after the completed purchase batch.",
+                pending.ItemId);
+            FinishBatch(null);
+            return true;
+        }
+
+        var listingIds = pending.RemainingSelections
+            .Select(selection => selection.ListingId)
+            .ToArray();
+        if (!TryReadSelections(listingIds, out var refreshed, out var selectionError))
+        {
+            AbortRemainingBatchAfterRefresh(
+                selectionError ?? "The remaining refreshed listings could not be read.");
+            return true;
+        }
+
+        var reconciliation = RemoteMarketPurchaseVerification.Reconcile(
+            pending.RemainingSelections,
+            refreshed);
+        if (!reconciliation.Succeeded)
+        {
+            AbortRemainingBatchAfterRefresh(
+                $"{reconciliation.FailureReason} The confirmed purchase was preserved.");
+            return true;
+        }
+
+        var refreshedByListingId = reconciliation.RefreshedSelections
+            .ToDictionary(selection => selection.ListingId);
+        foreach (var item in batchItems.Where(item => item.Status == RemoteMarketBatchItemStatus.Queued))
+            item.Selection = refreshedByListingId[item.ListingId];
+
+        lastOutcome = "Listings refreshed; continuing the requested purchase.";
+        RebuildView();
+        framework.RunOnTick(AdvanceBatch);
+        return true;
+    }
+
+    private void FailPendingPostPurchaseRefresh(string reason)
+    {
+        if (pendingPostPurchaseRefresh is null)
+            return;
+
+        pendingPostPurchaseRefresh = null;
+        StopTrackedBrowse(reason);
+        AbortRemainingBatchAfterRefresh(reason);
+    }
+
+    private void AbortRemainingBatchAfterRefresh(string reason)
+    {
+        foreach (var item in batchItems.Where(item => item.Status == RemoteMarketBatchItemStatus.Queued))
+            item.Status = RemoteMarketBatchItemStatus.Skipped;
+        log.Warning(
+            "[MarketMafioso] Confirmed purchase preserved, but post-purchase listing refresh stopped: {Reason}",
+            reason);
+        FinishBatch($"Purchase confirmed, but listings could not be refreshed: {reason}");
+    }
+
+    private void RestoreVerifiedSelection(IEnumerable<ulong> listingIds)
+    {
+        var visibleListingIds = listingSnapshot
+            .Select(listing => listing.ListingId)
+            .ToHashSet();
+        pendingSelectionRestoreIds = listingIds
+            .Where(visibleListingIds.Contains)
+            .Distinct()
+            .ToArray();
+    }
+
+    private string? StartBatch(IReadOnlyList<RemoteMarketSelectionView> staged)
+    {
         if (staged.Count == 0)
             return "Select at least one listing.";
         var stagedTotal = staged.Aggregate(0UL, (sum, selection) => sum + selection.TotalGil);
@@ -535,10 +792,62 @@ internal sealed class RemoteMarketController : IDisposable
         return null;
     }
 
+    private unsafe bool TryReadSelections(
+        IEnumerable<ulong> selectedListingIds,
+        out IReadOnlyList<RemoteMarketSelectionView> selections,
+        out string? error)
+    {
+        var staged = new List<RemoteMarketSelectionView>();
+        var proxy = GetItemSearchProxy();
+        if (proxy == null)
+        {
+            selections = Array.Empty<RemoteMarketSelectionView>();
+            error = "ItemSearch proxy is unavailable.";
+            return false;
+        }
+
+        foreach (var listingId in selectedListingIds.Distinct())
+        {
+            var listing = FindListing(proxy, listingId);
+            if (listing is null)
+            {
+                selections = Array.Empty<RemoteMarketSelectionView>();
+                error = "A selected listing is no longer available.";
+                return false;
+            }
+            if (purchasedListingIds.Contains(listingId))
+            {
+                selections = Array.Empty<RemoteMarketSelectionView>();
+                error = "One of the selected listings was already purchased.";
+                return false;
+            }
+
+            staged.Add(ToSelection(
+                listing.Value,
+                resolveItemName(listing.Value.ItemId) ?? $"Item {listing.Value.ItemId}"));
+        }
+
+        if (staged.Count == 0)
+        {
+            selections = Array.Empty<RemoteMarketSelectionView>();
+            error = "Select at least one listing.";
+            return false;
+        }
+
+        selections = staged;
+        error = null;
+        return true;
+    }
+
     public void CancelBatch()
     {
         foreach (var item in batchItems.Where(item => item.Status == RemoteMarketBatchItemStatus.Queued))
             item.Status = RemoteMarketBatchItemStatus.Skipped;
+        if (pendingPostPurchaseRefresh is not null)
+        {
+            pendingPostPurchaseRefresh = null;
+            StopTrackedBrowse("Remote market purchase batch cancelled during listing refresh.");
+        }
         if (attempt is null)
             FinishBatch("Batch cancelled.");
         else
@@ -547,7 +856,7 @@ internal sealed class RemoteMarketController : IDisposable
 
     private void AdvanceBatch()
     {
-        if (attempt is not null)
+        if (attempt is not null || pendingPostPurchaseRefresh is not null)
             return;
         var next = batchItems.FirstOrDefault(item => item.Status == RemoteMarketBatchItemStatus.Queued);
         if (next is null)
@@ -560,6 +869,13 @@ internal sealed class RemoteMarketController : IDisposable
             foreach (var item in batchItems.Where(item => item.Status == RemoteMarketBatchItemStatus.Queued))
                 item.Status = RemoteMarketBatchItemStatus.Skipped;
             FinishBatch(contextBlock);
+            return;
+        }
+        if (!IsListingSnapshotVerifiedForPurchase(listingSnapshotIdentity, browseRuntime.Snapshot))
+        {
+            foreach (var item in batchItems.Where(item => item.Status == RemoteMarketBatchItemStatus.Queued))
+                item.Status = RemoteMarketBatchItemStatus.Skipped;
+            FinishBatch("Price verification was lost before the purchase request could be sent.");
             return;
         }
 
@@ -586,9 +902,18 @@ internal sealed class RemoteMarketController : IDisposable
                 var staged = listing.Value;
                 var listingPointer = (MarketBoardListing*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref staged);
                 if (!proxy->SetLastPurchasedItem(listingPointer))
+                {
                     failure = "The client refused to stage the listing.";
-                else if (!nativePurchaseGuard.SendOwned(proxy))
-                    failure = "The client refused to send the purchase request.";
+                }
+                else
+                {
+                    pending.Phase = RemoteMarketPurchasePhase.Sending;
+                    pending.SentAtUtc = DateTimeOffset.UtcNow;
+                    pending.DeadlineAtUtc = pending.SentAtUtc + PurchaseDeadline;
+                    pending.GilBeforeSend = GetCurrentGil();
+                    if (!nativePurchaseGuard.SendOwned(proxy))
+                        failure = "The client refused to send the purchase request.";
+                }
             }
         }
 
@@ -599,10 +924,10 @@ internal sealed class RemoteMarketController : IDisposable
             return;
         }
 
+        if (!ReferenceEquals(attempt, pending))
+            return;
+
         pending.Phase = RemoteMarketPurchasePhase.Sent;
-        pending.SentAtUtc = DateTimeOffset.UtcNow;
-        pending.DeadlineAtUtc = pending.SentAtUtc + PurchaseDeadline;
-        pending.GilBeforeSend = GetCurrentGil();
         log.Information(
             "[MarketMafioso] Remote market purchase sent. ListingId={ListingId} ItemId={ItemId} Quantity={Quantity} TotalGil={TotalGil}",
             pending.Selection.ListingId,
@@ -635,7 +960,8 @@ internal sealed class RemoteMarketController : IDisposable
 
     private void OnPurchaseRequested(IMarketBoardPurchaseHandler purchase)
     {
-        if (attempt is not { Phase: RemoteMarketPurchasePhase.Sent } pending)
+        if (attempt is not { } pending ||
+            !IsPurchaseRequestCorrelatablePhase(pending.Phase))
         {
             log.Information(
                 "[MarketMafioso] Native-path purchase request observed outside a staged remote attempt. ListingId={ListingId} CatalogId={CatalogId} Quantity={Quantity} PricePerUnit={PricePerUnit}",
@@ -665,7 +991,8 @@ internal sealed class RemoteMarketController : IDisposable
 
     private void OnItemPurchased(IMarketBoardPurchase purchase)
     {
-        if (attempt is not { Phase: RemoteMarketPurchasePhase.Sent } pending)
+        if (attempt is not { } pending ||
+            !IsPurchaseRequestCorrelatablePhase(pending.Phase))
             return;
         if (!RemoteMarketPurchaseMatcher.ConfirmationMatchesIntent(
                 pending.Selection.ItemId,
@@ -682,7 +1009,10 @@ internal sealed class RemoteMarketController : IDisposable
                 purchasedListingIds.Add(pending.Selection.ListingId);
                 pending.Phase = RemoteMarketPurchasePhase.Confirmed;
                 MarkActiveItem(RemoteMarketBatchItemStatus.Confirmed);
-                Complete(pending, $"Purchased {pending.Quantity}x {pending.ItemName} for {pending.TotalGil:N0} gil.");
+                Complete(
+                    pending,
+                    $"Purchased {pending.Quantity}x {pending.ItemName} for {pending.TotalGil:N0} gil.",
+                    refreshListings: true);
                 return;
             }
             if (delta == 0)
@@ -714,7 +1044,7 @@ internal sealed class RemoteMarketController : IDisposable
     {
         pending.Phase = RemoteMarketPurchasePhase.Indeterminate;
         MarkActiveItem(RemoteMarketBatchItemStatus.Failed);
-        Complete(pending, "No purchase confirmation arrived before the deadline. The server silently drops invalid requests, so re-search the item, then reconcile inventory and gil before retrying.");
+        Complete(pending, "No purchase confirmation arrived before the deadline. Reconcile inventory and gil before retrying.");
     }
 
     private void Fail(RemoteMarketPurchaseAttempt pending, string reason)
@@ -723,7 +1053,10 @@ internal sealed class RemoteMarketController : IDisposable
         Complete(pending, reason);
     }
 
-    private void Complete(RemoteMarketPurchaseAttempt pending, string message)
+    private void Complete(
+        RemoteMarketPurchaseAttempt pending,
+        string message,
+        bool refreshListings = false)
     {
         if (pending.SentAtUtc is not null)
             ClearStagedPurchase();
@@ -738,7 +1071,16 @@ internal sealed class RemoteMarketController : IDisposable
             pending.PacketMatchesIntent,
             message);
         WriteEvidence(pending);
-        framework.RunOnTick(AdvanceBatch, BatchPacingDelay);
+        if (refreshListings)
+        {
+            framework.RunOnTick(
+                () => BeginPostPurchaseRefresh(pending.Selection.ItemId, pending.Selection.ItemName),
+                BatchPacingDelay);
+        }
+        else
+        {
+            framework.RunOnTick(AdvanceBatch, BatchPacingDelay);
+        }
     }
 
     private void NoteRejectedTerritory()
@@ -782,6 +1124,16 @@ internal sealed class RemoteMarketController : IDisposable
 
     private void OnFrameworkUpdate(IFramework _)
     {
+        if (pendingPurchaseVerification is { } verification &&
+            DateTimeOffset.UtcNow >= verification.DeadlineAtUtc)
+        {
+            FailPendingPurchaseVerification("Price verification timed out. Review the current results before purchasing.");
+        }
+        if (pendingPostPurchaseRefresh is { } refresh &&
+            DateTimeOffset.UtcNow >= refresh.DeadlineAtUtc)
+        {
+            FailPendingPostPurchaseRefresh("Listing refresh timed out.");
+        }
         if (trackedBrowseSearchActive && DateTimeOffset.UtcNow >= nextTrackedBrowsePollUtc)
             AdvanceTrackedBrowseSearch();
         ObserveTrackedBrowse();
@@ -789,7 +1141,15 @@ internal sealed class RemoteMarketController : IDisposable
         {
             var agentModule = AgentModule.Instance();
             var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
-            nativePurchaseGuard.ObserveMarketAgentActive(agent != null && agent->IsAgentActive());
+            var agentActive = agent != null && agent->IsAgentActive();
+            nativePurchaseGuard.ObserveMarketAgentActive(agentActive);
+            var resultVisible = IsAddonVisible(ItemSearchResultAddon);
+            overlaySession.ObserveNativeState(
+                resultVisible,
+                resultVisible && IsMarketBoardResultVisible(),
+                IsAddonVisible("ItemSearch"),
+                agentActive,
+                pendingPurchaseVerification is not null || pendingPostPurchaseRefresh is not null);
         }
     }
 
@@ -818,7 +1178,12 @@ internal sealed class RemoteMarketController : IDisposable
                 browse.OperationId,
                 browse.FailureCode ?? "Unknown",
                 browse.Message);
-            RebuildView();
+            if (pendingPurchaseVerification is not null)
+                FailPendingPurchaseVerification($"Price verification failed: {browse.Message}");
+            else if (pendingPostPurchaseRefresh is not null)
+                FailPendingPostPurchaseRefresh($"Listing refresh failed: {browse.Message}");
+            else
+                RebuildView();
         }
         else
         {
@@ -836,6 +1201,7 @@ internal sealed class RemoteMarketController : IDisposable
     private unsafe void CloseOwnedRemoteMarketAgent()
     {
         AbandonTrackedBrowse("Remote market controller disposed or closed its owned agent.");
+        overlaySession.Close();
         if (!nativePurchaseGuard.IsRemoteSessionActive)
             return;
 
@@ -853,6 +1219,25 @@ internal sealed class RemoteMarketController : IDisposable
 
     private void AbandonTrackedBrowse(string reason)
     {
+        StopTrackedBrowse(reason);
+        if (pendingPurchaseVerification is { } verification)
+        {
+            RestoreVerifiedSelection(
+                verification.IntendedSelections.Select(selection => selection.ListingId));
+            pendingPurchaseVerification = null;
+            lastOutcome = reason;
+        }
+        if (pendingPostPurchaseRefresh is not null)
+        {
+            pendingPostPurchaseRefresh = null;
+            foreach (var item in batchItems.Where(item => item.Status == RemoteMarketBatchItemStatus.Queued))
+                item.Status = RemoteMarketBatchItemStatus.Skipped;
+        }
+        RebuildView();
+    }
+
+    private void StopTrackedBrowse(string reason)
+    {
         var browse = browseRuntime.Snapshot;
         if (browse.IsActive &&
             browse.Owner == MarketBoardBrowseOwner.RemoteMarketController &&
@@ -866,7 +1251,6 @@ internal sealed class RemoteMarketController : IDisposable
         }
 
         trackedBrowseSearchActive = false;
-        RebuildView();
     }
 
     private void ScheduleBlockedNativePurchaseRecovery()
@@ -885,7 +1269,7 @@ internal sealed class RemoteMarketController : IDisposable
             notificationManager.AddNotification(new Notification
             {
                 Title = "MMF Remote Market",
-                Content = "Native market-board purchases aren't available remotely. Select the listing in MMF and confirm it there.",
+                Content = "MMF blocked the native purchase before any request was sent.",
                 Type = NotificationType.Warning,
                 InitialDuration = TimeSpan.FromSeconds(8),
                 Minimized = false,
@@ -983,6 +1367,14 @@ internal sealed class RemoteMarketController : IDisposable
             ? browse.OperationId
             : null;
 
+    internal static bool ShouldResetTrackedBrowseTerminalLatch(
+        string? previousOperationId,
+        string nextOperationId) =>
+        !string.Equals(previousOperationId, nextOperationId, StringComparison.Ordinal);
+
+    internal static bool IsPurchaseRequestCorrelatablePhase(RemoteMarketPurchasePhase phase) =>
+        phase is RemoteMarketPurchasePhase.Sending or RemoteMarketPurchasePhase.Sent;
+
     internal static bool IsListingSnapshotVerifiedForPurchase(
         RemoteMarketListingSnapshotIdentity? identity,
         MarketBoardBrowseSnapshot browse) =>
@@ -996,6 +1388,18 @@ internal sealed class RemoteMarketController : IDisposable
             identity.ListingCount,
             identity.CapturedListingCount) is not null;
 
+    internal static bool IsFreshListingSnapshotVerifiedForPurchase(
+        RemoteMarketListingSnapshotIdentity? identity,
+        MarketBoardBrowseSnapshot browse,
+        string? previousOperationId) =>
+        IsListingSnapshotVerifiedForPurchase(identity, browse) &&
+        !string.Equals(identity!.VerifiedBrowseOperationId, previousOperationId, StringComparison.Ordinal);
+
+    internal static bool RequiresAutomaticPurchaseVerification(
+        RemoteMarketListingSnapshotIdentity? identity,
+        MarketBoardBrowseSnapshot browse) =>
+        !IsListingSnapshotVerifiedForPurchase(identity, browse);
+
     public unsafe bool TryGetResultAnchor(out System.Numerics.Vector2 anchor)
     {
         anchor = default;
@@ -1004,6 +1408,12 @@ internal sealed class RemoteMarketController : IDisposable
             return false;
         anchor = new System.Numerics.Vector2(addon->X + addon->GetScaledWidth(true) + 8f, addon->Y + 4f);
         return true;
+    }
+
+    private unsafe bool IsAddonVisible(string addonName)
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        return addon != null && addon->IsReady && addon->IsVisible;
     }
 
     public unsafe bool TryGetResultBounds(out System.Numerics.Vector2 anchor, out float maxHeight)
@@ -1028,6 +1438,7 @@ internal sealed class RemoteMarketController : IDisposable
 internal enum RemoteMarketPurchasePhase
 {
     AwaitingConfirmation,
+    Sending,
     Sent,
     Confirmed,
     Failed,
@@ -1048,7 +1459,7 @@ internal enum RemoteMarketBatchItemStatus
 internal sealed class RemoteMarketBatchItem(ulong listingId, RemoteMarketSelectionView selection, RemoteMarketBatchItemStatus status)
 {
     public ulong ListingId { get; } = listingId;
-    public RemoteMarketSelectionView Selection { get; } = selection;
+    public RemoteMarketSelectionView Selection { get; set; } = selection;
     public RemoteMarketBatchItemStatus Status { get; set; } = status;
 }
 
@@ -1084,6 +1495,11 @@ internal sealed record RemoteMarketBatchView(
     int FailedCount,
     bool Active);
 
+internal sealed record RemoteMarketPurchaseVerificationView(
+    int ListingCount,
+    long Quantity,
+    ulong TotalGil);
+
 internal sealed record RemoteMarketEconomicsView(
     uint CheapestUnitPrice,
     uint MedianUnitPrice,
@@ -1103,6 +1519,7 @@ internal sealed record RemoteMarketView(
     IReadOnlyList<RemoteMarketListingView> Listings,
     int ExpectedListingCount,
     RemoteMarketBatchView? Batch,
+    RemoteMarketPurchaseVerificationView? Verification,
     string? LastOutcome,
     string? ContextBlockReason,
     uint? GilOnHand,

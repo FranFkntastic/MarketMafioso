@@ -33,7 +33,9 @@ public sealed class MarketBoardItemSearchDriver
     public unsafe MarketBoardItemSearchResult Search(
         uint itemId,
         string? itemName,
-        MarketBoardBrowseOwner owner = MarketBoardBrowseOwner.MarketAcquisition)
+        MarketBoardBrowseOwner owner = MarketBoardBrowseOwner.MarketAcquisition,
+        MarketBoardItemSearchIntent intent = MarketBoardItemSearchIntent.PresentOrBrowse,
+        string? previousOperationId = null)
     {
         if (itemId == 0)
             throw new InvalidOperationException("Item id is required before searching the market board.");
@@ -60,8 +62,13 @@ public sealed class MarketBoardItemSearchDriver
         var observedBrowse = browseRuntime.Snapshot;
         if (IsOwnedBrowse(observedBrowse, owner, itemId))
         {
+            var isPreviousTerminal =
+                intent == MarketBoardItemSearchIntent.RequireFreshBrowse &&
+                observedBrowse.IsTerminal &&
+                string.Equals(observedBrowse.OperationId, previousOperationId, StringComparison.Ordinal);
             if (!observedBrowse.IsTerminal ||
-                !string.Equals(lastReturnedTerminalOperationId, observedBrowse.OperationId, StringComparison.Ordinal))
+                (!isPreviousTerminal &&
+                 !string.Equals(lastReturnedTerminalOperationId, observedBrowse.OperationId, StringComparison.Ordinal)))
             {
                 if (observedBrowse.IsTerminal)
                     lastReturnedTerminalOperationId = observedBrowse.OperationId;
@@ -73,7 +80,9 @@ public sealed class MarketBoardItemSearchDriver
                     owner,
                     itemId,
                     itemSearchResultVisible,
-                    openResultItemId))
+                    openResultItemId,
+                    intent,
+                    previousOperationId))
             {
                 return BuildBrowseResult(itemName.Trim(), observedBrowse);
             }
@@ -320,11 +329,15 @@ public sealed class MarketBoardItemSearchDriver
         MarketBoardBrowseOwner owner,
         uint requestedItemId,
         bool resultVisible,
-        uint openResultItemId) =>
+        uint openResultItemId,
+        MarketBoardItemSearchIntent intent = MarketBoardItemSearchIntent.PresentOrBrowse,
+        string? previousOperationId = null) =>
         browse.IsTerminal &&
         IsOwnedBrowse(browse, owner, requestedItemId) &&
         resultVisible &&
-        IsOpenListingResultForRequestedItem(requestedItemId, openResultItemId);
+        IsOpenListingResultForRequestedItem(requestedItemId, openResultItemId) &&
+        (intent != MarketBoardItemSearchIntent.RequireFreshBrowse ||
+         !string.Equals(browse.OperationId, previousOperationId, StringComparison.Ordinal));
 
     internal static IReadOnlyList<MarketBoardItemSearchSubmitCallback> GetSearchSubmitCallbackSequence()
     {
@@ -877,6 +890,12 @@ public enum MarketBoardItemSearchAction
 {
     ResetMode,
     SubmitSearch,
+}
+
+public enum MarketBoardItemSearchIntent
+{
+    PresentOrBrowse,
+    RequireFreshBrowse,
 }
 
 public enum MarketBoardItemSearchSubmitCallback

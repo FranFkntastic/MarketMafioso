@@ -55,6 +55,7 @@ public sealed class RemoteMarketPresentationIdentityTests
 
         Assert.Equal(OperationId, operationId);
         Assert.True(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(identity, browse));
+        Assert.False(RemoteMarketController.RequiresAutomaticPurchaseVerification(identity, browse));
     }
 
     [Fact]
@@ -64,6 +65,7 @@ public sealed class RemoteMarketPresentationIdentityTests
 
         Assert.True(IsCurrent(identity));
         Assert.False(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(identity, CompletedBrowse()));
+        Assert.True(RemoteMarketController.RequiresAutomaticPurchaseVerification(identity, CompletedBrowse()));
     }
 
     [Fact]
@@ -95,6 +97,27 @@ public sealed class RemoteMarketPresentationIdentityTests
     }
 
     [Fact]
+    public void PostPurchaseRefresh_RequiresANewVerifiedBrowseOperation()
+    {
+        var browse = CompletedBrowse();
+        var identity = NativeIdentity(OperationId);
+
+        Assert.False(
+            RemoteMarketController.IsFreshListingSnapshotVerifiedForPurchase(
+                identity,
+                browse,
+                OperationId));
+
+        var refreshedBrowse = browse with { OperationId = "market-browse:2" };
+        var refreshedIdentity = NativeIdentity(refreshedBrowse.OperationId);
+        Assert.True(
+            RemoteMarketController.IsFreshListingSnapshotVerifiedForPurchase(
+                refreshedIdentity,
+                refreshedBrowse,
+                OperationId));
+    }
+
+    [Fact]
     public void ForeignBrowseOwner_CannotVerifyNativeListingsForPurchase()
     {
         var browse = CompletedBrowse() with { Owner = MarketBoardBrowseOwner.MarketAcquisition };
@@ -106,6 +129,34 @@ public sealed class RemoteMarketPresentationIdentityTests
             ListingCount,
             ListingCount));
     }
+
+    [Theory]
+    [InlineData((int)RemoteMarketPurchasePhase.Sending, true)]
+    [InlineData((int)RemoteMarketPurchasePhase.Sent, true)]
+    [InlineData((int)RemoteMarketPurchasePhase.AwaitingConfirmation, false)]
+    [InlineData((int)RemoteMarketPurchasePhase.Confirmed, false)]
+    [InlineData((int)RemoteMarketPurchasePhase.Failed, false)]
+    public void PurchasePacketCorrelationIncludesTheSynchronousSendPhase(
+        int phase,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            RemoteMarketController.IsPurchaseRequestCorrelatablePhase(
+                (RemoteMarketPurchasePhase)phase));
+
+    [Theory]
+    [InlineData(null, "market-browse:1", true)]
+    [InlineData("market-browse:1", "market-browse:1", false)]
+    [InlineData("market-browse:1", "market-browse:2", true)]
+    public void TerminalBrowseLatchOnlyResetsForANewOperation(
+        string? previousOperationId,
+        string nextOperationId,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            RemoteMarketController.ShouldResetTrackedBrowseTerminalLatch(
+                previousOperationId,
+                nextOperationId));
 
     private static bool IsCurrent(
         RemoteMarketListingSnapshotIdentity? identity,

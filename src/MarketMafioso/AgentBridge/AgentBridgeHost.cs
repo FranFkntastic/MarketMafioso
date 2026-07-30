@@ -100,7 +100,7 @@ public sealed class AgentBridgeHost : IDisposable
         ],
         provider.GetReviewSurfaces(),
         provider.GetCaptureSurfaces(),
-        []);
+        provider.GetActions());
 
     private void RegisterCommands()
     {

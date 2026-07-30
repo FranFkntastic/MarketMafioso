@@ -206,11 +206,13 @@ public class MainWindow : Window, IDisposable
             Plugin.AddonLifecycle,
             log,
             scanner.ResolveItemName,
-            (itemId, itemName) =>
+            (itemId, itemName, intent, previousOperationId) =>
                 marketBoardItemSearchDriver.Search(
                     itemId,
                     itemName,
-                    MarketBoardBrowseOwner.RemoteMarketController),
+                    MarketBoardBrowseOwner.RemoteMarketController,
+                    intent,
+                    previousOperationId),
             marketBoardBrowseRuntime,
             Plugin.PluginInterface,
             Plugin.PluginInterface.GetPluginConfigDirectory());
@@ -230,7 +232,7 @@ public class MainWindow : Window, IDisposable
             log,
             Plugin.PluginInterface,
             Plugin.PluginInterface.GetPluginConfigDirectory());
-        RemoteMarketOverlay = new RemoteMarketOverlayWindow(remoteMarketController);
+        RemoteMarketOverlay = new RemoteMarketOverlayWindow(remoteMarketController, AgentReviewRegistry);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
         var routeUiAutomation = new DalamudMarketAcquisitionRouteUiAutomation();

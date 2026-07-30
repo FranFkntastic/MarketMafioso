@@ -17,6 +17,7 @@ public interface IMarketMafiosoBridgeProvider
     void StopRoute();
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> GetCaptureSurfaces();
+    IReadOnlyList<AgentBridgeActionDescriptor> GetActions();
     AgentBridgeUiReviewFrame GetControlSurface();
     AgentBridgeUiControlReview ReviewControl(string controlId);
     AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId, System.Text.Json.JsonElement? arguments = null);
@@ -44,6 +45,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
 
     private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> AcquisitionSurfaces =
     [
+        new("remote-market", "Remote Market Overlay", "open-main-window", "Remote Market", 59),
         new("market-acquisition", "Market Acquisition", "select-main-tab", "Market Acquisition", 60),
         new("market-acquisition.inbox", "Market Acquisition - Inbox", "select-main-tab", "Market Acquisition/Inbox", 62),
         new("market-acquisition.workbench", "Market Acquisition - Workbench", "select-main-tab", "Market Acquisition/Workbench", 63),
@@ -97,6 +99,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         ? PublicReviewSurfaces.Concat(AcquisitionSurfaces).OrderBy(surface => surface.Order).ToArray()
         : PublicReviewSurfaces;
     public IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> GetCaptureSurfaces() => CaptureSurfaces;
+    public IReadOnlyList<AgentBridgeActionDescriptor> GetActions() => reviewRegistry.ActionCatalog();
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
     public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);
     public AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId, System.Text.Json.JsonElement? arguments = null) =>
