@@ -8,16 +8,16 @@ using Dalamud.Interface.Windowing;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Tables;
 using Lumina.Excel.Sheets;
-using MarketMafioso.MarketAcquisition.RemoteMarket;
+using MarketMafioso.MarketAcquisition.MarketBoard;
 using MarketMafioso.Windows.Main;
 
 namespace MarketMafioso.Windows;
 
-public sealed class RemoteMarketOverlayWindow : Window
+public sealed class MarketListingOverlayWindow : Window
 {
     private static readonly Vector2 MinimumSize = new(480, 280);
 
-    private readonly RemoteMarketController controller;
+    private readonly MarketBoardAcquisitionController controller;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly HashSet<ulong> selectedListingIds = [];
     private bool confirmArmed;
@@ -26,16 +26,16 @@ public sealed class RemoteMarketOverlayWindow : Window
     private long observedRevision = -1;
     private uint cachedIconItemId;
     private ISharedImmediateTexture? cachedIcon;
-    private IReadOnlyList<RemoteMarketListingView> projectedListings = Array.Empty<RemoteMarketListingView>();
+    private IReadOnlyList<MarketListingRowView> projectedListings = Array.Empty<MarketListingRowView>();
     private long projectedRevision = -1;
     private readonly string[] projectedFilters = new string[7];
     private int projectedSortColumn = -1;
     private ImGuiSortDirection projectedSortDirection;
-    private RemoteMarketListingView[] selectedListings = [];
+    private MarketListingRowView[] selectedListings = [];
     private long selectedQuantity;
     private ulong selectedGil;
 
-    private static readonly DalamudTableProjection<RemoteMarketListingView> tableProjection = new(
+    private static readonly DalamudTableProjection<MarketListingRowView> tableProjection = new(
     [
         new("Qty", 48f, listing => listing.Quantity.ToString(), listing => listing.Quantity),
         new("Unit", 84f, listing => listing.UnitPrice.ToString("N0"), listing => listing.UnitPrice, ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultSort),
@@ -46,11 +46,11 @@ public sealed class RemoteMarketOverlayWindow : Window
         new("State", 84f, listing => listing.AlreadyPurchased ? "purchased" : listing.BatchStatus?.ToString().ToLowerInvariant() ?? string.Empty),
     ]);
 
-    internal RemoteMarketOverlayWindow(
-        RemoteMarketController controller,
+    internal MarketListingOverlayWindow(
+        MarketBoardAcquisitionController controller,
         AgentBridgeUiReviewRegistry reviewRegistry)
         : base(
-            "MMF Remote Market##MarketMafiosoRemoteMarketOverlay",
+            "MMF Market Listings##MarketMafiosoMarketListingOverlay",
             ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoSavedSettings)
     {
         this.controller = controller ?? throw new ArgumentNullException(nameof(controller));
@@ -111,7 +111,7 @@ public sealed class RemoteMarketOverlayWindow : Window
         DrawSelectionFooter(view);
     }
 
-    private void SynchronizeView(RemoteMarketView view)
+    private void SynchronizeView(MarketListingView view)
     {
         observedRevision = view.Revision;
         var buyableIds = view.Listings
@@ -145,7 +145,7 @@ public sealed class RemoteMarketOverlayWindow : Window
         RebuildSelection(view);
     }
 
-    private void DrawHeader(RemoteMarketView view)
+    private void DrawHeader(MarketListingView view)
     {
         var first = view.Listings[0];
         if (cachedIcon?.TryGetWrap(out var icon, out _) == true)
@@ -171,7 +171,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             pinned = !pinned;
     }
 
-    private static void DrawEconomicsStrip(RemoteMarketView view)
+    private static void DrawEconomicsStrip(MarketListingView view)
     {
         if (view.Economics is not { } economics)
             return;
@@ -188,7 +188,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             delta > 0 ? $"▲ {delta:P0} above sale avg" : $"▼ {-delta:P0} below sale avg");
     }
 
-    private void DrawListingsTable(RemoteMarketView view, bool batchActive)
+    private void DrawListingsTable(MarketListingView view, bool batchActive)
     {
         var tableHeight = Math.Min(460f, Math.Max(140f, ImGui.GetContentRegionAvail().Y - 110f));
         if (!tableProjection.Begin("##RMCListingGrid", tableHeight))
@@ -219,7 +219,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             if (!selectable)
                 ImGui.EndDisabled();
 
-            var muted = listing.AlreadyPurchased || status is RemoteMarketBatchItemStatus.Confirmed or RemoteMarketBatchItemStatus.Skipped;
+            var muted = listing.AlreadyPurchased || status is MarketListingBatchStatus.Confirmed or MarketListingBatchStatus.Skipped;
             Cell(listing.UnitPrice.ToString("N0"), muted);
             Cell(listing.TotalTax.ToString("N0"), muted);
             Cell(listing.TotalGil.ToString("N0"), muted);
@@ -227,9 +227,9 @@ public sealed class RemoteMarketOverlayWindow : Window
             Cell(listing.RetainerName, muted);
 
             ImGui.TableNextColumn();
-            if (status == RemoteMarketBatchItemStatus.Failed)
+            if (status == MarketListingBatchStatus.Failed)
                 ImGui.TextColored(MarketMafiosoUiTheme.Error, "FAILED");
-            else if (status == RemoteMarketBatchItemStatus.Sending)
+            else if (status == MarketListingBatchStatus.Sending)
                 ImGui.TextColored(MarketMafiosoUiTheme.Header, "sending");
             else if (listing.AlreadyPurchased)
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, "purchased");
@@ -239,8 +239,8 @@ public sealed class RemoteMarketOverlayWindow : Window
         tableProjection.End();
     }
 
-    private unsafe IReadOnlyList<RemoteMarketListingView> GetProjectedListings(
-        RemoteMarketView view,
+    private unsafe IReadOnlyList<MarketListingRowView> GetProjectedListings(
+        MarketListingView view,
         ImGuiTableSortSpecsPtr sortSpecs)
     {
         var sortColumn = -1;
@@ -272,7 +272,7 @@ public sealed class RemoteMarketOverlayWindow : Window
         return projectedListings;
     }
 
-    private void DrawBatch(RemoteMarketView view)
+    private void DrawBatch(MarketListingView view)
     {
         var batch = view.Batch!;
         ImGui.ProgressBar(batch.TotalCount == 0 ? 0f : (float)batch.CompletedCount / batch.TotalCount, new Vector2(-1, 0),
@@ -287,7 +287,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, outcome);
     }
 
-    private static void DrawPurchaseVerification(RemoteMarketPurchaseVerificationView verification)
+    private static void DrawPurchaseVerification(MarketListingVerificationView verification)
     {
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Verifying prices...");
         ImGui.TextColored(
@@ -297,7 +297,7 @@ public sealed class RemoteMarketOverlayWindow : Window
                 : $"{verification.ListingCount} listings · {verification.Quantity:N0} items · {verification.TotalGil:N0} gil");
     }
 
-    private void DrawSelectionFooter(RemoteMarketView view)
+    private void DrawSelectionFooter(MarketListingView view)
     {
         if (ImGui.SmallButton("All"))
         {
@@ -330,7 +330,7 @@ public sealed class RemoteMarketOverlayWindow : Window
         if (selectCheapestClicked && canSelectCheapest)
             SelectCheapest(view);
         RegisterLastReviewedAction(
-            "remote-market.select-cheapest",
+            "market-listings.select-cheapest",
             "Select the cheapest current listing",
             canSelectCheapest,
             () => SelectCheapest(view),
@@ -356,7 +356,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             if (ImGuiUi.Button(label, canArmPurchase))
                 confirmArmed = true;
             RegisterLastReviewedAction(
-                "remote-market.arm-purchase",
+                "market-listings.arm-purchase",
                 label,
                 canArmPurchase,
                 () => confirmArmed = true,
@@ -371,8 +371,8 @@ public sealed class RemoteMarketOverlayWindow : Window
         if (ImGuiUi.Button("Confirm purchase", canConfirmPurchase))
             ConfirmSelection(view);
         RegisterLastReviewedAction(
-            "remote-market.confirm-purchase",
-            "Confirm the reviewed remote-market purchase",
+            "market-listings.confirm-purchase",
+            "Confirm the reviewed listing purchase",
             canConfirmPurchase,
             () => ConfirmSelection(view),
             FormatSelectionReviewValue());
@@ -381,7 +381,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             confirmArmed = false;
     }
 
-    private void RebuildSelection(RemoteMarketView view)
+    private void RebuildSelection(MarketListingView view)
     {
         selectedListings = view.Listings
             .Where(listing => selectedListingIds.Contains(listing.ListingId))
@@ -390,7 +390,7 @@ public sealed class RemoteMarketOverlayWindow : Window
         selectedGil = selectedListings.Aggregate(0UL, (sum, listing) => sum + listing.TotalGil);
     }
 
-    private void SelectCheapest(RemoteMarketView view)
+    private void SelectCheapest(MarketListingView view)
     {
         selectedListingIds.Clear();
         var accumulated = 0L;
@@ -408,12 +408,12 @@ public sealed class RemoteMarketOverlayWindow : Window
         RebuildSelection(view);
     }
 
-    private void ConfirmSelection(RemoteMarketView view)
+    private void ConfirmSelection(MarketListingView view)
     {
         confirmArmed = false;
         var error = controller.BeginBatch(selectedListingIds);
         if (error is not null)
-            Plugin.ChatGui.PrintError($"[MMF] Remote market: {error}");
+            Plugin.ChatGui.PrintError($"[MMF] Market listings: {error}");
         else
             selectedListingIds.Clear();
         RebuildSelection(view);
@@ -439,13 +439,13 @@ public sealed class RemoteMarketOverlayWindow : Window
             selected: false,
             value,
             arguments: null,
-            surfaceId: "remote-market",
+            surfaceId: "market-listings",
             mutating: true,
             completionOperationKind: null,
             _ =>
             {
                 invoke();
-                return AgentBridgeUiActionResult.Ok("Remote-market control was invoked.");
+                return AgentBridgeUiActionResult.Ok("Market-listing control was invoked.");
             });
 
     private static ISharedImmediateTexture? ResolveItemIcon(uint itemId)

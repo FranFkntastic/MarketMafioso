@@ -6,7 +6,7 @@ namespace MarketMafioso.Automation.MarketBoard;
 public enum MarketBoardBrowseOwner
 {
     MarketAcquisition,
-    RemoteMarketController,
+    MarketListingAcquisition,
     RemoteAccessProbe,
 }
 

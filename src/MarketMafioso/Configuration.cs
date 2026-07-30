@@ -36,9 +36,11 @@ public class Configuration : IPluginConfiguration
     public bool ShouldSerializeCreateMarketAcquisitionRouteDiagnosticPackages() => false;
     public bool EnableMarketAcquisitionDryRunTools { get; set; } = false;
 
-    public bool EnableRemoteMarketPurchase { get; set; } = false;
+    [JsonProperty("EnableRemoteMarketPurchase")]
+    public bool EnableMarketListingPurchases { get; set; } = false;
 
-    public List<uint> RemoteMarketRejectedTerritories { get; set; } = [];
+    [JsonProperty("RemoteMarketRejectedTerritories")]
+    public List<uint> MarketListingRejectedTerritories { get; set; } = [];
     public bool EnableAgentBridge { get; set; } = false;
     public bool EnableAgentBridgeScreenshots { get; set; } = false;
     public bool EnableAgentBridgeAudit { get; set; } = false;

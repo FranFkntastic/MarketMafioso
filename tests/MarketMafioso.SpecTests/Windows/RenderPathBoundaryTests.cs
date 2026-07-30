@@ -29,103 +29,86 @@ public sealed class RenderPathBoundaryTests
     }
 
     [Fact]
-    public void RemoteMarketViewGetterOnlyReturnsThePublishedSnapshot()
+    public void MarketListingViewGetterOnlyReturnsThePublishedSnapshot()
     {
-        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
-        var declaration = "public RemoteMarketView GetView() => cachedView;";
+        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketBoardAcquisitionController.cs");
+        var declaration = "public MarketListingView GetView() => cachedView;";
 
         Assert.Contains(declaration, source, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RemoteMarketOverlayVisibilityRequiresCurrentSnapshotIdentity()
+    public void MarketListingOverlayVisibilityRequiresCurrentSnapshotIdentity()
     {
-        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
+        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketBoardAcquisitionController.cs");
         var body = ExtractMethodBody(source, "IsMarketBoardResultVisible");
 
-        Assert.Contains("IsListingSnapshotCurrent(", body, StringComparison.Ordinal);
+        Assert.Contains("listingSession.IsCurrentNativePresentation(", body, StringComparison.Ordinal);
         Assert.DoesNotContain("GetNativePresentationState", body, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RemoteMarketOverlayUsesControllerOwnedSessionInsteadOfTransientAddonVisibility()
+    public void MarketListingOverlayUsesControllerOwnedSessionInsteadOfTransientAddonVisibility()
     {
-        var overlay = ReadSource("src", "MarketMafioso", "Windows", "RemoteMarketOverlayWindow.cs");
-        var controller = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
+        var overlay = ReadSource("src", "MarketMafioso", "Windows", "MarketListingOverlayWindow.cs");
+        var controller = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketBoardAcquisitionController.cs");
         var drawConditions = ExtractMethodBody(overlay, "DrawConditions");
 
         Assert.Contains("controller.ShouldPresentOverlay()", drawConditions, StringComparison.Ordinal);
         Assert.DoesNotContain("IsMarketBoardResultVisible()", drawConditions, StringComparison.Ordinal);
-        Assert.Contains("RemoteMarketOverlaySession overlaySession", controller, StringComparison.Ordinal);
+        Assert.Contains("MarketListingPresentationSession presentationSession", controller, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RemoteMarketConfirmedPurchaseReconcilesInPlace()
+    public void ConfirmedListingPurchaseReconcilesInPlace()
     {
-        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
-        var confirmation = ExtractMethodBody(source, "OnItemPurchased");
-        var completion = ExtractMethodBody(source, "Complete");
+        var coordinator = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketListingPurchaseCoordinator.cs");
+        var controller = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketBoardAcquisitionController.cs");
+        var confirmation = ExtractMethodBody(coordinator, "OnItemPurchased");
+        var completion = ExtractMethodBody(coordinator, "Complete");
 
         Assert.Contains("purchasedListingIds.Add(pending.Selection.ListingId)", confirmation, StringComparison.Ordinal);
-        Assert.Contains("ReconcileConfirmedPurchase(pending.Selection.ListingId)", confirmation, StringComparison.Ordinal);
-        Assert.Contains("framework.RunOnTick(AdvanceBatch, BatchPacingDelay)", completion, StringComparison.Ordinal);
-        Assert.Contains("proxy->SetLastPurchasedItem", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("BeginPostPurchaseRefresh", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("pendingPostPurchaseRefresh", source, StringComparison.Ordinal);
+        Assert.Contains("reconcileConfirmedPurchase(pending.Selection.ListingId)", confirmation, StringComparison.Ordinal);
+        Assert.Contains("listingSession.ConfirmPurchase(listingId)", controller, StringComparison.Ordinal);
+        Assert.Contains("framework.RunOnTick(Advance, BatchPacingDelay)", completion, StringComparison.Ordinal);
+        Assert.Contains("proxy->SetLastPurchasedItem", coordinator, StringComparison.Ordinal);
+        Assert.DoesNotContain("BeginPostPurchaseRefresh", coordinator, StringComparison.Ordinal);
+        Assert.DoesNotContain("pendingPostPurchaseRefresh", coordinator, StringComparison.Ordinal);
         Assert.DoesNotContain("RequireFreshBrowse", confirmation, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RemoteMarketOverlayExposesItsRealPurchaseStepsForReviewedAutomation()
+    public void MarketListingOverlayExposesItsRealPurchaseStepsForReviewedAutomation()
     {
-        var overlay = ReadSource("src", "MarketMafioso", "Windows", "RemoteMarketOverlayWindow.cs");
+        var overlay = ReadSource("src", "MarketMafioso", "Windows", "MarketListingOverlayWindow.cs");
         var bridge = ReadSource("src", "MarketMafioso", "AgentBridge", "MarketMafiosoBridgeProvider.cs");
 
-        Assert.Contains("\"remote-market.select-cheapest\"", overlay, StringComparison.Ordinal);
-        Assert.Contains("\"remote-market.arm-purchase\"", overlay, StringComparison.Ordinal);
-        Assert.Contains("\"remote-market.confirm-purchase\"", overlay, StringComparison.Ordinal);
-        Assert.Contains("surfaceId: \"remote-market\"", overlay, StringComparison.Ordinal);
-        Assert.Contains("new(\"remote-market\", \"Remote Market Overlay\"", bridge, StringComparison.Ordinal);
+        Assert.Contains("\"market-listings.select-cheapest\"", overlay, StringComparison.Ordinal);
+        Assert.Contains("\"market-listings.arm-purchase\"", overlay, StringComparison.Ordinal);
+        Assert.Contains("\"market-listings.confirm-purchase\"", overlay, StringComparison.Ordinal);
+        Assert.Contains("surfaceId: \"market-listings\"", overlay, StringComparison.Ordinal);
+        Assert.Contains("new(\"market-listings\", \"Market Listings\"", bridge, StringComparison.Ordinal);
         Assert.Contains("reviewRegistry.ActionCatalog()", bridge, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RemoteMarketListingCacheRefreshesFromNativeLifecycleEvents()
+    public void ControllerConsumesSharedEventDrivenListingObserver()
     {
-        var source = ReadSource(
-            "src",
-            "MarketMafioso",
-            "MarketAcquisition",
-            "RemoteMarket",
-            "RemoteMarketNativeListingCache.cs");
+        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketBoardAcquisitionController.cs");
 
-        Assert.Contains(
-            "RegisterListener(AddonEvent.PostRefresh, ItemSearchResultAddon, OnNativeListingsChanged)",
-            source,
-            StringComparison.Ordinal);
-        Assert.Contains("private void OnNativeListingsChanged", source, StringComparison.Ordinal);
-        Assert.Contains("marketBoard.OfferingsReceived += OnOfferingsReceived", source, StringComparison.Ordinal);
-        Assert.Contains("framework.RunOnTick(Capture)", source, StringComparison.Ordinal);
-        Assert.Contains("SnapshotChanged?.Invoke(candidate)", source, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void RemoteMarketControllerConsumesNativeListingCapability()
-    {
-        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
-
-        Assert.Contains("RemoteMarketNativeListingCache nativeListingCache", source, StringComparison.Ordinal);
-        Assert.Contains("nativeListingCache.SnapshotChanged += OnNativeListingSnapshotChanged", source, StringComparison.Ordinal);
+        Assert.Contains("DalamudMarketBoardListingObserver listingObserver", source, StringComparison.Ordinal);
+        Assert.Contains("listingObserver.Changed += OnListingObservationChanged", source, StringComparison.Ordinal);
+        Assert.Contains("MarketBoardListingSession listingSession", source, StringComparison.Ordinal);
         Assert.DoesNotContain("RegisterListener(AddonEvent.PostRefresh", source, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RemoteMarketPurchaseAutomaticallyRepairsUnverifiedNativeEntry()
+    public void ListingPurchaseAutomaticallyRepairsUnverifiedNativeEntry()
     {
-        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
+        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketBoardAcquisitionController.cs");
         var beginBatch = ExtractMethodBody(source, "BeginBatch");
 
-        Assert.Contains("RequiresAutomaticPurchaseVerification(", beginBatch, StringComparison.Ordinal);
+        Assert.Contains("listingSession.IsVerifiedForPurchase(", beginBatch, StringComparison.Ordinal);
         Assert.Contains("BeginPendingPurchaseVerification(", beginBatch, StringComparison.Ordinal);
         Assert.DoesNotContain("Open this item through MMF", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Select the listing in MMF", source, StringComparison.Ordinal);
@@ -138,9 +121,9 @@ public sealed class RenderPathBoundaryTests
     [InlineData("DrawEconomicsStrip")]
     [InlineData("DrawListingsTable")]
     [InlineData("DrawBatch")]
-    public void RemoteMarketDrawMethodsOnlyRenderCachedState(string methodName)
+    public void MarketListingDrawMethodsOnlyRenderCachedState(string methodName)
     {
-        var source = ReadSource("src", "MarketMafioso", "Windows", "RemoteMarketOverlayWindow.cs");
+        var source = ReadSource("src", "MarketMafioso", "Windows", "MarketListingOverlayWindow.cs");
         var body = ExtractMethodBody(source, methodName);
 
         foreach (var forbidden in new[]
@@ -158,9 +141,9 @@ public sealed class RenderPathBoundaryTests
     }
 
     [Fact]
-    public void RemoteMarketIconCacheDoesNotRetainAFrameScopedTextureWrap()
+    public void MarketListingIconCacheDoesNotRetainAFrameScopedTextureWrap()
     {
-        var source = ReadSource("src", "MarketMafioso", "Windows", "RemoteMarketOverlayWindow.cs");
+        var source = ReadSource("src", "MarketMafioso", "Windows", "MarketListingOverlayWindow.cs");
         var resolver = ExtractMethodBody(source, "ResolveItemIcon");
         var header = ExtractMethodBody(source, "DrawHeader");
 
