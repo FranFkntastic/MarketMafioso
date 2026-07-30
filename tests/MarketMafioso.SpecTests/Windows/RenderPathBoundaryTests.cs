@@ -46,6 +46,36 @@ public sealed class RenderPathBoundaryTests
         Assert.Contains("IsListingSnapshotCurrent(", body, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RemoteMarketListingCacheRefreshesFromNativeLifecycleEvents()
+    {
+        var source = ReadSource(
+            "src",
+            "MarketMafioso",
+            "MarketAcquisition",
+            "RemoteMarket",
+            "RemoteMarketNativeListingCache.cs");
+
+        Assert.Contains(
+            "RegisterListener(AddonEvent.PostRefresh, ItemSearchResultAddon, OnNativeListingsChanged)",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains("private void OnNativeListingsChanged", source, StringComparison.Ordinal);
+        Assert.Contains("marketBoard.OfferingsReceived += OnOfferingsReceived", source, StringComparison.Ordinal);
+        Assert.Contains("framework.RunOnTick(Capture)", source, StringComparison.Ordinal);
+        Assert.Contains("SnapshotChanged?.Invoke(candidate)", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RemoteMarketControllerConsumesNativeListingCapability()
+    {
+        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
+
+        Assert.Contains("RemoteMarketNativeListingCache nativeListingCache", source, StringComparison.Ordinal);
+        Assert.Contains("nativeListingCache.SnapshotChanged += OnNativeListingSnapshotChanged", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RegisterListener(AddonEvent.PostRefresh", source, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("Draw")]
     [InlineData("DrawHeader")]
