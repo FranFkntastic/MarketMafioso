@@ -51,7 +51,6 @@ public class MainWindow : Window, IDisposable
     private readonly IPluginLog log;
     private readonly RemoteMarketController remoteMarketController;
     private readonly RemoteSummoningBellProbe remoteSummoningBellProbe;
-    private readonly RemoteMarketTabPanel remoteMarketTabPanel;
 
     public RemoteMarketOverlayWindow RemoteMarketOverlay { get; }
     private readonly IDataManager dataManager;
@@ -231,19 +230,6 @@ public class MainWindow : Window, IDisposable
             log,
             Plugin.PluginInterface,
             Plugin.PluginInterface.GetPluginConfigDirectory());
-        remoteMarketTabPanel = new RemoteMarketTabPanel(
-            config,
-            remoteMarketController,
-            remoteSummoningBellProbe,
-            AgentReviewRegistry,
-            () =>
-            {
-                remoteMarketController.OpenMarketBoard();
-                var result = remoteMarketController.SearchItem(5116, "Cobalt Ore");
-                var outcome = $"{result.Status}: {result.Message}";
-                remoteMarketController.SetDebugOutcome(outcome);
-                return outcome;
-            });
         RemoteMarketOverlay = new RemoteMarketOverlayWindow(remoteMarketController);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
@@ -521,6 +507,7 @@ public class MainWindow : Window, IDisposable
         var warmBellProbe = remoteSummoningBellProbe.GetWarmSessionProbeView();
         var workshopReview = workshopMaterials.BuildReview();
         var workshopRun = workshopVendorRestockRunner.ActiveRun;
+        var remoteMarket = remoteMarketController.GetView();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -576,6 +563,21 @@ public class MainWindow : Window, IDisposable
                     0UL,
                     (sum, receipt) => checked(sum + receipt.SpentGil)) ?? 0,
                 ArmedItemId = workshopRun?.ArmedPurchase?.ItemId,
+            },
+            RemoteMarket = new AgentBridgeRemoteMarketTruth
+            {
+                Available = remoteMarketController.IsAvailable,
+                ResultVisible = remoteMarketController.IsMarketBoardResultVisible(),
+                ViewRevision = remoteMarket.Revision,
+                ListingCount = remoteMarket.Listings.Count,
+                ItemId = remoteMarket.Listings.FirstOrDefault()?.ItemId,
+                HighQuality = remoteMarket.Listings.FirstOrDefault()?.IsHighQuality,
+                CheapestUnitPrice = remoteMarket.Listings.Count == 0
+                    ? null
+                    : remoteMarket.Listings.Min(listing => listing.UnitPrice),
+                CurrentGil = remoteMarket.GilOnHand,
+                MarketContextSource = remoteMarket.MarketContext?.Source,
+                MarketContextSummary = remoteMarket.MarketContextSummary,
             },
             RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
             {
@@ -820,12 +822,6 @@ public class MainWindow : Window, IDisposable
                     ImGui.EndTabItem();
                 }
 
-                if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Remote Market", GetAgentTabFlags("Remote Market")))
-                {
-                    remoteMarketTabPanel.Draw();
-                    ImGui.EndTabItem();
-                }
-
                 if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
                 {
                     marketAcquisitionDiagnosticsPanel.Draw();
@@ -862,6 +858,8 @@ public class MainWindow : Window, IDisposable
         bool IsDocked);
 
     public string OpenRemoteMarketBoard() => remoteMarketController.OpenMarketBoard();
+
+    public string OpenRemoteMarketItem(uint itemId) => remoteMarketController.OpenMarketItem(itemId);
 
     public string BeginRemoteSummoningBellProbe() => remoteSummoningBellProbe.BeginProbe();
 
@@ -953,7 +951,6 @@ public class MainWindow : Window, IDisposable
             "Squire" or "Workshop Logistics" or "Trade Queue" or "Settings" or "Status" => true,
             "Diagnostics" => true,
             "Market Acquisition" => IsMarketAcquisitionUnlocked(),
-            "Remote Market" => IsMarketAcquisitionUnlocked(),
             _ => false,
         };
         if (!allowed || !IsAllowedWorkspaceView(mainTab, workspaceView))
@@ -982,12 +979,16 @@ public class MainWindow : Window, IDisposable
         IsOpen = true;
     }
 
-    private bool CanStageWorkshopMarketAcquisition() =>
+    private bool CanStageMarketAcquisition() =>
         IsMarketAcquisitionUnlocked() &&
         !acquisitionWorkspace.IsBusy &&
         !routeEngine.IsRouteActive &&
         !acquisitionRequestBuilder.IsSynchronizing &&
         !acquisitionRequestBuilder.HasExactAcquisitionAuthority;
+
+    private bool CanStageWorkshopMarketAcquisition() => CanStageMarketAcquisition();
+
+    public bool CanStageContextMenuItemToWorkbench() => CanStageMarketAcquisition();
 
     private string StageWorkshopMarketAcquisition(WorkshopMaterialProcurement line)
     {
@@ -1005,6 +1006,31 @@ public class MainWindow : Window, IDisposable
         return staged > 0
             ? $"Added {line.VendorNeed:N0} {line.Availability.ItemName} to Market Acquisition."
             : $"{line.Availability.ItemName} is already in Market Acquisition.";
+    }
+
+    public string StageContextMenuItemToWorkbench(uint itemId, string itemName)
+    {
+        if (itemId == 0 || string.IsNullOrWhiteSpace(itemName))
+            return "The selected item could not be resolved.";
+        if (!CanStageContextMenuItemToWorkbench())
+            return "Market Acquisition is unavailable while its Workbench or route is busy.";
+
+        var staged = acquisitionRequestBuilder.StageLines(
+            [
+                new MarketAcquisitionRequestLineDocument
+                {
+                    ItemId = itemId,
+                    ItemName = itemName.Trim(),
+                    QuantityMode = "TargetQuantity",
+                    TargetQuantity = 1,
+                    HqPolicy = "Either",
+                },
+            ]);
+        QueueAgentTabSelection("Market Acquisition", "Workbench");
+        IsOpen = true;
+        return staged > 0
+            ? $"Added 1 {itemName.Trim()} to the Market Acquisition Workbench."
+            : $"{itemName.Trim()} is already in the Market Acquisition Workbench.";
     }
 
     internal static bool TryNormalizeAgentBridgeTab(string tabName, out string mainTab, out string? workspaceView)

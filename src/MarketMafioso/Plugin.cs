@@ -47,6 +47,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
     [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
     [PluginService] internal static IAetheryteList AetheryteList { get; private set; } = null!;
+    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
 
@@ -64,6 +65,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly QuartermasterIpcClient quartermaster;
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
+    private readonly MarketAcquisitionItemContextMenu marketAcquisitionItemContextMenu;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
@@ -194,6 +196,15 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log);
         exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
+        marketAcquisitionItemContextMenu = new MarketAcquisitionItemContextMenu(
+            ContextMenu,
+            GameGui,
+            DataManager,
+            Framework,
+            ChatGui,
+            () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
+            mainWindow.CanStageContextMenuItemToWorkbench,
+            mainWindow.StageContextMenuItemToWorkbench);
 
         agentBridgeProofStore = new AgentBridgeProofStore();
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
@@ -279,6 +290,26 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 
             case "market":
+#if DEBUG
+                if (!string.IsNullOrWhiteSpace(commandArgument))
+                {
+                    var itemName = commandArgument.Trim().Trim('"');
+                    var matches = DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>()
+                        .Where(item => string.Equals(item.Name.ToString(), itemName, StringComparison.OrdinalIgnoreCase))
+                        .Take(2)
+                        .ToArray();
+                    if (matches.Length != 1)
+                    {
+                        ChatGui.PrintError(matches.Length == 0
+                            ? $"[MMF] No exact market item named \"{itemName}\" was found."
+                            : $"[MMF] More than one market item is named \"{itemName}\".");
+                        break;
+                    }
+
+                    ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketItem(matches[0].RowId)}");
+                    break;
+                }
+#endif
                 ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketBoard()}");
                 break;
 
@@ -596,6 +627,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         StopTimer();
+        marketAcquisitionItemContextMenu.Dispose();
         exactAcquisitionIpc.Dispose();
         agentBridge.Dispose();
 
