@@ -59,6 +59,7 @@ internal sealed class RemoteMarketController : IDisposable
     private int listingCaptureQueued;
     private CmbMarketContext? marketContext;
     private long viewRevision;
+    private int debugSearchGeneration;
     private RemoteMarketView cachedView = new(
         0,
         false,
@@ -154,6 +155,55 @@ internal sealed class RemoteMarketController : IDisposable
             itemId,
             maxUnitPrice?.ToString() ?? "(none)");
         return true;
+    }
+
+    public string OpenMarketItem(uint itemId)
+    {
+        if (!IsAvailable || itemId == 0 || !clientState.IsLoggedIn)
+            return "The listing search could not be opened.";
+
+        var itemName = resolveItemName(itemId);
+        if (string.IsNullOrWhiteSpace(itemName))
+            return "The requested item name could not be resolved.";
+
+        OpenMarketBoard();
+        var generation = Interlocked.Increment(ref debugSearchGeneration);
+        framework.RunOnTick(
+            () => AdvanceDebugListingSearch(itemId, itemName, generation, DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10)));
+        return $"Listing search queued for {itemName}.";
+    }
+
+    private void AdvanceDebugListingSearch(
+        uint itemId,
+        string itemName,
+        int generation,
+        DateTimeOffset deadlineUtc)
+    {
+        if (generation != Volatile.Read(ref debugSearchGeneration))
+            return;
+
+        var result = searchDriver(itemId, itemName);
+        if (result.ReadyForListings)
+        {
+            log.Information(
+                "[MarketMafioso] DAB market listing search reached ListingsReady. Item={ItemId}",
+                itemId);
+            return;
+        }
+
+        if (!result.IsInProgress || DateTimeOffset.UtcNow >= deadlineUtc)
+        {
+            log.Warning(
+                "[MarketMafioso] DAB market listing search stopped. Item={ItemId} Status={Status} Message={Message}",
+                itemId,
+                result.Status,
+                result.Message);
+            return;
+        }
+
+        framework.RunOnTick(
+            () => AdvanceDebugListingSearch(itemId, itemName, generation, deadlineUtc),
+            TimeSpan.FromMilliseconds(100));
     }
 
     private void OnOfferingsReceived(IMarketBoardCurrentOfferings offerings)

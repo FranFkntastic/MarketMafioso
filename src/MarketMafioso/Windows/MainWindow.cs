@@ -420,6 +420,7 @@ public class MainWindow : Window, IDisposable
         var normalBellCapture = remoteSummoningBellProbe.GetNormalCaptureView();
         var yieldBellProbe = remoteSummoningBellProbe.GetYieldProbeView();
         var warmBellProbe = remoteSummoningBellProbe.GetWarmSessionProbeView();
+        var remoteMarket = remoteMarketController.GetView();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -436,6 +437,21 @@ public class MainWindow : Window, IDisposable
             WorkspaceBusy = acquisitionWorkspace.IsBusy,
             ClaimedRequestId = acquisitionWorkspace.ClaimedRequest?.Id,
             PreparedPlanStatus = acquisitionWorkspace.PreparedPlan?.Status,
+            RemoteMarket = new AgentBridgeRemoteMarketTruth
+            {
+                Available = remoteMarketController.IsAvailable,
+                ResultVisible = remoteMarketController.IsMarketBoardResultVisible(),
+                ViewRevision = remoteMarket.Revision,
+                ListingCount = remoteMarket.Listings.Count,
+                ItemId = remoteMarket.Listings.FirstOrDefault()?.ItemId,
+                HighQuality = remoteMarket.Listings.FirstOrDefault()?.IsHighQuality,
+                CheapestUnitPrice = remoteMarket.Listings.Count == 0
+                    ? null
+                    : remoteMarket.Listings.Min(listing => listing.UnitPrice),
+                CurrentGil = remoteMarket.GilOnHand,
+                MarketContextSource = remoteMarket.MarketContext?.Source,
+                MarketContextSummary = remoteMarket.MarketContextSummary,
+            },
             RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
             {
                 Active = remoteBellProbe.Active,
@@ -637,6 +653,8 @@ public class MainWindow : Window, IDisposable
     }
 
     public string OpenRemoteMarketBoard() => remoteMarketController.OpenMarketBoard();
+
+    public string OpenRemoteMarketItem(uint itemId) => remoteMarketController.OpenMarketItem(itemId);
 
     public string BeginRemoteSummoningBellProbe() => remoteSummoningBellProbe.BeginProbe();
 

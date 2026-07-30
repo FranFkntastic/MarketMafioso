@@ -249,6 +249,26 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 
             case "market":
+#if DEBUG
+                if (!string.IsNullOrWhiteSpace(commandArgument))
+                {
+                    var itemName = commandArgument.Trim().Trim('"');
+                    var matches = DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>()
+                        .Where(item => string.Equals(item.Name.ToString(), itemName, StringComparison.OrdinalIgnoreCase))
+                        .Take(2)
+                        .ToArray();
+                    if (matches.Length != 1)
+                    {
+                        ChatGui.PrintError(matches.Length == 0
+                            ? $"[MMF] No exact market item named \"{itemName}\" was found."
+                            : $"[MMF] More than one market item is named \"{itemName}\".");
+                        break;
+                    }
+
+                    ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketItem(matches[0].RowId)}");
+                    break;
+                }
+#endif
                 ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketBoard()}");
                 break;
 

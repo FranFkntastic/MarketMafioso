@@ -65,6 +65,19 @@ public sealed class AgentBridgeProofFactoryTests
         WorkspaceBusy = false,
         ClaimedRequestId = "request-1",
         PreparedPlanStatus = "Ready",
+        RemoteMarket = new AgentBridgeRemoteMarketTruth
+        {
+            Available = true,
+            ResultVisible = true,
+            ViewRevision = 7,
+            ListingCount = 10,
+            ItemId = 8,
+            HighQuality = false,
+            CheapestUnitPrice = 50,
+            CurrentGil = 1_000,
+            MarketContextSource = "Universalis",
+            MarketContextSummary = "DC best 45p",
+        },
         RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
         {
             Active = false,
