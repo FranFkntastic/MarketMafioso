@@ -23,6 +23,7 @@ public interface IMarketAcquisitionRouteContext
     bool IsCurrentWorldAvailable { get; }
     string GetCurrentWorldName();
     bool TryGetCharacterScope(out string characterName, out string homeWorld);
+    bool TryIsWorldTravelBusy(out bool isBusy);
 }
 
 public interface IMarketAcquisitionRouteUiAutomation
@@ -86,7 +87,11 @@ public interface IMarketAcquisitionMarketBoardIo
 {
     MarketBoardApproachResult OpenOrApproachMarketBoard();
     MarketAcquisitionApproachCleanupResult StopOwnedApproach(MarketAcquisitionApproachLease lease);
-    MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName);
+    MarketBoardItemSearchResult SearchItem(
+        uint itemId,
+        string? itemName,
+        MarketBoardItemSearchIntent intent = MarketBoardItemSearchIntent.PresentOrBrowse,
+        string? previousOperationId = null);
     MarketBoardReadResult ReadCurrentListings(string currentWorld);
     MarketBoardInputCapture CaptureInputState();
     void AbandonBrowse(string reason);

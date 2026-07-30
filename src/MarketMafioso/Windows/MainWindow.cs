@@ -253,7 +253,7 @@ public class MainWindow : Window, IDisposable
         exactAcquisitionRouteStateStore = new ConfigurationExactAcquisitionRouteExecutionStateStore(config);
         routeEngine = new MarketAcquisitionRouteEngine(
             marketAcquisitionRouteRunner,
-            new DalamudMarketAcquisitionRouteContext(playerState),
+            new DalamudMarketAcquisitionRouteContext(playerState, lifestream),
             routeUiAutomation,
             new UnsupportedMarketAcquisitionRouteTravelCleanup(),
             new DalamudMarketAcquisitionMarketBoardIo(
@@ -467,6 +467,7 @@ public class MainWindow : Window, IDisposable
             () => _ = ProbeLiveMarketBoardAsync(),
             () => _ = PauseGuidedRouteAsync(),
             () => _ = ResumeGuidedRouteAsync(),
+            () => _ = RecoverGuidedRouteAsync(),
             () => _ = StopGuidedRouteAsync(),
             () => _ = RestartGuidedRouteAsync(),
             () => _ = ReprepareGuidedRouteAsync(),
@@ -510,6 +511,7 @@ public class MainWindow : Window, IDisposable
         var workshopReview = workshopMaterials.BuildReview();
         var workshopRun = workshopVendorRestockRunner.ActiveRun;
         var remoteMarket = remoteMarketController.GetView();
+        var remoteMarketNative = remoteMarketController.GetNativePresentationState();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -570,7 +572,11 @@ public class MainWindow : Window, IDisposable
             RemoteMarket = new AgentBridgeRemoteMarketTruth
             {
                 Available = remoteMarketController.IsAvailable,
-                ResultVisible = remoteMarketController.IsMarketBoardResultVisible(),
+                ResultVisible = remoteMarketNative.MatchesSnapshot,
+                NativeResultAddonVisible = remoteMarketNative.ResultAddonVisible,
+                NativeAgentActive = remoteMarketNative.AgentActive,
+                NativeListingCount = remoteMarketNative.ListingCount,
+                NativeRequestId = remoteMarketNative.RequestId,
                 ViewRevision = remoteMarket.Revision,
                 ListingCount = remoteMarket.Listings.Count,
                 ItemId = remoteMarket.Listings.FirstOrDefault()?.ItemId,
@@ -1718,6 +1724,16 @@ public class MainWindow : Window, IDisposable
         routeEngine.Resume();
         routeEngine.ReportRouteProgress();
         return Task.CompletedTask;
+    }
+
+    private Task RecoverGuidedRouteAsync()
+    {
+        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
+        {
+            routeEngine.Recover(claimed);
+            routeEngine.ReportRouteProgress();
+            return Task.CompletedTask;
+        });
     }
 
     private Task StopGuidedRouteAsync()

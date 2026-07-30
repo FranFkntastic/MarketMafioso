@@ -10,6 +10,7 @@ public sealed record MarketBoardPurchaseSession
     public MarketBoardPurchaseCandidate Candidate { get; init; } = new();
     public DateTimeOffset StartedAtUtc { get; init; }
     public DateTimeOffset DeadlineUtc { get; init; }
+    public bool ConfirmationWasSubmitted { get; init; }
     public MarketBoardPurchaseSessionPhase Phase => ResolvePhase(Status);
     public bool IsActive =>
         Phase is MarketBoardPurchaseSessionPhase.WaitingForConfirmation or MarketBoardPurchaseSessionPhase.WaitingForListingRemoval;
@@ -44,6 +45,7 @@ public sealed record MarketBoardPurchaseSession
                 Status = "WaitingForListingRemoval",
                 Message = "Purchase confirmation submitted; waiting for the guarded listing to disappear.",
                 DeadlineUtc = nowUtc.Add(listingRemovalWatchdog),
+                ConfirmationWasSubmitted = true,
             };
         }
 

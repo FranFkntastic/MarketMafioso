@@ -87,6 +87,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             ? null
             : session?.ActiveStop;
 
+    public MarketAcquisitionGuidedRouteStop? RetainedActiveStop => session?.ActiveStop;
+
     public IReadOnlyList<MarketAcquisitionGuidedRouteStop> Stops => session?.Stops ?? [];
 
     public bool IsRunning => string.Equals(State, "Running", StringComparison.OrdinalIgnoreCase);
@@ -94,6 +96,10 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public bool IsPaused => string.Equals(State, "Paused", StringComparison.OrdinalIgnoreCase);
 
     public bool CanRestart => session != null;
+
+    public bool CanRecover =>
+        State is "Stopped" or "Failed" &&
+        session?.ActiveStop != null;
 
     public IReadOnlyList<MarketAcquisitionCompletedRouteStop> CompletedOrProbedStops =>
         session?.Stops
@@ -232,6 +238,46 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         State = "Running";
         StatusMessage = $"Route resumed. Next stop: {ActiveStop?.WorldName}.";
         diagnostics.Record("resumed", StatusMessage);
+        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
+    }
+
+    public MarketAcquisitionRouteActionResult Recover(string currentWorld)
+    {
+        if (!CanRecover)
+            return Fail($"Route cannot be recovered while {State}.");
+
+        var recovery = session!.PrepareForRecovery(currentWorld);
+        if (!recovery.Success)
+            return Fail(recovery.Message);
+
+        CloseDiagnostics();
+        diagnostics = diagnosticsRequested
+            ? MarketAcquisitionRouteDiagnostics.CreateEnabled(
+                diagnosticsDirectory,
+                DateTimeOffset.Now,
+                executionMode == MarketAcquisitionExecutionMode.DryRun ? "dry-run-recovery" : "route-recovery",
+                diagnosticsLevelRequested)
+            : MarketAcquisitionRouteDiagnostics.Disabled;
+        LastDiagnosticFilePath = diagnostics.FilePath;
+        LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
+        LastPurchaseRecordsCsvPath = diagnostics.PurchaseRecordsCsvPath;
+        LastRunSummary = null;
+        State = "Running";
+        SearchSubmitted = false;
+        MarketBoardCloseRequiredBeforeTravel = false;
+        standaloneInputCaptureLogOpen = false;
+        itemSearchAutomationStartedUtc = null;
+        ClearListingReadPendingWatchdog();
+        StatusMessage = recovery.Message;
+        diagnostics.Record(
+            "route-recovered",
+            StatusMessage,
+            new Dictionary<string, string?>
+            {
+                ["currentWorld"] = currentWorld,
+                ["retainedWorld"] = session.ActiveStop?.WorldName,
+                ["retainedItem"] = FormatRouteItem(session.ActiveStop?.ActiveItemSubtask),
+            });
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
