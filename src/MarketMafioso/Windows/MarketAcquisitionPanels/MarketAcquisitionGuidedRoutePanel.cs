@@ -22,6 +22,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action stopRoute;
     private readonly Action restartRoute;
     private readonly Action reprepareRoute;
+    private readonly Action<bool> reconcileTerminalPurchase;
     private readonly Action retryExactAcquisitionRecovery;
     private readonly Action returnToExactAcquisitionAdvisor;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary;
@@ -42,6 +43,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action stopRoute,
         Action restartRoute,
         Action reprepareRoute,
+        Action<bool> reconcileTerminalPurchase,
         Action retryExactAcquisitionRecovery,
         Action returnToExactAcquisitionAdvisor,
         Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary,
@@ -60,6 +62,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
         this.restartRoute = restartRoute ?? throw new ArgumentNullException(nameof(restartRoute));
         this.reprepareRoute = reprepareRoute ?? throw new ArgumentNullException(nameof(reprepareRoute));
+        this.reconcileTerminalPurchase = reconcileTerminalPurchase ?? throw new ArgumentNullException(nameof(reconcileTerminalPurchase));
         this.retryExactAcquisitionRecovery = retryExactAcquisitionRecovery ?? throw new ArgumentNullException(nameof(retryExactAcquisitionRecovery));
         this.returnToExactAcquisitionAdvisor = returnToExactAcquisitionAdvisor ?? throw new ArgumentNullException(nameof(returnToExactAcquisitionAdvisor));
         this.drawPostRunDiagnosticSummary = drawPostRunDiagnosticSummary ?? throw new ArgumentNullException(nameof(drawPostRunDiagnosticSummary));
@@ -84,7 +87,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                             snapshot.CompletedOrProbedStopCount > 0;
         DrawExactAcquisitionExecution(snapshot);
         DrawShardStorageCheckpoint(snapshot);
-        DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence);
+        if (!DrawTerminalPurchaseRecovery(snapshot))
+            DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence);
 
         ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
         if (snapshot.RecoveryBlockedReason is { } recoveryBlockedReason)
@@ -117,6 +121,49 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
         DrawGuidedRouteStops(snapshot.Stops);
         drawMarketBoardProbeStatus(snapshot);
+    }
+
+    private bool DrawTerminalPurchaseRecovery(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        if (snapshot.RecoveryBlockedReason == null ||
+            snapshot.PurchaseEvidenceState is not { } terminal ||
+            terminal is PendingMarketPurchase)
+        {
+            return false;
+        }
+
+        var intent = terminal.Intent;
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Warning,
+            $"Resolve listing {intent.ListingId}: {intent.Quantity:N0} item(s), {intent.TotalGil:N0} gil on {intent.WorldName}.");
+        if (terminal is ConfirmedMarketPurchase)
+        {
+            if (ImGuiUi.PrimaryButton("Apply Confirmed Purchase##MarketAcquisitionApplyConfirmedPurchase", true))
+                reconcileTerminalPurchase(true);
+            RegisterLastControl(
+                "acquisition.route.purchase-recovery.apply-confirmed",
+                "Apply the server-confirmed purchase and unlock retained route recovery",
+                true,
+                () => reconcileTerminalPurchase(true));
+            return true;
+        }
+
+        if (ImGuiUi.PrimaryButton("Purchase Happened##MarketAcquisitionReconcilePurchased", true))
+            reconcileTerminalPurchase(true);
+        RegisterLastControl(
+            "acquisition.route.purchase-recovery.purchased",
+            "Record the indeterminate purchase and unlock retained route recovery",
+            true,
+            () => reconcileTerminalPurchase(true));
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Purchase Failed##MarketAcquisitionReconcileFailed", true))
+            reconcileTerminalPurchase(false);
+        RegisterLastControl(
+            "acquisition.route.purchase-recovery.failed",
+            "Record that the indeterminate purchase did not occur and unlock retained route recovery",
+            true,
+            () => reconcileTerminalPurchase(false));
+        return true;
     }
 
     private void DrawGuidedRouteActionRow(

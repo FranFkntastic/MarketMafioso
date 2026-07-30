@@ -13,7 +13,7 @@ public sealed record MarketBoardPurchaseSession
     public bool ConfirmationWasSubmitted { get; init; }
     public MarketBoardPurchaseSessionPhase Phase => ResolvePhase(Status);
     public bool IsActive =>
-        Phase is MarketBoardPurchaseSessionPhase.WaitingForConfirmation or MarketBoardPurchaseSessionPhase.WaitingForListingRemoval;
+        Phase is MarketBoardPurchaseSessionPhase.WaitingForConfirmation or MarketBoardPurchaseSessionPhase.WaitingForOutcome;
 
     public static MarketBoardPurchaseSession Start(
         MarketBoardPurchaseCandidate candidate,
@@ -31,7 +31,7 @@ public sealed record MarketBoardPurchaseSession
     public MarketBoardPurchaseSession RecordConfirmationAttempt(
         MarketBoardPurchaseResult result,
         DateTimeOffset nowUtc,
-        TimeSpan listingRemovalWatchdog)
+        TimeSpan outcomeWatchdog)
     {
         ArgumentNullException.ThrowIfNull(result);
 
@@ -42,9 +42,9 @@ public sealed record MarketBoardPurchaseSession
         {
             return this with
             {
-                Status = "WaitingForListingRemoval",
-                Message = "Purchase confirmation submitted; waiting for the guarded listing to disappear.",
-                DeadlineUtc = nowUtc.Add(listingRemovalWatchdog),
+                Status = "WaitingForOutcome",
+                Message = "Purchase confirmation submitted; waiting for authoritative outcome evidence.",
+                DeadlineUtc = nowUtc.Add(outcomeWatchdog),
                 ConfirmationWasSubmitted = true,
             };
         }
@@ -68,17 +68,8 @@ public sealed record MarketBoardPurchaseSession
     {
         ArgumentNullException.ThrowIfNull(freshRead);
 
-        if (!Status.Equals("WaitingForListingRemoval", StringComparison.OrdinalIgnoreCase))
+        if (!Status.Equals("WaitingForOutcome", StringComparison.OrdinalIgnoreCase))
             return this;
-
-        if (freshRead.Status.Equals("MarketBoardNotOpen", StringComparison.OrdinalIgnoreCase))
-        {
-            return this with
-            {
-                Status = "Completed",
-                Message = "Confirmed purchase: the market-board result window closed after confirmation submission, so the guarded listing is considered removed.",
-            };
-        }
 
         if (freshRead.Status.Equals("NoListings", StringComparison.OrdinalIgnoreCase))
         {
@@ -151,7 +142,7 @@ public sealed record MarketBoardPurchaseSession
 
     private MarketBoardAutomationOutcome ClassifyFreshReadOutcome(MarketBoardReadResult freshRead)
     {
-        if (freshRead.Status is "MarketBoardNotOpen" or "NoListings")
+        if (freshRead.Status == "NoListings")
             return MarketBoardAutomationOutcome.ExpectedAlternate;
 
         if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
@@ -192,7 +183,7 @@ public sealed record MarketBoardPurchaseSession
         return status switch
         {
             "WaitingForConfirmation" => MarketBoardPurchaseSessionPhase.WaitingForConfirmation,
-            "WaitingForListingRemoval" => MarketBoardPurchaseSessionPhase.WaitingForListingRemoval,
+            "WaitingForOutcome" => MarketBoardPurchaseSessionPhase.WaitingForOutcome,
             "Completed" => MarketBoardPurchaseSessionPhase.Completed,
             _ => MarketBoardPurchaseSessionPhase.Failed,
         };
@@ -202,7 +193,7 @@ public sealed record MarketBoardPurchaseSession
 public enum MarketBoardPurchaseSessionPhase
 {
     WaitingForConfirmation,
-    WaitingForListingRemoval,
+    WaitingForOutcome,
     Completed,
     Failed,
 }
