@@ -90,6 +90,19 @@ public sealed class MarketMafiosoBridgeProviderTests
         WorkspaceBusy = false,
         ClaimedRequestId = null,
         PreparedPlanStatus = null,
+        RemoteMarket = new AgentBridgeRemoteMarketTruth
+        {
+            Available = false,
+            ResultVisible = false,
+            ViewRevision = 0,
+            ListingCount = 0,
+            ItemId = null,
+            HighQuality = null,
+            CheapestUnitPrice = null,
+            CurrentGil = null,
+            MarketContextSource = null,
+            MarketContextSummary = null,
+        },
         RemoteBellProbe = CreateRemoteBellProbeTruth(),
         Route = new AgentBridgeRouteTruth
         {

@@ -24,8 +24,23 @@ public sealed record AgentBridgeTruth
     public required bool WorkspaceBusy { get; init; }
     public required string? ClaimedRequestId { get; init; }
     public required string? PreparedPlanStatus { get; init; }
+    public required AgentBridgeRemoteMarketTruth RemoteMarket { get; init; }
     public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+}
+
+public sealed record AgentBridgeRemoteMarketTruth
+{
+    public required bool Available { get; init; }
+    public required bool ResultVisible { get; init; }
+    public required long ViewRevision { get; init; }
+    public required int ListingCount { get; init; }
+    public required uint? ItemId { get; init; }
+    public required bool? HighQuality { get; init; }
+    public required uint? CheapestUnitPrice { get; init; }
+    public required ulong? CurrentGil { get; init; }
+    public required string? MarketContextSource { get; init; }
+    public required string? MarketContextSummary { get; init; }
 }
 
 public sealed record AgentBridgeRemoteBellProbeTruth
