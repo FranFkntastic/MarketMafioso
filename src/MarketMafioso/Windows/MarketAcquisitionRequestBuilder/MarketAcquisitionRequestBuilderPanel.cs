@@ -8,6 +8,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Items;
+using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.MarketAcquisition.ExactAuthority;
@@ -358,10 +359,12 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         var isSelected = controller.SelectedLineIndex == index;
-        if (ImGui.Selectable(
-                $"{FormatLineItemName(line)}##SelectLine",
-                isSelected,
-                ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowItemOverlap))
+        var selectionCursor = ImGui.GetCursorPos();
+        var selection = DalamudTableSelectionRenderer.DrawRow(
+            "##SelectLine",
+            isSelected,
+            new Vector2(0f, ImGui.GetTextLineHeightWithSpacing()));
+        if (selection.Activated)
         {
             controller.SelectLine(index);
             selectedLineInspectorRequested = false;
@@ -377,6 +380,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 controller.SelectLine(index);
                 selectedLineInspectorRequested = false;
             });
+        ImGui.SetCursorPos(selectionCursor);
+        ImGui.TextUnformatted(FormatLineItemName(line));
 
         if (!canEdit || isExactAcquisitionLine)
             ImGui.BeginDisabled();
