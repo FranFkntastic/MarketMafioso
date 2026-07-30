@@ -161,14 +161,6 @@ internal sealed class RemoteMarketController : IDisposable
         return null;
     }
 
-    public void ClearRejectedTerritories()
-    {
-        configuration.RemoteMarketRejectedTerritories.Clear();
-        configuration.Save();
-    }
-
-    public void SetDebugOutcome(string message) => lastOutcome = message;
-
     public string OpenMarketBoard()
     {
         if (!IsAvailable)
