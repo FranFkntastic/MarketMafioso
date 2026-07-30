@@ -19,6 +19,9 @@ public sealed class CraftArchitectWorkshopHostCraftQuoteService(
             return cached;
 
         var quote = await appraisalService.AppraiseAsync(request, cancellationToken);
+        if (quote == null)
+            return null;
+
         if (quote.Plan != null)
         {
             var planJson = recipeCalculationService.SerializePlan(

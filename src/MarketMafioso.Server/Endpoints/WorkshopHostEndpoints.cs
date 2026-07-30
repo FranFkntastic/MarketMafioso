@@ -154,10 +154,17 @@ internal static class WorkshopHostEndpoints
         string planId)
     {
         var configuredOrigin = configuration["MarketMafioso:PublicOrigin"]?.Trim().TrimEnd('/');
-        var origin = string.IsNullOrWhiteSpace(configuredOrigin)
+        var workshopOrigin = string.IsNullOrWhiteSpace(configuredOrigin)
             ? $"{request.Scheme}://{request.Host}"
             : configuredOrigin;
         var snapshotPath = $"{request.PathBase}/api/craft/plans/{Uri.EscapeDataString(planId)}";
-        return $"{origin}/?appraisalPlan={Uri.EscapeDataString(snapshotPath)}";
+        var snapshotUrl = $"{workshopOrigin}{snapshotPath}";
+        var configuredAppOrigin = configuration["MarketMafioso:CraftArchitectAppOrigin"]?.Trim().TrimEnd('/');
+        if (!string.IsNullOrWhiteSpace(configuredAppOrigin))
+            return $"{configuredAppOrigin}/?appraisalPlan={Uri.EscapeDataString(snapshotUrl)}";
+
+        return request.PathBase.HasValue
+            ? $"{workshopOrigin}/?appraisalPlan={Uri.EscapeDataString(snapshotPath)}"
+            : snapshotUrl;
     }
 }

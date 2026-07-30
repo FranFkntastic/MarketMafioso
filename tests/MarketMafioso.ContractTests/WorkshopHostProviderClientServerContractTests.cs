@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -60,8 +61,44 @@ public sealed class WorkshopHostProviderClientServerContractTests
             quote.PlanUrl);
     }
 
+    [Fact]
+    public async Task SeparateCraftArchitectOrigin_ReceivesAbsolutePlanSnapshotTarget()
+    {
+        const string planId = "0123456789abcdef0123456789abcdef";
+        await using var application = CreateHostedApplication(
+            services => services.AddSingleton<IWorkshopHostCraftQuoteService>(
+                new StaticWorkshopHostCraftQuoteService(new CaWorkshop.CraftAppraisalQuote
+                {
+                    ItemId = 2,
+                    ItemName = "Fire Shard",
+                    RequestedQuantity = 10,
+                    PlanId = planId,
+                })),
+            basePath: string.Empty,
+            craftArchitectAppOrigin: "https://craft.example");
+        using var client = application.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", "client-secret");
+
+        var response = await client.PostAsJsonAsync(
+            "/api/craft/appraise",
+            new CaWorkshop.CraftAppraisalRequest
+            {
+                ItemId = 2,
+                ItemName = "Fire Shard",
+                Quantity = 10,
+            });
+        response.EnsureSuccessStatusCode();
+        var quote = await response.Content.ReadFromJsonAsync<CaWorkshop.CraftAppraisalQuote>();
+
+        Assert.Equal(
+            $"https://craft.example/?appraisalPlan=http%3A%2F%2Flocalhost%2Fapi%2Fcraft%2Fplans%2F{planId}",
+            quote?.PlanUrl);
+    }
+
     private static WebApplicationFactory<Program> CreateHostedApplication(
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        string basePath = "/marketmafioso",
+        string? craftArchitectAppOrigin = null)
     {
         var contentRoot = Path.Combine(
             Path.GetTempPath(),
@@ -72,9 +109,10 @@ public sealed class WorkshopHostProviderClientServerContractTests
         {
             ["MarketMafioso:RequireApiKey"] = "true",
             ["MarketMafioso:ClientApiKey"] = "client-secret",
-            ["MarketMafioso:BasePath"] = "/marketmafioso",
+            ["MarketMafioso:BasePath"] = basePath,
             ["MarketMafioso:EnableMarketAcquisition"] = "true",
             ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
+            ["MarketMafioso:CraftArchitectAppOrigin"] = craftArchitectAppOrigin,
         };
 
         return new WebApplicationFactory<Program>()
