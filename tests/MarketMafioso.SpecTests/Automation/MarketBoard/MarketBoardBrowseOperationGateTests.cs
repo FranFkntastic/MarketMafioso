@@ -381,6 +381,22 @@ public sealed class MarketBoardBrowseOperationGateTests
     }
 
     [Fact]
+    public void PostPurchaseRefresh_DoesNotReuseItsPreviousTerminalBrowse()
+    {
+        var browse = CompletedBrowse(ItemId, listingCount: 31, pageCount: 4, requestId: 3);
+
+        Assert.False(
+            MarketBoardItemSearchDriver.ShouldReuseOwnedTerminalResult(
+                browse,
+                MarketBoardBrowseOwner.MarketAcquisition,
+                ItemId,
+                resultVisible: true,
+                openResultItemId: ItemId,
+                MarketBoardItemSearchIntent.RequireFreshBrowse,
+                browse.OperationId));
+    }
+
+    [Fact]
     public void FailedSameItemBrowse_PreservesVisibleListingsForReadOnlyConsumers()
     {
         var browse = CompletedBrowse(ItemId, listingCount: 0, pageCount: 0, requestId: null) with

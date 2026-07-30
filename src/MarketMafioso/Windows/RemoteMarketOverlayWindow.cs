@@ -5,6 +5,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
+using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Tables;
 using Lumina.Excel.Sheets;
 using MarketMafioso.MarketAcquisition.RemoteMarket;
@@ -17,6 +18,7 @@ public sealed class RemoteMarketOverlayWindow : Window
     private static readonly Vector2 MinimumSize = new(480, 280);
 
     private readonly RemoteMarketController controller;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly HashSet<ulong> selectedListingIds = [];
     private bool confirmArmed;
     private int cheapestTarget = 1;
@@ -44,12 +46,15 @@ public sealed class RemoteMarketOverlayWindow : Window
         new("State", 84f, listing => listing.AlreadyPurchased ? "purchased" : listing.BatchStatus?.ToString().ToLowerInvariant() ?? string.Empty),
     ]);
 
-    internal RemoteMarketOverlayWindow(RemoteMarketController controller)
+    internal RemoteMarketOverlayWindow(
+        RemoteMarketController controller,
+        AgentBridgeUiReviewRegistry reviewRegistry)
         : base(
             "MMF Remote Market##MarketMafiosoRemoteMarketOverlay",
             ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoSavedSettings)
     {
         this.controller = controller ?? throw new ArgumentNullException(nameof(controller));
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = MinimumSize,
@@ -59,7 +64,7 @@ public sealed class RemoteMarketOverlayWindow : Window
         IsOpen = true;
     }
 
-    public override bool DrawConditions() => controller.IsAvailable && controller.IsMarketBoardResultVisible();
+    public override bool DrawConditions() => controller.ShouldPresentOverlay();
 
     public override void PreDraw()
     {
@@ -97,6 +102,12 @@ public sealed class RemoteMarketOverlayWindow : Window
             return;
         }
 
+        if (view.Verification is not null)
+        {
+            DrawPurchaseVerification(view.Verification);
+            return;
+        }
+
         DrawSelectionFooter(view);
     }
 
@@ -108,6 +119,11 @@ public sealed class RemoteMarketOverlayWindow : Window
             .Select(listing => listing.ListingId)
             .ToHashSet();
         selectedListingIds.RemoveWhere(id => !buyableIds.Contains(id));
+        foreach (var listingId in controller.ConsumePendingSelectionRestoreIds())
+        {
+            if (buyableIds.Contains(listingId))
+                selectedListingIds.Add(listingId);
+        }
 
         if (view.Listings.Count > 0 && cachedIconItemId != view.Listings[0].ItemId)
         {
@@ -271,6 +287,16 @@ public sealed class RemoteMarketOverlayWindow : Window
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, outcome);
     }
 
+    private static void DrawPurchaseVerification(RemoteMarketPurchaseVerificationView verification)
+    {
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Verifying prices...");
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            verification.ListingCount == 1
+                ? $"{verification.Quantity:N0} item · {verification.TotalGil:N0} gil"
+                : $"{verification.ListingCount} listings · {verification.Quantity:N0} items · {verification.TotalGil:N0} gil");
+    }
+
     private void DrawSelectionFooter(RemoteMarketView view)
     {
         if (ImGui.SmallButton("All"))
@@ -295,23 +321,20 @@ public sealed class RemoteMarketOverlayWindow : Window
         ImGui.InputInt("##cheapestTarget", ref cheapestTarget, 0, 0);
         cheapestTarget = Math.Clamp(cheapestTarget, 1, 99999);
         ImGui.SameLine();
-        if (ImGui.SmallButton("Select cheapest for N items"))
-        {
-            selectedListingIds.Clear();
-            var accumulated = 0L;
-            foreach (var listing in view.Listings
-                         .Where(listing => !listing.AlreadyPurchased)
-                         .OrderBy(listing => listing.UnitPrice)
-                         .ThenByDescending(listing => listing.Quantity))
-            {
-                if (accumulated >= cheapestTarget)
-                    break;
-                selectedListingIds.Add(listing.ListingId);
-                accumulated += listing.Quantity;
-            }
-            confirmArmed = false;
-            RebuildSelection(view);
-        }
+        var canSelectCheapest = view.Listings.Any(listing => !listing.AlreadyPurchased);
+        if (!canSelectCheapest)
+            ImGui.BeginDisabled();
+        var selectCheapestClicked = ImGui.SmallButton("Select cheapest for N items");
+        if (!canSelectCheapest)
+            ImGui.EndDisabled();
+        if (selectCheapestClicked && canSelectCheapest)
+            SelectCheapest(view);
+        RegisterLastReviewedAction(
+            "remote-market.select-cheapest",
+            "Select the cheapest current listing",
+            canSelectCheapest,
+            () => SelectCheapest(view),
+            $"item={view.Listings[0].ItemName}; targetQuantity={cheapestTarget}");
 
         if (selectedListings.Length == 0)
         {
@@ -329,23 +352,30 @@ public sealed class RemoteMarketOverlayWindow : Window
 
         if (!confirmArmed)
         {
-            if (ImGuiUi.Button(label, view.Available && view.ContextBlockReason is null && affordable))
+            var canArmPurchase = view.Available && view.ContextBlockReason is null && affordable;
+            if (ImGuiUi.Button(label, canArmPurchase))
                 confirmArmed = true;
+            RegisterLastReviewedAction(
+                "remote-market.arm-purchase",
+                label,
+                canArmPurchase,
+                () => confirmArmed = true,
+                FormatSelectionReviewValue());
             if (view.ContextBlockReason is not null)
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, view.ContextBlockReason);
             return;
         }
 
         ImGui.TextWrapped(label);
-        if (ImGuiUi.Button("Confirm purchase", view.Available && view.ContextBlockReason is null && affordable))
-        {
-            confirmArmed = false;
-            var error = controller.BeginBatch(selectedListingIds);
-            if (error is not null)
-                Plugin.ChatGui.PrintError($"[MMF] Remote market: {error}");
-            selectedListingIds.Clear();
-            RebuildSelection(view);
-        }
+        var canConfirmPurchase = view.Available && view.ContextBlockReason is null && affordable;
+        if (ImGuiUi.Button("Confirm purchase", canConfirmPurchase))
+            ConfirmSelection(view);
+        RegisterLastReviewedAction(
+            "remote-market.confirm-purchase",
+            "Confirm the reviewed remote-market purchase",
+            canConfirmPurchase,
+            () => ConfirmSelection(view),
+            FormatSelectionReviewValue());
         ImGui.SameLine();
         if (ImGui.Button("Cancel"))
             confirmArmed = false;
@@ -359,6 +389,64 @@ public sealed class RemoteMarketOverlayWindow : Window
         selectedQuantity = selectedListings.Sum(listing => (long)listing.Quantity);
         selectedGil = selectedListings.Aggregate(0UL, (sum, listing) => sum + listing.TotalGil);
     }
+
+    private void SelectCheapest(RemoteMarketView view)
+    {
+        selectedListingIds.Clear();
+        var accumulated = 0L;
+        foreach (var listing in view.Listings
+                     .Where(listing => !listing.AlreadyPurchased)
+                     .OrderBy(listing => listing.UnitPrice)
+                     .ThenByDescending(listing => listing.Quantity))
+        {
+            if (accumulated >= cheapestTarget)
+                break;
+            selectedListingIds.Add(listing.ListingId);
+            accumulated += listing.Quantity;
+        }
+        confirmArmed = false;
+        RebuildSelection(view);
+    }
+
+    private void ConfirmSelection(RemoteMarketView view)
+    {
+        confirmArmed = false;
+        var error = controller.BeginBatch(selectedListingIds);
+        if (error is not null)
+            Plugin.ChatGui.PrintError($"[MMF] Remote market: {error}");
+        else
+            selectedListingIds.Clear();
+        RebuildSelection(view);
+    }
+
+    private string FormatSelectionReviewValue() =>
+        $"listingIds={string.Join(",", selectedListings.Select(listing => listing.ListingId))}; " +
+        $"quantity={selectedQuantity}; totalGil={selectedGil}";
+
+    private void RegisterLastReviewedAction(
+        string id,
+        string label,
+        bool enabled,
+        System.Action invoke,
+        string? value) =>
+        reviewRegistry.Register(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            selected: false,
+            value,
+            arguments: null,
+            surfaceId: "remote-market",
+            mutating: true,
+            completionOperationKind: null,
+            _ =>
+            {
+                invoke();
+                return AgentBridgeUiActionResult.Ok("Remote-market control was invoked.");
+            });
 
     private static ISharedImmediateTexture? ResolveItemIcon(uint itemId)
     {
