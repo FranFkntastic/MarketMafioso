@@ -6,8 +6,8 @@ using System.Numerics;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.Automation.Vendors;
+using Franthropy.Dalamud.Travel;
 using MarketMafioso.Automation.Runtime;
-using MarketMafioso.Automation.Travel;
 using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.WorkshopPrep;
@@ -23,8 +23,10 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
     private readonly WorkshopQuartermasterRequestService quartermaster;
     private readonly DalamudGilVendorAccessReader access;
     private readonly DalamudOrdinaryGilShop shop;
-    private readonly VNavmeshIpc vnavmesh;
-    private readonly LifestreamIpc lifestream;
+    private readonly DalamudVNavmeshTravel vnavmesh;
+    private readonly DalamudLifestreamAetheryteTravel aetheryteTravel;
+    private readonly DalamudLifestreamObjectInteractor objectInteractor;
+    private readonly DalamudTravelReadiness travelReadiness;
     private readonly ExternalAutomationCoordinator externalAutomation;
     private readonly IClientState clientState;
     private readonly IObjectTable objectTable;
@@ -41,8 +43,10 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         WorkshopQuartermasterRequestService quartermaster,
         DalamudGilVendorAccessReader access,
         DalamudOrdinaryGilShop shop,
-        VNavmeshIpc vnavmesh,
-        LifestreamIpc lifestream,
+        DalamudVNavmeshTravel vnavmesh,
+        DalamudLifestreamAetheryteTravel aetheryteTravel,
+        DalamudLifestreamObjectInteractor objectInteractor,
+        DalamudTravelReadiness travelReadiness,
         ExternalAutomationCoordinator externalAutomation,
         IClientState clientState,
         IObjectTable objectTable,
@@ -54,7 +58,9 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         this.access = access ?? throw new ArgumentNullException(nameof(access));
         this.shop = shop ?? throw new ArgumentNullException(nameof(shop));
         this.vnavmesh = vnavmesh ?? throw new ArgumentNullException(nameof(vnavmesh));
-        this.lifestream = lifestream ?? throw new ArgumentNullException(nameof(lifestream));
+        this.aetheryteTravel = aetheryteTravel ?? throw new ArgumentNullException(nameof(aetheryteTravel));
+        this.objectInteractor = objectInteractor ?? throw new ArgumentNullException(nameof(objectInteractor));
+        this.travelReadiness = travelReadiness ?? throw new ArgumentNullException(nameof(travelReadiness));
         this.externalAutomation = externalAutomation ?? throw new ArgumentNullException(nameof(externalAutomation));
         this.clientState = clientState ?? throw new ArgumentNullException(nameof(clientState));
         this.objectTable = objectTable ?? throw new ArgumentNullException(nameof(objectTable));
@@ -161,16 +167,33 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
                 : new(WorkshopVendorReachState.Unavailable, assessment.Message);
         }
 
+        var readiness = travelReadiness.Advance();
+        if (readiness.State is TravelReadinessState.Repairing or TravelReadinessState.Waiting)
+            return new(WorkshopVendorReachState.Waiting, readiness.Message);
+        if (readiness.State == TravelReadinessState.Blocked)
+            return new(WorkshopVendorReachState.Failed, readiness.Message);
+
         if (clientState.TerritoryType != offer.TerritoryId)
         {
             if (assessment.RouteAetheryteId is not { } route)
                 return new(WorkshopVendorReachState.Unavailable, "No live owner-accessible route reaches this vendor.");
             if (requestedAetheryteId != route && utcNow() >= nextActionAt)
             {
-                if (!lifestream.TryTeleport(route))
-                    return new(WorkshopVendorReachState.Failed, "Lifestream could not start travel to the reviewed vendor route.");
-                requestedAetheryteId = route;
-                nextActionAt = utcNow().Add(ActionThrottle);
+                var submission = aetheryteTravel.TrySubmit(route);
+                switch (submission.State)
+                {
+                    case AetheryteTravelSubmissionState.Submitted:
+                        requestedAetheryteId = route;
+                        nextActionAt = utcNow().Add(ActionThrottle);
+                        travelReadiness.Reset();
+                        break;
+                    case AetheryteTravelSubmissionState.Busy:
+                        return new(WorkshopVendorReachState.Waiting, submission.Message);
+                    case AetheryteTravelSubmissionState.Rejected:
+                    case AetheryteTravelSubmissionState.Unavailable:
+                    case AetheryteTravelSubmissionState.InvalidRequest:
+                        return new(WorkshopVendorReachState.Failed, submission.Message);
+                }
             }
             return new(WorkshopVendorReachState.Waiting, $"Traveling to {offer.NpcName}.");
         }
@@ -190,34 +213,44 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
             return new(WorkshopVendorReachState.Waiting, "Waiting for the player's position after travel.");
         var destination = npc?.Position ?? offer.Position;
         var distance = HorizontalDistance(playerPosition.Value, destination);
+        if (distance <= DirectInteractionDistance)
+        {
+            if (npc is null)
+                return new(WorkshopVendorReachState.Waiting, $"Waiting for {offer.NpcName} to become targetable.");
+            StopOwnedNavigation();
+            if (utcNow() < nextActionAt)
+                return new(WorkshopVendorReachState.Waiting, $"Opening {offer.NpcName}'s shop.");
+            return InteractWithVendor(npc, offer);
+        }
+
+        var navigation = vnavmesh.Observe();
+        if (navigation.State == VNavmeshLifecycleState.Loading)
+            return new(WorkshopVendorReachState.Waiting, navigation.Message);
+        if (navigation.State is VNavmeshLifecycleState.Unavailable or VNavmeshLifecycleState.IpcFailure)
+            return new(WorkshopVendorReachState.Failed, navigation.Message);
         var decision = DecideApproach(
             distance,
             npc is not null,
-            vnavmesh.IsReady,
-            vnavmesh.IsRunning,
+            navigation.State == VNavmeshLifecycleState.Ready,
+            navigation.State == VNavmeshLifecycleState.Running,
             ownsNavigation);
         switch (decision)
         {
-            case WorkshopVendorApproachDecision.Interact:
-                StopOwnedNavigation();
-                if (utcNow() < nextActionAt)
-                    return new(WorkshopVendorReachState.Waiting, $"Opening {offer.NpcName}'s shop.");
-                return InteractWithVendor(npc!, offer);
-            case WorkshopVendorApproachDecision.WaitForNpc:
-                return new(WorkshopVendorReachState.Waiting, $"Waiting for {offer.NpcName} to become targetable.");
             case WorkshopVendorApproachDecision.WaitForOwnedRoute:
                 return new(WorkshopVendorReachState.Waiting, $"Walking to {offer.NpcName} ({distance:0.0} yalms away).");
             case WorkshopVendorApproachDecision.BlockedByAnotherRoute:
                 return new(WorkshopVendorReachState.Failed, "Another vnavmesh route is already active.");
             case WorkshopVendorApproachDecision.NavigationUnavailable:
-                return new(WorkshopVendorReachState.Failed, "vnavmesh is required to walk from the aetheryte to this vendor.");
+                return new(WorkshopVendorReachState.Waiting, navigation.Message);
         }
 
         if (utcNow() >= nextActionAt)
         {
-            var movement = vnavmesh.MoveCloseTo(destination, NavigationStopDistance);
-            if (!movement.Success)
-                return new(WorkshopVendorReachState.Failed, $"Could not start the route to {offer.NpcName}.");
+            var movement = vnavmesh.TryMoveCloseTo(destination, NavigationStopDistance);
+            if (movement.State == VNavmeshPathSubmissionState.Loading)
+                return new(WorkshopVendorReachState.Waiting, movement.Message);
+            if (!movement.Submitted)
+                return new(WorkshopVendorReachState.Failed, movement.Message);
             ownsNavigation = true;
             nextActionAt = utcNow().Add(ActionThrottle);
         }
@@ -231,6 +264,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         nextActionAt = DateTimeOffset.MinValue;
         activeNpcId = 0;
         requestedAetheryteId = null;
+        travelReadiness.Reset();
     }
 
     public GilVendorShopReadResult ReadShopRows() => shop.ReadRows();
@@ -268,10 +302,12 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
             nextActionAt = utcNow().Add(ActionThrottle);
             return new(WorkshopVendorReachState.Waiting, $"Choosing {offer.NpcName}'s reviewed shop.");
         }
-        if (!lifestream.IsAvailable)
-            return new(WorkshopVendorReachState.Failed, "Lifestream is required to interact with the reached vendor.");
-        if (!lifestream.TryEnqueueObjectInteraction(offer.NpcId))
-            return new(WorkshopVendorReachState.Failed, $"Could not interact with {offer.NpcName} through Lifestream.");
+        var interaction = objectInteractor.TryEnqueue(
+            offer.NpcId,
+            approachDistance: NavigationStopDistance,
+            exportedName: "MarketMafioso vendor interaction");
+        if (!interaction.Success)
+            return new(WorkshopVendorReachState.Failed, interaction.Message);
         nextActionAt = utcNow().Add(ActionThrottle);
         return new(WorkshopVendorReachState.Waiting, $"Opening {offer.NpcName}'s shop.");
     }
@@ -280,8 +316,8 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
     {
         if (!ownsNavigation)
             return;
-        if (vnavmesh.IsRunning)
-            vnavmesh.Stop();
+        if (vnavmesh.Observe().IsRunning)
+            vnavmesh.TryStop();
         ownsNavigation = false;
     }
 
