@@ -312,7 +312,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         var previous = Document;
         Document = RequestDocumentMutation.AddLine(Document, line);
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
-        SelectedLineIndex = -1;
+        SelectedLineIndex = Document.Lines.Count - 1;
         FinishLocalEdit("Work-order draft updated.");
     }
 
@@ -375,7 +375,9 @@ public sealed class MarketAcquisitionRequestBuilderController
         var previous = Document;
         Document = RequestDocumentMutation.RemoveLine(Document, index);
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
-        SelectedLineIndex = -1;
+        SelectedLineIndex = Document.Lines.Count == 0
+            ? -1
+            : Math.Min(index, Document.Lines.Count - 1);
         FinishLocalEdit("Line removed.");
         return true;
     }

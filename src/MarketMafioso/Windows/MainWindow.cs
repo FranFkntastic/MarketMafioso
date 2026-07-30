@@ -29,6 +29,7 @@ using MarketMafioso.MarketDiagnostics;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Retainers;
 using Franthropy.Dalamud.Automation.Vendors;
+using Franthropy.Dalamud.Travel;
 using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.MarketBoard;
@@ -339,8 +340,21 @@ public class MainWindow : Window, IDisposable
             workshopQuartermasterRequest,
             workshopVendorAccess,
             new DalamudOrdinaryGilShop(Plugin.GameGui, dataManager),
-            new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
-            new LifestreamIpc(Plugin.PluginInterface, log),
+            new DalamudVNavmeshTravel(Plugin.PluginInterface),
+            new DalamudLifestreamAetheryteTravel(Plugin.PluginInterface),
+            new DalamudLifestreamObjectInteractor(Plugin.PluginInterface),
+            new DalamudTravelReadiness(
+                Plugin.Condition,
+                Plugin.GameGui,
+                Plugin.ObjectTable,
+                [
+                    "RetainerList",
+                    "SelectString",
+                    "Talk",
+                    "InventoryRetainer",
+                    "InventoryRetainerLarge",
+                    "InventoryRetainerSmall",
+                ]),
             workshopVendorAutomationCoordinator,
             Plugin.ClientState,
             Plugin.ObjectTable);

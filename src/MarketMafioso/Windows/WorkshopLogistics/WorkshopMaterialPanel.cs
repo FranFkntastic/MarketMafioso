@@ -128,7 +128,10 @@ internal sealed class WorkshopMaterialPanel
             return;
 
         materialTable.DrawFilterRow();
-        var active = runner.ActiveRun;
+        var active = runner.ActiveRun is { } candidate &&
+                     (runner.IsRunning || candidate.Phase == WorkshopVendorRestockPhase.Paused)
+            ? candidate
+            : null;
         var rows = OrderForDisplay(filtered)
             .Select(line => new MaterialTableRow(
                 line,
@@ -411,15 +414,6 @@ internal sealed class WorkshopMaterialPanel
         var candidate = line.SelectedCandidate ?? line.Candidates.FirstOrDefault();
         if (candidate is not null && line.VendorNeed > 0)
         {
-            var selectionEnabled = !runner.IsRunning &&
-                                   runner.ActiveRun?.Phase != WorkshopVendorRestockPhase.Paused;
-            if (ImGuiUi.MenuItem(
-                    line.Selected ? "Exclude vendor purchase" : "Include vendor purchase",
-                    selectionEnabled))
-            {
-                SetSelected(line.Availability.ItemId, !line.Selected);
-            }
-
             if (line.Selected &&
                 line.ApprovedVendorQuantity > 0 &&
                 ImGuiUi.MenuItem(
@@ -469,11 +463,10 @@ internal sealed class WorkshopMaterialPanel
     private void DrawVendorControls(WorkshopMaterialProcurement line)
     {
         var selected = line.Selected;
-        var selectionEnabled = config.AutomaticallyBuyWorkshopVendorMaterials &&
-                               !runner.IsRunning &&
+        var selectionEnabled = !runner.IsRunning &&
                                runner.ActiveRun?.Phase != WorkshopVendorRestockPhase.Paused;
         ImGui.BeginDisabled(!selectionEnabled);
-        if (ImGui.Checkbox("Buy##selected", ref selected))
+        if (ImGui.Checkbox($"Buy##selected-{line.Availability.ItemId}", ref selected))
             SetSelected(line.Availability.ItemId, selected);
         ImGui.EndDisabled();
         reviewRegistry.Register(
@@ -492,7 +485,7 @@ internal sealed class WorkshopMaterialPanel
         var quantityEnabled = selectionEnabled && selected;
         ImGui.BeginDisabled(!quantityEnabled);
         ImGui.SetNextItemWidth(78f);
-        if (ImGui.InputInt("##quantity", ref quantity, 0))
+        if (ImGui.InputInt($"##quantity-{line.Availability.ItemId}", ref quantity, 0))
         {
             quantity = Math.Clamp(quantity, 0, line.VendorNeed);
             SetQuantity(line.Availability.ItemId, quantity, line.VendorNeed);

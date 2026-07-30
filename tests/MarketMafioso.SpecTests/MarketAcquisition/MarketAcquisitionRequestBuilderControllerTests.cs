@@ -1,4 +1,5 @@
 using System.Net;
+using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
@@ -7,7 +8,7 @@ namespace MarketMafioso.SpecTests.MarketAcquisition;
 public sealed class MarketAcquisitionRequestBuilderControllerTests
 {
     [Fact]
-    public void ApplyEditorLine_SelectsExistingItemInsteadOfAddingDuplicate()
+    public void Selection_ReusesExistingItemAndBuildsSharedActionPresentation()
     {
         var existing = Line(36183, "Rose Gold Ingot");
         var controller = CreateController(
@@ -22,6 +23,51 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Single(controller.Document.Lines);
         Assert.Equal(0, controller.SelectedLineIndex);
         Assert.Contains("already in the Workbench", controller.Status);
+
+        var appraisalState = new CraftAppraisalRequestBuilderState();
+        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(controller.Document, existing);
+        appraisalState.RecordLineQuote(
+            identity,
+            new CraftAppraisalQuote
+            {
+                ItemId = existing.ItemId,
+                ItemName = existing.ItemName,
+                EstimatedUnitCost = 576.4m,
+                EstimatedTotalCost = 576.4m,
+                IsComplete = true,
+                Source = "CraftArchitectLocal",
+                Confidence = "Medium",
+                PlanId = "plan-1",
+                PlanUrl = "https://example.test/?appraisalPlan=plan-1",
+                Warnings = ["Retained evidence used."],
+            },
+            diagnosticFilePath: null);
+
+        var presentation = Assert.IsType<MarketAcquisitionSelectedLinePresentation>(
+            MarketAcquisitionSelectedLinePresenter.Build(
+                controller.Document,
+                controller.SelectedLineIndex,
+                appraisalState,
+                canEdit: true,
+                isAppraising: false,
+                isExactAcquisitionLine: false,
+                DateTimeOffset.UtcNow));
+
+        Assert.Equal("CA · 577 gil · 1 warning", presentation.EvidenceSummary);
+        Assert.Equal(
+            [
+                MarketAcquisitionSelectedLineActionKind.RefreshQuote,
+                MarketAcquisitionSelectedLineActionKind.UseQuote,
+                MarketAcquisitionSelectedLineActionKind.OpenPlan,
+                MarketAcquisitionSelectedLineActionKind.RemoveLine,
+            ],
+            presentation.Actions.Select(action => action.Kind));
+        Assert.Equal(
+            MarketAcquisitionSelectedLineSurface.CommandBar,
+            MarketAcquisitionSelectedLinePresenter.ResolveSurface(inspectorRequested: false, presentation));
+        Assert.Equal(
+            MarketAcquisitionSelectedLineSurface.Inspector,
+            MarketAcquisitionSelectedLinePresenter.ResolveSurface(inspectorRequested: true, presentation));
     }
 
     [Fact]
