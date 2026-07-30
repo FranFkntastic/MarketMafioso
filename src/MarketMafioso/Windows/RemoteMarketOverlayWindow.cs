@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
-using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Interface.Windowing;
@@ -69,7 +68,7 @@ public sealed class RemoteMarketOverlayWindow : Window
 
         if (view.Listings.Count == 0)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Search an item in the market board window to load listings here.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, view.BrowseMessage);
             return;
         }
 

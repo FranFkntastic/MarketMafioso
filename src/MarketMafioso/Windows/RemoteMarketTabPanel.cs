@@ -81,6 +81,7 @@ internal sealed class RemoteMarketTabPanel
 #endif
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.Listings.Count} listings staged");
+        DrawRow("Browse", view.BrowseMessage);
 
         if (view.Batch is { } batch)
         {

@@ -91,17 +91,20 @@ public sealed class DalamudMarketAcquisitionMarketBoardIo : IMarketAcquisitionMa
     private readonly MarketBoardItemSearchDriver searchDriver;
     private readonly MarketBoardListingReader listingReader;
     private readonly MarketBoardInputCaptureReader inputCaptureReader;
+    private readonly IMarketBoardBrowseRuntime browseRuntime;
 
     public DalamudMarketAcquisitionMarketBoardIo(
         MarketBoardApproachService approachService,
         MarketBoardItemSearchDriver searchDriver,
         MarketBoardListingReader listingReader,
-        MarketBoardInputCaptureReader inputCaptureReader)
+        MarketBoardInputCaptureReader inputCaptureReader,
+        IMarketBoardBrowseRuntime browseRuntime)
     {
         this.approachService = approachService;
         this.searchDriver = searchDriver;
         this.listingReader = listingReader;
         this.inputCaptureReader = inputCaptureReader;
+        this.browseRuntime = browseRuntime ?? throw new ArgumentNullException(nameof(browseRuntime));
     }
 
     public MarketBoardApproachResult OpenOrApproachMarketBoard() => approachService.OpenOrApproach();
@@ -119,6 +122,20 @@ public sealed class DalamudMarketAcquisitionMarketBoardIo : IMarketAcquisitionMa
     public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName) => searchDriver.Search(itemId, itemName);
     public MarketBoardReadResult ReadCurrentListings(string currentWorld) => listingReader.ReadCurrentListings(currentWorld);
     public MarketBoardInputCapture CaptureInputState() => inputCaptureReader.Capture();
+    public void AbandonBrowse(string reason)
+    {
+        var browse = browseRuntime.Snapshot;
+        if (browse.IsActive &&
+            browse.Owner == MarketBoardBrowseOwner.MarketAcquisition &&
+            !string.IsNullOrWhiteSpace(browse.OperationId))
+        {
+            browseRuntime.TryAbandon(
+                MarketBoardBrowseOwner.MarketAcquisition,
+                browse.OperationId,
+                reason,
+                out _);
+        }
+    }
 }
 
 public sealed class DalamudMarketAcquisitionPurchaseIo : IMarketAcquisitionPurchaseIo

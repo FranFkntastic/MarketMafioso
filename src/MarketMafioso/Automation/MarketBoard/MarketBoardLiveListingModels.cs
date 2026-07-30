@@ -43,6 +43,16 @@ public sealed record MarketBoardReadResult
     public bool HasIncompleteCoverage => UnreadListingCount > 0;
     public byte CurrentRequestId { get; init; }
     public byte NextRequestId { get; init; }
+    public string BrowseOperationId { get; init; } = string.Empty;
+    public uint BrowseHeaderStatus { get; init; }
+    public int BrowseExpectedPageCount { get; init; }
+    public int BrowseObservedPageCount { get; init; }
+    public uint? BrowseHistoryItemId { get; init; }
+    public bool IsBrowseVerified =>
+        !string.IsNullOrWhiteSpace(BrowseOperationId) &&
+        BrowseHeaderStatus == 0 &&
+        BrowseExpectedPageCount == BrowseObservedPageCount &&
+        BrowseHistoryItemId == ItemId;
     public IReadOnlyDictionary<uint, int> RawItemIdMismatchCounts { get; init; } =
         new Dictionary<uint, int>();
     public IReadOnlyList<MarketBoardLiveListing> Listings { get; init; } = [];
@@ -57,6 +67,11 @@ public sealed record MarketBoardAccumulatedReadResult
     public int PageCount { get; init; }
     public byte CurrentRequestId { get; init; }
     public byte NextRequestId { get; init; }
+    public string BrowseOperationId { get; init; } = string.Empty;
+    public uint BrowseHeaderStatus { get; init; }
+    public int BrowseExpectedPageCount { get; init; }
+    public int BrowseObservedPageCount { get; init; }
+    public uint? BrowseHistoryItemId { get; init; }
     public IReadOnlyList<MarketBoardLiveListing> Listings { get; init; } = [];
 
     public int ReadableListingCount => Listings.Count;
@@ -85,6 +100,11 @@ public sealed record MarketBoardAccumulatedReadResult
             PageCount = 1,
             CurrentRequestId = readResult.CurrentRequestId,
             NextRequestId = readResult.NextRequestId,
+            BrowseOperationId = readResult.BrowseOperationId,
+            BrowseHeaderStatus = readResult.BrowseHeaderStatus,
+            BrowseExpectedPageCount = readResult.BrowseExpectedPageCount,
+            BrowseObservedPageCount = readResult.BrowseObservedPageCount,
+            BrowseHistoryItemId = readResult.BrowseHistoryItemId,
             Listings = Deduplicate(readResult.Listings),
         };
     }
@@ -98,6 +118,20 @@ public sealed record MarketBoardAccumulatedReadResult
 
         if (!readResult.WorldName.Equals(WorldName, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Cannot merge market board reads for different worlds.");
+
+        if (string.IsNullOrWhiteSpace(BrowseOperationId) ||
+            !string.Equals(readResult.BrowseOperationId, BrowseOperationId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Cannot merge market board reads from different browse operations.");
+        }
+
+        if (readResult.CurrentRequestId != CurrentRequestId ||
+            readResult.BrowseHeaderStatus != BrowseHeaderStatus ||
+            readResult.BrowseExpectedPageCount != BrowseExpectedPageCount ||
+            readResult.BrowseHistoryItemId != BrowseHistoryItemId)
+        {
+            throw new InvalidOperationException("Cannot merge discontinuous market-board request evidence.");
+        }
 
         var merged = new List<MarketBoardLiveListing>(Listings.Count + readResult.Listings.Count);
         var listingIds = new HashSet<string>(StringComparer.Ordinal);
@@ -121,6 +155,7 @@ public sealed record MarketBoardAccumulatedReadResult
             PageCount = PageCount + 1,
             CurrentRequestId = readResult.CurrentRequestId,
             NextRequestId = readResult.NextRequestId,
+            BrowseObservedPageCount = Math.Max(BrowseObservedPageCount, readResult.BrowseObservedPageCount),
             Listings = merged,
         };
     }
@@ -143,6 +178,11 @@ public sealed record MarketBoardAccumulatedReadResult
             IsListingCountTruncated = IsListingCountTruncated,
             CurrentRequestId = CurrentRequestId,
             NextRequestId = NextRequestId,
+            BrowseOperationId = BrowseOperationId,
+            BrowseHeaderStatus = BrowseHeaderStatus,
+            BrowseExpectedPageCount = BrowseExpectedPageCount,
+            BrowseObservedPageCount = BrowseObservedPageCount,
+            BrowseHistoryItemId = BrowseHistoryItemId,
             Listings = Listings,
         };
 

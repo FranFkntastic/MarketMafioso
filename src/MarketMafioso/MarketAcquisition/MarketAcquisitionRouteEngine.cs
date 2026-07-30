@@ -1064,6 +1064,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var deadline = operationExecutor.CheckDeadline(clock.UtcNow, clock.MonotonicMilliseconds);
             if (deadline.Snapshot is { IsTerminal: true } timedOut)
             {
+                marketBoard.AbandonBrowse(timedOut.Message);
                 runner.RecordRouteOperationSnapshot(timedOut);
                 UpdateStatus(FailRoute(timedOut.Message));
                 return;
@@ -2030,6 +2031,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CancelActiveOperation(string message)
     {
+        marketBoard.AbandonBrowse(message);
         var cancellation = operationExecutor.Cancel(clock.UtcNow, clock.MonotonicMilliseconds, message);
         if (cancellation.Accepted && cancellation.Snapshot != null)
             runner.RecordRouteOperationSnapshot(cancellation.Snapshot);
@@ -2044,6 +2046,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (deadline.Snapshot is not { IsTerminal: true } timedOut)
             return false;
 
+        marketBoard.AbandonBrowse(timedOut.Message);
         runner.RecordRouteOperationSnapshot(timedOut);
         UpdateStatus(FailRoute(timedOut.Message));
         return true;

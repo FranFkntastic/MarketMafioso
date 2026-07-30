@@ -9,6 +9,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using ECommons;
 using Dalamud.Interface.Windowing;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.AgentBridge;
@@ -57,6 +58,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly HttpReporter reporter;
     private readonly RetainerSaleChatObserver retainerSaleChatObserver;
     private readonly RetainerHistoryObserver retainerHistoryObserver;
+    private readonly DalamudMarketBoardBrowseObserver marketBoardBrowseObserver;
     private readonly RemoteMarketAccessProbe remoteMarketAccessProbe;
     private readonly RemoteMarketProbeWindow remoteMarketProbeWindow;
     private readonly QuartermasterIpcClient quartermaster;
@@ -109,6 +111,10 @@ public sealed class Plugin : IDalamudPlugin
             DataManager,
             Log,
             retainerSaleChatObserver.EnqueueExternal);
+        marketBoardBrowseObserver = new DalamudMarketBoardBrowseObserver(
+            GameInteropProvider,
+            Framework,
+            Log);
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         remoteMarketAccessProbe = new RemoteMarketAccessProbe(
             Configuration,
@@ -120,6 +126,7 @@ public sealed class Plugin : IDalamudPlugin
             GameGui,
             ChatGui,
             Log,
+            marketBoardBrowseObserver,
             PluginInterface.GetPluginConfigDirectory());
         remoteMarketProbeWindow = new RemoteMarketProbeWindow(remoteMarketAccessProbe);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
@@ -183,6 +190,7 @@ public sealed class Plugin : IDalamudPlugin
                 TargetManager,
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
                 Log),
+            marketBoardBrowseObserver,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log);
         exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
@@ -609,6 +617,7 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.Dispose();
         reporter.Dispose();
         remoteMarketAccessProbe.Dispose();
+        marketBoardBrowseObserver.Dispose();
         retainerHistoryObserver.Dispose();
         retainerSaleChatObserver.Dispose();
         quartermaster.Dispose();

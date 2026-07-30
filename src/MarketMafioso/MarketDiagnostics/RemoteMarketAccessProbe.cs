@@ -8,6 +8,7 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Runtime;
 
 namespace MarketMafioso.MarketDiagnostics;
@@ -27,6 +28,7 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
     private readonly IGameGui gameGui;
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
+    private readonly IMarketBoardBrowseRuntime browseRuntime;
     private readonly string evidenceDirectory;
 
     private ProbeSession? session;
@@ -42,6 +44,7 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
         IGameGui gameGui,
         IChatGui chatGui,
         IPluginLog log,
+        IMarketBoardBrowseRuntime browseRuntime,
         string pluginConfigDirectory)
     {
         this.configuration = configuration;
@@ -53,7 +56,9 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
         this.gameGui = gameGui;
         this.chatGui = chatGui;
         this.log = log;
+        this.browseRuntime = browseRuntime ?? throw new ArgumentNullException(nameof(browseRuntime));
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "market-diagnostics");
+        framework.Update += OnFrameworkUpdate;
     }
 
     public bool IsEnabled => configuration.EnableMarketDiagnostics;
@@ -88,9 +93,20 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
             }
         }
 
-        session = new ProbeSession(DateTimeOffset.UtcNow, territory, position, agentOpened);
-        marketBoard.OfferingsReceived += OnOfferingsReceived;
-        marketBoard.HistoryReceived += OnHistoryReceived;
+        if (!browseRuntime.TryBegin(
+                MarketBoardBrowseOwner.RemoteAccessProbe,
+                0,
+                out var browse))
+        {
+            return $"Remote market probe could not own the next request: {browse.Message}";
+        }
+
+        session = new ProbeSession(
+            DateTimeOffset.UtcNow,
+            territory,
+            position,
+            agentOpened,
+            browse.OperationId);
         marketBoard.PurchaseRequested += OnPurchaseRequested;
         marketBoard.ItemPurchased += OnItemPurchased;
         addonLifecycle.RegisterListener(AddonEvent.PreFinalize, "ItemSearch", OnItemSearchFinalized);
@@ -113,8 +129,7 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
 
     public void Dispose()
     {
-        marketBoard.OfferingsReceived -= OnOfferingsReceived;
-        marketBoard.HistoryReceived -= OnHistoryReceived;
+        framework.Update -= OnFrameworkUpdate;
         marketBoard.PurchaseRequested -= OnPurchaseRequested;
         marketBoard.ItemPurchased -= OnItemPurchased;
         if (closeListenerRegistered)
@@ -133,7 +148,13 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
         unsafe
         {
             var proxy = GetItemSearchProxy();
-            if (proxy != null)
+            var browse = browseRuntime.Snapshot;
+            if (proxy != null &&
+                session is { } active &&
+                string.Equals(active.BrowseOperationId, browse.OperationId, StringComparison.Ordinal) &&
+                browse.IsComplete &&
+                proxy->SearchItemId == browse.ItemId &&
+                proxy->ListingCount == browse.ExpectedListingCount)
             {
                 listingCount = proxy->ListingCount;
                 waitingForListings = proxy->WaitingForListings;
@@ -229,6 +250,15 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
         var compatibility = GamePatchCompatibilityGate.Evaluate(PatchContractId, ApprovedGameVersion);
         if (!compatibility.IsApproved)
             return compatibility.Message;
+        var browse = browseRuntime.Snapshot;
+        if (!browseRuntime.IsAvailable)
+            return browseRuntime.AvailabilityMessage;
+        if (session is not { } active ||
+            !string.Equals(active.BrowseOperationId, browse.OperationId, StringComparison.Ordinal) ||
+            !browse.IsComplete)
+        {
+            return $"The browse is not verified: {browse.Message}";
+        }
         if (session.PurchaseRequestSent && !session.PurchaseResponseReceived)
             return "A purchase response is still pending.";
         if (listingCount == 0)
@@ -257,24 +287,34 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
         ConcludeProbe(session.Verdict ?? "Closed", session.VerdictReason ?? "market board window closed before any server response");
     }
 
-    private void OnOfferingsReceived(IMarketBoardCurrentOfferings offerings)
+    private void OnFrameworkUpdate(IFramework _)
     {
-        if (session is null)
+        if (session is not { } active || active.Verdict is not null)
             return;
-        session.OfferingsPages += 1;
-        session.OfferingsListings += offerings.ItemListings.Count;
-        session.FirstOfferingsItemId ??= offerings.ItemListings.Count > 0 ? offerings.ItemListings[0].ItemId : null;
-        MarkConfirmed($"server returned {offerings.ItemListings.Count} listings with no market board interaction");
-    }
 
-    private void OnHistoryReceived(IMarketBoardHistory history)
-    {
-        if (session is null)
+        var browse = browseRuntime.Snapshot;
+        if (!string.Equals(active.BrowseOperationId, browse.OperationId, StringComparison.Ordinal) ||
+            !browse.IsTerminal)
+        {
             return;
-        session.HistoryReceived = true;
-        session.HistoryItemId = history.ItemId;
-        session.HistoryEntries = history.HistoryListings.Count;
-        MarkConfirmed($"server returned {history.HistoryListings.Count} sale history entries with no market board interaction");
+        }
+
+        active.OfferingsPages = browse.PageCount;
+        active.OfferingsListings = browse.ListingCount;
+        active.FirstOfferingsItemId = browse.ItemId == 0 ? null : browse.ItemId;
+        active.HistoryReceived = browse.HistoryObserved;
+        active.HistoryItemId = browse.HistoryItemId;
+        active.HistoryEntries = browse.HistoryEntryCount;
+        if (browse.IsFailed)
+        {
+            ConcludeProbe(
+                "Rejected",
+                $"correlated browse failed closed ({browse.FailureCode}): {browse.Message}");
+            return;
+        }
+
+        MarkConfirmed(
+            $"server completed correlated browse {browse.OperationId} for item {browse.ItemId} with {browse.ExpectedListingCount} listing(s) and matching standard history");
     }
 
     private void OnPurchaseRequested(IMarketBoardPurchaseHandler purchase)
@@ -326,8 +366,11 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
         if (concluded is null)
             return;
         session = null;
-        marketBoard.OfferingsReceived -= OnOfferingsReceived;
-        marketBoard.HistoryReceived -= OnHistoryReceived;
+        browseRuntime.TryAbandon(
+            MarketBoardBrowseOwner.RemoteAccessProbe,
+            concluded.BrowseOperationId,
+            $"Remote access probe concluded before browse completion: {reason}.",
+            out _);
         marketBoard.PurchaseRequested -= OnPurchaseRequested;
         marketBoard.ItemPurchased -= OnItemPurchased;
         if (closeListenerRegistered)
@@ -380,12 +423,18 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
         }
     }
 
-    private sealed class ProbeSession(DateTimeOffset armedAtUtc, uint territory, string position, bool agentOpened)
+    private sealed class ProbeSession(
+        DateTimeOffset armedAtUtc,
+        uint territory,
+        string position,
+        bool agentOpened,
+        string browseOperationId)
     {
         public DateTimeOffset ArmedAtUtc { get; } = armedAtUtc;
         public uint Territory { get; } = territory;
         public string Position { get; } = position;
         public bool AgentOpened { get; } = agentOpened;
+        public string BrowseOperationId { get; } = browseOperationId;
         public int OfferingsPages { get; set; }
         public int OfferingsListings { get; set; }
         public uint? FirstOfferingsItemId { get; set; }

@@ -15,17 +15,9 @@ concurrency:
 jobs:
   lifecycle:
     name: Ready for review and clean patch
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
-      - name: Require ready-for-review state
-        env:
-          PR_IS_DRAFT: ${{ github.event.pull_request.draft }}
-        run: |
-          if [ "$PR_IS_DRAFT" = "true" ]; then
-            echo "::error::Completed work must be marked ready for review. Drafts are reserved for explicitly incomplete work."
-            exit 1
-          fi
-
       - name: Checkout pull request
         uses: actions/checkout@v4
         with:

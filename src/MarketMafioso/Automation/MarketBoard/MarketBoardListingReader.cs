@@ -1,21 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Dalamud.Plugin.Services;
-using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 
 namespace MarketMafioso.Automation.MarketBoard;
 
 public sealed class MarketBoardListingReader
 {
-    private const string ItemSearchResultAddon = "ItemSearchResult";
+    private readonly IMarketBoardBrowseRuntime browseRuntime;
 
-    private readonly IGameGui gameGui;
-
-    public MarketBoardListingReader(IGameGui gameGui)
+    public MarketBoardListingReader(IMarketBoardBrowseRuntime browseRuntime)
     {
-        this.gameGui = gameGui;
+        this.browseRuntime = browseRuntime ?? throw new ArgumentNullException(nameof(browseRuntime));
     }
 
     public unsafe MarketBoardReadResult ReadCurrentListings(string currentWorld)
@@ -23,14 +19,48 @@ public sealed class MarketBoardListingReader
         if (string.IsNullOrWhiteSpace(currentWorld))
             throw new InvalidOperationException("Current world is required before reading market board listings.");
 
-        var addon = gameGui.GetAddonByName<AddonItemSearchResult>(ItemSearchResultAddon, 1);
-        if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
+        if (!browseRuntime.IsAvailable)
         {
             return new MarketBoardReadResult
             {
-                Status = "MarketBoardNotOpen",
-                Message = "Open market board search results for the planned item before running the read-only probe.",
+                Status = "BrowseObserverUnavailable",
+                Message = browseRuntime.AvailabilityMessage,
                 ReadState = MarketBoardListingReadState.Unavailable,
+            };
+        }
+
+        var browse = browseRuntime.Snapshot;
+        if (browse.IsFailed)
+        {
+            return new MarketBoardReadResult
+            {
+                Status = browse.FailureCode ?? "BrowseEvidenceFailed",
+                Message = browse.Message,
+                ReadState = MarketBoardListingReadState.Unavailable,
+                ItemId = browse.ItemId,
+                WorldName = currentWorld,
+                BrowseOperationId = browse.OperationId,
+                BrowseHeaderStatus = browse.HeaderStatus,
+                BrowseExpectedPageCount = browse.ExpectedPageCount,
+                BrowseObservedPageCount = browse.PageCount,
+                BrowseHistoryItemId = browse.HistoryItemId,
+            };
+        }
+
+        if (!browse.IsComplete)
+        {
+            return new MarketBoardReadResult
+            {
+                Status = "AwaitingBrowseEvidence",
+                Message = browse.Message,
+                ReadState = MarketBoardListingReadState.Loading,
+                ItemId = browse.ItemId,
+                WorldName = currentWorld,
+                BrowseOperationId = browse.OperationId,
+                BrowseHeaderStatus = browse.HeaderStatus,
+                BrowseExpectedPageCount = browse.ExpectedPageCount,
+                BrowseObservedPageCount = browse.PageCount,
+                BrowseHistoryItemId = browse.HistoryItemId,
             };
         }
 
@@ -45,19 +75,66 @@ public sealed class MarketBoardListingReader
             };
         }
 
-        var itemId = infoProxy->SearchItemId;
-        if (itemId == 0)
+        var itemId = browse.ItemId;
+        if (itemId == 0 || infoProxy->SearchItemId != itemId)
         {
             return new MarketBoardReadResult
             {
-                Status = "NoSearchItem",
-                Message = "Market board search results are open, but no searched item id is available.",
+                Status = "ListingCacheItemMismatch",
+                Message =
+                    $"Verified browse {browse.OperationId} owns item {itemId}, but the listing cache reports item {infoProxy->SearchItemId}.",
                 ReadState = MarketBoardListingReadState.Unavailable,
+                ItemId = itemId,
+                WorldName = currentWorld,
+                BrowseOperationId = browse.OperationId,
+            };
+        }
+
+        var reportedListingCount = browse.ExpectedListingCount;
+        if (infoProxy->ListingCount != reportedListingCount)
+        {
+            return new MarketBoardReadResult
+            {
+                Status = "ListingCacheCountMismatch",
+                Message =
+                    $"Verified browse {browse.OperationId} expects {reportedListingCount} listings, but the native cache reports {infoProxy->ListingCount}.",
+                ReadState = MarketBoardListingReadState.Unavailable,
+                ItemId = itemId,
+                WorldName = currentWorld,
+                ReportedListingCount = reportedListingCount,
+                ListingCapacity = infoProxy->Listings.Length,
+                BrowseOperationId = browse.OperationId,
+                BrowseHeaderStatus = browse.HeaderStatus,
+                BrowseExpectedPageCount = browse.ExpectedPageCount,
+                BrowseObservedPageCount = browse.PageCount,
+                BrowseHistoryItemId = browse.HistoryItemId,
+            };
+        }
+
+        if (browse.RequestId is { } observedRequestId &&
+            infoProxy->InfoProxyPageInterface.CurrentRequestId != observedRequestId)
+        {
+            return new MarketBoardReadResult
+            {
+                Status = "ListingCacheRequestMismatch",
+                Message =
+                    $"Verified browse {browse.OperationId} owns request {observedRequestId}, but the native cache reports {infoProxy->InfoProxyPageInterface.CurrentRequestId}.",
+                ReadState = MarketBoardListingReadState.Unavailable,
+                ItemId = itemId,
+                WorldName = currentWorld,
+                ReportedListingCount = reportedListingCount,
+                ListingCapacity = infoProxy->Listings.Length,
+                CurrentRequestId = infoProxy->InfoProxyPageInterface.CurrentRequestId,
+                NextRequestId = infoProxy->InfoProxyPageInterface.NextRequestId,
+                BrowseOperationId = browse.OperationId,
+                BrowseHeaderStatus = browse.HeaderStatus,
+                BrowseExpectedPageCount = browse.ExpectedPageCount,
+                BrowseObservedPageCount = browse.PageCount,
+                BrowseHistoryItemId = browse.HistoryItemId,
             };
         }
 
         var listings = new List<MarketBoardLiveListing>();
-        var reportedListingCount = (int)infoProxy->ListingCount;
         var listingCapacity = infoProxy->Listings.Length;
         var listingCount = Math.Min(reportedListingCount, listingCapacity);
         foreach (var listing in infoProxy->Listings[..listingCount])
@@ -85,26 +162,48 @@ public sealed class MarketBoardListingReader
         }
 
         return BuildReadResult(
-            infoProxy->WaitingForListings,
             itemId,
             currentWorld,
             listings,
             reportedListingCount,
             listingCapacity,
             infoProxy->InfoProxyPageInterface.CurrentRequestId,
-            infoProxy->InfoProxyPageInterface.NextRequestId);
+            infoProxy->InfoProxyPageInterface.NextRequestId,
+            browse);
     }
 
     internal static MarketBoardReadResult BuildReadResult(
-        bool waitingForListings,
         uint itemId,
         string currentWorld,
         IReadOnlyList<MarketBoardLiveListing> listings,
         int? reportedListingCount = null,
         int? listingCapacity = null,
         byte currentRequestId = 0,
-        byte nextRequestId = 0)
+        byte nextRequestId = 0,
+        MarketBoardBrowseSnapshot? browse = null)
     {
+        if (browse?.IsComplete != true ||
+            browse.ItemId != itemId ||
+            browse.HeaderStatus != 0 ||
+            browse.HistoryItemId != itemId)
+        {
+            return new MarketBoardReadResult
+            {
+                Status = "UnverifiedBrowseEvidence",
+                Message = "Native listing rows are not authoritative without a completed matching browse lifecycle.",
+                ReadState = MarketBoardListingReadState.Unavailable,
+                ItemId = itemId,
+                WorldName = currentWorld,
+                CurrentRequestId = currentRequestId,
+                NextRequestId = nextRequestId,
+                BrowseOperationId = browse?.OperationId ?? string.Empty,
+                BrowseHeaderStatus = browse?.HeaderStatus ?? 0,
+                BrowseExpectedPageCount = browse?.ExpectedPageCount ?? 0,
+                BrowseObservedPageCount = browse?.PageCount ?? 0,
+                BrowseHistoryItemId = browse?.HistoryItemId,
+            };
+        }
+
         var realListings = listings
             .Where(MarketBoardListingIntegrity.IsRealListing)
             .ToArray();
@@ -113,6 +212,31 @@ public sealed class MarketBoardListingReader
         var effectiveListingCapacity = Math.Max(listingCapacity ?? realListings.Length, realListings.Length);
         var isAtListingCapacity = effectiveListingCapacity > 0 && realListings.Length >= effectiveListingCapacity;
         var isListingCountTruncated = effectiveReportedListingCount > realListings.Length;
+        if (isListingCountTruncated)
+        {
+            return new MarketBoardReadResult
+            {
+                Status = "ListingCacheIncomplete",
+                Message =
+                    $"Verified browse expected {effectiveReportedListingCount} listings, but only {realListings.Length} valid native rows were readable.",
+                ReadState = MarketBoardListingReadState.Unavailable,
+                ItemId = itemId,
+                WorldName = currentWorld,
+                ReportedListingCount = effectiveReportedListingCount,
+                ListingCapacity = effectiveListingCapacity,
+                IsAtListingCapacity = isAtListingCapacity,
+                IsListingCountTruncated = true,
+                CurrentRequestId = currentRequestId,
+                NextRequestId = nextRequestId,
+                Listings = [],
+                BrowseOperationId = browse?.OperationId ?? string.Empty,
+                BrowseHeaderStatus = browse?.HeaderStatus ?? 0,
+                BrowseExpectedPageCount = browse?.ExpectedPageCount ?? 0,
+                BrowseObservedPageCount = browse?.PageCount ?? 0,
+                BrowseHistoryItemId = browse?.HistoryItemId,
+            };
+        }
+
         var readState = isListingCountTruncated
             ? MarketBoardListingReadState.FreshPartial
             : MarketBoardListingReadState.FreshComplete;
@@ -139,18 +263,20 @@ public sealed class MarketBoardListingReader
                 NextRequestId = nextRequestId,
                 RawItemIdMismatchCounts = rawItemIdMismatchCounts,
                 Listings = [],
+                BrowseOperationId = browse?.OperationId ?? string.Empty,
+                BrowseHeaderStatus = browse?.HeaderStatus ?? 0,
+                BrowseExpectedPageCount = browse?.ExpectedPageCount ?? 0,
+                BrowseObservedPageCount = browse?.PageCount ?? 0,
+                BrowseHistoryItemId = browse?.HistoryItemId,
             };
         }
 
         if (realListings.Length > 0)
         {
-            var waitingNote = waitingForListings
-                ? " Waiting flag is still set, but visible listing rows were present."
-                : string.Empty;
             return new MarketBoardReadResult
             {
                 Status = "Ready",
-                Message = $"Read {realListings.Length} live market board listing(s).{capacityNote}{truncatedNote}{waitingNote}",
+                Message = $"Read {realListings.Length} verified live market board listing(s).{capacityNote}{truncatedNote}",
                 ReadState = readState,
                 ItemId = itemId,
                 WorldName = currentWorld,
@@ -162,18 +288,19 @@ public sealed class MarketBoardListingReader
                 NextRequestId = nextRequestId,
                 RawItemIdMismatchCounts = rawItemIdMismatchCounts,
                 Listings = realListings,
+                BrowseOperationId = browse?.OperationId ?? string.Empty,
+                BrowseHeaderStatus = browse?.HeaderStatus ?? 0,
+                BrowseExpectedPageCount = browse?.ExpectedPageCount ?? 0,
+                BrowseObservedPageCount = browse?.PageCount ?? 0,
+                BrowseHistoryItemId = browse?.HistoryItemId,
             };
         }
 
         return new MarketBoardReadResult
         {
-            Status = waitingForListings ? "WaitingForListings" : "NoListings",
-            Message = waitingForListings
-                ? "Market board listings are still loading."
-                : "No live market board listings were available for the current search.",
-            ReadState = waitingForListings
-                ? MarketBoardListingReadState.Loading
-                : MarketBoardListingReadState.FreshComplete,
+            Status = "NoListings",
+            Message = "The correlated result header authoritatively reported no live listings.",
+            ReadState = MarketBoardListingReadState.FreshComplete,
             ItemId = itemId,
             WorldName = currentWorld,
             ReportedListingCount = effectiveReportedListingCount,
@@ -184,6 +311,11 @@ public sealed class MarketBoardListingReader
             NextRequestId = nextRequestId,
             RawItemIdMismatchCounts = rawItemIdMismatchCounts,
             Listings = [],
+            BrowseOperationId = browse?.OperationId ?? string.Empty,
+            BrowseHeaderStatus = browse?.HeaderStatus ?? 0,
+            BrowseExpectedPageCount = browse?.ExpectedPageCount ?? 0,
+            BrowseObservedPageCount = browse?.PageCount ?? 0,
+            BrowseHistoryItemId = browse?.HistoryItemId,
         };
     }
 
