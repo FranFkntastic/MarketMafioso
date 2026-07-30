@@ -97,6 +97,12 @@ public sealed class RemoteMarketOverlayWindow : Window
             return;
         }
 
+        if (view.Verification is not null)
+        {
+            DrawPurchaseVerification(view.Verification);
+            return;
+        }
+
         DrawSelectionFooter(view);
     }
 
@@ -108,6 +114,11 @@ public sealed class RemoteMarketOverlayWindow : Window
             .Select(listing => listing.ListingId)
             .ToHashSet();
         selectedListingIds.RemoveWhere(id => !buyableIds.Contains(id));
+        foreach (var listingId in controller.ConsumePendingSelectionRestoreIds())
+        {
+            if (buyableIds.Contains(listingId))
+                selectedListingIds.Add(listingId);
+        }
 
         if (view.Listings.Count > 0 && cachedIconItemId != view.Listings[0].ItemId)
         {
@@ -271,6 +282,16 @@ public sealed class RemoteMarketOverlayWindow : Window
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, outcome);
     }
 
+    private static void DrawPurchaseVerification(RemoteMarketPurchaseVerificationView verification)
+    {
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Verifying prices...");
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            verification.ListingCount == 1
+                ? $"{verification.Quantity:N0} item · {verification.TotalGil:N0} gil"
+                : $"{verification.ListingCount} listings · {verification.Quantity:N0} items · {verification.TotalGil:N0} gil");
+    }
+
     private void DrawSelectionFooter(RemoteMarketView view)
     {
         if (ImGui.SmallButton("All"))
@@ -343,7 +364,8 @@ public sealed class RemoteMarketOverlayWindow : Window
             var error = controller.BeginBatch(selectedListingIds);
             if (error is not null)
                 Plugin.ChatGui.PrintError($"[MMF] Remote market: {error}");
-            selectedListingIds.Clear();
+            else
+                selectedListingIds.Clear();
             RebuildSelection(view);
         }
         ImGui.SameLine();

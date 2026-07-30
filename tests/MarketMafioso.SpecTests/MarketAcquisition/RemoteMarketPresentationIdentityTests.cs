@@ -55,6 +55,7 @@ public sealed class RemoteMarketPresentationIdentityTests
 
         Assert.Equal(OperationId, operationId);
         Assert.True(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(identity, browse));
+        Assert.False(RemoteMarketController.RequiresAutomaticPurchaseVerification(identity, browse));
     }
 
     [Fact]
@@ -64,6 +65,7 @@ public sealed class RemoteMarketPresentationIdentityTests
 
         Assert.True(IsCurrent(identity));
         Assert.False(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(identity, CompletedBrowse()));
+        Assert.True(RemoteMarketController.RequiresAutomaticPurchaseVerification(identity, CompletedBrowse()));
     }
 
     [Fact]

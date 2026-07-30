@@ -76,6 +76,19 @@ public sealed class RenderPathBoundaryTests
         Assert.DoesNotContain("RegisterListener(AddonEvent.PostRefresh", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RemoteMarketPurchaseAutomaticallyRepairsUnverifiedNativeEntry()
+    {
+        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
+        var beginBatch = ExtractMethodBody(source, "BeginBatch");
+
+        Assert.Contains("RequiresAutomaticPurchaseVerification(", beginBatch, StringComparison.Ordinal);
+        Assert.Contains("BeginPendingPurchaseVerification(", beginBatch, StringComparison.Ordinal);
+        Assert.DoesNotContain("Open this item through MMF", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Select the listing in MMF", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Re-search to refresh", source, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("Draw")]
     [InlineData("DrawHeader")]
