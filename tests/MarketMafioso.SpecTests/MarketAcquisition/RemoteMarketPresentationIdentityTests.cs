@@ -11,77 +11,119 @@ public sealed class RemoteMarketPresentationIdentityTests
     private const string OperationId = "market-browse:1";
 
     [Fact]
-    public void ExactPublishedBrowseAndNativeIdentity_IsCurrent()
+    public void ExactNativeIdentity_IsCurrentWithoutOwnedBrowse()
     {
-        Assert.True(IsCurrent(Identity(), CompletedBrowse()));
+        Assert.True(IsCurrent(NativeIdentity()));
     }
 
     [Fact]
-    public void DifferentNativeItem_HidesStaleOverlay()
+    public void DifferentNativeItem_HidesStaleOverlayUntilRecapture()
     {
-        Assert.False(IsCurrent(Identity(), CompletedBrowse(), nativeItemId: 13117));
+        Assert.False(IsCurrent(NativeIdentity(), nativeItemId: 13117));
     }
 
     [Fact]
-    public void SameItemWithDifferentNativeRequest_HidesStaleOverlay()
+    public void SameItemWithDifferentNativeRequest_HidesStaleOverlayUntilRecapture()
     {
-        Assert.False(IsCurrent(Identity(), CompletedBrowse(), nativeRequestId: RequestId + 1));
+        Assert.False(IsCurrent(NativeIdentity(), nativeRequestId: RequestId + 1));
     }
 
     [Fact]
-    public void SameItemWithDifferentNativeListingCount_HidesStaleOverlay()
+    public void SameItemWithDifferentNativeListingCount_HidesStaleOverlayUntilRecapture()
     {
-        Assert.False(IsCurrent(Identity(), CompletedBrowse(), nativeListingCount: ListingCount + 1));
-    }
-
-    [Fact]
-    public void SupersedingBrowseOperation_HidesStaleOverlay()
-    {
-        Assert.False(IsCurrent(
-            Identity(),
-            CompletedBrowse() with { OperationId = "market-browse:2" }));
-    }
-
-    [Fact]
-    public void ForeignBrowseOwner_HidesStaleOverlay()
-    {
-        Assert.False(IsCurrent(
-            Identity(),
-            CompletedBrowse() with { Owner = MarketBoardBrowseOwner.MarketAcquisition }));
+        Assert.False(IsCurrent(NativeIdentity(), nativeListingCount: ListingCount + 1));
     }
 
     [Fact]
     public void MissingNativeResultOrPublishedIdentity_HidesOverlay()
     {
-        Assert.False(IsCurrent(Identity(), CompletedBrowse(), resultVisible: false));
-        Assert.False(IsCurrent(null, CompletedBrowse()));
+        Assert.False(IsCurrent(NativeIdentity(), resultVisible: false));
+        Assert.False(IsCurrent(null));
     }
 
     [Fact]
-    public void FailedBrowse_HidesPreviouslyPublishedOverlay()
+    public void MatchingOwnedBrowse_VerifiesSnapshotForPurchase()
     {
-        Assert.False(IsCurrent(
-            Identity(),
-            CompletedBrowse() with { Phase = MarketBoardBrowsePhase.Failed }));
+        var browse = CompletedBrowse();
+        var operationId = RemoteMarketController.GetVerifiedBrowseOperationId(
+            browse,
+            ItemId,
+            RequestId,
+            ListingCount,
+            ListingCount);
+        var identity = NativeIdentity(operationId);
+
+        Assert.Equal(OperationId, operationId);
+        Assert.True(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(identity, browse));
+    }
+
+    [Fact]
+    public void ManualNativeSearch_RemainsVisibleButIsNotVerifiedForPurchase()
+    {
+        var identity = NativeIdentity();
+
+        Assert.True(IsCurrent(identity));
+        Assert.False(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(identity, CompletedBrowse()));
+    }
+
+    [Fact]
+    public void PartialNativePrefix_RemainsVisibleButCannotVerifyForPurchase()
+    {
+        const int capturedListingCount = 10;
+        var browse = CompletedBrowse();
+        var operationId = RemoteMarketController.GetVerifiedBrowseOperationId(
+            browse,
+            ItemId,
+            RequestId,
+            ListingCount,
+            capturedListingCount);
+        var identity = NativeIdentity(operationId, capturedListingCount);
+
+        Assert.True(IsCurrent(identity));
+        Assert.Null(operationId);
+        Assert.False(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(identity, browse));
+    }
+
+    [Fact]
+    public void SupersedingBrowse_InvalidatesPurchaseVerificationWithoutInvalidatingPresentation()
+    {
+        var identity = NativeIdentity(OperationId);
+        var browse = CompletedBrowse() with { OperationId = "market-browse:2" };
+
+        Assert.True(IsCurrent(identity));
+        Assert.False(RemoteMarketController.IsListingSnapshotVerifiedForPurchase(identity, browse));
+    }
+
+    [Fact]
+    public void ForeignBrowseOwner_CannotVerifyNativeListingsForPurchase()
+    {
+        var browse = CompletedBrowse() with { Owner = MarketBoardBrowseOwner.MarketAcquisition };
+
+        Assert.Null(RemoteMarketController.GetVerifiedBrowseOperationId(
+            browse,
+            ItemId,
+            RequestId,
+            ListingCount,
+            ListingCount));
     }
 
     private static bool IsCurrent(
         RemoteMarketListingSnapshotIdentity? identity,
-        MarketBoardBrowseSnapshot browse,
         bool resultVisible = true,
         uint nativeItemId = ItemId,
         uint nativeListingCount = ListingCount,
         byte? nativeRequestId = RequestId) =>
         RemoteMarketController.IsListingSnapshotCurrent(
             identity,
-            browse,
             resultVisible,
             nativeItemId,
             nativeListingCount,
             nativeRequestId);
 
-    private static RemoteMarketListingSnapshotIdentity Identity() =>
-        new(OperationId, ItemId, RequestId, ListingCount);
+    private static RemoteMarketListingSnapshotIdentity NativeIdentity(
+        string? operationId = null,
+        int capturedListingCount = ListingCount) =>
+        new(ItemId, RequestId, ListingCount, capturedListingCount, operationId);
 
     private static MarketBoardBrowseSnapshot CompletedBrowse() =>
         new()
