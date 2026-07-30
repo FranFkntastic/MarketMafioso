@@ -43,7 +43,6 @@ public class MainWindow : Window, IDisposable
     private readonly IPluginLog log;
     private readonly RemoteMarketController remoteMarketController;
     private readonly RemoteSummoningBellProbe remoteSummoningBellProbe;
-    private readonly RemoteMarketTabPanel remoteMarketTabPanel;
 
     public RemoteMarketOverlayWindow RemoteMarketOverlay { get; }
     private readonly IDataManager dataManager;
@@ -199,19 +198,6 @@ public class MainWindow : Window, IDisposable
             log,
             Plugin.PluginInterface,
             Plugin.PluginInterface.GetPluginConfigDirectory());
-        remoteMarketTabPanel = new RemoteMarketTabPanel(
-            config,
-            remoteMarketController,
-            remoteSummoningBellProbe,
-            AgentReviewRegistry,
-            () =>
-            {
-                remoteMarketController.OpenMarketBoard();
-                var result = marketBoardItemSearchDriver.Search(5116, "Cobalt Ore");
-                var outcome = $"{result.Status}: {result.Message}";
-                remoteMarketController.SetDebugOutcome(outcome);
-                return outcome;
-            });
         RemoteMarketOverlay = new RemoteMarketOverlayWindow(remoteMarketController);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
@@ -622,12 +608,6 @@ public class MainWindow : Window, IDisposable
                     ImGui.EndTabItem();
                 }
 
-                if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Remote Market", GetAgentTabFlags("Remote Market")))
-                {
-                    remoteMarketTabPanel.Draw();
-                    ImGui.EndTabItem();
-                }
-
                 if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
                 {
                     marketAcquisitionDiagnosticsPanel.Draw();
@@ -718,7 +698,6 @@ public class MainWindow : Window, IDisposable
             "Squire" or "Workshop Logistics" or "Settings" or "Status" => true,
             "Diagnostics" => true,
             "Market Acquisition" => IsMarketAcquisitionUnlocked(),
-            "Remote Market" => IsMarketAcquisitionUnlocked(),
             _ => false,
         };
         if (!allowed || !IsAllowedWorkspaceView(mainTab, workspaceView))
@@ -745,6 +724,38 @@ public class MainWindow : Window, IDisposable
         acquisitionRequestBuilder.StageExactAcquisitionTransfer(transfer);
         QueueAgentTabSelection("Market Acquisition", "Workbench");
         IsOpen = true;
+    }
+
+    public bool CanStageContextMenuItemToWorkbench() =>
+        IsMarketAcquisitionUnlocked() &&
+        !acquisitionWorkspace.IsBusy &&
+        !routeEngine.IsRouteActive &&
+        !acquisitionRequestBuilder.IsSynchronizing &&
+        !acquisitionRequestBuilder.HasExactAcquisitionAuthority;
+
+    public string StageContextMenuItemToWorkbench(uint itemId, string itemName)
+    {
+        if (itemId == 0 || string.IsNullOrWhiteSpace(itemName))
+            return "The selected item could not be resolved.";
+        if (!CanStageContextMenuItemToWorkbench())
+            return "Market Acquisition is unavailable while its Workbench or route is busy.";
+
+        var staged = acquisitionRequestBuilder.StageLines(
+            [
+                new MarketAcquisitionRequestLineDocument
+                {
+                    ItemId = itemId,
+                    ItemName = itemName.Trim(),
+                    QuantityMode = "TargetQuantity",
+                    TargetQuantity = 1,
+                    HqPolicy = "Either",
+                },
+            ]);
+        QueueAgentTabSelection("Market Acquisition", "Workbench");
+        IsOpen = true;
+        return staged > 0
+            ? $"Added 1 {itemName.Trim()} to the Market Acquisition Workbench."
+            : $"{itemName.Trim()} is already in the Market Acquisition Workbench.";
     }
 
     internal static bool TryNormalizeAgentBridgeTab(string tabName, out string mainTab, out string? workspaceView)

@@ -42,6 +42,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ISigScanner SigScanner { get; private set; } = null!;
     [PluginService] internal static IGameInteropProvider GameInteropProvider { get; private set; } = null!;
     [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
+    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
 
@@ -58,6 +59,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly QuartermasterIpcClient quartermaster;
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
+    private readonly MarketAcquisitionItemContextMenu marketAcquisitionItemContextMenu;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
@@ -159,6 +161,15 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log);
         exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
+        marketAcquisitionItemContextMenu = new MarketAcquisitionItemContextMenu(
+            ContextMenu,
+            GameGui,
+            DataManager,
+            Framework,
+            ChatGui,
+            () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
+            mainWindow.CanStageContextMenuItemToWorkbench,
+            mainWindow.StageContextMenuItemToWorkbench);
 
         agentBridgeProofStore = new AgentBridgeProofStore();
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
@@ -443,6 +454,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         StopTimer();
+        marketAcquisitionItemContextMenu.Dispose();
         exactAcquisitionIpc.Dispose();
         agentBridge.Dispose();
 
