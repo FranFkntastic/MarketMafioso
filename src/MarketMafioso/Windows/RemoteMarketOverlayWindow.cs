@@ -141,7 +141,10 @@ public sealed class RemoteMarketOverlayWindow : Window
         ImGui.BeginGroup();
         ImGui.TextColored(MarketMafiosoUiTheme.Header, $"{first.ItemName}{(first.IsHighQuality ? " (HQ)" : string.Empty)}");
         var gilText = view.GilOnHand is { } gil ? $"{gil:N0} gil on hand" : "gil unavailable";
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.Listings.Count} listings · {gilText}");
+        var listingCountText = view.Listings.Count < view.ExpectedListingCount
+            ? $"{view.Listings.Count} of {view.ExpectedListingCount} listings"
+            : $"{view.Listings.Count} listings";
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{listingCountText} · {gilText}");
         ImGui.EndGroup();
 
         if (view.MarketContextSummary is { } marketContextSummary)
