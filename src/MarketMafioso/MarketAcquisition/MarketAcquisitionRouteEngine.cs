@@ -13,7 +13,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan RouteMonitorInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan MarketBoardItemSearchOperationTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan TravelPreparationOperationTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan WorldTravelArrivalOperationTimeout = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan SameDataCenterWorldTravelArrivalOperationTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan DataCenterTravelArrivalOperationTimeout = TimeSpan.FromMinutes(6);
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
@@ -900,22 +901,33 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return active;
         }
 
+        var sourceWorld = currentWorld ??
+            throw new InvalidOperationException("Current world is required before starting world travel.");
+        var sourceDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(sourceWorld);
+        var targetDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(activeStop.WorldName);
+        var isDataCenterTravel = !sourceDataCenter.Equals(targetDataCenter, StringComparison.OrdinalIgnoreCase);
+        var timeout = ResolveWorldTravelArrivalOperationTimeout(sourceWorld, activeStop.WorldName);
+        var travelKind = isDataCenterTravel ? "Data center travel" : "World travel";
         var operation = operationExecutor.Begin(new MarketAcquisitionRouteOperationStart
         {
             OperationId = $"{state.ProgressNonce}:world-travel:{++operationSequence}",
             Kind = MarketAcquisitionRouteOperationKind.Travel,
             StartedAtUtc = clock.UtcNow,
             StartedAtMonotonicMilliseconds = clock.MonotonicMilliseconds,
-            Timeout = WorldTravelArrivalOperationTimeout,
+            Timeout = timeout,
             TimeoutDisposition = MarketAcquisitionRouteOperationDisposition.Failed,
             TimeoutMessage =
-                $"World travel timed out after {WorldTravelArrivalOperationTimeout.TotalSeconds:N0}s while waiting to arrive on {activeStop.WorldName}.",
+                $"{travelKind} timed out after {timeout.TotalMinutes:N0} minutes while waiting to arrive on {activeStop.WorldName}.",
             Context = new Dictionary<string, string?>
             {
                 ["world"] = activeStop.WorldName,
-                ["sourceWorld"] = currentWorld,
+                ["sourceWorld"] = sourceWorld,
+                ["sourceDataCenter"] = sourceDataCenter,
+                ["targetDataCenter"] = targetDataCenter,
+                ["travelScope"] = isDataCenterTravel ? "CrossDataCenter" : "SameDataCenter",
+                ["timeoutSeconds"] = timeout.TotalSeconds.ToString("N0"),
                 ["dependency"] = "Lifestream",
-                ["timeoutPolicySource"] = "NightmareToolsDefaultBoundProvisional",
+                ["timeoutPolicySource"] = "MarketAcquisitionTravelScope",
             },
         });
         activeTravelLease = new MarketAcquisitionTravelLease
@@ -932,6 +944,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             "Travel lease created before Lifestream command dispatch.",
             CreateTravelCleanupDetails(activeTravelLease, "Start", "LeaseCreated", unresolvedExternalAutomation: false));
         return operation;
+    }
+
+    internal static TimeSpan ResolveWorldTravelArrivalOperationTimeout(string sourceWorld, string targetWorld)
+    {
+        var sourceDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(sourceWorld);
+        var targetDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(targetWorld);
+        return sourceDataCenter.Equals(targetDataCenter, StringComparison.OrdinalIgnoreCase)
+            ? SameDataCenterWorldTravelArrivalOperationTimeout
+            : DataCenterTravelArrivalOperationTimeout;
     }
 
     private MarketAcquisitionRouteOperationSnapshot ObserveWorldTravelOperation(
