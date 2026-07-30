@@ -244,7 +244,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow.AcquisitionCompositionWindow);
         windowSystem.AddWindow(agentBridgeProofWindow);
         windowSystem.AddWindow(remoteMarketProbeWindow);
-        windowSystem.AddWindow(mainWindow.RemoteMarketOverlay);
+        windowSystem.AddWindow(mainWindow.MarketListingOverlay);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
@@ -306,11 +306,11 @@ public sealed class Plugin : IDalamudPlugin
                         break;
                     }
 
-                    ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketItem(matches[0].RowId)}");
+                    ChatGui.Print($"[MMF] Market listings: {mainWindow.OpenMarketListing(matches[0].RowId)}");
                     break;
                 }
 #endif
-                ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketBoard()}");
+                ChatGui.Print($"[MMF] Market listings: {mainWindow.OpenMarketListings()}");
                 break;
 
             case "probe-market":
@@ -601,7 +601,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         retainerSaleChatObserver.Tick();
         retainerHistoryObserver.Tick();
-        mainWindow.RemoteMarketOverlay.IsOpen = true;
+        mainWindow.MarketListingOverlay.IsOpen = true;
         tradeQueueRunner.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();

@@ -45,7 +45,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
 
     private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> AcquisitionSurfaces =
     [
-        new("remote-market", "Remote Market Overlay", "open-main-window", "Remote Market", 59),
+        new("market-listings", "Market Listings", "open-main-window", "Market Listings", 59),
         new("market-acquisition", "Market Acquisition", "select-main-tab", "Market Acquisition", 60),
         new("market-acquisition.inbox", "Market Acquisition - Inbox", "select-main-tab", "Market Acquisition/Inbox", 62),
         new("market-acquisition.workbench", "Market Acquisition - Workbench", "select-main-tab", "Market Acquisition/Workbench", 63),

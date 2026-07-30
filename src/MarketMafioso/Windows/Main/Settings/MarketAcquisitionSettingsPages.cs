@@ -16,7 +16,7 @@ internal sealed class MarketAcquisitionSettingsPages
         Descriptors =
         [
             new("market.operation", "Market Acquisition / Operation", DrawOperation, 30, IsUnlocked,
-                ["opportunistic world checks", "recent world TTL", "full resweep", "remote market purchases"]),
+                ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases"]),
             new("market.diagnostics", "Market Acquisition / Diagnostics", DrawDiagnostics, 31, IsUnlocked,
                 ["route diagnostic packages", "route log", "observed listings", "purchase records"]),
         ];
@@ -26,9 +26,9 @@ internal sealed class MarketAcquisitionSettingsPages
 
     private void DrawOperation(SettingsPageContext context)
     {
-        DrawCheckbox(context, "Enable remote market purchases",
-            "Allows explicit remote-market commands and integrations to open the market board and purchase confirmed listings.",
-            () => config.EnableRemoteMarketPurchase, value => config.EnableRemoteMarketPurchase = value);
+        DrawCheckbox(context, "Enable listing purchases",
+            "Allows acquisition commands and integrations to open the market board and purchase confirmed listings.",
+            () => config.EnableMarketListingPurchases, value => config.EnableMarketListingPurchases = value);
         DrawCheckbox(context, "Check every batch item on each visited world",
             "Default on. While already on a world, MarketMafioso checks other unfinished items from the same claimed batch.",
             () => config.EnableOpportunisticWorldChecks, value => config.EnableOpportunisticWorldChecks = value);

@@ -13,7 +13,7 @@ using MarketMafioso.AgentBridge;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.MarketAcquisition.RemoteMarket;
+using MarketMafioso.MarketAcquisition.MarketBoard;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.SquireIntegration;
 using MarketMafioso.Windows.Main;
@@ -49,10 +49,10 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
-    private readonly RemoteMarketController remoteMarketController;
+    private readonly MarketBoardAcquisitionController marketBoardAcquisition;
     private readonly RemoteSummoningBellProbe remoteSummoningBellProbe;
 
-    public RemoteMarketOverlayWindow RemoteMarketOverlay { get; }
+    public MarketListingOverlayWindow MarketListingOverlay { get; }
     private readonly IDataManager dataManager;
     private readonly HttpClient acquisitionHttpClient = new();
     private readonly HttpClient craftQuoteHttpClient = new();
@@ -193,7 +193,7 @@ public class MainWindow : Window, IDisposable
                 "market-purchase-evidence.json")),
             marketPurchasePacketObserver.Queue,
             () => Plugin.Framework.IsInFrameworkUpdateThread);
-        remoteMarketController = new RemoteMarketController(
+        marketBoardAcquisition = new MarketBoardAcquisitionController(
             config,
             Plugin.MarketBoard,
             Plugin.ClientState,
@@ -211,7 +211,7 @@ public class MainWindow : Window, IDisposable
                 marketBoardItemSearchDriver.Search(
                     itemId,
                     itemName,
-                    MarketBoardBrowseOwner.RemoteMarketController,
+                    MarketBoardBrowseOwner.MarketListingAcquisition,
                     intent,
                     previousOperationId),
             marketBoardBrowseRuntime,
@@ -233,7 +233,7 @@ public class MainWindow : Window, IDisposable
             log,
             Plugin.PluginInterface,
             Plugin.PluginInterface.GetPluginConfigDirectory());
-        RemoteMarketOverlay = new RemoteMarketOverlayWindow(remoteMarketController, AgentReviewRegistry);
+        MarketListingOverlay = new MarketListingOverlayWindow(marketBoardAcquisition, AgentReviewRegistry);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
         var routeUiAutomation = new DalamudMarketAcquisitionRouteUiAutomation();
@@ -517,8 +517,8 @@ public class MainWindow : Window, IDisposable
         var warmBellProbe = remoteSummoningBellProbe.GetWarmSessionProbeView();
         var workshopReview = workshopMaterials.BuildReview();
         var workshopRun = workshopVendorRestockRunner.ActiveRun;
-        var remoteMarket = remoteMarketController.GetView();
-        var remoteMarketNative = remoteMarketController.GetNativePresentationState();
+        var listingView = marketBoardAcquisition.GetView();
+        var nativeListingPresentation = marketBoardAcquisition.GetNativePresentationState();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -578,22 +578,22 @@ public class MainWindow : Window, IDisposable
             },
             RemoteMarket = new AgentBridgeRemoteMarketTruth
             {
-                Available = remoteMarketController.IsAvailable,
-                ResultVisible = remoteMarketNative.MatchesSnapshot,
-                NativeResultAddonVisible = remoteMarketNative.ResultAddonVisible,
-                NativeAgentActive = remoteMarketNative.AgentActive,
-                NativeListingCount = remoteMarketNative.ListingCount,
-                NativeRequestId = remoteMarketNative.RequestId,
-                ViewRevision = remoteMarket.Revision,
-                ListingCount = remoteMarket.Listings.Count,
-                ItemId = remoteMarket.Listings.FirstOrDefault()?.ItemId,
-                HighQuality = remoteMarket.Listings.FirstOrDefault()?.IsHighQuality,
-                CheapestUnitPrice = remoteMarket.Listings.Count == 0
+                Available = marketBoardAcquisition.IsAvailable,
+                ResultVisible = nativeListingPresentation.MatchesSnapshot,
+                NativeResultAddonVisible = nativeListingPresentation.ResultAddonVisible,
+                NativeAgentActive = nativeListingPresentation.AgentActive,
+                NativeListingCount = nativeListingPresentation.ListingCount,
+                NativeRequestId = nativeListingPresentation.RequestId,
+                ViewRevision = listingView.Revision,
+                ListingCount = listingView.Listings.Count,
+                ItemId = listingView.Listings.FirstOrDefault()?.ItemId,
+                HighQuality = listingView.Listings.FirstOrDefault()?.IsHighQuality,
+                CheapestUnitPrice = listingView.Listings.Count == 0
                     ? null
-                    : remoteMarket.Listings.Min(listing => listing.UnitPrice),
-                CurrentGil = remoteMarket.GilOnHand,
-                MarketContextSource = remoteMarket.MarketContext?.Source,
-                MarketContextSummary = remoteMarket.MarketContextSummary,
+                    : listingView.Listings.Min(listing => listing.UnitPrice),
+                CurrentGil = listingView.GilOnHand,
+                MarketContextSource = listingView.MarketContext?.Source,
+                MarketContextSummary = listingView.MarketContextSummary,
             },
             RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
             {
@@ -873,9 +873,9 @@ public class MainWindow : Window, IDisposable
         Vector2 WorkSize,
         bool IsDocked);
 
-    public string OpenRemoteMarketBoard() => remoteMarketController.OpenMarketBoard();
+    public string OpenMarketListings() => marketBoardAcquisition.OpenMarketBoard();
 
-    public string OpenRemoteMarketItem(uint itemId) => remoteMarketController.OpenMarketItem(itemId);
+    public string OpenMarketListing(uint itemId) => marketBoardAcquisition.OpenMarketItem(itemId);
 
     public string BeginRemoteSummoningBellProbe() => remoteSummoningBellProbe.BeginProbe();
 
@@ -2199,7 +2199,7 @@ public class MainWindow : Window, IDisposable
         uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();
         routeEngine.Dispose();
-        remoteMarketController.Dispose();
+        marketBoardAcquisition.Dispose();
         remoteSummoningBellProbe.Dispose();
         marketPurchasePacketObserver.Dispose();
         acquisitionHttpClient.Dispose();

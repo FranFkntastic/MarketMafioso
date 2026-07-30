@@ -4,7 +4,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using Dalamud.Plugin.Services;
 
-namespace MarketMafioso.MarketAcquisition.RemoteMarket;
+namespace MarketMafioso.MarketAcquisition.MarketBoard;
 
 internal sealed record CmbMarketContext(
     uint ItemId,
