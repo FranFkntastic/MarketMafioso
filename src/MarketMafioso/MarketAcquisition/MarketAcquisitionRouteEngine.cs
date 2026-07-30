@@ -17,7 +17,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan DataCenterTravelArrivalOperationTimeout = TimeSpan.FromMinutes(6);
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
-    private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan MarketBoardPurchaseMonitorInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan UniversalisFreshnessVerificationDelay = TimeSpan.FromSeconds(10);
     private readonly MarketAcquisitionRouteRunner runner;
@@ -122,7 +122,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         IsRouteActive = IsRouteActive,
         IsRunning = runner.IsRunning,
         IsPaused = runner.IsPaused,
-        CanRestart = runner.CanRestart,
+        CanRestart = runner.CanRestart && state.ManualRecoveryBlockedReason == null,
+        CanRecover =
+            runner.CanRecover &&
+            state.ManualRecoveryBlockedReason == null &&
+            exactAcquisitionAuthority is null,
+        RecoveryBlockedReason = state.ManualRecoveryBlockedReason,
         CanFinalizeInputCaptureLog = runner.CanFinalizeInputCaptureLog,
         CompletedOrProbedStopCount = runner.CompletedOrProbedStops.Count,
         RouteState = runner.State,
@@ -422,6 +427,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Stop()
     {
+        CaptureManualRecoverySafetyBlock();
         evidence.Flush();
         uiAutomation.TryCloseMarketBoardWindows();
         CleanupOwnedApproach("Stop");
@@ -437,12 +443,56 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         return UpdateStatus(result);
     }
 
+    public MarketAcquisitionRouteActionResult Recover(MarketAcquisitionClaimView claimed)
+    {
+        ArgumentNullException.ThrowIfNull(claimed);
+        if (!runner.CanRecover)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
+                $"Route cannot be recovered while {runner.State}."));
+        if (state.ManualRecoveryBlockedReason is { } blockedReason)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
+        if (exactAcquisitionAuthority is not null)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
+                "Use exact-acquisition recovery for this retained route."));
+        if (shardCheckpoints?.IsActive == true)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
+                $"Route recovery is locked while purchased shards are being reconciled: {shardCheckpoints.Snapshot.Message}"));
+        if (!context.IsCurrentWorldAvailable)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
+                "Route recovery is waiting for the current world to become available."));
+        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
+
+        CleanupOwnedApproach("Recovery");
+        CleanupOwnedTravel("Recovery");
+        CancelActiveOperation("Recovering retained route progress.");
+        claimedRequest = claimed;
+        listingReadAccumulator.Clear();
+        purchaseAutomation.Clear();
+        state.MarketBoardReadResult = null;
+        state.MarketBoardReconciliation = null;
+        state.LiveCandidatePlan = null;
+        state.PostPurchasePreviousBrowseOperationId = null;
+        state.NextRouteMonitorUtc = clock.UtcNow;
+        reportDispatcher.BeginSession(claimed);
+        freshnessCancellation.Cancel();
+        freshnessCancellation.Dispose();
+        freshnessCancellation = new CancellationTokenSource();
+
+        var result = runner.Recover(context.GetCurrentWorldName());
+        if (result.Success)
+            state.ManualRecoveryBlockedReason = null;
+        return UpdateStatus(result);
+    }
+
     public MarketAcquisitionRouteActionResult Restart(
         MarketAcquisitionPlan plan,
         MarketAcquisitionClaimView claimed)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (state.ManualRecoveryBlockedReason is { } blockedReason)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
         CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
@@ -478,6 +528,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (state.ManualRecoveryBlockedReason is { } blockedReason)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
         CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
@@ -1398,6 +1450,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var selection = purchase.ExecuteFirstCandidate(state.LiveCandidatePlan, freshRead);
         var now = clock.UtcNow;
         purchaseAutomation.RecordPurchaseSelection(selection, now, MarketBoardPurchaseConfirmationWatchdog);
+        if (selection.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase))
+            state.PostPurchasePreviousBrowseOperationId = state.MarketBoardReadResult?.BrowseOperationId;
         runner.RecordAutomationSnapshot(CreatePurchaseSelectionSnapshot(selection));
 
         if (selection.Status.Equals("NoCandidate", StringComparison.OrdinalIgnoreCase))
@@ -1475,7 +1529,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 candidate => exactAcquisitionAuthority is null
                     ? purchase.TryConfirmPendingPurchase(candidate)
                     : purchase.TryConfirmPendingPurchase(candidate, CreatePurchaseIntentContext()),
-                () => marketBoard.ReadCurrentListings(context.GetCurrentWorldName()),
+                () => ReadFreshPostPurchaseListings(previousSession),
                 monitorListingRemoval: exactAcquisitionAuthority is null);
             if (!tick.DidWork)
                 return MarketAcquisitionRouteEngineTickResult.Idle("Purchase monitor had no due work.");
@@ -1733,6 +1787,38 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
+        state.PostPurchasePreviousBrowseOperationId = null;
+    }
+
+    private MarketBoardReadResult ReadFreshPostPurchaseListings(MarketBoardPurchaseSession session)
+    {
+        var candidate = session.Candidate;
+        var itemName = runner.RetainedActiveStop?.ActiveItemSubtask?.ItemName ??
+                       claimedRequest?.ItemName;
+        var search = marketBoard.SearchItem(
+            candidate.ItemId,
+            itemName,
+            MarketBoardItemSearchIntent.RequireFreshBrowse,
+            state.PostPurchasePreviousBrowseOperationId);
+        if (search.ReadyForListings)
+            return marketBoard.ReadCurrentListings(context.GetCurrentWorldName());
+
+        var browse = search.BrowseEvidence;
+        return new MarketBoardReadResult
+        {
+            Status = "PostPurchaseRefreshPending",
+            Message = $"Refreshing listings after purchase confirmation ({search.Status}). {search.Message}",
+            ReadState = MarketBoardListingReadState.Loading,
+            ItemId = candidate.ItemId,
+            WorldName = context.GetCurrentWorldName(),
+            ReportedListingCount = browse?.ExpectedListingCount ?? 0,
+            CurrentRequestId = browse?.RequestId ?? 0,
+            BrowseOperationId = browse?.OperationId ?? string.Empty,
+            BrowseHeaderStatus = browse?.HeaderStatus ?? 0,
+            BrowseExpectedPageCount = browse?.ExpectedPageCount ?? 0,
+            BrowseObservedPageCount = browse?.PageCount ?? 0,
+            BrowseHistoryItemId = browse?.HistoryItemId,
+        };
     }
 
     private void SimulateDryRunPurchase(string currentWorld)
@@ -2075,11 +2161,20 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
     {
+        CaptureManualRecoverySafetyBlock();
         evidence.Flush();
         CleanupOwnedApproach("Failure");
         CleanupOwnedTravel("Failure");
         CancelActiveOperation($"Route failed; active operation cancelled. {message}");
         return runner.FailRoute(message, exception);
+    }
+
+    private void CaptureManualRecoverySafetyBlock()
+    {
+        var purchaseSession = purchaseAutomation.PurchaseSession;
+        state.ManualRecoveryBlockedReason = purchaseSession?.ConfirmationWasSubmitted != true
+            ? null
+            : $"The retained route cannot resume automatically because listing {purchaseSession.Candidate.ListingId} may have been purchased. Reconcile that purchase outcome before retrying it.";
     }
 
     private void CleanupOwnedApproach(string terminalReason)
@@ -2188,7 +2283,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             CreateTravelCleanupDetails(lease, terminalReason, "Aggregate", unresolved, result, cleanupId));
     }
 
-    private bool TryReconcileUnresolvedTravelLease(out string message)
+    private bool TryReconcileUnresolvedTravelLease(out string message, bool allowIdleResolution = false)
     {
         var lease = unresolvedTravelLease;
         if (lease == null)
@@ -2206,6 +2301,26 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 CreateTravelCleanupDetails(lease, "Reconcile", "ResolvedByArrival", unresolvedExternalAutomation: false));
             message = string.Empty;
             return true;
+        }
+
+        var isBusy = false;
+        var travelStateAvailable = allowIdleResolution && context.TryIsWorldTravelBusy(out isBusy);
+        if (travelStateAvailable && !isBusy)
+        {
+            unresolvedTravelLease = null;
+            runner.RecordRouteCleanup(
+                $"Resolved previous unsupported Lifestream travel lease after Lifestream reported idle.",
+                CreateTravelCleanupDetails(lease, "ManualRecovery", "ResolvedByIdleObservation", unresolvedExternalAutomation: false));
+            message = string.Empty;
+            return true;
+        }
+
+        if (allowIdleResolution)
+        {
+            message = travelStateAvailable && isBusy
+                ? $"Cannot recover while the previous Lifestream travel to {lease.TargetWorld} is still running."
+                : $"Cannot recover because Lifestream travel state is unavailable; the previous travel to {lease.TargetWorld} cannot yet be proven finished.";
+            return false;
         }
 
         message = $"Cannot start a new route while previous Lifestream travel to {lease.TargetWorld} remains unresolved. Confirm arrival on that world before restarting.";

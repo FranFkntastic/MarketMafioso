@@ -13,6 +13,8 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public bool IsRunning { get; init; }
     public bool IsPaused { get; init; }
     public bool CanRestart { get; init; }
+    public bool CanRecover { get; init; }
+    public string? RecoveryBlockedReason { get; init; }
     public bool CanFinalizeInputCaptureLog { get; init; }
     public int CompletedOrProbedStopCount { get; init; }
     public string RouteState { get; init; } = string.Empty;

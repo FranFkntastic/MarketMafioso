@@ -8,6 +8,7 @@ public enum MarketAcquisitionGuidedRoutePrimaryAction
     None,
     RetryExactAcquisitionRecovery,
     ResumeManualPause,
+    RecoverStoppedRoute,
     PauseActiveRoute,
 }
 
@@ -25,6 +26,8 @@ public static class MarketAcquisitionGuidedRouteActionPresenter
         }
         if (snapshot.IsPaused)
             return MarketAcquisitionGuidedRoutePrimaryAction.ResumeManualPause;
+        if (snapshot.CanRecover)
+            return MarketAcquisitionGuidedRoutePrimaryAction.RecoverStoppedRoute;
         if (snapshot.IsRunning)
             return MarketAcquisitionGuidedRoutePrimaryAction.PauseActiveRoute;
         return MarketAcquisitionGuidedRoutePrimaryAction.None;

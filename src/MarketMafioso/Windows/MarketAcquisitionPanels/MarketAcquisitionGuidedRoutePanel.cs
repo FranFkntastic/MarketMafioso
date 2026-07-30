@@ -18,6 +18,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action observeCurrentBoard;
     private readonly Action pauseRoute;
     private readonly Action resumeRoute;
+    private readonly Action recoverRoute;
     private readonly Action stopRoute;
     private readonly Action restartRoute;
     private readonly Action reprepareRoute;
@@ -37,6 +38,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action observeCurrentBoard,
         Action pauseRoute,
         Action resumeRoute,
+        Action recoverRoute,
         Action stopRoute,
         Action restartRoute,
         Action reprepareRoute,
@@ -54,6 +56,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.observeCurrentBoard = observeCurrentBoard ?? throw new ArgumentNullException(nameof(observeCurrentBoard));
         this.pauseRoute = pauseRoute ?? throw new ArgumentNullException(nameof(pauseRoute));
         this.resumeRoute = resumeRoute ?? throw new ArgumentNullException(nameof(resumeRoute));
+        this.recoverRoute = recoverRoute ?? throw new ArgumentNullException(nameof(recoverRoute));
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
         this.restartRoute = restartRoute ?? throw new ArgumentNullException(nameof(restartRoute));
         this.reprepareRoute = reprepareRoute ?? throw new ArgumentNullException(nameof(reprepareRoute));
@@ -74,7 +77,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                        !isPlanStale &&
                        plan.WorldBatches.Count > 0 &&
                        !snapshot.IsRunning &&
-                       !snapshot.IsPaused;
+                       !snapshot.IsPaused &&
+                       snapshot.RecoveryBlockedReason == null;
         var canReprepare = canStart &&
                             snapshot.CanRestart &&
                             snapshot.CompletedOrProbedStopCount > 0;
@@ -83,6 +87,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence);
 
         ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
+        if (snapshot.RecoveryBlockedReason is { } recoveryBlockedReason)
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, recoveryBlockedReason);
         if (isPlanStale)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Request changed after this plan was prepared. Prepare a fresh plan before starting.");
         drawPostRunDiagnosticSummary(snapshot);
@@ -148,6 +154,17 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", true))
                 stopRoute();
             RegisterLastControl("acquisition.route.stop", "Stop the Market Acquisition route", true, stopRoute);
+            return;
+        }
+        if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.RecoverStoppedRoute)
+        {
+            if (ImGuiUi.PrimaryButton("Recover Route##MarketAcquisitionRecoverRoute", true))
+                recoverRoute();
+            RegisterLastControl(
+                "acquisition.route.recover",
+                "Recover the stopped Market Acquisition route from its retained stop and line progress",
+                true,
+                recoverRoute);
             return;
         }
 

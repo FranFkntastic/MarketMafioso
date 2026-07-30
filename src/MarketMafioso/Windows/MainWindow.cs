@@ -253,7 +253,7 @@ public class MainWindow : Window, IDisposable
         exactAcquisitionRouteStateStore = new ConfigurationExactAcquisitionRouteExecutionStateStore(config);
         routeEngine = new MarketAcquisitionRouteEngine(
             marketAcquisitionRouteRunner,
-            new DalamudMarketAcquisitionRouteContext(playerState),
+            new DalamudMarketAcquisitionRouteContext(playerState, lifestream),
             routeUiAutomation,
             new UnsupportedMarketAcquisitionRouteTravelCleanup(),
             new DalamudMarketAcquisitionMarketBoardIo(
@@ -467,6 +467,7 @@ public class MainWindow : Window, IDisposable
             () => _ = ProbeLiveMarketBoardAsync(),
             () => _ = PauseGuidedRouteAsync(),
             () => _ = ResumeGuidedRouteAsync(),
+            () => _ = RecoverGuidedRouteAsync(),
             () => _ = StopGuidedRouteAsync(),
             () => _ = RestartGuidedRouteAsync(),
             () => _ = ReprepareGuidedRouteAsync(),
@@ -1718,6 +1719,16 @@ public class MainWindow : Window, IDisposable
         routeEngine.Resume();
         routeEngine.ReportRouteProgress();
         return Task.CompletedTask;
+    }
+
+    private Task RecoverGuidedRouteAsync()
+    {
+        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
+        {
+            routeEngine.Recover(claimed);
+            routeEngine.ReportRouteProgress();
+            return Task.CompletedTask;
+        });
     }
 
     private Task StopGuidedRouteAsync()

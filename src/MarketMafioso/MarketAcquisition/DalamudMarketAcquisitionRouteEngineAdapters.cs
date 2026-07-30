@@ -18,8 +18,13 @@ public sealed class DalamudMarketAcquisitionRouteCallbackDispatcher : IMarketAcq
 public sealed class DalamudMarketAcquisitionRouteContext : IMarketAcquisitionRouteContext
 {
     private readonly IPlayerState playerState;
+    private readonly LifestreamIpc lifestream;
 
-    public DalamudMarketAcquisitionRouteContext(IPlayerState playerState) => this.playerState = playerState;
+    public DalamudMarketAcquisitionRouteContext(IPlayerState playerState, LifestreamIpc lifestream)
+    {
+        this.playerState = playerState;
+        this.lifestream = lifestream;
+    }
 
     public bool IsCurrentWorldAvailable => playerState.CurrentWorld.IsValid;
 
@@ -33,6 +38,8 @@ public sealed class DalamudMarketAcquisitionRouteContext : IMarketAcquisitionRou
         homeWorld = playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : string.Empty;
         return !string.IsNullOrWhiteSpace(characterName) && !string.IsNullOrWhiteSpace(homeWorld);
     }
+
+    public bool TryIsWorldTravelBusy(out bool isBusy) => lifestream.TryIsBusy(out isBusy);
 }
 
 public sealed class DalamudMarketAcquisitionRouteUiAutomation : IMarketAcquisitionRouteUiAutomation
@@ -119,7 +126,12 @@ public sealed class DalamudMarketAcquisitionMarketBoardIo : IMarketAcquisitionMa
             AdapterCapability = "GlobalPathStopOnly",
         };
     }
-    public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName) => searchDriver.Search(itemId, itemName);
+    public MarketBoardItemSearchResult SearchItem(
+        uint itemId,
+        string? itemName,
+        MarketBoardItemSearchIntent intent = MarketBoardItemSearchIntent.PresentOrBrowse,
+        string? previousOperationId = null) =>
+        searchDriver.Search(itemId, itemName, MarketBoardBrowseOwner.MarketAcquisition, intent, previousOperationId);
     public MarketBoardReadResult ReadCurrentListings(string currentWorld) => listingReader.ReadCurrentListings(currentWorld);
     public MarketBoardInputCapture CaptureInputState() => inputCaptureReader.Capture();
     public void AbandonBrowse(string reason)

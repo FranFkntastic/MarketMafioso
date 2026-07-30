@@ -24,6 +24,23 @@ public sealed class MarketAcquisitionGuidedRouteSession
     public bool ShouldMonitorActiveStop =>
         ActiveStop?.Status is "TravelCommandSent" or "Arrived" or "Purchasing";
 
+    public MarketAcquisitionGuidedRouteResult PrepareForRecovery(string currentWorld)
+    {
+        var stop = ActiveStop;
+        if (stop == null)
+            return MarketAcquisitionGuidedRouteResult.Fail("The retained route has no remaining stop to recover.");
+
+        var alreadyAtStop =
+            !string.IsNullOrWhiteSpace(currentWorld) &&
+            stop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase);
+        stop.Status = alreadyAtStop ? "Arrived" : "Pending";
+        stop.MarketBoardTravelCommandSent = false;
+        return MarketAcquisitionGuidedRouteResult.Ok(
+            alreadyAtStop
+                ? $"Recovered the retained route on {stop.WorldName}; live market evidence will be reacquired before continuing."
+                : $"Recovered the retained route at {stop.WorldName}; travel will resume from the current world.");
+    }
+
     public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId)
     {
         if (string.IsNullOrWhiteSpace(lineId))
