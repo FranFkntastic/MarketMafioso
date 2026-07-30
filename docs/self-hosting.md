@@ -6,7 +6,7 @@ Workshop Host enables persistent inventory snapshots, the inventory browser, dia
 
 The current package still keeps receiver-era names in scripts, routes, Docker image, and some setting filenames for compatibility.
 
-Craft Architect quote lookup is now part of the default source build. Workshop Host directly references Craft Architect Core and advertises `craft.appraise` from `/api/capabilities`. MMF still checks the capability first so older or custom hosts can degrade to quote-file imports or manual craft costs.
+Craft Architect quote lookup is an optional service integration. Workshop Host compiles independently, advertises `craft.appraise` only when `MarketMafioso__CraftArchitectAppraiseUrl` points to a loopback CA service, and never reaches inside CA's engine.
 
 ## Requirements
 
@@ -39,7 +39,7 @@ cd release/self-host
 
 The installer wizard generates `config/marketmafioso.env`, pulls the server image, starts the container, checks `/health`, and prints the plugin endpoint/API key.
 
-After health passes, the installer also checks Workshop Host capabilities, verifies `craft.appraise` is advertised, confirms unauthenticated quote requests are rejected, and confirms the quote endpoint validates schema shape with the generated client key.
+After health passes, the installer checks Workshop Host capabilities, reports whether the optional CA service is configured, confirms unauthenticated quote requests are rejected, and confirms the quote endpoint validates schema shape with the generated client key.
 
 To update later:
 
@@ -95,7 +95,7 @@ Publish the server:
 .\src\MarketMafioso\tools\Publish-ServerRelease.ps1
 ```
 
-Direct source publishing expects the sibling `FFXIV Craft Architect C# Edition` checkout beside the MarketMafioso checkout so the server can compile its Craft Architect Core project reference.
+Direct source publishing does not require a Craft Architect checkout. Quote computation remains unavailable until a separate CA helper is running and its exact loopback appraisal URL is configured.
 
 For a self-contained Linux x64 build:
 
@@ -126,6 +126,7 @@ MarketMafioso__CraftQuoteApiKey=<optional-craft-quote-only-key>
 MarketMafioso__DiagnosticsReadApiKey=<optional-diagnostics-read-only-key>
 MarketMafioso__BasePath=<path-prefix-or-empty>
 MarketMafioso__PublicOrigin=<public-origin-for-dashboard-links>
+MarketMafioso__CraftArchitectAppraiseUrl=<optional-loopback-ca-appraisal-url>
 MarketMafioso__DatabasePath=<sqlite-file-path>
 MarketMafioso__RawJsonRetentionCount=20
 MarketMafioso__SnapshotRetentionCount=500
@@ -183,7 +184,7 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<client-api-key>" }
 ```
 
-Current source builds should include `craft.appraise`. If it is missing, you are likely talking to an older or custom host, and MMF can still use manual craft costs or Craft Architect quote-file imports. When `craft.appraise` is present, Acquisition Workbench craft appraisal can use the Workshop Host quote API after you enable Workshop Host craft quotes in plugin settings.
+`craft.appraise` appears only when the separate CA service URL is configured. When present, Acquisition Workbench can use the hosted quote API after you enable Craft Architect quotes in plugin settings.
 
 The quote endpoint exists at:
 
@@ -191,6 +192,6 @@ The quote endpoint exists at:
 http://localhost:5088/api/craft/appraise
 ```
 
-The endpoint is backed by Craft Architect Core in current source builds.
+The endpoint is an authenticated gateway to the separately hosted Craft Architect API.
 
 The installer and updater smoke-test quote auth and request validation without doing a real appraisal, so setup is not blocked by transient upstream recipe or pricing data.

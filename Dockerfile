@@ -1,25 +1,20 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-ARG CRAFT_ARCHITECT_CORE_PROJECT="/src/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
 
 COPY MarketMafioso.sln ./
-COPY ["craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj", "craft-architect/src/FFXIV Craft Architect.Core/"]
 COPY src/MarketMafioso.Contracts/MarketMafioso.Contracts.csproj src/MarketMafioso.Contracts/
 COPY src/MarketMafioso/MarketMafioso.csproj src/MarketMafioso/
 COPY src/MarketMafioso.Dashboard/MarketMafioso.Dashboard.csproj src/MarketMafioso.Dashboard/
 COPY src/MarketMafioso.Server/MarketMafioso.Server.csproj src/MarketMafioso.Server/
 COPY tests/MarketMafioso.SpecTests/MarketMafioso.SpecTests.csproj tests/MarketMafioso.SpecTests/
 COPY tests/MarketMafioso.ContractTests/MarketMafioso.ContractTests.csproj tests/MarketMafioso.ContractTests/
-RUN dotnet restore src/MarketMafioso.Server/MarketMafioso.Server.csproj \
-    /p:CraftArchitectCoreProject="$CRAFT_ARCHITECT_CORE_PROJECT"
+RUN dotnet restore src/MarketMafioso.Server/MarketMafioso.Server.csproj
 
 COPY . .
-COPY ["craft-architect/src/FFXIV Craft Architect.Core/", "craft-architect/src/FFXIV Craft Architect.Core/"]
 RUN dotnet publish src/MarketMafioso.Server/MarketMafioso.Server.csproj \
     -c Release \
     -o /app/publish \
     --no-restore \
-    /p:CraftArchitectCoreProject="$CRAFT_ARCHITECT_CORE_PROJECT" \
     /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime

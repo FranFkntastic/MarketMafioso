@@ -42,8 +42,8 @@ internal sealed class AdvancedSettingsPages
 
     private void DrawCraftQuotes(SettingsPageContext context)
     {
-        DrawCheckbox(context, "Enable Workshop Host craft quotes",
-            "Uses the configured Workshop Host service for advisory craft-cost evidence when the host advertises craft.appraise.",
+        DrawCheckbox(context, "Enable Craft Architect quotes",
+            "Uses Craft Architect's hosted appraisal API for advisory craft-cost evidence when the server advertises craft.appraise.",
             () => config.EnableWorkshopHostCraftQuotes, value => config.EnableWorkshopHostCraftQuotes = value);
         DrawCheckbox(context, "Enable manual craft-cost fallback",
             "Default off. Workshop Host should be the normal quote path; manual craft cost entry is only for local troubleshooting.",

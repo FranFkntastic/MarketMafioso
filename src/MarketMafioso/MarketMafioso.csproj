@@ -17,7 +17,6 @@
     <Punchline>Workshop logistics, market acquisition, and inventory history.</Punchline>
     <RepoUrl>https://github.com/FranFkntastic/MarketMafioso</RepoUrl>
     <UsesFranthropy>true</UsesFranthropy>
-    <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
@@ -37,15 +36,9 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild"
-          Condition="!Exists('$(CraftArchitectCoreProject)')">
-    <Error Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Check out the sibling repository or set -p:CraftArchitectCoreProject=&quot;path/to/FFXIV Craft Architect.Core.csproj&quot;." />
-  </Target>
-
   <ItemGroup>
     <ProjectReference Include="$(FranthropyDalamudProject)" />
     <ProjectReference Include="$(FranthropyFfxivProject)" />
-    <ProjectReference Include="$(CraftArchitectCoreProject)" />
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
   </ItemGroup>
 

@@ -1,8 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "",
-    [string]$OutputPath = "",
-    [string]$CraftArchitectCoreProject = ""
+    [string]$OutputPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,11 +29,6 @@ $arguments = @(
 
 if (-not [string]::IsNullOrWhiteSpace($Runtime)) {
     $arguments += @("-r", $Runtime, "--self-contained", "true")
-}
-
-if (-not [string]::IsNullOrWhiteSpace($CraftArchitectCoreProject)) {
-    $resolvedCoreProject = [System.IO.Path]::GetFullPath($CraftArchitectCoreProject)
-    $arguments += "-p:CraftArchitectCoreProject=$resolvedCoreProject"
 }
 
 Write-Host "Publishing MarketMafioso.Server to $OutputPath"

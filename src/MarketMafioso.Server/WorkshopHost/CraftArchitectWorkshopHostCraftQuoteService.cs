@@ -1,37 +1,83 @@
-using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
-using FFXIV_Craft_Architect.Core.Services;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace MarketMafioso.Server.WorkshopHost;
 
-public sealed class CraftArchitectWorkshopHostCraftQuoteService(
-    ICraftAppraisalService appraisalService,
-    RecipeCalculationService recipeCalculationService,
-    WorkshopHostCraftQuoteCache quoteCache,
-    CraftAppraisalPlanStore planStore) : IWorkshopHostCraftQuoteService
+public sealed class CraftArchitectWorkshopHostCraftQuoteService : IWorkshopHostCraftQuoteService
 {
-    public bool IsAvailable => true;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly HttpClient httpClient;
+    private readonly Uri? appraiseEndpoint;
+
+    public CraftArchitectWorkshopHostCraftQuoteService(
+        HttpClient httpClient,
+        IConfiguration configuration)
+    {
+        this.httpClient = httpClient;
+        appraiseEndpoint = ParseLoopbackEndpoint(
+            configuration["MarketMafioso:CraftArchitectAppraiseUrl"]);
+    }
+
+    public bool IsAvailable => appraiseEndpoint != null;
 
     public async Task<CraftAppraisalQuote?> AppraiseAsync(
         CraftAppraisalRequest request,
         CancellationToken cancellationToken)
     {
-        if (quoteCache.TryGet(request, out var cached))
-            return cached;
-
-        var quote = await appraisalService.AppraiseAsync(request, cancellationToken);
-        if (quote == null)
+        if (appraiseEndpoint == null)
             return null;
 
-        if (quote.Plan != null)
+        using var response = await httpClient.PostAsJsonAsync(
+            appraiseEndpoint,
+            request,
+            JsonOptions,
+            cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+        if (!response.IsSuccessStatusCode)
         {
-            var planJson = recipeCalculationService.SerializePlan(
-                quote.Plan,
-                includeMarketPrices: true);
-            var planId = await planStore.SaveAsync(planJson, cancellationToken);
-            quote = quote with { PlanId = planId };
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new CraftArchitectApiException(response.StatusCode, body);
         }
 
-        quoteCache.Set(request, quote);
+        var quote = await response.Content.ReadFromJsonAsync<CraftAppraisalQuote>(
+            JsonOptions,
+            cancellationToken);
+        if (quote == null)
+            throw new CraftArchitectApiException(response.StatusCode, "Craft Architect returned an empty quote.");
+        if (quote.SchemaVersion != 1 ||
+            quote.ItemId != request.ItemId ||
+            quote.RequestedQuantity != request.Quantity)
+        {
+            throw new CraftArchitectApiException(
+                response.StatusCode,
+                "Craft Architect returned a quote that does not match the requested contract.");
+        }
+
         return quote;
     }
+
+    private static Uri? ParseLoopbackEndpoint(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var endpoint) ||
+            endpoint.Scheme != Uri.UriSchemeHttp ||
+            !endpoint.IsLoopback)
+        {
+            return null;
+        }
+
+        return endpoint;
+    }
+}
+
+public sealed class CraftArchitectApiException(
+    HttpStatusCode statusCode,
+    string responseBody)
+    : HttpRequestException(
+        $"Craft Architect appraisal API returned {(int)statusCode} {statusCode}.",
+        inner: null,
+        statusCode)
+{
+    public string ResponseBody { get; } = responseBody;
 }

@@ -32,7 +32,7 @@ public sealed class WorkshopHostCraftQuoteProvider : ICraftQuoteProvider
         this.readApiKey = readApiKey ?? throw new ArgumentNullException(nameof(readApiKey));
     }
 
-    public string ProviderId => "WorkshopHost";
+    public string ProviderId => "CraftArchitectApi";
 
     public bool IsConfigured =>
         readEnabled() &&
@@ -71,7 +71,7 @@ public sealed class WorkshopHostCraftQuoteProvider : ICraftQuoteProvider
             JsonOptions,
             cancellationToken).ConfigureAwait(false);
         if (quote is null)
-            throw new InvalidOperationException("Workshop Host craft quote response was empty.");
+            throw new InvalidOperationException("Craft Architect quote API response was empty.");
 
         ValidateQuote(request, quote);
         return quote;
@@ -99,18 +99,18 @@ public sealed class WorkshopHostCraftQuoteProvider : ICraftQuoteProvider
     private static void ValidateQuote(MarketAppraisalRequest request, CraftAppraisalQuote quote)
     {
         if (quote.SchemaVersion != 1)
-            throw new InvalidOperationException($"Unsupported Workshop Host craft quote schema version {quote.SchemaVersion}.");
+            throw new InvalidOperationException($"Unsupported Craft Architect quote schema version {quote.SchemaVersion}.");
 
         if (quote.ItemId != request.ItemId)
         {
             throw new InvalidOperationException(
-                $"Workshop Host craft quote item {quote.ItemId} does not match selected item {request.ItemId}.");
+                $"Craft Architect quote item {quote.ItemId} does not match selected item {request.ItemId}.");
         }
 
         if (quote.RequestedQuantity != request.Quantity)
         {
             throw new InvalidOperationException(
-                $"Workshop Host craft quote quantity {quote.RequestedQuantity} does not match requested quantity {request.Quantity}.");
+                $"Craft Architect quote quantity {quote.RequestedQuantity} does not match requested quantity {request.Quantity}.");
         }
     }
 
@@ -191,6 +191,6 @@ public sealed class WorkshopHostCraftQuoteHttpException : HttpRequestException
 
     private static string BuildMessage(HttpStatusCode statusCode, string? error) =>
         string.IsNullOrWhiteSpace(error)
-            ? $"Workshop Host craft quote failed with {(int)statusCode} {statusCode}."
-            : $"Workshop Host craft quote failed with {(int)statusCode} {statusCode}: {error}";
+            ? $"Craft Architect quote API failed with {(int)statusCode} {statusCode}."
+            : $"Craft Architect quote API failed with {(int)statusCode} {statusCode}: {error}";
 }

@@ -80,7 +80,7 @@ public sealed class CraftAppraisalRequestBuilderController
             State.WorkshopHostAvailable = await refreshCapabilities(cancellationToken).ConfigureAwait(false);
             State.CapabilitiesCheckedAtUtc = getUtcNow();
             State.WorkshopHostStatus = State.WorkshopHostAvailable
-                ? "Workshop Host craft quotes available."
+                ? "Craft Architect quote API available."
                 : "Workshop Host does not advertise craft quote support.";
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

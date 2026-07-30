@@ -31,7 +31,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private string gilCapBuffer = string.Empty;
     private string hqPolicy = "Either";
     private bool isAppraising;
-    private bool showAddLineEditor;
     private bool selectedLineInspectorRequested;
 
     private MarketAcquisitionRequestDocument document => controller.Document;
@@ -131,13 +130,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         DrawRouteScope(context);
         ImGui.Spacing();
         DrawExceptionalStatus(context);
-        ImGuiUi.SectionHeaderWithActions(
-            "Buy list",
-            MainWindow.ColHeader,
-            () => DrawBuyListHeaderActions(context),
-            showAddLineEditor ? 168f : 76f);
-        if (showAddLineEditor)
-            DrawCompactAddRow(context);
+        ImGuiUi.SectionHeader("Buy list", MainWindow.ColHeader);
         DrawSelectedLineWorkspace(context, reservedFooterHeight);
     }
 
@@ -232,52 +225,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
     }
 
-    private void DrawBuyListHeaderActions(MarketAcquisitionRequestBuilderContext context)
-    {
-        var canEdit = CanEdit(context);
-        if (showAddLineEditor)
-        {
-            var canAdd = CanAddEditorLine(canEdit);
-            if (ImGuiUi.PrimaryButton("Add line", canAdd))
-            {
-                ApplyEditorLine();
-                ResetLineEditor();
-                showAddLineEditor = false;
-            }
-            RegisterLastControl(
-                "acquisition.workbench.add",
-                "Add the item editor values to the Workbench",
-                canAdd,
-                false,
-                itemAutocomplete.SelectedItem?.ItemId.ToString(),
-                () =>
-                {
-                    ApplyEditorLine();
-                    ResetLineEditor();
-                    showAddLineEditor = false;
-                });
-            ImGui.SameLine();
-        }
-
-        void ToggleAddLineEditor()
-        {
-            showAddLineEditor = !showAddLineEditor;
-            if (!showAddLineEditor)
-                ResetLineEditor();
-        }
-
-        var toggleLabel = showAddLineEditor ? "Cancel" : "Add item";
-        if (ImGuiUi.Button(toggleLabel, canEdit))
-            ToggleAddLineEditor();
-        RegisterLastControl(
-            "acquisition.workbench.add-editor",
-            showAddLineEditor ? "Close the add-item editor" : "Open the add-item editor",
-            canEdit,
-            showAddLineEditor,
-            itemAutocomplete.SelectedItem?.ItemId.ToString(),
-            ToggleAddLineEditor);
-    }
-
     private void DrawSelectedLineWorkspace(
         MarketAcquisitionRequestBuilderContext context,
         float reservedFooterHeight)
@@ -326,7 +273,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var flags = AcquisitionRequestTableStyle.LineTableFlags |
                     ImGuiTableFlags.SizingStretchProp |
                     ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV3", 7, flags, new Vector2(0, tableHeight)))
+        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV3", 8, flags, new Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.4f);
@@ -336,6 +283,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TableSetupColumn("Spend ceiling", ImGuiTableColumnFlags.WidthStretch, 1.2f);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthStretch, 0.8f);
         ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch, 1.4f);
+        ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed, 72f);
         ImGui.TableHeadersRow();
 
         for (var index = 0; index < document.Lines.Count; index++)
@@ -344,6 +292,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             DrawCompactLineRow(context, line, index);
         }
 
+        DrawCompactAddRow(context);
         ImGui.EndTable();
     }
 
@@ -848,22 +797,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         var canEdit = CanEdit(context);
         ImGui.PushID("AcquisitionWorkbenchAddRow");
-        var flags = ImGuiTableFlags.SizingStretchProp |
-                    ImGuiTableFlags.Borders |
-                    ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("AcquisitionWorkbenchAddEditor", 7, flags))
-        {
-            ImGui.PopID();
-            return;
-        }
-
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.4f);
-        ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthStretch, 1.5f);
-        ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthStretch, 0.9f);
-        ImGui.TableSetupColumn("Unit ceiling", ImGuiTableColumnFlags.WidthStretch, 1.1f);
-        ImGui.TableSetupColumn("Spend ceiling", ImGuiTableColumnFlags.WidthStretch, 1.2f);
-        ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthStretch, 0.8f);
-        ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch, 1.4f);
         ImGui.TableNextRow();
 
         if (!canEdit)
@@ -907,21 +840,35 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TableNextColumn();
         ImGui.TextColored(MainWindow.ColMuted, "After add");
 
-        if (!canEdit)
-            ImGui.EndDisabled();
-        ImGui.EndTable();
-        ImGui.PopID();
-    }
-
-    private bool CanAddEditorLine(bool canEdit) =>
-        canEdit &&
-        RequestLineInputValidator.CanAddIntentLine(
+        ImGui.TableNextColumn();
+        var canAdd = canEdit && RequestLineInputValidator.CanAddIntentLine(
             itemAutocomplete.SelectedItem,
             quantityMode,
             targetQuantityBuffer,
             string.Empty,
             maxUnitPriceBuffer,
             gilCapBuffer);
+        if (ImGuiUi.PrimaryButton("Add", canAdd))
+        {
+            AddEditorLine();
+            ClearLineEditor();
+        }
+        RegisterLastControl(
+            "acquisition.workbench.add",
+            "Add the inline item to the Workbench",
+            canAdd,
+            false,
+            itemAutocomplete.SelectedItem?.ItemId.ToString(),
+            () =>
+            {
+                AddEditorLine();
+                ClearLineEditor();
+            });
+
+        if (!canEdit)
+            ImGui.EndDisabled();
+        ImGui.PopID();
+    }
 
     private bool CanEdit(MarketAcquisitionRequestBuilderContext context) =>
         !context.IsBusy &&
@@ -1044,7 +991,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
     }
 
-    private void ApplyEditorLine()
+    private void AddEditorLine()
     {
         if (itemAutocomplete.SelectedItem is not { } item)
             return;
@@ -1060,7 +1007,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             MaxUnitPrice = ParseUInt(maxUnitPriceBuffer),
             GilCap = ParseUInt(gilCapBuffer),
         };
-        controller.ApplyEditorLine(line);
+        controller.AddEditorLine(line);
     }
 
     private void RemoveLine(int index)
@@ -1106,7 +1053,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         ResetLineEditor();
         controller.ClearSelection();
-        showAddLineEditor = false;
         selectedLineInspectorRequested = false;
     }
 

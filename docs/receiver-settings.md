@@ -30,17 +30,17 @@ This is the public browser address for Workshop Host. The server uses it when it
 
 Why it matters: if this points to the wrong address, uploads may still work but links shown by the plugin can open the wrong site.
 
-### `MarketMafioso__CraftArchitectAppOrigin`
+### `MarketMafioso__CraftArchitectAppraiseUrl`
 
 Example:
 
 ```text
-MarketMafioso__CraftArchitectAppOrigin=https://craft.example.com
+MarketMafioso__CraftArchitectAppraiseUrl=http://127.0.0.1:5129/craft/appraise
 ```
 
-Set this to the Craft Architect browser application when it is hosted separately from Workshop Host. Leave it blank when Craft Architect owns the domain root and Workshop Host is mounted below it, such as `/marketmafioso`; a root-hosted Workshop Host without this setting returns the exact `.craftplan` snapshot directly instead of opening the wrong dashboard.
+Set this to the exact loopback endpoint of a separately hosted Craft Architect appraisal service. Workshop Host refuses non-loopback targets so the internal compute API cannot be redirected to an arbitrary remote service.
 
-Why it matters: quote responses can link to the precise priced plan, but only the Craft Architect application knows how to load that snapshot into an editable workspace.
+Why it matters: Workshop Host advertises `craft.appraise` only when this boundary is configured, and Craft Architect—not MMF—owns quote caching and the exact priced-plan snapshot link.
 
 ### `MarketMafioso__BasePath`
 
