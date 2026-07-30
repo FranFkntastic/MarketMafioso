@@ -47,12 +47,40 @@ internal sealed class MarketAcquisitionSettingsPages
             () => config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep, value => config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep = value);
     }
 
-    private void DrawDiagnostics(SettingsPageContext context) => DrawCheckbox(context, "Create route diagnostic packages",
-        "When enabled, every guided route writes route.log plus observed-listings and purchase-record CSVs.",
-        () => config.CreateMarketAcquisitionRouteDiagnosticPackages, value => config.CreateMarketAcquisitionRouteDiagnosticPackages = value);
+    private void DrawDiagnostics(SettingsPageContext context)
+    {
+        const string label = "Route diagnostics";
+        const string description = "Summary records route decisions, purchases, timing, and failures. Full trace adds segmented replay evidence.";
+        if (!context.Matches(label, description, "Off", "Summary", "Full trace"))
+            return;
+
+        var current = config.MarketAcquisitionRouteDiagnostics;
+        ImGui.SetNextItemWidth(180f);
+        if (ImGui.BeginCombo(label, FormatDiagnosticsLevel(current)))
+        {
+            foreach (var level in Enum.GetValues<MarketAcquisitionRouteDiagnosticsLevel>())
+            {
+                if (!ImGui.Selectable(FormatDiagnosticsLevel(level), level == current))
+                    continue;
+
+                config.MarketAcquisitionRouteDiagnostics = level;
+                config.Save();
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, description);
+        ImGui.Spacing();
+    }
 
     private void DrawCheckbox(SettingsPageContext context, string label, string description, Func<bool> getter, Action<bool> setter) =>
         SettingsPageUi.DrawConfigCheckbox(config, context, label, description, getter, setter);
+
+    private static string FormatDiagnosticsLevel(MarketAcquisitionRouteDiagnosticsLevel level) => level switch
+    {
+        MarketAcquisitionRouteDiagnosticsLevel.Off => "Off",
+        MarketAcquisitionRouteDiagnosticsLevel.FullTrace => "Full trace",
+        _ => "Summary",
+    };
 
     private bool IsUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
 }

@@ -10,6 +10,7 @@ public sealed class LifestreamIpc
 {
     private const string InternalName = "Lifestream";
     private const string IsBusyChannel = "Lifestream.IsBusy";
+    private const string TeleportChannel = "Lifestream.Teleport";
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly IPluginLog log;
     private readonly DalamudLifestreamObjectInteractor objectInteractor;
@@ -50,5 +51,25 @@ public sealed class LifestreamIpc
 
         log.Warning($"[MarketMafioso] Lifestream object-interaction IPC failed ({result.Code}): {result.Message}");
         return false;
+    }
+
+    public bool TryTeleport(uint aetheryteId)
+    {
+        if (aetheryteId == 0 || !IsAvailable)
+            return false;
+        if (!TryIsBusy(out var isBusy) || isBusy)
+            return false;
+
+        try
+        {
+            return pluginInterface
+                .GetIpcSubscriber<uint, byte, bool>(TeleportChannel)
+                .InvokeFunc(aetheryteId, 0);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] Lifestream teleport IPC failed.");
+            return false;
+        }
     }
 }

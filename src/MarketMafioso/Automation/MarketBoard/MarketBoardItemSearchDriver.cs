@@ -17,13 +17,23 @@ public sealed class MarketBoardItemSearchDriver
     private const string ItemSearchResultAddon = "ItemSearchResult";
 
     private readonly IGameGui gameGui;
+    private readonly IMarketBoardBrowseRuntime browseRuntime;
+    private string? lastReturnedTerminalOperationId;
+    private MarketBoardBrowseOwner? submittedSearchOwner;
+    private uint submittedSearchItemId;
 
-    public MarketBoardItemSearchDriver(IGameGui gameGui)
+    public MarketBoardItemSearchDriver(
+        IGameGui gameGui,
+        IMarketBoardBrowseRuntime browseRuntime)
     {
-        this.gameGui = gameGui;
+        this.gameGui = gameGui ?? throw new ArgumentNullException(nameof(gameGui));
+        this.browseRuntime = browseRuntime ?? throw new ArgumentNullException(nameof(browseRuntime));
     }
 
-    public unsafe MarketBoardItemSearchResult Search(uint itemId, string? itemName)
+    public unsafe MarketBoardItemSearchResult Search(
+        uint itemId,
+        string? itemName,
+        MarketBoardBrowseOwner owner = MarketBoardBrowseOwner.MarketAcquisition)
     {
         if (itemId == 0)
             throw new InvalidOperationException("Item id is required before searching the market board.");
@@ -31,30 +41,69 @@ public sealed class MarketBoardItemSearchDriver
         if (string.IsNullOrWhiteSpace(itemName))
             throw new InvalidOperationException($"Item name is required before searching the market board for item {itemId}.");
 
-        var itemSearchResult = gameGui.GetAddonByName<AddonItemSearchResult>(ItemSearchResultAddon, 1);
-        if (itemSearchResult != null && IsAddonReady(&itemSearchResult->AtkUnitBase))
+        if (!browseRuntime.IsAvailable)
         {
-            var infoProxy = InfoProxyItemSearch.Instance();
-            var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
-            if (IsOpenListingResultForRequestedItem(itemId, openResultItemId))
+            return new MarketBoardItemSearchResult
             {
-                return new MarketBoardItemSearchResult
-                {
-                    Status = "ListingsReady",
-                    Message = $"Market board listings are open for {itemName.Trim()} ({itemId}).",
-                    Details = new Dictionary<string, string?>
-                    {
-                        ["itemSearchResultVisible"] = true.ToString(),
-                        ["openResultItemId"] = openResultItemId.ToString(CultureInfo.InvariantCulture),
-                    },
-                };
+                Status = GamePatchCompatibility.FailureCode,
+                Message = browseRuntime.AvailabilityMessage,
+            };
+        }
+
+        var itemSearchResult = gameGui.GetAddonByName<AddonItemSearchResult>(ItemSearchResultAddon, 1);
+        var itemSearchResultVisible =
+            itemSearchResult != null &&
+            IsAddonReady(&itemSearchResult->AtkUnitBase);
+        var infoProxy = itemSearchResultVisible ? InfoProxyItemSearch.Instance() : null;
+        var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
+
+        var observedBrowse = browseRuntime.Snapshot;
+        if (IsOwnedBrowse(observedBrowse, owner, itemId))
+        {
+            if (!observedBrowse.IsTerminal ||
+                !string.Equals(lastReturnedTerminalOperationId, observedBrowse.OperationId, StringComparison.Ordinal))
+            {
+                if (observedBrowse.IsTerminal)
+                    lastReturnedTerminalOperationId = observedBrowse.OperationId;
+                return BuildBrowseResult(itemName.Trim(), observedBrowse);
             }
 
+            if (ShouldReuseOwnedTerminalResult(
+                    observedBrowse,
+                    owner,
+                    itemId,
+                    itemSearchResultVisible,
+                    openResultItemId))
+            {
+                return BuildBrowseResult(itemName.Trim(), observedBrowse);
+            }
+
+            ClearSubmittedSearch();
+        }
+        else if (observedBrowse.IsActive)
+        {
+            return new MarketBoardItemSearchResult
+            {
+                Status = "BrowseBusy",
+                Message =
+                    $"Market-board browse {observedBrowse.OperationId} is already owned by {observedBrowse.Owner} for item {observedBrowse.ItemId}.",
+                BrowseEvidence = observedBrowse,
+            };
+        }
+        else if (submittedSearchOwner != owner || submittedSearchItemId != itemId)
+        {
+            ClearSubmittedSearch();
+        }
+
+        if (itemSearchResultVisible)
+        {
             itemSearchResult->AtkUnitBase.Close(true);
+            ClearSubmittedSearch();
             return new MarketBoardItemSearchResult
             {
                 Status = "StaleListingsClosed",
-                Message = $"Closed stale market board listings for item {openResultItemId}; preparing to search {itemName.Trim()} ({itemId}).",
+                Message =
+                    $"Closed unverified market-board listings for item {openResultItemId}; preparing one correlated browse for {itemName.Trim()} ({itemId}).",
                 Details = new Dictionary<string, string?>
                 {
                     ["itemSearchResultVisible"] = true.ToString(),
@@ -105,16 +154,6 @@ public sealed class MarketBoardItemSearchDriver
         }
 
         AddAgentDetails(details, agent);
-        if (TryOpenExactItemResult(addon, agent, itemId, details))
-        {
-            return new MarketBoardItemSearchResult
-            {
-                Status = "ItemOpenSent",
-                Message = $"Opening exact market board item result for {searchText} ({itemId}); waiting for market listings.",
-                Details = details,
-            };
-        }
-
         if (IsSearchAgentStillWorking(agent))
         {
             var agentIsPartialSearching = agent != null && agent->IsPartialSearching;
@@ -134,6 +173,35 @@ public sealed class MarketBoardItemSearchDriver
             };
         }
 
+        if (TryOpenExactItemResult(addon, agent, itemId, owner, details))
+        {
+            ClearSubmittedSearch();
+            var browse = browseRuntime.Snapshot;
+            return BuildBrowseResult(searchText, browse, details);
+        }
+
+        if (details.TryGetValue("itemResultSelectStatus", out var selectionStatus) &&
+            selectionStatus is "ResultRendererNotReady" or "ResultInteractionDisabled")
+        {
+            return new MarketBoardItemSearchResult
+            {
+                Status = "SearchSent",
+                Message = $"Waiting for the exact {searchText} ({itemId}) result renderer to become interactable.",
+                Details = details,
+            };
+        }
+
+        if (submittedSearchOwner == owner && submittedSearchItemId == itemId)
+        {
+            details["searchSubmissionLatched"] = true.ToString();
+            return new MarketBoardItemSearchResult
+            {
+                Status = "SearchSent",
+                Message = $"Waiting for the exact market-board item result for {searchText} ({itemId}); the text search will not be resent.",
+                Details = details,
+            };
+        }
+
         if (!TrySubmitSearchWithTextInputEnter(addon, agent, itemId, searchText, details))
         {
             return new MarketBoardItemSearchResult
@@ -147,6 +215,8 @@ public sealed class MarketBoardItemSearchDriver
         details["partialSearchAfter"] = addon->PartialMatch.ToString();
         AddAgentDetails(details, agent);
         details["searchAgentStillWorking"] = false.ToString();
+        submittedSearchOwner = owner;
+        submittedSearchItemId = itemId;
 
         return new MarketBoardItemSearchResult
         {
@@ -156,7 +226,10 @@ public sealed class MarketBoardItemSearchDriver
         };
     }
 
-    public unsafe MarketBoardItemSearchResult Observe(uint itemId, string? itemName)
+    public unsafe MarketBoardItemSearchResult Observe(
+        uint itemId,
+        string? itemName,
+        MarketBoardBrowseOwner owner = MarketBoardBrowseOwner.MarketAcquisition)
     {
         if (itemId == 0)
             throw new InvalidOperationException("Item id is required before observing the market board search state.");
@@ -165,19 +238,9 @@ public sealed class MarketBoardItemSearchDriver
             throw new InvalidOperationException($"Item name is required before observing the market board search state for item {itemId}.");
 
         var searchText = itemName.Trim();
-        var itemSearchResult = gameGui.GetAddonByName<AtkUnitBase>(ItemSearchResultAddon, 1);
-        if (IsAddonReady(itemSearchResult))
-        {
-            return new MarketBoardItemSearchResult
-            {
-                Status = "ListingsReady",
-                Message = $"Market board listings are open for {searchText} ({itemId}).",
-                Details = new Dictionary<string, string?>
-                {
-                    ["itemSearchResultVisible"] = true.ToString(),
-                },
-            };
-        }
+        var browse = browseRuntime.Snapshot;
+        if (IsOwnedBrowse(browse, owner, itemId))
+            return BuildBrowseResult(searchText, browse);
 
         var addon = gameGui.GetAddonByName<AddonItemSearch>(ItemSearchAddon, 1);
         if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
@@ -252,6 +315,17 @@ public sealed class MarketBoardItemSearchDriver
         return requestedItemId != 0 && openResultItemId == requestedItemId;
     }
 
+    internal static bool ShouldReuseOwnedTerminalResult(
+        MarketBoardBrowseSnapshot browse,
+        MarketBoardBrowseOwner owner,
+        uint requestedItemId,
+        bool resultVisible,
+        uint openResultItemId) =>
+        browse.IsTerminal &&
+        IsOwnedBrowse(browse, owner, requestedItemId) &&
+        resultVisible &&
+        IsOpenListingResultForRequestedItem(requestedItemId, openResultItemId);
+
     internal static IReadOnlyList<MarketBoardItemSearchSubmitCallback> GetSearchSubmitCallbackSequence()
     {
         return
@@ -321,9 +395,13 @@ public sealed class MarketBoardItemSearchDriver
         return
         [
             MarketBoardItemSearchResultActivationEvent.ListItemClick,
-            MarketBoardItemSearchResultActivationEvent.ListItemDoubleClick,
         ];
     }
+
+    internal static bool IsResultListInteractionReady(
+        bool isItemInteractionEnabled,
+        bool isItemClickEnabled) =>
+        isItemInteractionEnabled || isItemClickEnabled;
 
     internal static MarketBoardItemSearchFocusTarget ChooseTextInputFocusTarget(bool hasCollisionNode, bool hasOwnerNode)
     {
@@ -544,10 +622,11 @@ public sealed class MarketBoardItemSearchDriver
         };
     }
 
-    private static unsafe bool TryOpenExactItemResult(
+    private unsafe bool TryOpenExactItemResult(
         AddonItemSearch* addon,
         AgentItemSearch* agent,
         uint itemId,
+        MarketBoardBrowseOwner owner,
         IDictionary<string, string?> details)
     {
         if (agent == null)
@@ -584,12 +663,61 @@ public sealed class MarketBoardItemSearchDriver
 
             details["listIsItemInteractionEnabled"] = addon->ResultsList->IsItemInteractionEnabled.ToString();
             details["listIsItemClickEnabled"] = addon->ResultsList->IsItemClickEnabled.ToString();
+            var renderedItemCount = addon->ResultsList->GetItemCount();
+            if (renderedItemCount <= index)
+            {
+                details["itemResultSelectStatus"] = "ResultRendererNotReady";
+                return false;
+            }
+
+            if (!IsResultListInteractionReady(
+                    addon->ResultsList->IsItemInteractionEnabled,
+                    addon->ResultsList->IsItemClickEnabled))
+            {
+                details["itemResultSelectStatus"] = "ResultInteractionDisabled";
+                return false;
+            }
+
+            if (!browseRuntime.TryBegin(owner, itemId, out var armed))
+            {
+                details["itemResultSelectStatus"] = "BrowseOwnershipUnavailable";
+                details["browseOperationId"] = armed.OperationId;
+                details["browseOwner"] = armed.Owner?.ToString();
+                details["browsePhase"] = armed.Phase.ToString();
+                return false;
+            }
+
+            if (!browseRuntime.TryClaimActivation(owner, itemId, out var claimed))
+            {
+                details["itemResultSelectStatus"] = "ActivationAlreadyClaimed";
+                details["browseOperationId"] = claimed.OperationId;
+                details["browsePhase"] = claimed.Phase.ToString();
+                return false;
+            }
+
+            details["browseOperationId"] = claimed.OperationId;
+            details["browseOwner"] = owner.ToString();
             details["listSelectedItemIndexBefore"] = addon->ResultsList->SelectedItemIndex.ToString(CultureInfo.InvariantCulture);
             details["agentResultSelectedIndexBefore"] = agent->ResultSelectedIndex.ToString(CultureInfo.InvariantCulture);
 
-            addon->ResultsList->SelectItem(index, true);
-            foreach (var activationEvent in GetResultActivationEventSequence())
-                addon->ResultsList->DispatchItemEvent(index, ToAtkEventType(activationEvent));
+            try
+            {
+                addon->ResultsList->SelectItem(index, true);
+                foreach (var activationEvent in GetResultActivationEventSequence())
+                    addon->ResultsList->DispatchItemEvent(index, ToAtkEventType(activationEvent));
+            }
+            catch (Exception exception)
+            {
+                browseRuntime.TryAbandon(
+                    owner,
+                    claimed.OperationId,
+                    $"Exact-item activation failed before RequestData acceptance: {exception.Message}",
+                    out var abandoned);
+                details["itemResultSelectStatus"] = "ActivationFailed";
+                details["activationException"] = exception.GetType().Name;
+                details["browsePhase"] = abandoned.Phase.ToString();
+                return true;
+            }
 
             details["itemOpenSource"] = "ResultListActivationSequence";
             details["itemOpenEventSequence"] = string.Join(",", GetResultActivationEventSequence());
@@ -603,12 +731,70 @@ public sealed class MarketBoardItemSearchDriver
         return false;
     }
 
+    private static bool IsOwnedBrowse(
+        MarketBoardBrowseSnapshot snapshot,
+        MarketBoardBrowseOwner owner,
+        uint itemId) =>
+        !string.IsNullOrWhiteSpace(snapshot.OperationId) &&
+        snapshot.Owner == owner &&
+        snapshot.ItemId == itemId;
+
+    private void ClearSubmittedSearch()
+    {
+        submittedSearchOwner = null;
+        submittedSearchItemId = 0;
+    }
+
+    private static MarketBoardItemSearchResult BuildBrowseResult(
+        string itemName,
+        MarketBoardBrowseSnapshot browse,
+        IReadOnlyDictionary<string, string?>? existingDetails = null)
+    {
+        var details = existingDetails is null
+            ? new Dictionary<string, string?>()
+            : new Dictionary<string, string?>(existingDetails);
+        details["browseOperationId"] = browse.OperationId;
+        details["browseOwner"] = browse.Owner?.ToString();
+        details["browsePhase"] = browse.Phase.ToString();
+        details["requestObserved"] = browse.RequestObserved.ToString();
+        details["requestAccepted"] = browse.RequestAccepted.ToString();
+        details["headerObserved"] = browse.HeaderObserved.ToString();
+        details["headerStatus"] = $"0x{browse.HeaderStatus:X8}";
+        details["expectedListings"] = browse.ExpectedListingCount.ToString(CultureInfo.InvariantCulture);
+        details["expectedPages"] = browse.ExpectedPageCount.ToString(CultureInfo.InvariantCulture);
+        details["observedPages"] = browse.PageCount.ToString(CultureInfo.InvariantCulture);
+        details["requestId"] = browse.RequestId?.ToString(CultureInfo.InvariantCulture);
+        details["terminalPageObserved"] = browse.TerminalPageObserved.ToString();
+        details["historyObserved"] = browse.HistoryObserved.ToString();
+        details["historyItemId"] = browse.HistoryItemId?.ToString(CultureInfo.InvariantCulture);
+        details["failureCode"] = browse.FailureCode;
+
+        var status = browse.Phase switch
+        {
+            MarketBoardBrowsePhase.Completed => "ListingsReady",
+            MarketBoardBrowsePhase.Failed => browse.FailureCode ?? "BrowseFailed",
+            MarketBoardBrowsePhase.Armed => "BrowseArmed",
+            MarketBoardBrowsePhase.ActivationDispatched => "ActivationDispatched",
+            MarketBoardBrowsePhase.AwaitingHeader => "RequestAccepted",
+            MarketBoardBrowsePhase.AwaitingPagesAndHistory => "AwaitingBrowseEvidence",
+            MarketBoardBrowsePhase.AwaitingHistory => "AwaitingHistory",
+            _ => "BrowseUnavailable",
+        };
+
+        return new MarketBoardItemSearchResult
+        {
+            Status = status,
+            Message = $"{itemName} ({browse.ItemId}): {browse.Message}",
+            Details = details,
+            BrowseEvidence = browse,
+        };
+    }
+
     private static AtkEventType ToAtkEventType(MarketBoardItemSearchResultActivationEvent activationEvent)
     {
         return activationEvent switch
         {
             MarketBoardItemSearchResultActivationEvent.ListItemClick => AtkEventType.ListItemClick,
-            MarketBoardItemSearchResultActivationEvent.ListItemDoubleClick => AtkEventType.ListItemDoubleClick,
             _ => throw new ArgumentOutOfRangeException(nameof(activationEvent), activationEvent, null),
         };
     }
@@ -716,7 +902,6 @@ public enum MarketBoardItemSearchSubmitStep
 public enum MarketBoardItemSearchResultActivationEvent
 {
     ListItemClick,
-    ListItemDoubleClick,
 }
 
 public enum MarketBoardItemSearchFocusTarget
@@ -731,9 +916,15 @@ public sealed record MarketBoardItemSearchResult
     public string Status { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
     public IReadOnlyDictionary<string, string?> Details { get; init; } = new Dictionary<string, string?>();
-    public bool SearchSent => string.Equals(Status, "SearchSent", StringComparison.OrdinalIgnoreCase);
-    public bool ReadyForListings => string.Equals(Status, "ListingsReady", StringComparison.OrdinalIgnoreCase);
+    public MarketBoardBrowseSnapshot? BrowseEvidence { get; init; }
+    public bool SearchSent =>
+        BrowseEvidence?.RequestAccepted == true ||
+        string.Equals(Status, "SearchSent", StringComparison.OrdinalIgnoreCase);
+    public bool ReadyForListings =>
+        BrowseEvidence?.IsComplete == true ||
+        string.Equals(Status, "ListingsReady", StringComparison.OrdinalIgnoreCase);
     public bool IsInProgress =>
-        Status is "MarketBoardNotOpen" or "ModeReset" or "StaleListingsClosed" or "SearchSent" or "ItemSelectionSent" or "ItemOpenSent";
+        BrowseEvidence?.IsActive == true ||
+        Status is "MarketBoardNotOpen" or "ModeReset" or "StaleListingsClosed" or "SearchSent";
 }
 

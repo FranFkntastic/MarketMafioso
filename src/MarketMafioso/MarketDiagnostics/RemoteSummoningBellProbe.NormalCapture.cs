@@ -59,6 +59,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 session is null &&
                 yieldProbeSession is null &&
                 warmSessionProbeSession is null &&
+                retainerRpcProbeSession is null &&
                 !anyRetainerUiOpen,
             Readiness = anyRetainerUiOpen
                 ? "Close the current retainer interaction before arming the recorder."
@@ -89,6 +90,8 @@ internal sealed partial class RemoteSummoningBellProbe
             return "The YieldEventScene2 probe is already active.";
         if (warmSessionProbeSession is not null)
             return "The warm-session retention probe is already active.";
+        if (retainerRpcProbeSession is not null)
+            return "The retainer RPC probe is already active.";
         if (normalCaptureSession is not null)
             return "The normal bell flight recorder is already armed.";
         if (IsAnyRetainerSessionUiOpen())
@@ -335,6 +338,8 @@ internal sealed partial class RemoteSummoningBellProbe
         bell.CancelTalkPacketTransport("The normal bell flight recorder concluded.");
         var transport = bell.ObserveTalkPacketTransport();
         CaptureNormalStateTransition(active);
+        boundaryMotionTriggerSession = null;
+        StopBoundaryNavigation();
         normalCaptureSession = null;
 
         var completedAtUtc = DateTimeOffset.UtcNow;
@@ -360,6 +365,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 active.ReturnedRetainerListObservedAtUtc,
                 active.SessionClosedObservedAtUtc),
             active.StateSamples.ToArray(),
+            active.BoundaryTrigger,
             transport);
         var path = WriteNormalCaptureEvidence(evidence);
 
@@ -545,6 +551,7 @@ internal sealed partial class RemoteSummoningBellProbe
         public DateTimeOffset? ReturnedRetainerListObservedAtUtc { get; set; }
         public DateTimeOffset? SessionClosedObservedAtUtc { get; set; }
         public NormalBellClientState? LastState { get; set; }
+        public NormalBellBoundaryTriggerEvidence? BoundaryTrigger { get; set; }
         public List<NormalBellClientStateSample> StateSamples { get; } = [];
     }
 
@@ -566,7 +573,19 @@ internal sealed partial class RemoteSummoningBellProbe
         bool CommandMenuObserved,
         NormalBellLifecycleMilestones LifecycleMilestones,
         NormalBellClientStateSample[] StateTransitions,
+        NormalBellBoundaryTriggerEvidence? BoundaryTrigger,
         TalkEventPacketTransportObservation Transport);
+
+    private sealed record NormalBellBoundaryTriggerEvidence(
+        DateTimeOffset SKeyObservedAtUtc,
+        ProbePosition? Position,
+        float Distance,
+        string FocusTargetGameObjectId,
+        ulong InteractionResult,
+        ProbePosition? PositionAfterMovement,
+        float? DistanceAfterMovement,
+        string? NavigationStopMessage,
+        string Message);
 
     private sealed record NormalBellLifecycleMilestones(
         DateTimeOffset? InitialRetainerListObservedAtUtc,

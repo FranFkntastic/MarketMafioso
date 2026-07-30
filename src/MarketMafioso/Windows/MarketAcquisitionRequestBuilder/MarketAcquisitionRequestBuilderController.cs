@@ -18,6 +18,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     private readonly Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderRefreshOutcome>> refreshRequest;
     private readonly Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted;
     private readonly Action<MarketAcquisitionRequestDocument> persistDocument;
+    private Configuration? recoveryConfig;
     private bool syncRequested;
     private DateTimeOffset syncDueAtUtc = DateTimeOffset.MaxValue;
     private DateTimeOffset nextRemotePollAtUtc = DateTimeOffset.UtcNow;
@@ -39,6 +40,7 @@ public sealed class MarketAcquisitionRequestBuilderController
             documentAdopted,
             CreatePersistence(config))
     {
+        recoveryConfig = config;
     }
 
     internal MarketAcquisitionRequestBuilderController(
@@ -69,6 +71,9 @@ public sealed class MarketAcquisitionRequestBuilderController
     public bool IsSyncing { get; private set; }
 
     public bool IsRefreshing { get; private set; }
+
+    public bool HasPreviousWorkbench =>
+        recoveryConfig?.PreviousMarketAcquisitionRequestDocument is not null;
 
     public string CurrentIntentHash
     {
@@ -290,6 +295,14 @@ public sealed class MarketAcquisitionRequestBuilderController
     public void ApplyEditorLine(MarketAcquisitionRequestLineDocument line)
     {
         ArgumentNullException.ThrowIfNull(line);
+        var duplicateIndex = Document.Lines.FindIndex(existing => existing.ItemId == line.ItemId);
+        if (duplicateIndex >= 0 && duplicateIndex != SelectedLineIndex)
+        {
+            SelectedLineIndex = duplicateIndex;
+            Status = $"{line.ItemName} is already in the Workbench; selected the existing line.";
+            return;
+        }
+
         if (SelectedLineIndex >= 0 && SelectedLineIndex < Document.Lines.Count)
         {
             CommitLocalEdit(RequestDocumentMutation.ReplaceLine(Document, SelectedLineIndex, line), "Work-order draft updated.");
@@ -299,17 +312,40 @@ public sealed class MarketAcquisitionRequestBuilderController
         var previous = Document;
         Document = RequestDocumentMutation.AddLine(Document, line);
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
-        SelectedLineIndex = -1;
+        SelectedLineIndex = Document.Lines.Count - 1;
+        FinishLocalEdit("Work-order draft updated.");
+    }
+
+    public void AddEditorLine(MarketAcquisitionRequestLineDocument line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        var duplicateIndex = Document.Lines.FindIndex(existing => existing.ItemId == line.ItemId);
+        if (duplicateIndex >= 0)
+        {
+            SelectedLineIndex = duplicateIndex;
+            Status = $"{line.ItemName} is already in the Workbench; selected the existing line.";
+            return;
+        }
+
+        var previous = Document;
+        Document = RequestDocumentMutation.AddLine(Document, line);
+        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
+        SelectedLineIndex = Document.Lines.Count - 1;
         FinishLocalEdit("Work-order draft updated.");
     }
 
     public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
         AddLines(lines, "ExactAcquisition");
 
+    public int AddLines(
+        IEnumerable<MarketAcquisitionRequestLineDocument> lines,
+        string sourceLabel) =>
+        AddLinesCore(lines, sourceLabel);
+
     public int MergeComposition(MarketAcquisitionWorkbenchComposition composition)
     {
         ArgumentNullException.ThrowIfNull(composition);
-        return AddLines(composition.Lines, composition.Name);
+        return AddLinesCore(composition.Lines, composition.Name);
     }
 
     public void LoadComposition(
@@ -318,6 +354,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         string world)
     {
         ArgumentNullException.ThrowIfNull(composition);
+        PreserveCurrentWorkbenchForRecovery();
         Document = composition.CreateDocument(characterName, world);
         ResetSelection();
         Status = $"Loaded {composition.Name} as a new Workbench draft.";
@@ -325,7 +362,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         RequestAutomaticSync();
     }
 
-    private int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines, string sourceLabel)
+    private int AddLinesCore(IEnumerable<MarketAcquisitionRequestLineDocument> lines, string sourceLabel)
     {
         ArgumentNullException.ThrowIfNull(lines);
         var previous = Document;
@@ -356,7 +393,9 @@ public sealed class MarketAcquisitionRequestBuilderController
         var previous = Document;
         Document = RequestDocumentMutation.RemoveLine(Document, index);
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
-        SelectedLineIndex = -1;
+        SelectedLineIndex = Document.Lines.Count == 0
+            ? -1
+            : Math.Min(index, Document.Lines.Count - 1);
         FinishLocalEdit("Line removed.");
         return true;
     }
@@ -423,6 +462,10 @@ public sealed class MarketAcquisitionRequestBuilderController
             nextRemotePollAtUtc = DateTimeOffset.UtcNow.Add(RemotePollInterval);
             SaveDocument();
         }
+        catch (MarketAcquisitionLifecycleHttpException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
+        {
+            HandleTerminalSynchronizationConflict(ex);
+        }
         catch (Exception ex)
         {
             Document = Document with { SyncStatus = "SyncFailed", UpdatedAtUtc = DateTimeOffset.UtcNow };
@@ -434,6 +477,56 @@ public sealed class MarketAcquisitionRequestBuilderController
         {
             IsSyncing = false;
         }
+    }
+
+    public void StartBlankWorkbench(string characterName, string world)
+    {
+        PreserveCurrentWorkbenchForRecovery();
+        Document = MarketAcquisitionRequestDocument.CreateDefault(characterName, world);
+        ResetSelection();
+        syncRequested = false;
+        syncDueAtUtc = DateTimeOffset.MaxValue;
+        Status = "Started a blank Workbench. The previous draft is available under Recovery.";
+        SaveDocument();
+    }
+
+    public bool RestorePreviousWorkbench()
+    {
+        if (recoveryConfig is null ||
+            MarketAcquisitionRequestDocumentPersistence.RestorePrevious(recoveryConfig) is not { } previous)
+        {
+            Status = "No previous Workbench is available.";
+            return false;
+        }
+
+        var current = Document;
+        MarketAcquisitionRequestDocumentPersistence.SavePrevious(
+            recoveryConfig,
+            HasMeaningfulContent(current) ? current : null);
+        Document = previous.WithNewIdentity();
+        ResetSelection();
+        Status = "Restored the previous Workbench as a new draft.";
+        SaveDocument();
+        RequestAutomaticSync();
+        return true;
+    }
+
+    private void PreserveCurrentWorkbenchForRecovery()
+    {
+        if (recoveryConfig is not null && HasMeaningfulContent(Document))
+            MarketAcquisitionRequestDocumentPersistence.SavePrevious(recoveryConfig, Document);
+    }
+
+    private static bool HasMeaningfulContent(MarketAcquisitionRequestDocument document) =>
+        document.Lines.Count > 0 || document.ExactAcquisitionAuthority is not null;
+
+    private void HandleTerminalSynchronizationConflict(MarketAcquisitionLifecycleHttpException ex)
+    {
+        syncRequested = false;
+        syncDueAtUtc = DateTimeOffset.MaxValue;
+        Document = Document with { SyncStatus = "RemoteChanged", UpdatedAtUtc = DateTimeOffset.UtcNow };
+        Status = $"The server work order changed, so automatic sync is paused. Refresh it or start a blank Workbench. {ex.Message}";
+        SaveDocument();
     }
 
     public async Task RefreshAsync()

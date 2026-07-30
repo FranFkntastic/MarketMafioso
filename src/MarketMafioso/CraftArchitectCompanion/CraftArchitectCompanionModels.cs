@@ -18,6 +18,8 @@ public sealed record CraftAppraisalQuote
     public string Confidence { get; init; } = "Unknown";
     public bool IsComplete { get; init; }
     public string AppraisalStatus { get; init; } = "Unknown";
+    public string? PlanId { get; init; }
+    public string? PlanUrl { get; init; }
     public IReadOnlyList<CraftAppraisalMaterialQuote> Materials { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }

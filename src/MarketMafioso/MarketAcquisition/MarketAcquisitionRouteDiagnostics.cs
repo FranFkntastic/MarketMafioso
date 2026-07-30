@@ -20,21 +20,27 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         null,
         null,
         null,
+        null,
         DateTimeOffset.MinValue,
         string.Empty,
-        string.Empty);
+        string.Empty,
+        MarketAcquisitionRouteDiagnosticsLevel.Off);
 
     private readonly object sync = new();
+    private readonly HashSet<string> summarizedPendingOperations = new(StringComparer.Ordinal);
     private readonly Stopwatch stopwatch = Stopwatch.StartNew();
     private readonly AutomationDiagnosticsLog log;
     private readonly AutomationCsvLog? observedListingsCsv;
     private readonly AutomationCsvLog? purchaseRecordsCsv;
     private readonly StreamWriter? routeEventsWriter;
+    private readonly MarketAcquisitionSegmentedJsonlWriter? fullTraceWriter;
     private readonly DateTimeOffset startedAt;
     private readonly string packageKind;
     private readonly string runId;
+    private readonly MarketAcquisitionRouteDiagnosticsLevel level;
     private string captureStatus = "Active";
-    private long nextEventSequence;
+    private long nextSummaryEventSequence;
+    private long nextFullTraceEventSequence;
     private bool disposed;
 
     private MarketAcquisitionRouteDiagnostics(
@@ -42,19 +48,23 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         AutomationCsvLog? observedListingsCsv,
         AutomationCsvLog? purchaseRecordsCsv,
         StreamWriter? routeEventsWriter,
+        MarketAcquisitionSegmentedJsonlWriter? fullTraceWriter,
         string? manifestPath,
         string? packageDirectoryPath,
         DateTimeOffset startedAt,
         string packageKind,
-        string runId)
+        string runId,
+        MarketAcquisitionRouteDiagnosticsLevel level)
     {
         this.log = log;
         this.observedListingsCsv = observedListingsCsv;
         this.purchaseRecordsCsv = purchaseRecordsCsv;
         this.routeEventsWriter = routeEventsWriter;
+        this.fullTraceWriter = fullTraceWriter;
         this.startedAt = startedAt;
         this.packageKind = packageKind;
         this.runId = runId;
+        this.level = level;
         ObservedListingsCsvPath = observedListingsCsv?.FilePath;
         PurchaseRecordsCsvPath = purchaseRecordsCsv?.FilePath;
         RouteEventsJsonlPath = routeEventsWriter == null
@@ -82,52 +92,69 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
 
     public static MarketAcquisitionRouteDiagnostics CreateEnabled(string directory, DateTimeOffset startedAt)
     {
-        return CreatePackage(directory, startedAt, "route");
+        return CreatePackage(directory, startedAt, "route", MarketAcquisitionRouteDiagnosticsLevel.FullTrace);
     }
 
     public static MarketAcquisitionRouteDiagnostics CreateEnabled(
         string directory,
         DateTimeOffset startedAt,
-        string packageKind)
+        string packageKind,
+        MarketAcquisitionRouteDiagnosticsLevel level = MarketAcquisitionRouteDiagnosticsLevel.FullTrace)
     {
         if (!packageKind.Equals("route", StringComparison.OrdinalIgnoreCase) &&
             !packageKind.Equals("dry-run", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Package kind must be route or dry-run.", nameof(packageKind));
-        return CreatePackage(directory, startedAt, packageKind);
+        if (level == MarketAcquisitionRouteDiagnosticsLevel.Off)
+            return Disabled;
+        return CreatePackage(directory, startedAt, packageKind, level);
     }
 
     public static MarketAcquisitionRouteDiagnostics CreateInputCapture(string directory, DateTimeOffset startedAt)
     {
-        return CreatePackage(directory, startedAt, "input-capture");
+        return CreatePackage(directory, startedAt, "input-capture", MarketAcquisitionRouteDiagnosticsLevel.FullTrace);
     }
 
     private static MarketAcquisitionRouteDiagnostics CreatePackage(
         string directory,
         DateTimeOffset startedAt,
-        string filePrefix)
+        string filePrefix,
+        MarketAcquisitionRouteDiagnosticsLevel level)
     {
         var createCompanionCsvs =
-            filePrefix.Equals("route", StringComparison.OrdinalIgnoreCase) ||
-            filePrefix.Equals("dry-run", StringComparison.OrdinalIgnoreCase);
+            level == MarketAcquisitionRouteDiagnosticsLevel.FullTrace &&
+            (filePrefix.Equals("route", StringComparison.OrdinalIgnoreCase) ||
+             filePrefix.Equals("dry-run", StringComparison.OrdinalIgnoreCase));
         var packageDirectory = CreatePackageDirectory(directory, startedAt, filePrefix);
         AutomationCsvLog? observedListingsCsv = null;
         AutomationCsvLog? purchaseRecordsCsv = null;
         StreamWriter? routeEventsWriter = null;
+        MarketAcquisitionSegmentedJsonlWriter? fullTraceWriter = null;
         AutomationDiagnosticsLog? log = null;
 
         try
         {
             observedListingsCsv = createCompanionCsvs
-                ? AutomationCsvLog.CreateAtPath(Path.Combine(packageDirectory, "observed-listings.csv"), ObservedListingsHeader)
+                ? AutomationCsvLog.CreateAtPath(Path.Combine(packageDirectory, "observed-listings.csv"), ObservedListingsHeader, autoFlush: false)
                 : null;
             purchaseRecordsCsv = createCompanionCsvs
-                ? AutomationCsvLog.CreateAtPath(Path.Combine(packageDirectory, "purchase-records.csv"), PurchaseRecordsHeader)
+                ? AutomationCsvLog.CreateAtPath(Path.Combine(packageDirectory, "purchase-records.csv"), PurchaseRecordsHeader, autoFlush: false)
                 : null;
             var routeEventsJsonlPath = Path.Combine(packageDirectory, "route-events.jsonl");
-            routeEventsWriter = new StreamWriter(File.Open(routeEventsJsonlPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+            routeEventsWriter = new StreamWriter(
+                new FileStream(
+                    routeEventsJsonlPath,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.Read,
+                    bufferSize: 64 * 1024,
+                    FileOptions.SequentialScan),
+                bufferSize: 64 * 1024)
             {
-                AutoFlush = true,
+                AutoFlush = false,
             };
+            fullTraceWriter = level == MarketAcquisitionRouteDiagnosticsLevel.FullTrace
+                ? new MarketAcquisitionSegmentedJsonlWriter(packageDirectory)
+                : null;
             var manifestPath = Path.Combine(packageDirectory, "manifest.json");
             log = AutomationDiagnosticsLog.CreateEnabledAtPath(
                 Path.Combine(packageDirectory, $"{filePrefix}.log"),
@@ -138,18 +165,22 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                     ["packageDirectoryPath"] = packageDirectory,
                     ["observedListingsCsvPath"] = observedListingsCsv?.FilePath,
                     ["purchaseRecordsCsvPath"] = purchaseRecordsCsv?.FilePath,
-                });
+                    ["diagnosticsLevel"] = level.ToString(),
+                },
+                autoFlush: false);
 
             var diagnostics = new MarketAcquisitionRouteDiagnostics(
                 log,
                 observedListingsCsv,
                 purchaseRecordsCsv,
                 routeEventsWriter,
+                fullTraceWriter,
                 manifestPath,
                 packageDirectory,
                 startedAt,
                 filePrefix,
-                Path.GetFileName(packageDirectory));
+                Path.GetFileName(packageDirectory),
+                level);
 
             diagnostics.WriteManifest();
             diagnostics.RecordRouteEvent(
@@ -159,6 +190,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 {
                     ["runId"] = diagnostics.runId,
                     ["packageKind"] = filePrefix,
+                    ["diagnosticsLevel"] = level.ToString(),
                     ["routeLog"] = Path.GetFileName(diagnostics.FilePath),
                     ["observedListingsCsv"] = Path.GetFileName(diagnostics.ObservedListingsCsvPath),
                     ["purchaseRecordsCsv"] = Path.GetFileName(diagnostics.PurchaseRecordsCsvPath),
@@ -171,6 +203,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         catch
         {
             log?.Dispose();
+            fullTraceWriter?.Dispose();
             routeEventsWriter?.Dispose();
             purchaseRecordsCsv?.Dispose();
             observedListingsCsv?.Dispose();
@@ -218,8 +251,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             if (disposed)
                 return;
 
-            log.Record(eventName, message, details);
-            WriteRouteEventUnsafe(eventName, message, details);
+            RecordUnsafe(eventName, message, details);
             if (IsTerminalEvent(eventName))
             {
                 captureStatus = "Finalizing";
@@ -275,7 +307,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             if (disposed)
                 return;
 
-            WriteRouteEventUnsafe(
+            RecordUnsafe(
                 "observed-listings",
                 "Recorded observed market-board listing evidence.",
                 eventDetails);
@@ -346,7 +378,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             if (disposed)
                 return;
 
-            WriteRouteEventUnsafe(
+            RecordUnsafe(
                 "purchase-audit",
                 "Recorded market-board purchase audit evidence.",
                 eventDetails);
@@ -394,6 +426,21 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         Dispose();
     }
 
+    public void Flush()
+    {
+        lock (sync)
+        {
+            if (disposed)
+                return;
+
+            observedListingsCsv?.Flush();
+            purchaseRecordsCsv?.Flush();
+            routeEventsWriter?.Flush();
+            fullTraceWriter?.Flush();
+            log.Flush();
+        }
+    }
+
     public void Dispose()
     {
         lock (sync)
@@ -407,6 +454,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 observedListingsCsv?.Dispose();
                 purchaseRecordsCsv?.Dispose();
                 routeEventsWriter?.Dispose();
+                fullTraceWriter?.Dispose();
                 log.Dispose();
             }
             finally
@@ -552,14 +600,15 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             if (disposed)
                 return;
 
-            WriteRouteEventUnsafe(eventName, message, details);
+            RecordUnsafe(eventName, message, details, writeLog: false);
         }
     }
 
-    private void WriteRouteEventUnsafe(
+    private void RecordUnsafe(
         string eventName,
         string message,
-        IReadOnlyDictionary<string, string?>? details)
+        IReadOnlyDictionary<string, string?>? details,
+        bool writeLog = true)
     {
         if (routeEventsWriter == null)
             return;
@@ -574,18 +623,39 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             }
         }
 
-        var routeEvent = new MarketAcquisitionRouteDiagnosticEvent
+        var elapsedMilliseconds = (long)stopwatch.Elapsed.TotalMilliseconds;
+        var recordedAtUtc = DateTimeOffset.UtcNow;
+        if (fullTraceWriter != null)
+        {
+            var fullTraceEvent = new MarketAcquisitionRouteDiagnosticEvent
+            {
+                SchemaVersion = MarketAcquisitionRouteDiagnosticEvent.CurrentSchemaVersion,
+                Sequence = ++nextFullTraceEventSequence,
+                ElapsedMilliseconds = elapsedMilliseconds,
+                RecordedAtUtc = recordedAtUtc,
+                EventName = eventName,
+                Message = message,
+                Details = filteredDetails,
+            };
+            fullTraceWriter.Write(fullTraceEvent.Sequence, JsonSerializer.Serialize(fullTraceEvent, JsonOptions));
+        }
+
+        if (!ShouldIncludeInSummary(eventName, message, filteredDetails))
+            return;
+
+        var summaryEvent = new MarketAcquisitionRouteDiagnosticEvent
         {
             SchemaVersion = MarketAcquisitionRouteDiagnosticEvent.CurrentSchemaVersion,
-            Sequence = ++nextEventSequence,
-            ElapsedMilliseconds = (long)stopwatch.Elapsed.TotalMilliseconds,
-            RecordedAtUtc = DateTimeOffset.UtcNow,
+            Sequence = ++nextSummaryEventSequence,
+            ElapsedMilliseconds = elapsedMilliseconds,
+            RecordedAtUtc = recordedAtUtc,
             EventName = eventName,
             Message = message,
             Details = filteredDetails,
         };
-
-        routeEventsWriter.WriteLine(JsonSerializer.Serialize(routeEvent, JsonOptions));
+        routeEventsWriter.WriteLine(JsonSerializer.Serialize(summaryEvent, JsonOptions));
+        if (writeLog)
+            log.Record(eventName, message, details);
     }
 
     private void WriteManifest()
@@ -599,6 +669,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             SchemaVersion = MarketAcquisitionRouteDiagnosticEvent.CurrentSchemaVersion,
             RunId = runId,
             PackageKind = packageKind,
+            DiagnosticsLevel = level.ToString(),
             CaptureStatus = captureStatus,
             StartedAtUtc = startedAt,
             AssemblyName = assembly.GetName().Name,
@@ -608,6 +679,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 ?.InformationalVersion,
             Artifacts = BuildArtifacts(),
             CaptureCapabilities = BuildCaptureCapabilities(),
+            FullTraceSegments = fullTraceWriter?.Segments ?? [],
         };
 
         AtomicJsonFile.Write(ManifestPath, manifest, JsonOptions);
@@ -625,6 +697,8 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             capabilities.Add("observed-listings-csv");
         if (purchaseRecordsCsv != null)
             capabilities.Add("purchase-records-csv");
+        if (fullTraceWriter != null)
+            capabilities.Add("segmented-full-trace-jsonl-v1");
 
         return capabilities;
     }
@@ -643,12 +717,54 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             artifacts["observedListingsCsv"] = Path.GetFileName(ObservedListingsCsvPath);
         if (PurchaseRecordsCsvPath != null)
             artifacts["purchaseRecordsCsv"] = Path.GetFileName(PurchaseRecordsCsvPath);
+        if (fullTraceWriter != null)
+            artifacts["fullTraceSegments"] = "trace-*.jsonl";
 
         return artifacts;
     }
 
     private static bool IsTerminalEvent(string eventName) =>
         eventName is "complete" or "failed" or "stopped" or "input-capture-finalized";
+
+    private bool ShouldIncludeInSummary(
+        string eventName,
+        string message,
+        IReadOnlyDictionary<string, string> details)
+    {
+        if (IsTerminalEvent(eventName) ||
+            eventName.Contains("fail", StringComparison.OrdinalIgnoreCase) ||
+            eventName.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+            eventName.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+            eventName.Contains("warning", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("fail", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (eventName is "listing-read-pending" or "market-board-approach" or "probe-start")
+            return false;
+
+        if (eventName.Equals("automation-snapshot", StringComparison.OrdinalIgnoreCase) &&
+            !details.ContainsKey("candidateListingId") &&
+            details.TryGetValue("outcome", out var outcome) &&
+            (outcome.Equals("InProgress", StringComparison.OrdinalIgnoreCase) ||
+             outcome.Equals("Pending", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (eventName.Equals("route-operation", StringComparison.OrdinalIgnoreCase) &&
+            details.TryGetValue("disposition", out var disposition) &&
+            (disposition.Equals("Pending", StringComparison.OrdinalIgnoreCase) ||
+             disposition.Equals("Running", StringComparison.OrdinalIgnoreCase)))
+        {
+            return details.TryGetValue("operationId", out var operationId) &&
+                   summarizedPendingOperations.Add(operationId);
+        }
+
+        return true;
+    }
 
     private static string FormatCoverageStatus(MarketAcquisitionLiveCandidatePlan candidatePlan) =>
         candidatePlan.ReportedListingCount > candidatePlan.ReadableListingCount

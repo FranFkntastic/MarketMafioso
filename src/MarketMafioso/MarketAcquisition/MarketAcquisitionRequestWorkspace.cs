@@ -349,6 +349,68 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             Status = "Request rejected.";
         });
 
+    public async Task<bool> ShelfActiveWorkOrderAsync(
+        string? remoteRequestId = null,
+        int remoteRevision = 0)
+    {
+        var shelved = false;
+        await RunAsync(async token =>
+        {
+            if (isRouteActive?.Invoke() == true)
+                throw new InvalidOperationException("Stop the guided route before shelving its work order.");
+
+            var requestId = ClaimedRequest?.Id ?? remoteRequestId;
+            var revision = ClaimedRequest?.Revision ?? remoteRevision;
+            if (string.IsNullOrWhiteSpace(requestId) || revision < 1)
+                throw new InvalidOperationException("No synchronized work order is available to shelve.");
+            var serverUrl = config.ServerUrl;
+            var apiKey = WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config);
+            try
+            {
+                await client.ShelfWorkOrderAsync(
+                    serverUrl,
+                    apiKey,
+                    requestId,
+                    revision,
+                    token).ConfigureAwait(false);
+            }
+            catch (MarketAcquisitionLifecycleHttpException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
+            {
+                var current = await client.GetBatchAsync(serverUrl, apiKey, requestId, token).ConfigureAwait(false);
+                if (current.Status is MarketAcquisitionStatuses.PendingPickup
+                    or MarketAcquisitionStatuses.Claimed
+                    or MarketAcquisitionStatuses.AcceptedInPlugin)
+                {
+                    await client.ShelfWorkOrderAsync(
+                        serverUrl,
+                        apiKey,
+                        requestId,
+                        current.Revision,
+                        token).ConfigureAwait(false);
+                }
+                else if (current.Status is not (MarketAcquisitionStatuses.Shelved
+                         or MarketAcquisitionStatuses.Archived
+                         or MarketAcquisitionStatuses.Complete
+                         or MarketAcquisitionStatuses.Cancelled
+                         or MarketAcquisitionStatuses.Rejected
+                         or MarketAcquisitionStatuses.Expired))
+                {
+                    throw new InvalidOperationException(
+                        $"Work order {requestId} is {current.Status} and cannot be shelved safely.");
+                }
+            }
+
+            MarketAcquisitionClaimPersistence.Clear(config);
+            ClaimedRequest = null;
+            ClearClaimMetadata();
+            ClearPreparedPlan();
+            saveConfig();
+            Status = "Active work order shelved.";
+            shelved = true;
+        }).ConfigureAwait(false);
+        return shelved;
+    }
+
     public void ForgetLocalClaim()
     {
         MarketAcquisitionClaimPersistence.Clear(config);

@@ -1,22 +1,19 @@
 using System;
-using System.IO;
-using System.IO.Pipes;
+using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
-using System.Security.Cryptography;
-using System.Text;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Ui;
+using SharedAgentBridgeHost = Franthropy.Dalamud.AgentBridge.AgentBridgeHost;
 
 namespace MarketMafioso.AgentBridge;
 
+/// <summary>MarketMafioso-specific policy layered on Franthropy's shared authenticated host.</summary>
 public sealed class AgentBridgeHost : IDisposable
 {
-    private const int MaxRequestCharacters = 16_384;
     private readonly Configuration config;
-    private readonly string configDirectory;
     private readonly Func<Action, Task> scheduleOnFramework;
     private readonly IMarketMafiosoBridgeProvider provider;
     private readonly AgentBridgeProofStore proofStore;
@@ -25,15 +22,16 @@ public sealed class AgentBridgeHost : IDisposable
     private readonly Func<string, AgentBridgeUiCaptureTransactionHandle> beginCapturePresentation;
     private readonly Func<string, AgentBridgeUiCaptureTransactionResult> completeCapturePresentation;
     private readonly Func<string, AgentBridgeUiCaptureTransactionResult> cancelCapturePresentation;
-    private readonly JsonSerializerOptions jsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-    private CancellationTokenSource? cancellation;
-    private Task? listenTask;
-    private string? accessToken;
+    private readonly AgentBridgeCommandRouter router = new();
+    private readonly SharedAgentBridgeHost host;
+    private readonly AgentBridgeRuntimeIdentity runtimeIdentity;
+    private readonly (string Id, string Alias) profile;
     private long revision;
 
     public AgentBridgeHost(
         Configuration config,
         string configDirectory,
+        string mainDllPath,
         Func<Action, Task> dispatchOnFramework,
         IMarketMafiosoBridgeProvider provider,
         AgentBridgeProofStore proofStore,
@@ -44,7 +42,6 @@ public sealed class AgentBridgeHost : IDisposable
         Func<string, AgentBridgeUiCaptureTransactionResult> cancelCapturePresentation)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
-        this.configDirectory = configDirectory ?? throw new ArgumentNullException(nameof(configDirectory));
         scheduleOnFramework = dispatchOnFramework ?? throw new ArgumentNullException(nameof(dispatchOnFramework));
         this.provider = provider ?? throw new ArgumentNullException(nameof(provider));
         this.proofStore = proofStore ?? throw new ArgumentNullException(nameof(proofStore));
@@ -53,400 +50,179 @@ public sealed class AgentBridgeHost : IDisposable
         this.beginCapturePresentation = beginCapturePresentation ?? throw new ArgumentNullException(nameof(beginCapturePresentation));
         this.completeCapturePresentation = completeCapturePresentation ?? throw new ArgumentNullException(nameof(completeCapturePresentation));
         this.cancelCapturePresentation = cancelCapturePresentation ?? throw new ArgumentNullException(nameof(cancelCapturePresentation));
+        profile = AgentBridgeProfileIdentity.FromPluginConfigDirectory(configDirectory);
+        runtimeIdentity = AgentBridgeRuntimeIdentity.FromAssembly("MarketMafioso", Assembly.GetExecutingAssembly(), mainDllPath);
+        RegisterCommands();
+        host = new SharedAgentBridgeHost(new AgentBridgeHostOptions
+        {
+            ConfigDirectory = configDirectory,
+            PluginInstanceId = config.PluginInstanceId,
+            PipeName = $"MarketMafioso.AgentBridge.{Environment.ProcessId}",
+            GetProtectedAccessToken = () => config.AgentBridgeProtectedAccessToken,
+            SetProtectedAccessToken = value =>
+            {
+                config.AgentBridgeProtectedAccessToken = value;
+                config.AgentBridgeAccessToken = string.Empty;
+            },
+            SaveConfiguration = config.Save,
+            CreateManifest = CreateManifest,
+            HandleRequestAsync = router.HandleAsync,
+            EnableAudit = config.EnableAgentBridgeAudit,
+            RequestTimeout = TimeSpan.FromSeconds(15),
+        });
     }
 
     public string PipeName => $"MarketMafioso.AgentBridge.{Environment.ProcessId}";
 
     public void Tick()
     {
-        if (IsBridgeEnabledForThisBuild())
-        {
-            EnsureStarted();
-            return;
-        }
-
-        Stop();
-    }
-
-    private bool IsBridgeEnabledForThisBuild()
-    {
 #if DEBUG
-        return config.EnableAgentBridge;
+        if (config.EnableAgentBridge)
+            host.Start();
+        else
+            host.Stop();
 #else
-        return false;
+        host.Stop();
 #endif
     }
 
-    public void Dispose() => Stop();
+    public void Dispose() => host.Dispose();
 
-    private void EnsureStarted()
+    private AgentBridgeManifest CreateManifest() => new(
+        2,
+        runtimeIdentity,
+        profile.Id,
+        profile.Alias,
+        "MarketMafioso.proof.v2",
+        [
+            new("snapshot"), new("reviewed-actions"), new("proofs"),
+            new("encrypted-capture"), new("capture-transactions"),
+        ],
+        provider.GetReviewSurfaces(),
+        provider.GetCaptureSurfaces(),
+        []);
+
+    private void RegisterCommands()
     {
-        if (listenTask != null)
-            return;
-
-        accessToken = GetOrCreateAccessToken();
-
-        Directory.CreateDirectory(BridgeDirectory);
-        if (!config.EnableAgentBridgeAudit && File.Exists(AuditPath))
-            File.Delete(AuditPath);
-        File.WriteAllText(DiscoveryPath, JsonSerializer.Serialize(new AgentBridgeDiscovery
-        {
-            SchemaVersion = 1,
-            PipeName = PipeName,
-            ProcessId = Environment.ProcessId,
-            PluginInstanceId = config.PluginInstanceId,
-        }, jsonOptions));
-        cancellation = new CancellationTokenSource();
-        listenTask = Task.Run(() => ListenLoopAsync(cancellation.Token));
+        router.Register("get-snapshot", GetSnapshotAsync);
+        router.Register("get-control-surface", _ => AgentBridgeResponse.Ok("Control surface captured.", provider.GetControlSurface()));
+        router.Register("get-control", GetControl);
+        router.Register("get-review-surfaces", _ => AgentBridgeResponse.Ok("Review surfaces captured.", provider.GetReviewSurfaces()));
+        router.Register("get-capture-surfaces", _ => AgentBridgeResponse.Ok("Capture surfaces captured.", provider.GetCaptureSurfaces()));
+        router.Register("invoke-control", InvokeControlAsync);
+        router.Register("open-main-window", async (_, token) => await RunAsync(provider.OpenMainWindow, token, "Main window opened.").ConfigureAwait(false));
+        router.Register("close-main-window", async (_, token) => await RunAsync(provider.CloseMainWindow, token, "Main window closed.").ConfigureAwait(false));
+        router.Register("open-acquisition-diagnostics", async (_, token) => await RunAsync(provider.OpenAcquisitionDiagnostics, token, "Acquisition diagnostics opened.").ConfigureAwait(false));
+        router.Register("select-main-tab", SelectMainTabAsync);
+        router.Register("capture-input-state", async (_, token) => await RunAsync(provider.CaptureInputState, token, "Market-board input state capture requested.").ConfigureAwait(false));
+        router.Register("stop-route", async (_, token) => await RunAsync(provider.StopRoute, token, "Route stop requested.").ConfigureAwait(false));
+        router.Register("capture-proof", CaptureProofAsync);
+        router.Register("get-proof", GetProof);
+        router.Register("begin-capture-presentation", BeginCapturePresentationAsync);
+        router.Register("complete-capture-presentation", CompleteCapturePresentationAsync);
+        router.Register("cancel-capture-presentation", CompleteCapturePresentationAsync);
+        router.Register("capture-screen", CaptureScreenAsync);
     }
 
-    private async Task ListenLoopAsync(CancellationToken cancellationToken)
+    private async ValueTask<AgentBridgeResponse> GetSnapshotAsync(AgentBridgeRequest _, CancellationToken token)
     {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                await using var pipe = new NamedPipeServerStream(
-                    PipeName,
-                    PipeDirection.InOut,
-                    1,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-                await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
-                using var reader = new StreamReader(pipe, leaveOpen: true);
-                await using var writer = new StreamWriter(pipe) { AutoFlush = true };
-                using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                readTimeout.CancelAfter(TimeSpan.FromSeconds(5));
-                var requestJson = await ReadBoundedLineAsync(reader, readTimeout.Token).ConfigureAwait(false);
-                var response = await HandleRequestAsync(requestJson, cancellationToken).ConfigureAwait(false);
-                await writer.WriteLineAsync(JsonSerializer.Serialize(response, jsonOptions).AsMemory(), cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                AppendAudit("host-error", ex.GetType().Name);
-                await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
-            }
-        }
-    }
-
-    private async Task<AgentBridgeResponse> HandleRequestAsync(string? requestJson, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(requestJson) || requestJson.Length > MaxRequestCharacters)
-            return AgentBridgeResponse.Fail("Invalid bridge request.");
-
-        AgentBridgeRequest? request;
-        try
-        {
-            request = JsonSerializer.Deserialize<AgentBridgeRequest>(requestJson, jsonOptions);
-        }
-        catch (JsonException)
-        {
-            return AgentBridgeResponse.Fail("Bridge request JSON is invalid.");
-        }
-
-        if (request == null || !string.Equals(request.Token, accessToken, StringComparison.Ordinal))
-            return AgentBridgeResponse.Fail("Bridge authentication failed.");
-
         AgentBridgeProofReceipt? receipt = null;
-        switch (request.Command?.Trim().ToLowerInvariant())
-        {
-            case "hello":
-                return AgentBridgeResponse.Ok("Bridge is ready.");
-            case "get-snapshot":
-                await dispatchOnFramework(() => receipt = AgentBridgeProofFactory.Create(
-                    provider.CreateSnapshot(),
-                    Interlocked.Increment(ref revision),
-                    challenge: null)).ConfigureAwait(false);
-                return AgentBridgeResponse.Ok("Snapshot captured.", receipt);
-            case "get-control-surface":
-                return AgentBridgeResponse.Ok("Control surface captured.", provider.GetControlSurface());
-            case "get-control":
-                if (string.IsNullOrWhiteSpace(request.Target))
-                    return AgentBridgeResponse.Fail("A control ID is required.");
-                var controlReview = provider.ReviewControl(request.Target);
-                return controlReview.Control == null
-                    ? new AgentBridgeResponse { Success = false, Message = "The requested control is not rendered.", Receipt = controlReview }
-                    : AgentBridgeResponse.Ok("Reviewed control captured.", controlReview);
-            case "get-review-surfaces":
-                return AgentBridgeResponse.Ok("Review surfaces captured.", provider.GetReviewSurfaces());
-            case "get-capture-surfaces":
-                return AgentBridgeResponse.Ok("Capture surfaces captured.", provider.GetCaptureSurfaces());
-            case "invoke-control":
-                if (string.IsNullOrWhiteSpace(request.Target) || request.FrameId is null)
-                    return AgentBridgeResponse.Fail("Control ID and reviewed frame ID are required.");
-                AgentBridgeUiControlInvocation? invocation = null;
-                await dispatchOnFramework(() => invocation = provider.InvokeControl(request.Target, request.FrameId.Value)).ConfigureAwait(false);
-                if (invocation == null)
-                    return AgentBridgeResponse.Fail("Control invocation did not complete on the framework thread.");
-                AppendAudit("invoke-control", invocation.Success ? request.Target : "rejected");
-                return invocation.Success
-                    ? AgentBridgeResponse.Ok(invocation.Message, invocation.Frame)
-                    : AgentBridgeResponse.Fail(invocation.Message);
-            case "open-main-window":
-                await dispatchOnFramework(provider.OpenMainWindow).ConfigureAwait(false);
-                AppendAudit("open-main-window", "accepted");
-                return AgentBridgeResponse.Ok("Main window opened.");
-            case "close-main-window":
-                await dispatchOnFramework(provider.CloseMainWindow).ConfigureAwait(false);
-                AppendAudit("close-main-window", "accepted");
-                return AgentBridgeResponse.Ok("Main window closed.");
-            case "begin-capture-presentation":
-                if (!screenshotsEnabled())
-                    return AgentBridgeResponse.Fail("Agent bridge screenshots are disabled by local configuration.");
-                if (string.IsNullOrWhiteSpace(request.Target) ||
-                    !provider.GetCaptureSurfaces().Any(surface => string.Equals(surface.Id, request.Target, StringComparison.Ordinal)))
-                    return AgentBridgeResponse.Fail("The requested capture presentation target is not registered.");
-                AgentBridgeUiCaptureTransactionHandle? handle = null;
-                try
-                {
-                    await dispatchOnFramework(() => handle = beginCapturePresentation(request.Target!)).ConfigureAwait(false);
-                    var ready = await handle!.Ready.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    return AgentBridgeResponse.Ok("Capture presentation rendered and ready.", ready);
-                }
-                catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or OperationCanceledException)
-                {
-                    if (handle != null)
-                        await dispatchOnFramework(() => cancelCapturePresentation(handle.TransactionId)).ConfigureAwait(false);
-                    return AgentBridgeResponse.Fail($"Capture presentation failed: {ex.Message}");
-                }
-            case "complete-capture-presentation":
-            case "cancel-capture-presentation":
-                if (string.IsNullOrWhiteSpace(request.TransactionId))
-                    return AgentBridgeResponse.Fail("A capture transaction identifier is required.");
-                AgentBridgeUiCaptureTransactionResult? transactionResult = null;
-                await dispatchOnFramework(() => transactionResult = string.Equals(request.Command, "complete-capture-presentation", StringComparison.OrdinalIgnoreCase)
-                    ? completeCapturePresentation(request.TransactionId)
-                    : cancelCapturePresentation(request.TransactionId)).ConfigureAwait(false);
-                return transactionResult!.Success
-                    ? AgentBridgeResponse.Ok(transactionResult.Message, transactionResult)
-                    : AgentBridgeResponse.Fail(transactionResult.Message);
-            case "open-acquisition-diagnostics":
-                await dispatchOnFramework(provider.OpenAcquisitionDiagnostics).ConfigureAwait(false);
-                AppendAudit("open-acquisition-diagnostics", "accepted");
-                return AgentBridgeResponse.Ok("Acquisition diagnostics opened.");
-            case "capture-proof":
-                await dispatchOnFramework(() => receipt = CaptureProof(request.Challenge, openWindow: true)).ConfigureAwait(false);
-                AppendAudit("capture-proof", receipt!.ProofId);
-                return AgentBridgeResponse.Ok("Proof captured; wait for the in-game proof window to render before reading it again.", receipt);
-            case "select-main-tab":
-                var tabSelected = false;
-                await dispatchOnFramework(() => tabSelected = provider.TrySelectMainTab(request.Target ?? string.Empty)).ConfigureAwait(false);
-                AppendAudit("select-main-tab", tabSelected ? request.Target ?? string.Empty : "rejected");
-                return tabSelected
-                    ? AgentBridgeResponse.Ok($"Queued main tab {request.Target} for the next in-game frame.")
-                    : AgentBridgeResponse.Fail("Requested main tab is unavailable or not allowed.");
-            case "capture-input-state":
-                await dispatchOnFramework(provider.CaptureInputState).ConfigureAwait(false);
-                AppendAudit("capture-input-state", "accepted");
-                return AgentBridgeResponse.Ok("Market-board input state capture requested.");
-            case "stop-route":
-                await dispatchOnFramework(provider.StopRoute).ConfigureAwait(false);
-                AppendAudit("stop-route", "accepted");
-                return AgentBridgeResponse.Ok("Route stop requested.");
-            case "capture-screen":
-                if (!screenshotsEnabled())
-                    return AgentBridgeResponse.Fail("Agent bridge screenshots are disabled by local configuration.");
-                if (!string.IsNullOrWhiteSpace(request.Target))
-                {
-                    var captureTabSelected = false;
-                    await dispatchOnFramework(() => captureTabSelected = provider.TrySelectMainTab(request.Target)).ConfigureAwait(false);
-                    if (!captureTabSelected)
-                        return AgentBridgeResponse.Fail("Requested capture tab is unavailable or not allowed.");
-                }
-                using (var captureTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                {
-                    captureTimeout.CancelAfter(TimeSpan.FromSeconds(12));
-                    try
-                    {
-                        var capture = await captureViewport(request.FullViewport, captureTimeout.Token).ConfigureAwait(false);
-                        return AgentBridgeResponse.Ok("Rendered viewport captured.", capture);
-                    }
-                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        AppendAudit("capture-screen", "timeout");
-                        return AgentBridgeResponse.Fail("Rendered viewport capture timed out.");
-                    }
-                    catch (Exception ex)
-                    {
-                        AppendAudit("capture-screen", $"failed:{ex.GetType().Name}");
-                        return AgentBridgeResponse.Fail($"Rendered viewport capture failed: {ex.Message}");
-                    }
-                }
-            case "get-proof":
-                receipt = string.IsNullOrWhiteSpace(request.ProofId)
-                    ? proofStore.GetCurrent()
-                    : proofStore.Get(request.ProofId);
-                return receipt == null
-                    ? AgentBridgeResponse.Fail("No proof has been captured.")
-                    : AgentBridgeResponse.Ok("Current proof returned.", receipt);
-            default:
-                return AgentBridgeResponse.Fail("Bridge command is not allowed.");
-        }
+        await DispatchAsync(() => receipt = AgentBridgeProofFactory.Create(provider.CreateSnapshot(), Interlocked.Increment(ref revision), null), token).ConfigureAwait(false);
+        return AgentBridgeResponse.Ok("Snapshot captured.", receipt);
     }
 
-    private AgentBridgeProofReceipt CaptureProof(string? challenge, bool openWindow)
+    private AgentBridgeResponse GetControl(AgentBridgeRequest request)
     {
-        var receipt = proofStore.Capture(provider.CreateSnapshot(), Interlocked.Increment(ref revision), challenge);
-        if (openWindow)
+        if (string.IsNullOrWhiteSpace(request.Target)) return AgentBridgeResponse.Fail("A control ID is required.");
+        var review = provider.ReviewControl(request.Target);
+        return review.Control is null
+            ? new AgentBridgeResponse { Success = false, Message = "The requested control is not rendered.", Receipt = review }
+            : AgentBridgeResponse.Ok("Reviewed control captured.", review);
+    }
+
+    private async ValueTask<AgentBridgeResponse> InvokeControlAsync(AgentBridgeRequest request, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(request.Target) || request.FrameId is null)
+            return AgentBridgeResponse.Fail("Control ID and reviewed frame ID are required.");
+        AgentBridgeUiControlInvocation? invocation = null;
+        await DispatchAsync(() => invocation = provider.InvokeControl(request.Target, request.FrameId.Value, request.Arguments), token).ConfigureAwait(false);
+        if (invocation is null) return AgentBridgeResponse.Fail("Control invocation did not complete on the framework thread.");
+        return invocation.Success
+            ? AgentBridgeResponse.Ok(invocation.Message, invocation, invocation.Action?.OperationId)
+            : new AgentBridgeResponse { Success = false, Message = invocation.Message, Receipt = invocation };
+    }
+
+    private async ValueTask<AgentBridgeResponse> SelectMainTabAsync(AgentBridgeRequest request, CancellationToken token)
+    {
+        var selected = false;
+        await DispatchAsync(() => selected = provider.TrySelectMainTab(request.Target ?? string.Empty), token).ConfigureAwait(false);
+        return selected ? AgentBridgeResponse.Ok($"Queued main tab {request.Target} for the next in-game frame.") : AgentBridgeResponse.Fail("Requested main tab is unavailable or not allowed.");
+    }
+
+    private async ValueTask<AgentBridgeResponse> CaptureProofAsync(AgentBridgeRequest request, CancellationToken token)
+    {
+        AgentBridgeProofReceipt? receipt = null;
+        await DispatchAsync(() =>
+        {
+            receipt = proofStore.Capture(provider.CreateSnapshot(), Interlocked.Increment(ref revision), request.Challenge);
             provider.OpenProof(receipt.ProofId);
-        return receipt;
+        }, token).ConfigureAwait(false);
+        return AgentBridgeResponse.Ok("Proof captured; wait for the in-game proof window to render before reading it again.", receipt);
     }
 
-    private Task dispatchOnFramework(Action action)
+    private AgentBridgeResponse GetProof(AgentBridgeRequest request)
     {
-        var activeCancellation = Volatile.Read(ref cancellation);
-        if (activeCancellation is null)
-            return Task.FromCanceled(new CancellationToken(canceled: true));
-        var token = activeCancellation.Token;
-        return scheduleOnFramework(() =>
-        {
-            if (!token.IsCancellationRequested)
-                action();
-        }).WaitAsync(token);
+        var receipt = string.IsNullOrWhiteSpace(request.ProofId) ? proofStore.GetCurrent() : proofStore.Get(request.ProofId);
+        return receipt is null ? AgentBridgeResponse.Fail("No proof has been captured.") : AgentBridgeResponse.Ok("Current proof returned.", receipt);
     }
 
-    private void Stop()
+    private async ValueTask<AgentBridgeResponse> BeginCapturePresentationAsync(AgentBridgeRequest request, CancellationToken token)
     {
-        var activeCancellation = Interlocked.Exchange(ref cancellation, null);
-        var activeListener = Interlocked.Exchange(ref listenTask, null);
-        if (activeCancellation != null)
-        {
-            activeCancellation.Cancel();
-            if (activeListener is not null)
-            {
-                try
-                {
-                    if (!activeListener.Wait(TimeSpan.FromSeconds(1)))
-                        _ = ObserveStoppedListenerAsync(activeListener);
-                }
-                catch (Exception exception) when (exception is AggregateException or OperationCanceledException) { }
-            }
-            activeCancellation.Dispose();
-        }
-
-        accessToken = null;
-        if (File.Exists(DiscoveryPath))
-            File.Delete(DiscoveryPath);
-    }
-
-    private string BridgeDirectory => Path.Combine(configDirectory, "agent-bridge");
-    private string DiscoveryPath => Path.Combine(BridgeDirectory, $"discovery-{Environment.ProcessId}.json");
-    private string AuditPath => Path.Combine(BridgeDirectory, "audit.jsonl");
-
-    private void AppendAudit(string action, string result)
-    {
-        if (!config.EnableAgentBridgeAudit)
-            return;
-        Directory.CreateDirectory(BridgeDirectory);
-        File.AppendAllText(AuditPath, JsonSerializer.Serialize(new { atUtc = DateTimeOffset.UtcNow, action, result }, jsonOptions) + Environment.NewLine);
-    }
-
-    private string GetOrCreateAccessToken()
-    {
-        var entropy = Encoding.UTF8.GetBytes(config.PluginInstanceId);
-        if (!string.IsNullOrWhiteSpace(config.AgentBridgeProtectedAccessToken))
-        {
-            try
-            {
-                var protectedBytes = Convert.FromBase64String(config.AgentBridgeProtectedAccessToken);
-                try
-                {
-                    return Encoding.UTF8.GetString(ProtectedData.Unprotect(
-                        protectedBytes,
-                        entropy,
-                        DataProtectionScope.CurrentUser));
-                }
-                finally
-                {
-                    CryptographicOperations.ZeroMemory(protectedBytes);
-                }
-            }
-            catch (CryptographicException)
-            {
-                config.AgentBridgeProtectedAccessToken = string.Empty;
-            }
-            catch (FormatException)
-            {
-                config.AgentBridgeProtectedAccessToken = string.Empty;
-            }
-        }
-
-        var token = string.IsNullOrWhiteSpace(config.AgentBridgeAccessToken)
-            ? Guid.NewGuid().ToString("N")
-            : config.AgentBridgeAccessToken;
-        var encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(token), entropy, DataProtectionScope.CurrentUser);
+        if (!screenshotsEnabled()) return AgentBridgeResponse.Fail("Agent bridge screenshots are disabled by local configuration.");
+        if (string.IsNullOrWhiteSpace(request.Target) || !provider.GetCaptureSurfaces().Any(surface => surface.Id == request.Target))
+            return AgentBridgeResponse.Fail("The requested capture presentation target is not registered.");
+        AgentBridgeUiCaptureTransactionHandle? handle = null;
         try
         {
-            config.AgentBridgeProtectedAccessToken = Convert.ToBase64String(encrypted);
-            config.AgentBridgeAccessToken = string.Empty;
-            config.Save();
+            await DispatchAsync(() => handle = beginCapturePresentation(request.Target), token).ConfigureAwait(false);
+            return AgentBridgeResponse.Ok("Capture presentation rendered and ready.", await handle!.Ready.WaitAsync(token).ConfigureAwait(false));
         }
-        finally
+        catch (Exception exception) when (exception is InvalidOperationException or TimeoutException or OperationCanceledException)
         {
-            CryptographicOperations.ZeroMemory(encrypted);
+            if (handle is not null) await DispatchAsync(() => cancelCapturePresentation(handle.TransactionId), token).ConfigureAwait(false);
+            return AgentBridgeResponse.Fail($"Capture presentation failed: {exception.Message}");
         }
-        return token;
     }
 
-    private static async Task<string?> ReadBoundedLineAsync(StreamReader reader, CancellationToken cancellationToken)
+    private async ValueTask<AgentBridgeResponse> CompleteCapturePresentationAsync(AgentBridgeRequest request, CancellationToken token)
     {
-        var builder = new StringBuilder();
-        var buffer = new char[1024];
-        while (true)
+        if (string.IsNullOrWhiteSpace(request.TransactionId)) return AgentBridgeResponse.Fail("A capture transaction identifier is required.");
+        AgentBridgeUiCaptureTransactionResult? result = null;
+        await DispatchAsync(() => result = request.Command == "complete-capture-presentation"
+            ? completeCapturePresentation(request.TransactionId)
+            : cancelCapturePresentation(request.TransactionId), token).ConfigureAwait(false);
+        return result!.Success ? AgentBridgeResponse.Ok(result.Message, result) : AgentBridgeResponse.Fail(result.Message);
+    }
+
+    private async ValueTask<AgentBridgeResponse> CaptureScreenAsync(AgentBridgeRequest request, CancellationToken token)
+    {
+        if (!screenshotsEnabled()) return AgentBridgeResponse.Fail("Agent bridge screenshots are disabled by local configuration.");
+        if (!string.IsNullOrWhiteSpace(request.Target))
         {
-            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-                return builder.Length == 0 ? null : builder.ToString();
-            var newline = Array.IndexOf(buffer, '\n', 0, read);
-            var length = newline >= 0 ? newline : read;
-            if (newline >= 0 && length > 0 && buffer[length - 1] == '\r')
-                length--;
-            builder.Append(buffer, 0, length);
-            if (builder.Length > MaxRequestCharacters)
-                throw new InvalidDataException("Bridge request exceeds the maximum length.");
-            if (newline >= 0)
-                return builder.ToString();
+            var selected = false;
+            await DispatchAsync(() => selected = provider.TrySelectMainTab(request.Target), token).ConfigureAwait(false);
+            if (!selected) return AgentBridgeResponse.Fail("Requested capture tab is unavailable or not allowed.");
         }
+        try { return AgentBridgeResponse.Ok("Rendered viewport captured.", await captureViewport(request.FullViewport, token).ConfigureAwait(false)); }
+        catch (OperationCanceledException) { return AgentBridgeResponse.Fail("Rendered viewport capture timed out."); }
+        catch (Exception exception) { return AgentBridgeResponse.Fail($"Rendered viewport capture failed: {exception.Message}"); }
     }
 
-    private static async Task ObserveStoppedListenerAsync(Task listener)
+    private async ValueTask<AgentBridgeResponse> RunAsync(Action action, CancellationToken token, string message)
     {
-        try { await listener.ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
-        catch { }
+        await DispatchAsync(action, token).ConfigureAwait(false);
+        return AgentBridgeResponse.Ok(message);
     }
-}
 
-public sealed record AgentBridgeDiscovery
-{
-    public required int SchemaVersion { get; init; }
-    public required string PipeName { get; init; }
-    public required int ProcessId { get; init; }
-    public required string PluginInstanceId { get; init; }
-}
-
-public sealed record AgentBridgeRequest
-{
-    public string? Token { get; init; }
-    public string? Command { get; init; }
-    public string? Challenge { get; init; }
-    public string? Target { get; init; }
-    public long? FrameId { get; init; }
-    public string? ProofId { get; init; }
-    public bool FullViewport { get; init; }
-    public string? TransactionId { get; init; }
-}
-
-public sealed record AgentBridgeResponse
-{
-    public required bool Success { get; init; }
-    public required string Message { get; init; }
-    public object? Receipt { get; init; }
-
-    public static AgentBridgeResponse Ok(string message, object? receipt = null) => new() { Success = true, Message = message, Receipt = receipt };
-    public static AgentBridgeResponse Fail(string message) => new() { Success = false, Message = message };
+    private Task DispatchAsync(Action action, CancellationToken token) => scheduleOnFramework(action).WaitAsync(token);
 }

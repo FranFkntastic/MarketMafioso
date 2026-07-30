@@ -32,6 +32,7 @@ public sealed class SqliteSchemaMigrator
         await AddColumnIfMissingAsync(connection, transaction, "characters", "service_account_key", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_key", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "player_gil", "INTEGER NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "retainer_management_json", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "location", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "observed_at_utc", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "item_type", "TEXT NULL", cancellationToken);
@@ -223,7 +224,8 @@ public sealed class SqliteSchemaMigrator
             plugin_version TEXT NOT NULL,
             generated_at_utc TEXT NOT NULL,
             raw_report_json TEXT NULL,
-            raw_json_retained_at_utc TEXT NULL
+            raw_json_retained_at_utc TEXT NULL,
+            retainer_management_json TEXT NULL
         );
 
         CREATE TABLE IF NOT EXISTS inventory_owners (

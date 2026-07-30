@@ -50,7 +50,7 @@ MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 
 `/health` remains public for uptime checks. Inventory ingestion, `/api/capabilities`, and `/api/reports...` machine-read routes require the client key. Browser dashboard routes use app-managed login sessions backed by the receiver SQLite database.
 
-Hosted Workshop Host exposes `/api/capabilities` for feature discovery. Current source builds advertise `craft.appraise` by default because the server directly references Craft Architect Core. Treat absent capabilities from older or custom hosts as unavailable rather than as errors.
+Hosted Workshop Host exposes `/api/capabilities` for feature discovery. It advertises `craft.appraise` only while a valid loopback Craft Architect API endpoint is configured; absent capability means the quote service is unavailable, not that MMF should compute a quote itself.
 
 The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
 
@@ -95,9 +95,7 @@ MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
 
 The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read routes, and proxied dashboard routes.
 
-Because the server now hard-references Craft Architect Core, CI or deployment runners that build from source must make Craft Architect Core available at build time. The included workflows check out `FranFkntastic/XIV-Craft-Architect` into `craft-architect` and pass `CraftArchitectCoreProject` to MSBuild.
-
-The dev workflow also smoke-tests `/api/capabilities` for `craft.appraise` and checks quote endpoint auth/schema validation without doing a live appraisal.
+The server compiles independently of Craft Architect. The dev deployment points it at CA's environment-matched loopback appraisal endpoint, then smoke-tests capability discovery, authentication, schema validation, and a real quote.
 
 Server deployment is intentionally separate from plugin deployment. A backend deploy updates the VPS Workshop Host only; it does not copy a DLL into Dalamud. Use `Deploy-PluginDev.ps1` when the in-game plugin needs to change too.
 
@@ -199,4 +197,4 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<secret>" }
 ```
 
-The response should include inventory/read diagnostics capabilities and `craft.appraise` on current builds. If `craft.appraise` is absent, the host is older or custom-built without Craft Architect quote support.
+The response should include inventory/read diagnostics capabilities. It includes `craft.appraise` only when the separate Craft Architect service is configured and reachable by policy.

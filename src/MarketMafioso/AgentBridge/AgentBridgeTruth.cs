@@ -18,15 +18,74 @@ public sealed record AgentBridgeTruth
     public required string CurrentWorld { get; init; }
     public required string HomeWorld { get; init; }
     public required bool MainWindowOpen { get; init; }
+    public required bool MainWindowCollapseOverrideActive { get; init; }
     public required bool MainWindowPinned { get; init; }
     public required bool AcquisitionDiagnosticsOpen { get; init; }
     public required string WorkspaceStatus { get; init; }
     public required bool WorkspaceBusy { get; init; }
     public required string? ClaimedRequestId { get; init; }
     public required string? PreparedPlanStatus { get; init; }
+    public AgentBridgeCraftAppraisalTruth? CraftAppraisal { get; init; }
+    public AgentBridgeWorkshopRestockTruth? WorkshopRestock { get; init; }
     public required AgentBridgeRemoteMarketTruth RemoteMarket { get; init; }
     public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+}
+
+public sealed record AgentBridgeCraftAppraisalTruth
+{
+    public required bool IsFetching { get; init; }
+    public required string Status { get; init; }
+    public required bool WorkshopHostEnabled { get; init; }
+    public required bool WorkshopHostAvailable { get; init; }
+    public uint? SelectedItemId { get; init; }
+    public string? SelectedItemName { get; init; }
+    public uint? RequestedQuantity { get; init; }
+    public string? HqPolicy { get; init; }
+    public string? Region { get; init; }
+    public required bool HasQuote { get; init; }
+    public bool QuoteComplete { get; init; }
+    public decimal? QuoteUnitCost { get; init; }
+    public string? QuoteSource { get; init; }
+    public string? QuoteConfidence { get; init; }
+    public int WarningCount { get; init; }
+    public string? PlanId { get; init; }
+    public required bool CanOpenPlan { get; init; }
+}
+
+public sealed record AgentBridgeWorkshopRestockTruth
+{
+    public required string QueueSignature { get; init; }
+    public required bool AutomaticallyBuyVendorMaterials { get; init; }
+    public required int MaterialCount { get; init; }
+    public required int ShortageLineCount { get; init; }
+    public required int OrdinaryGilCatalogLineCount { get; init; }
+    public required int AccessibleVendorLineCount { get; init; }
+    public required int SelectedVendorLineCount { get; init; }
+    public required int RetainerUnits { get; init; }
+    public required int VendorUnits { get; init; }
+    public required ulong MaximumGil { get; init; }
+    public required int StopCount { get; init; }
+    public IReadOnlyList<AgentBridgeWorkshopVendorLineTruth> VendorLines { get; init; } = [];
+    public string? ActivePhase { get; init; }
+    public string? ActiveMessage { get; init; }
+    public int VerifiedReceiptCount { get; init; }
+    public int VerifiedQuantity { get; init; }
+    public ulong VerifiedGil { get; init; }
+    public uint? ArmedItemId { get; init; }
+}
+
+public sealed record AgentBridgeWorkshopVendorLineTruth
+{
+    public required uint ItemId { get; init; }
+    public required string ItemName { get; init; }
+    public required int VendorNeed { get; init; }
+    public required bool Selected { get; init; }
+    public required int ApprovedQuantity { get; init; }
+    public required uint UnitPriceGil { get; init; }
+    public required uint NpcId { get; init; }
+    public required string NpcName { get; init; }
+    public required string AccessState { get; init; }
 }
 
 public sealed record AgentBridgeRemoteMarketTruth
@@ -60,6 +119,13 @@ public sealed record AgentBridgeRemoteBellProbeTruth
     public string? NormalCaptureMessage { get; init; }
     public string? NormalCaptureReadiness { get; init; }
     public string? NormalCaptureLastEvidencePath { get; init; }
+    public bool PositionFrameOneShotPrepared { get; init; }
+    public bool PositionFrameOneShotCanPrepare { get; init; }
+    public bool PositionFrameOneShotCanFire { get; init; }
+    public string? PositionFrameOneShotState { get; init; }
+    public string? PositionFrameOneShotMessage { get; init; }
+    public string? PositionFrameOneShotReadiness { get; init; }
+    public DateTimeOffset? PositionFrameOneShotExpiresAtUtc { get; init; }
     public bool YieldProbeActive { get; init; }
     public bool YieldProbeCanArmControl { get; init; }
     public bool YieldProbeCanReplaySessionFree { get; init; }

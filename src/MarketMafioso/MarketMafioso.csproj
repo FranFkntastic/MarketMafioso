@@ -16,8 +16,7 @@
     <Description>FFXIV workshop logistics, market acquisition, and optional receiver-backed inventory history.</Description>
     <Punchline>Workshop logistics, market acquisition, and inventory history.</Punchline>
     <RepoUrl>https://github.com/FranFkntastic/MarketMafioso</RepoUrl>
-    <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
-    <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
+    <UsesFranthropy>true</UsesFranthropy>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
@@ -37,18 +36,9 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="ValidateFranthropyDalamudProject" BeforeTargets="PrepareForBuild"
-          Condition="!Exists('$(FranthropyDalamudProject)')">
-    <Error Text="Franthropy.Dalamud was not found at '$(FranthropyDalamudProject)'. Clone Franthropy beside MarketMafioso or set -p:FranthropyDalamudProject=&quot;path\to\Franthropy.Dalamud.csproj&quot;." />
-  </Target>
-  <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild"
-          Condition="!Exists('$(CraftArchitectCoreProject)')">
-    <Error Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Check out the sibling repository or set -p:CraftArchitectCoreProject=&quot;path/to/FFXIV Craft Architect.Core.csproj&quot;." />
-  </Target>
-
   <ItemGroup>
     <ProjectReference Include="$(FranthropyDalamudProject)" />
-    <ProjectReference Include="$(CraftArchitectCoreProject)" />
+    <ProjectReference Include="$(FranthropyFfxivProject)" />
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
   </ItemGroup>
 

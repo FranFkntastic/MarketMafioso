@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Plugin;
@@ -12,6 +13,8 @@ public interface IVNavmeshIpcAdapter
     bool IsReady();
     bool IsRunning();
     bool MoveCloseTo(Vector3 destination, float range);
+    bool MoveDirect(IReadOnlyList<Vector3> waypoints);
+    bool SetMovementAllowed(bool allowed);
     bool Stop();
 }
 
@@ -43,6 +46,22 @@ public sealed class VNavmeshIpc
             : new(false, "vnavmesh rejected the market board approach request.");
     }
 
+    public VNavmeshMoveResult MoveDirect(Vector3 start, Vector3 destination)
+    {
+        if (!adapter.IsAvailable)
+            return new(false, "vnavmesh is not loaded; the direct path was not queued.");
+
+        if (!adapter.IsReady())
+            return new(false, "vnavmesh is not ready; the direct path was not queued.");
+
+        return adapter.MoveDirect([start, destination])
+            ? new(true, "vnavmesh accepted the route-owned direct path.")
+            : new(false, "vnavmesh rejected the route-owned direct path.");
+    }
+
+    public bool SetMovementAllowed(bool allowed) =>
+        adapter.IsAvailable && adapter.SetMovementAllowed(allowed);
+
     public VNavmeshStopResult Stop()
     {
         if (!adapter.IsAvailable)
@@ -60,6 +79,8 @@ public sealed class DalamudVNavmeshIpcAdapter : IVNavmeshIpcAdapter
     private const string NavIsReadyChannel = "vnavmesh.Nav.IsReady";
     private const string PathIsRunningChannel = "vnavmesh.Path.IsRunning";
     private const string PathStopChannel = "vnavmesh.Path.Stop";
+    private const string PathMoveToChannel = "vnavmesh.Path.MoveTo";
+    private const string PathSetMovementAllowedChannel = "vnavmesh.Path.SetMovementAllowed";
     private const string MoveCloseToChannel = "vnavmesh.SimpleMove.PathfindAndMoveCloseTo";
 
     private readonly IDalamudPluginInterface pluginInterface;
@@ -111,6 +132,35 @@ public sealed class DalamudVNavmeshIpcAdapter : IVNavmeshIpcAdapter
         catch (Exception ex)
         {
             log.Warning(ex, "[MarketMafioso] vnavmesh move-close IPC failed.");
+            return false;
+        }
+    }
+
+    public bool MoveDirect(IReadOnlyList<Vector3> waypoints)
+    {
+        try
+        {
+            pluginInterface.GetIpcSubscriber<List<Vector3>, bool, object>(PathMoveToChannel)
+                .InvokeAction([.. waypoints], false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] vnavmesh direct-path IPC failed.");
+            return false;
+        }
+    }
+
+    public bool SetMovementAllowed(bool allowed)
+    {
+        try
+        {
+            pluginInterface.GetIpcSubscriber<bool, object>(PathSetMovementAllowedChannel).InvokeAction(allowed);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] vnavmesh movement-gate IPC failed.");
             return false;
         }
     }

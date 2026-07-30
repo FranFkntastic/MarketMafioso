@@ -1,0 +1,30 @@
+name: Validate pull request
+
+on:
+  pull_request:
+    branches: [ local-dev ]
+    types: [ opened, reopened, synchronize, ready_for_review, converted_to_draft ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-pull-request-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lifecycle:
+    name: Ready for review and clean patch
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate patch whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"

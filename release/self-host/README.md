@@ -32,7 +32,7 @@ Workshop Host is a small private background server. It saves inventory reports i
 
 You do not need Workshop Host for basic plugin use. Install it only if you want stored inventory history, the browser dashboard, diagnostics, or suite integrations.
 
-MarketMafioso checks `http://localhost:5088/api/capabilities` before using backend-only features such as Craft Architect quote lookup. Current Workshop Host builds advertise `craft.appraise`; older receiver-era or custom hosts that do not list it will make MMF keep using manual craft costs or Craft Architect quote-file imports.
+MarketMafioso checks `http://localhost:5088/api/capabilities` before using backend-only features such as Craft Architect quote lookup. Workshop Host advertises `craft.appraise` only when its optional loopback CA service URL is configured.
 
 ## Install Docker First
 
@@ -180,7 +180,7 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<client-api-key>" }
 ```
 
-Current Workshop Host builds should include `craft.appraise`. If it is missing, the host is older or custom-built without Craft Architect quote support.
+`craft.appraise` is present only when the separate Craft Architect appraisal service is configured. Its absence is an explicit unavailable state.
 
 The installer and updater also smoke-test `/api/craft/appraise` auth and schema validation without doing a live appraisal.
 

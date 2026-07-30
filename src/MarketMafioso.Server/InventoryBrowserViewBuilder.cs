@@ -290,7 +290,8 @@ public static class InventoryBrowserViewBuilder
             location,
             equipped,
             condition,
-            retainerKeys);
+            retainerKeys,
+            ResolveStowage(report, item.ItemId));
     }
 
     private static IEnumerable<ListingRecord> EnumerateListings(StoredInventoryReport stored)
@@ -335,6 +336,7 @@ public static class InventoryBrowserViewBuilder
         TotalQuantity = row.TotalQuantity,
         HqQuantity = row.HqQuantity,
         OwnerCount = row.Locations.Select(location => location.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+        Stowage = row.SourceStacks.Select(stack => stack.Stowage).FirstOrDefault(stowage => stowage is not null),
         Locations = row.Locations.Select(location => new InventoryBrowserLocationView
         {
             OwnerName = location.OwnerName,
@@ -362,6 +364,7 @@ public static class InventoryBrowserViewBuilder
         IsHq = row.Quality == FfxivItemQuality.HQ,
         Equipped = row.Equipped.IsKnown ? row.Equipped.Value : null,
         ConditionPercent = row.Condition.IsKnown ? row.Condition.Value : null,
+        Stowage = row.Stowage,
     };
 
     private static InventoryBrowserMarketListingView ToListingView(ListingRecord row) => new()
@@ -414,6 +417,30 @@ public static class InventoryBrowserViewBuilder
     private static string DisplayName(uint itemId, string? itemName) =>
         string.IsNullOrWhiteSpace(itemName) ? $"Item {itemId}" : itemName;
 
+    private static InventoryBrowserStowageView? ResolveStowage(InventoryReport report, uint itemId)
+    {
+        var match = report.RetainerManagement?.Plans
+            .Where(plan => plan.Enabled)
+            .SelectMany(plan => plan.Rules.Select(rule => (Plan: plan, Rule: rule)))
+            .FirstOrDefault(entry => entry.Rule.ItemId == itemId);
+        if (match is not { Rule: not null } resolved)
+            return null;
+        return new InventoryBrowserStowageView
+        {
+            PlanId = resolved.Plan.Id,
+            RuleId = resolved.Rule.Id,
+            PlanName = resolved.Plan.Name,
+            DesiredPlayerQuantity = resolved.Rule.DesiredPlayerQuantity,
+            Quality = resolved.Rule.Quality,
+            Action = resolved.Rule.Action,
+            Quantity = resolved.Rule.Quantity,
+            PlayerQuantity = resolved.Rule.PlayerQuantity,
+            PreferredDestinations = resolved.Rule.PreferredDestinations
+                .Select(destination => destination.RetainerName ?? destination.RetainerId.ToString())
+                .ToArray(),
+        };
+    }
+
     private static IReadOnlyList<InventoryBrowserScopeView> BuildScopes(InventoryReport report)
     {
         var scopes = new List<InventoryBrowserScopeView>
@@ -462,7 +489,8 @@ public static class InventoryBrowserViewBuilder
         string? OwnerCharacterName, string? OwnerHomeWorld, string BagName, int? SlotIndex, int Quantity,
         FfxivItemQuality Quality, FfxivStorageLocation Location, FieldEvidence<bool> Equipped,
         FieldEvidence<decimal> Condition,
-        IReadOnlyCollection<FfxivRetainerKey> RetainerKeys);
+        IReadOnlyCollection<FfxivRetainerKey> RetainerKeys,
+        InventoryBrowserStowageView? Stowage);
 
     private sealed record LocationRecord(
         string OwnerName, string? OwnerCharacterName, string? OwnerHomeWorld, FfxivStorageLocation Location,

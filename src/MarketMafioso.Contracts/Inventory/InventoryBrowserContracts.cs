@@ -53,6 +53,7 @@ public sealed record InventoryBrowserItemView
     public int HqQuantity { get; init; }
     public IReadOnlyList<InventoryBrowserLocationView> Locations { get; init; } = [];
     public int OwnerCount { get; init; }
+    public InventoryBrowserStowageView? Stowage { get; init; }
 }
 
 public sealed record InventoryBrowserStackView
@@ -71,6 +72,63 @@ public sealed record InventoryBrowserStackView
     public bool IsHq { get; init; }
     public bool? Equipped { get; init; }
     public decimal? ConditionPercent { get; init; }
+    public InventoryBrowserStowageView? Stowage { get; init; }
+}
+
+public sealed record InventoryBrowserStowageView
+{
+    public Guid PlanId { get; init; }
+    public Guid RuleId { get; init; }
+    public string PlanName { get; init; } = string.Empty;
+    public int DesiredPlayerQuantity { get; init; }
+    public string Quality { get; init; } = string.Empty;
+    public string Action { get; init; } = "none";
+    public int Quantity { get; init; }
+    public int PlayerQuantity { get; init; }
+    public IReadOnlyList<string> PreferredDestinations { get; init; } = [];
+}
+
+public sealed record QuartermasterStowageReport
+{
+    public string Schema { get; init; } = "gooseworks-quartermaster-stowage-report/v1";
+    public string ProviderInstanceId { get; init; } = string.Empty;
+    public long Revision { get; init; }
+    public QuartermasterStowageOwner Owner { get; init; } = new();
+    public IReadOnlyList<QuartermasterStowagePlanReport> Plans { get; init; } = [];
+}
+
+public sealed record QuartermasterStowageOwner
+{
+    public ulong LocalContentId { get; init; }
+    public uint HomeWorldId { get; init; }
+}
+
+public sealed record QuartermasterStowagePlanReport
+{
+    public Guid Id { get; init; }
+    public long Revision { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public bool Enabled { get; init; }
+    public IReadOnlyList<QuartermasterStowageRuleReport> Rules { get; init; } = [];
+}
+
+public sealed record QuartermasterStowageRuleReport
+{
+    public Guid Id { get; init; }
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public int DesiredPlayerQuantity { get; init; }
+    public string Quality { get; init; } = string.Empty;
+    public string Action { get; init; } = "none";
+    public int Quantity { get; init; }
+    public int PlayerQuantity { get; init; }
+    public IReadOnlyList<QuartermasterStowageDestinationReport> PreferredDestinations { get; init; } = [];
+}
+
+public sealed record QuartermasterStowageDestinationReport
+{
+    public ulong RetainerId { get; init; }
+    public string? RetainerName { get; init; }
 }
 
 public sealed record InventoryBrowserLocationView

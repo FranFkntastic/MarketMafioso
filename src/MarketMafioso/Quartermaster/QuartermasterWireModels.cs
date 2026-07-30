@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace MarketMafioso.Quartermaster;
@@ -75,7 +76,31 @@ public sealed record QuartermasterSnapshot(
 {
     public ImmutableArray<string> PlayerRequestedSources { get; init; } = [];
     public ImmutableArray<string> PlayerObservedSources { get; init; } = [];
+    public ImmutableArray<QuartermasterStowagePlanSnapshot> StowagePlans { get; init; } = [];
 }
+
+public sealed record QuartermasterStowagePlanSnapshot(
+    Guid Id,
+    long Revision,
+    QuartermasterOwner Owner,
+    string Name,
+    bool Enabled,
+    int Priority,
+    ImmutableArray<QuartermasterStowageRuleSnapshot> Rules);
+
+public sealed record QuartermasterStowageRuleSnapshot(
+    Guid Id,
+    uint ItemId,
+    string? ItemName,
+    int DesiredPlayerQuantity,
+    string Quality,
+    bool Enabled,
+    ImmutableArray<ulong> PreferredRetainerIds,
+    string RoutingMode,
+    string Overflow,
+    string Action,
+    int ActionQuantity,
+    int PlayerQuantity);
 
 public sealed record QuartermasterOwnerScope(
     ulong? LocalContentId,
@@ -186,6 +211,51 @@ internal sealed class QuartermasterSnapshotWire
     public QuartermasterOwnerWire? CurrentOwner { get; init; }
     public QuartermasterStorageSourcesWire? PlayerStorage { get; init; }
     public List<QuartermasterRetainerWire>? Retainers { get; init; }
+    public JsonElement? StowagePlans { get; init; }
+}
+
+internal sealed class QuartermasterStowageEnvelopeWire
+{
+    public string? Schema { get; init; }
+    public List<QuartermasterStowagePlanWire>? Plans { get; init; }
+}
+
+internal sealed class QuartermasterStowagePlanWire
+{
+    public Guid Id { get; init; }
+    public long Revision { get; init; }
+    public QuartermasterOwnerWire? Owner { get; init; }
+    public string? Name { get; init; }
+    public bool Enabled { get; init; }
+    public int Priority { get; init; }
+    public List<QuartermasterStowageRuleWire>? Rules { get; init; }
+}
+
+internal sealed class QuartermasterStowageRuleWire
+{
+    public Guid Id { get; init; }
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public int DesiredPlayerQuantity { get; init; }
+    public string? Quality { get; init; }
+    public bool Enabled { get; init; }
+    public QuartermasterStowageRoutingWire? Routing { get; init; }
+    public QuartermasterStowageEvaluationWire? Evaluated { get; init; }
+}
+
+internal sealed class QuartermasterStowageRoutingWire
+{
+    public JsonElement? Mode { get; init; }
+    public List<ulong>? PreferredRetainerIds { get; init; }
+    public JsonElement? Overflow { get; init; }
+}
+
+internal sealed class QuartermasterStowageEvaluationWire
+{
+    public string? Action { get; init; }
+    public int Quantity { get; init; }
+    public int PlayerQuantity { get; init; }
+    public int DesiredPlayerQuantity { get; init; }
 }
 
 internal sealed class QuartermasterStorageSourcesWire

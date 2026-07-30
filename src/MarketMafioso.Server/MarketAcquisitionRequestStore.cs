@@ -265,6 +265,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (current == null)
             return null;
+        if (current.Revision != request.ExpectedRevision)
+            throw new MarketAcquisitionRevisionConflictException(request.ExpectedRevision, current.Revision);
 
         EnsureCanReplaceBatch(current);
 
@@ -289,16 +291,17 @@ public sealed partial class MarketAcquisitionRequestStore
             SET revision = $revision,
                 expires_at_utc = $expiresAtUtc,
                 payload_json = $payloadJson
-            WHERE id = $id;
+            WHERE id = $id AND revision = $expectedRevision;
             """;
         update.Parameters.AddWithValue("$revision", nextRevision);
         update.Parameters.AddWithValue("$expiresAtUtc", expiresAtUtc.ToString("O"));
         update.Parameters.AddWithValue("$payloadJson", replacementPayload);
         update.Parameters.AddWithValue("$id", id);
+        update.Parameters.AddWithValue("$expectedRevision", request.ExpectedRevision);
 
         var affected = await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         if (affected != 1)
-            return null;
+            throw new MarketAcquisitionRevisionConflictException(request.ExpectedRevision, current.Revision);
 
         var replacedView = current with
         {

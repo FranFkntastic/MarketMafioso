@@ -7,6 +7,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Franthropy.Dalamud.Automation.Retainers;
+using MarketMafioso.Automation.Travel;
 
 namespace MarketMafioso.MarketDiagnostics;
 
@@ -23,7 +24,8 @@ internal sealed record RemoteSummoningBellProbeView(
 
 internal sealed partial class RemoteSummoningBellProbe : IDisposable
 {
-    private const string ProbePhase = "A-loaded-same-zone-out-of-range";
+    private const string StockProbePhase = "A-loaded-same-zone-out-of-range";
+    private const string PositionFrameOneShotProbePhase = "A-position-frame-one-shot";
     private static readonly TimeSpan ObservationWindow = TimeSpan.FromSeconds(10);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
@@ -33,10 +35,14 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
     private readonly IFramework framework;
     private readonly IGameGui gameGui;
     private readonly ICondition condition;
+    private readonly IKeyState keyState;
+    private readonly ITargetManager targetManager;
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
+    private readonly ISigScanner sigScanner;
     private readonly DalamudSummoningBellInteractor bell;
     private readonly DalamudRetainerAutomationSession retainerAutomation;
+    private readonly VNavmeshIpc vnavmesh;
     private readonly IAutoRetainerIpc autoRetainer;
     private readonly string evidenceDirectory;
 
@@ -66,6 +72,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         IFramework framework,
         IGameGui gameGui,
         ICondition condition,
+        IKeyState keyState,
         IChatGui chatGui,
         IPluginLog log,
         IDalamudPluginInterface pluginInterface,
@@ -77,10 +84,14 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         this.framework = framework;
         this.gameGui = gameGui;
         this.condition = condition;
+        this.keyState = keyState;
+        this.targetManager = targetManager;
         this.chatGui = chatGui;
         this.log = log;
+        this.sigScanner = sigScanner;
         bell = new(objectTable, targetManager, dataManager, interopProvider, sigScanner);
         retainerAutomation = new(framework, gameGui, dataManager, log, objectTable, targetManager, sigScanner);
+        vnavmesh = new(new DalamudVNavmeshIpcAdapter(pluginInterface, log));
         autoRetainer = new DalamudAutoRetainerIpc(pluginInterface);
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-bell");
         framework.Update += OnFrameworkUpdate;
@@ -102,6 +113,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
                 normalCaptureSession is null &&
                 yieldProbeSession is null &&
                 warmSessionProbeSession is null &&
+                retainerRpcProbeSession is null &&
                 !IsRetainerListReady(),
             Readiness = observation.Message,
             BellGameObjectId = FormatGameObjectId(observation.BellGameObjectId),
@@ -124,6 +136,8 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return "The YieldEventScene2 probe is already active.";
         if (warmSessionProbeSession is not null)
             return "The warm-session retention probe is already active.";
+        if (retainerRpcProbeSession is not null)
+            return "The retainer RPC probe is already active.";
         if (session is not null)
             return "A remote bell probe is already observing its single submitted request.";
         if (IsRetainerListReady())
@@ -149,6 +163,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
                 startPosition,
                 CapturePosition(),
                 submission,
+                StockProbePhase,
                 "NotSubmitted",
                 false,
                 false);
@@ -171,7 +186,8 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             startedAtUtc + ObservationWindow,
             territoryId,
             startPosition,
-            submission);
+            submission,
+            StockProbePhase);
         view = new(
             true,
             false,
@@ -197,6 +213,15 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
     {
         if (disposed)
             return;
+        UpdatePositionFrameOneShotStaging();
+        UpdateBoundaryNavigationTrigger();
+        UpdateBoundaryRetainerListAutoClose();
+        UpdateBoundaryMotionTrigger();
+        if (retainerRpcProbeSession is not null)
+        {
+            UpdateRetainerRpcProbe();
+            return;
+        }
         if (normalCaptureSession is not null)
         {
             UpdateNormalCapture();
@@ -382,6 +407,9 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
                 bell.ObserveTalkPacketTransport()),
         };
         bell.CancelTalkPacketTransport("The remote bell probe concluded.");
+        var positionFrameOneShot = active.ProbePhase == PositionFrameOneShotProbePhase;
+        if (positionFrameOneShot && retainerListReady)
+            CloseBoundaryRetainerList();
         var completedAtUtc = DateTimeOffset.UtcNow;
         var evidence = CreateEvidence(
             active.StartedAtUtc,
@@ -390,11 +418,14 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             active.StartPosition,
             CapturePosition(),
             active.Submission,
+            active.ProbePhase,
             verdict,
             retainerListReady,
             active.OccupiedSummoningBellObserved);
         var path = WriteEvidence(evidence);
-        if (verdict == "Confirmed" && autoRetainerSuppression is { Changed: true })
+        if (!positionFrameOneShot &&
+            verdict == "Confirmed" &&
+            autoRetainerSuppression is { Changed: true })
             releaseSuppressionWhenRetainerListCloses = true;
         else
             ReleaseAutoRetainerSuppression();
@@ -428,6 +459,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         ProbePosition? startPosition,
         ProbePosition? conclusionPosition,
         RemoteSummoningBellInteractionResult submission,
+        string probePhase,
         string verdict,
         bool retainerListReady,
         bool occupiedSummoningBellObserved) =>
@@ -443,7 +475,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             submission.BellEventIdSource,
             submission.Distance,
             submission.OrdinaryInteractionDistance,
-            ProbePhase,
+            probePhase,
             submission.Code,
             submission.Message,
             submission.PacketOpcode,
@@ -466,6 +498,12 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             submission.InboundActorControlSamples,
             submission.InboundRawPacketCount,
             submission.InboundRawPacketSamples,
+            submission.InboundEventTerminationCount,
+            submission.InboundEventTerminationSamples,
+            submission.PositionFrameShadow,
+            submission.PreludeObservedCount,
+            submission.PreludeDroppedCount,
+            submission.PreludeSamples,
             submission.OriginalHitboxRadius,
             submission.TemporaryHitboxRadius,
             submission.OriginalBellX,
@@ -507,6 +545,12 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             InboundActorControlSamples = transport.InboundActorControlSamples,
             InboundRawPacketCount = transport.InboundRawPacketCount,
             InboundRawPacketSamples = transport.InboundRawPacketSamples,
+            InboundEventTerminationCount = transport.InboundEventTerminationCount,
+            InboundEventTerminationSamples = transport.InboundEventTerminationSamples,
+            PositionFrameShadow = transport.PositionFrameShadow,
+            PreludeObservedCount = transport.PreludeObservedCount,
+            PreludeDroppedCount = transport.PreludeDroppedCount,
+            PreludeSamples = transport.PreludeSamples,
         };
 
     private string? WriteEvidence(RemoteSummoningBellProbeEvidence evidence)
@@ -543,6 +587,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
 
     private void ReleaseAutoRetainerSuppression()
     {
+        const string suppressionSuffix = " AutoRetainer remains suppressed until the retainer session closes.";
         releaseSuppressionWhenRetainerListCloses = false;
         var suppression = autoRetainerSuppression;
         autoRetainerSuppression = null;
@@ -550,6 +595,11 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return;
 
         suppression.Dispose();
+        view = view with { Message = view.Message.Replace(suppressionSuffix, string.Empty, StringComparison.Ordinal) };
+        warmSessionProbeView = warmSessionProbeView with
+        {
+            Message = warmSessionProbeView.Message.Replace(suppressionSuffix, string.Empty, StringComparison.Ordinal),
+        };
         if (suppression.RestoreError is not null)
             log.Error("[MarketMafioso] AutoRetainer suppression restoration failed after remote bell probe: {Error}", suppression.RestoreError);
     }
@@ -560,12 +610,22 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return;
 
         disposed = true;
+        StopPositionFrameOneShotStaging();
+        positionFrameOneShotSlot.Cancel();
+        StopBoundaryNavigation();
         session = null;
         normalCaptureSession = null;
+        if (yieldProbeSession is not null)
+        {
+            yieldProbeSession.NativeCallPreloadCancellation.Cancel();
+            yieldProbeSession.NativeCallPreloadCancellation.Dispose();
+        }
         yieldProbeSession = null;
         if (warmSessionProbeSession is not null)
         {
             warmSessionProbeSession.BootstrapCancellation.Cancel();
+            RestoreLocalBellCondition(warmSessionProbeSession);
+            StopOwnedWarmSessionNavigation(warmSessionProbeSession);
             var warm = bell.ObserveWarmSessionRetention();
             if (warm.TeardownSuppressed &&
                 !warm.MatchingScene2Observed &&
@@ -577,6 +637,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         }
         warmSessionProbeSession = null;
         retainerAutomation.CancelActive();
+        DisposeRetainerRpcProbe();
         bell.CancelTalkPacketTransport("The remote bell probe was disposed.");
         bell.CancelYieldEventSceneProbe("The remote bell probe was disposed.");
         bell.StopWarmSessionRetention("The remote bell probe was disposed.");
@@ -592,9 +653,10 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         uint TerritoryId,
         ProbePosition? StartPosition,
         RemoteSummoningBellInteractionResult Submission,
+        string ProbePhase,
         bool OccupiedSummoningBellObserved = false);
 
-    private sealed record ProbePosition(float X, float Y, float Z);
+    internal sealed record ProbePosition(float X, float Y, float Z);
 
     private sealed record RemoteSummoningBellProbeEvidence(
         DateTimeOffset StartedAtUtc,
@@ -631,6 +693,12 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         InboundActorControlSample[]? InboundActorControlSamples,
         int InboundRawPacketCount,
         InboundRawPacketSample[]? InboundRawPacketSamples,
+        int InboundEventTerminationCount,
+        InboundEventTerminationSample[]? InboundEventTerminationSamples,
+        PositionFrameShadowObservation? PositionFrameShadow,
+        int PreludeObservedCount,
+        int PreludeDroppedCount,
+        ZonePacketPreludeSample[]? PreludeSamples,
         float OriginalHitboxRadius,
         float TemporaryHitboxRadius,
         float OriginalBellX,

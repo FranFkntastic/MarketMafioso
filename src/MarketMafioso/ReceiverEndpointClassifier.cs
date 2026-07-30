@@ -54,6 +54,15 @@ public static class ReceiverEndpointClassifier
             : $"{dashboardBaseUrl}/reports/{Uri.EscapeDataString(reportId)}";
     }
 
+    public static string? BuildInventoryDeltaUrl(string? serverUrl)
+    {
+        var endpoint = Classify(serverUrl);
+        if (endpoint.Kind == ReceiverEndpointKind.Invalid || endpoint.Uri == null)
+            return null;
+
+        return $"{endpoint.Uri.GetLeftPart(UriPartial.Path).TrimEnd('/')}/delta";
+    }
+
     public static string? BuildDashboardBaseUrl(string? serverUrl)
     {
         var endpoint = Classify(serverUrl);

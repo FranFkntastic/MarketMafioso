@@ -30,6 +30,8 @@ public sealed record MarketAcquisitionRouteDiagnosticManifest
 
     public required string PackageKind { get; init; }
 
+    public string DiagnosticsLevel { get; init; } = MarketAcquisitionRouteDiagnosticsLevel.FullTrace.ToString();
+
     public required string CaptureStatus { get; init; }
 
     public required DateTimeOffset StartedAtUtc { get; init; }
@@ -43,4 +45,19 @@ public sealed record MarketAcquisitionRouteDiagnosticManifest
     public required IReadOnlyDictionary<string, string> Artifacts { get; init; }
 
     public required IReadOnlyList<string> CaptureCapabilities { get; init; }
+
+    public IReadOnlyList<MarketAcquisitionRouteDiagnosticTraceSegment> FullTraceSegments { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionRouteDiagnosticTraceSegment
+{
+    public required string FileName { get; init; }
+
+    public required long FirstSequence { get; init; }
+
+    public required long LastSequence { get; init; }
+
+    public required long ByteLength { get; init; }
+
+    public required string Sha256 { get; init; }
 }

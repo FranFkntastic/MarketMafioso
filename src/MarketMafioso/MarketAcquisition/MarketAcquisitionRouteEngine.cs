@@ -13,7 +13,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan RouteMonitorInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan MarketBoardItemSearchOperationTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan TravelPreparationOperationTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan WorldTravelArrivalOperationTimeout = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan SameDataCenterWorldTravelArrivalOperationTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan DataCenterTravelArrivalOperationTimeout = TimeSpan.FromMinutes(6);
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
@@ -158,7 +159,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         bool includeOpportunisticChecks,
         ExactAcquisitionExecutionContract? exactAcquisitionContract = null,
         MarketAcquisitionRequestDocument? workbenchDocument = null,
-        MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live)
+        MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live,
+        MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
@@ -229,7 +231,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionRouteActionResult result;
         try
         {
-            result = runner.Start(routePlan, enableDiagnostics || executionMode == MarketAcquisitionExecutionMode.DryRun, includeOpportunisticChecks, executionMode);
+            var effectiveDiagnosticsLevel = MarketAcquisitionRouteDiagnosticsPolicy.Resolve(
+                enableDiagnostics ? diagnosticsLevel : MarketAcquisitionRouteDiagnosticsLevel.Off,
+                executionMode);
+            result = runner.Start(
+                routePlan,
+                effectiveDiagnosticsLevel != MarketAcquisitionRouteDiagnosticsLevel.Off,
+                includeOpportunisticChecks,
+                executionMode,
+                effectiveDiagnosticsLevel);
         }
         catch (Exception exception) when (exactAcquisitionAuthority is not null)
         {
@@ -347,7 +357,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public MarketAcquisitionRouteActionResult StartEvidenceRefresh(
         MarketAcquisitionPlan plan,
         MarketAcquisitionClaimView claimed,
-        bool enableDiagnostics)
+        bool enableDiagnostics,
+        MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
@@ -358,7 +369,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ClearExecutionState();
         state.EvidenceRefreshOnly = true;
         reportDispatcher.BeginSession(claimed);
-        var result = runner.Start(plan, enableDiagnostics, includeOpportunisticChecks: false);
+        var result = runner.Start(
+            plan,
+            enableDiagnostics,
+            includeOpportunisticChecks: false,
+            diagnosticsLevel: enableDiagnostics ? diagnosticsLevel : MarketAcquisitionRouteDiagnosticsLevel.Off);
         state.AcquisitionStatus = result.Success
             ? $"Evidence refresh started. {result.Message}"
             : result.Message;
@@ -407,6 +422,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Stop()
     {
+        evidence.Flush();
         uiAutomation.TryCloseMarketBoardWindows();
         CleanupOwnedApproach("Stop");
         CleanupOwnedTravel("Stop");
@@ -885,22 +901,33 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return active;
         }
 
+        var sourceWorld = currentWorld ??
+            throw new InvalidOperationException("Current world is required before starting world travel.");
+        var sourceDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(sourceWorld);
+        var targetDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(activeStop.WorldName);
+        var isDataCenterTravel = !sourceDataCenter.Equals(targetDataCenter, StringComparison.OrdinalIgnoreCase);
+        var timeout = ResolveWorldTravelArrivalOperationTimeout(sourceWorld, activeStop.WorldName);
+        var travelKind = isDataCenterTravel ? "Data center travel" : "World travel";
         var operation = operationExecutor.Begin(new MarketAcquisitionRouteOperationStart
         {
             OperationId = $"{state.ProgressNonce}:world-travel:{++operationSequence}",
             Kind = MarketAcquisitionRouteOperationKind.Travel,
             StartedAtUtc = clock.UtcNow,
             StartedAtMonotonicMilliseconds = clock.MonotonicMilliseconds,
-            Timeout = WorldTravelArrivalOperationTimeout,
+            Timeout = timeout,
             TimeoutDisposition = MarketAcquisitionRouteOperationDisposition.Failed,
             TimeoutMessage =
-                $"World travel timed out after {WorldTravelArrivalOperationTimeout.TotalSeconds:N0}s while waiting to arrive on {activeStop.WorldName}.",
+                $"{travelKind} timed out after {timeout.TotalMinutes:N0} minutes while waiting to arrive on {activeStop.WorldName}.",
             Context = new Dictionary<string, string?>
             {
                 ["world"] = activeStop.WorldName,
-                ["sourceWorld"] = currentWorld,
+                ["sourceWorld"] = sourceWorld,
+                ["sourceDataCenter"] = sourceDataCenter,
+                ["targetDataCenter"] = targetDataCenter,
+                ["travelScope"] = isDataCenterTravel ? "CrossDataCenter" : "SameDataCenter",
+                ["timeoutSeconds"] = timeout.TotalSeconds.ToString("N0"),
                 ["dependency"] = "Lifestream",
-                ["timeoutPolicySource"] = "NightmareToolsDefaultBoundProvisional",
+                ["timeoutPolicySource"] = "MarketAcquisitionTravelScope",
             },
         });
         activeTravelLease = new MarketAcquisitionTravelLease
@@ -917,6 +944,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             "Travel lease created before Lifestream command dispatch.",
             CreateTravelCleanupDetails(activeTravelLease, "Start", "LeaseCreated", unresolvedExternalAutomation: false));
         return operation;
+    }
+
+    internal static TimeSpan ResolveWorldTravelArrivalOperationTimeout(string sourceWorld, string targetWorld)
+    {
+        var sourceDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(sourceWorld);
+        var targetDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(targetWorld);
+        return sourceDataCenter.Equals(targetDataCenter, StringComparison.OrdinalIgnoreCase)
+            ? SameDataCenterWorldTravelArrivalOperationTimeout
+            : DataCenterTravelArrivalOperationTimeout;
     }
 
     private MarketAcquisitionRouteOperationSnapshot ObserveWorldTravelOperation(
@@ -1049,6 +1085,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var deadline = operationExecutor.CheckDeadline(clock.UtcNow, clock.MonotonicMilliseconds);
             if (deadline.Snapshot is { IsTerminal: true } timedOut)
             {
+                marketBoard.AbandonBrowse(timedOut.Message);
                 runner.RecordRouteOperationSnapshot(timedOut);
                 UpdateStatus(FailRoute(timedOut.Message));
                 return;
@@ -1612,6 +1649,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CompleteActiveWorldPurchaseBatch(string currentWorld)
     {
+        evidence.Flush();
         var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
         if (activeSubtask != null)
         {
@@ -2001,6 +2039,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public void Dispose()
     {
+        evidence.Flush();
         CleanupOwnedApproach("Dispose");
         CleanupOwnedTravel("Dispose");
         CancelActiveOperation("Route engine disposed.");
@@ -2013,6 +2052,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CancelActiveOperation(string message)
     {
+        marketBoard.AbandonBrowse(message);
         var cancellation = operationExecutor.Cancel(clock.UtcNow, clock.MonotonicMilliseconds, message);
         if (cancellation.Accepted && cancellation.Snapshot != null)
             runner.RecordRouteOperationSnapshot(cancellation.Snapshot);
@@ -2027,6 +2067,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (deadline.Snapshot is not { IsTerminal: true } timedOut)
             return false;
 
+        marketBoard.AbandonBrowse(timedOut.Message);
         runner.RecordRouteOperationSnapshot(timedOut);
         UpdateStatus(FailRoute(timedOut.Message));
         return true;
@@ -2034,6 +2075,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
     {
+        evidence.Flush();
         CleanupOwnedApproach("Failure");
         CleanupOwnedTravel("Failure");
         CancelActiveOperation($"Route failed; active operation cancelled. {message}");

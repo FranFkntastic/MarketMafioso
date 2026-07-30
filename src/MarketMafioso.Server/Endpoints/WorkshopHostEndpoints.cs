@@ -1,4 +1,3 @@
-using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.WorkshopHost;
 
@@ -122,11 +121,36 @@ internal static class WorkshopHostEndpoints
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        var quote = await quoteService.AppraiseAsync(quoteRequest, token);
-        return quote == null
-            ? Results.NotFound(new { error = "craft_appraisal_not_found" })
-            : Results.Ok(string.IsNullOrWhiteSpace(quote.Source)
-                ? quote with { Source = "WorkshopHostCraftArchitect" }
-                : quote);
+        CraftAppraisalQuote? quote;
+        try
+        {
+            quote = await quoteService.AppraiseAsync(quoteRequest, token);
+            if (quote == null)
+                return Results.NotFound(new { error = "craft_appraisal_not_found" });
+        }
+        catch (TaskCanceledException) when (!token.IsCancellationRequested)
+        {
+            return Results.Json(
+                new { error = "craft_architect_api_timeout" },
+                statusCode: StatusCodes.Status504GatewayTimeout);
+        }
+        catch (CraftArchitectApiException ex)
+            when (ex.StatusCode == System.Net.HttpStatusCode.GatewayTimeout)
+        {
+            return Results.Json(
+                new { error = "craft_architect_api_timeout" },
+                statusCode: StatusCodes.Status504GatewayTimeout);
+        }
+        catch (HttpRequestException)
+        {
+            return Results.Json(
+                new { error = "craft_architect_api_error" },
+                statusCode: StatusCodes.Status502BadGateway);
+        }
+
+        var response = string.IsNullOrWhiteSpace(quote.Source)
+            ? quote with { Source = "CraftArchitectHosted" }
+            : quote;
+        return Results.Ok(response);
     }
 }

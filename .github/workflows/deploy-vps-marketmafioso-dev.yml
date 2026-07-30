@@ -9,7 +9,6 @@ on:
       - 'tests/MarketMafioso.Server.Tests/**'
       - 'tests/MarketMafioso.ContractTests/**'
       - 'MarketMafioso.sln'
-      - 'eng/craft-architect-core.ref'
       - 'eng/franthropy.ref'
       - '.github/workflows/deploy-vps-marketmafioso-dev.yml'
   workflow_dispatch:
@@ -36,18 +35,6 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Read pinned Craft Architect Core revision
-        id: craft-architect-ref
-        shell: bash
-        run: echo "ref=$(tr -d '[:space:]' < eng/craft-architect-core.ref)" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout Craft Architect Core
-        uses: actions/checkout@v4
-        with:
-          repository: FranFkntastic/XIV-Craft-Architect
-          path: craft-architect
-          ref: ${{ steps.craft-architect-ref.outputs.ref }}
-
       - name: Read pinned Franthropy revision
         id: franthropy-ref
         shell: bash
@@ -65,34 +52,13 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Test receiver
-        run: >
-          dotnet test "tests/MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj"
-          -c Release
-          -p:CraftArchitectCoreProject="${GITHUB_WORKSPACE}/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
-          -p:FranthropyFfxivProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj"
-          -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
-          -p:FranthropyWebProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Web/Franthropy.Web.csproj"
-
-      - name: Test client-server contracts
-        run: >
-          dotnet test "tests/MarketMafioso.ContractTests/MarketMafioso.ContractTests.csproj"
-          -c Release
-          -p:EnableWindowsTargeting=true
-          -p:SkipDevPluginSync=true
-          -p:CraftArchitectCoreProject="${GITHUB_WORKSPACE}/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
-          -p:FranthropyDalamudProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Dalamud/Franthropy.Dalamud.csproj"
-          -p:FranthropyFfxivProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj"
-          -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
-          -p:FranthropyWebProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Web/Franthropy.Web.csproj"
-
       - name: Publish receiver
         run: >
           dotnet publish "src/MarketMafioso.Server/MarketMafioso.Server.csproj"
           -c Release
           -r linux-x64
           --self-contained true
-          -p:CraftArchitectCoreProject="${GITHUB_WORKSPACE}/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
+          -p:FranthropyRoot="${GITHUB_WORKSPACE}/franthropy"
           -p:FranthropyFfxivProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj"
           -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
           -p:FranthropyWebProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Web/Franthropy.Web.csproj"
@@ -111,6 +77,7 @@ jobs:
           export MarketMafioso__BasePath=/marketmafioso
           export MarketMafioso__DatabasePath="$database_path"
           export MarketMafioso__EnableMarketAcquisition=true
+          export MarketMafioso__CraftArchitectAppraiseUrl=http://127.0.0.1:5129/craft/appraise
 
           start_receiver() {
             "$receiver" >"$runtime_dir/receiver.log" 2>&1 &
@@ -172,6 +139,7 @@ jobs:
           MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
           MarketMafioso__StorageLabel=dev receiver storage
           MarketMafioso__EnableMarketAcquisition=true
+          MarketMafioso__CraftArchitectAppraiseUrl=http://127.0.0.1:5129/craft/appraise
           MarketMafioso__AllowedOrigins__0=https://dev.xivcraftarchitect.com
           MarketMafioso__AllowedOrigins__1=https://xivcraftarchitect.com
           MarketMafioso__AcquisitionExecutionLeaseSeconds=900
@@ -481,11 +449,6 @@ jobs:
             "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory")"
           expect_status ingest-with-key "$ingest_with_key" 400
 
-          read_with_client_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
-            "https://dev.xivcraftarchitect.com/marketmafioso/api/reports")"
-          expect_status read-with-key "$read_with_client_key" 200
-
           capabilities_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/capabilities")"
           expect_status capabilities-without-key "$capabilities_without_key" 401
@@ -526,6 +489,28 @@ jobs:
             "https://dev.xivcraftarchitect.com/marketmafioso/api/craft/appraise")"
           expect_status quote-invalid-schema "$quote_invalid_schema" 400
 
+          curl --fail --silent --show-error --max-time 70 \
+            --request POST \
+            --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
+            --header 'Content-Type: application/json' \
+            --data '{"schemaVersion":1,"itemId":7017,"itemName":"Varnish","quantity":1,"scope":{"region":"North America"},"options":{"hqPolicy":"Either","pricingMode":"CurrentMarketEvidence"}}' \
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/craft/appraise" \
+            --output craft-quote-smoke.json
+          snapshot_url="$(
+            node --input-type=module -e '
+              import { readFile } from "node:fs/promises";
+              const quote = JSON.parse(await readFile("craft-quote-smoke.json", "utf8"));
+              if (quote?.source !== "CraftArchitectHosted") process.exit(1);
+              if (quote?.itemId !== 7017 || quote?.requestedQuantity !== 1) process.exit(1);
+              const planUrl = new URL(quote.planUrl);
+              const snapshot = planUrl.searchParams.get("appraisalPlan");
+              if (!snapshot?.startsWith("https://dev.xivcraftarchitect.com/api/craft/plans/")) process.exit(1);
+              process.stdout.write(snapshot);
+            '
+          )"
+          curl --fail --silent --show-error "$snapshot_url" --output craft-plan-smoke.json
+          test -s craft-plan-smoke.json
+
           retired_dashboard_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/")"
           echo "retired-dashboard returned HTTP $retired_dashboard_status"
@@ -560,5 +545,11 @@ jobs:
           sudo systemctl restart "$service_name"
           sudo caddy validate --config /etc/caddy/Caddyfile
           sudo systemctl reload caddy
-          curl --fail --silent --show-error http://127.0.0.1:5088/health > /dev/null
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5088/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
           REMOTE

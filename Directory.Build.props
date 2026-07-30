@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <FranthropyRoot Condition="'$(FranthropyRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Franthropy'))</FranthropyRoot>
+    <FranthropyRootFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyRoot)'))</FranthropyRootFullPath>
+    <ExpectedFranthropyDalamudProject>$([System.IO.Path]::GetFullPath('$(FranthropyRootFullPath)\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj'))</ExpectedFranthropyDalamudProject>
+    <ExpectedFranthropyFilteringProject>$([System.IO.Path]::GetFullPath('$(FranthropyRootFullPath)\src\Franthropy.Filtering\Franthropy.Filtering.csproj'))</ExpectedFranthropyFilteringProject>
+    <ExpectedFranthropyFfxivProject>$([System.IO.Path]::GetFullPath('$(FranthropyRootFullPath)\src\Franthropy.FFXIV\Franthropy.FFXIV.csproj'))</ExpectedFranthropyFfxivProject>
+    <ExpectedFranthropyWebProject>$([System.IO.Path]::GetFullPath('$(FranthropyRootFullPath)\src\Franthropy.Web\Franthropy.Web.csproj'))</ExpectedFranthropyWebProject>
+    <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">$(ExpectedFranthropyDalamudProject)</FranthropyDalamudProject>
+    <FranthropyFilteringProject Condition="'$(FranthropyFilteringProject)' == ''">$(ExpectedFranthropyFilteringProject)</FranthropyFilteringProject>
+    <FranthropyFfxivProject Condition="'$(FranthropyFfxivProject)' == ''">$(ExpectedFranthropyFfxivProject)</FranthropyFfxivProject>
+    <FranthropyWebProject Condition="'$(FranthropyWebProject)' == ''">$(ExpectedFranthropyWebProject)</FranthropyWebProject>
+    <FranthropyDalamudProjectFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyDalamudProject)'))</FranthropyDalamudProjectFullPath>
+    <FranthropyFilteringProjectFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyFilteringProject)'))</FranthropyFilteringProjectFullPath>
+    <FranthropyFfxivProjectFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyFfxivProject)'))</FranthropyFfxivProjectFullPath>
+    <FranthropyWebProjectFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyWebProject)'))</FranthropyWebProjectFullPath>
+  </PropertyGroup>
+</Project>

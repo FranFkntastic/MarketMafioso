@@ -190,6 +190,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
             PlayerInventory = playerBags,
             Retainers = retainers,
             PlayerStorage = playerStorage,
+            RetainerManagement = snapshot.RetainerManagement,
         };
 
         return new StoredInventoryReport
@@ -221,7 +222,8 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
                 schema_version,
                 source_plugin,
                 plugin_version,
-                generated_at_utc
+                generated_at_utc,
+                retainer_management_json
             FROM snapshots
             WHERE account_id = $accountId AND id = $id
             """;

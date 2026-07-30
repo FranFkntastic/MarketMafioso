@@ -9,6 +9,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using ECommons;
 using Dalamud.Interface.Windowing;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.AgentBridge;
@@ -17,6 +18,7 @@ using MarketMafioso.MarketDiagnostics;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.SquireIntegration;
+using MarketMafioso.TradeQueue;
 using MarketMafioso.Windows;
 
 namespace MarketMafioso;
@@ -39,9 +41,12 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static ITextureReadbackProvider TextureReadbackProvider { get; private set; } = null!;
     [PluginService] internal static IGameInventory GameInventory { get; private set; } = null!;
+    [PluginService] internal static IKeyState KeyState { get; private set; } = null!;
     [PluginService] internal static ISigScanner SigScanner { get; private set; } = null!;
     [PluginService] internal static IGameInteropProvider GameInteropProvider { get; private set; } = null!;
     [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
+    [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
+    [PluginService] internal static IAetheryteList AetheryteList { get; private set; } = null!;
     [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
@@ -54,6 +59,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly HttpReporter reporter;
     private readonly RetainerSaleChatObserver retainerSaleChatObserver;
     private readonly RetainerHistoryObserver retainerHistoryObserver;
+    private readonly DalamudMarketBoardBrowseObserver marketBoardBrowseObserver;
     private readonly RemoteMarketAccessProbe remoteMarketAccessProbe;
     private readonly RemoteMarketProbeWindow remoteMarketProbeWindow;
     private readonly QuartermasterIpcClient quartermaster;
@@ -64,6 +70,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
     private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
+    private readonly ExternalAutomationCoordinator tradeAutomationCoordinator;
+    private readonly DalamudTradeQueueIo tradeQueueIo;
+    private readonly TradeQueueRunner tradeQueueRunner;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
     private readonly AgentBridgeProofStore agentBridgeProofStore;
@@ -104,6 +113,10 @@ public sealed class Plugin : IDalamudPlugin
             DataManager,
             Log,
             retainerSaleChatObserver.EnqueueExternal);
+        marketBoardBrowseObserver = new DalamudMarketBoardBrowseObserver(
+            GameInteropProvider,
+            Framework,
+            Log);
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         remoteMarketAccessProbe = new RemoteMarketAccessProbe(
             Configuration,
@@ -115,6 +128,7 @@ public sealed class Plugin : IDalamudPlugin
             GameGui,
             ChatGui,
             Log,
+            marketBoardBrowseObserver,
             PluginInterface.GetPluginConfigDirectory());
         remoteMarketProbeWindow = new RemoteMarketProbeWindow(remoteMarketAccessProbe);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
@@ -138,8 +152,25 @@ public sealed class Plugin : IDalamudPlugin
 
                 Configuration.Save();
             });
+        var workshopCraftRecipeResolver = new LuminaWorkshopMaterialCraftRecipeResolver(DataManager);
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
-            new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
+            workshopCraftRecipeResolver);
+        tradeAutomationCoordinator = new ExternalAutomationCoordinator(
+            new DalamudPluginDataStore(PluginInterface),
+            Log);
+        tradeQueueIo = new DalamudTradeQueueIo(
+            GameGui,
+            TargetManager,
+            Condition,
+            SigScanner,
+            DataManager,
+            Log);
+        tradeQueueRunner = new TradeQueueRunner(
+            Configuration.TradeQueueItems,
+            Configuration.Save,
+            tradeQueueIo,
+            tradeAutomationCoordinator,
+            Log);
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -150,6 +181,9 @@ public sealed class Plugin : IDalamudPlugin
             viwiWorkshoppaIpc,
             workshopAssemblyRunner,
             workshopMaterialManifestExport,
+            workshopCraftRecipeResolver,
+            tradeQueueRunner,
+            tradeQueueIo,
             DataManager,
             PlayerState,
             new MarketBoardApproachService(
@@ -158,6 +192,7 @@ public sealed class Plugin : IDalamudPlugin
                 TargetManager,
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
                 Log),
+            marketBoardBrowseObserver,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log);
         exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
@@ -183,6 +218,7 @@ public sealed class Plugin : IDalamudPlugin
         agentBridge = new AgentBridgeHost(
             Configuration,
             PluginInterface.GetPluginConfigDirectory(),
+            PluginInterface.AssemblyLocation.FullName,
             action => Framework.RunOnTick(action),
             new MarketMafiosoBridgeProvider(
                 mainWindow.CreateAgentBridgeTruth,
@@ -218,7 +254,12 @@ public sealed class Plugin : IDalamudPlugin
                 "\"/mmf capture-bell\" to arm the passive normal-bell flight recorder. " +
                 "Use \"/mmf capture-bell-lifecycle\" for the complete open/select/return/close trace. " +
                 "Yield tests: \"/mmf probe-bell-yield-control\" then \"/mmf probe-bell-yield-direct\". " +
-                "Warm retention: \"/mmf probe-bell-warm\", \"/mmf probe-bell-warm-delay <seconds>\", or \"/mmf probe-bell-warm-manual\". " +
+                "Native signature tests: \"/mmf probe-bell-native-call\" or \"/mmf probe-bell-native-select\". " +
+                "Retainer RPC test: \"/mmf probe-retainer-rpc-control\" then \"/mmf probe-retainer-rpc-bind-test\". " +
+                "Warm retention: \"/mmf probe-bell-warm\", \"/mmf probe-bell-warm-delay <seconds>\", " +
+                "\"/mmf probe-bell-warm-move <yalms>\", \"/mmf probe-bell-warm-unlock-move <yalms>\", " +
+                "or \"/mmf probe-bell-warm-manual\". " +
+                "Scene-2 oddballs: \"/mmf probe-bell-scene2-ui\" and \"/mmf probe-bell-scene2-move <yalms>\". " +
                 "Use \"/mmf probe-bell-warm-ui\" only for the old manual select/Quit bootstrap.",
         });
 
@@ -360,12 +401,66 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 #endif
 
+            case "probe-bell-native-call":
+#if DEBUG
+                ChatGui.Print($"[MMF] Native CallRetainer probe: {mainWindow.BeginNativeCallRetainerProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Native retainer-verb probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-native-select":
+#if DEBUG
+                ChatGui.Print($"[MMF] Native SelectRetainer probe: {mainWindow.BeginNativeSelectRetainerProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Native retainer-verb probes are only available in debug builds.");
+                break;
+#endif
+
             case "probe-bell-yield-cancel":
 #if DEBUG
                 ChatGui.Print($"[MMF] YieldEventScene2 probe: {mainWindow.CancelYieldEventSceneProbe()}");
                 break;
 #else
                 ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-control":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC control: {mainWindow.BeginRetainerRpcControlProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-bind-test":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC bind test: {mainWindow.BeginRetainerRpcBindProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-status":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC probe: {mainWindow.GetRetainerRpcProbeStatus()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-cancel":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC probe: {mainWindow.CancelRetainerRpcProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
                 break;
 #endif
 
@@ -394,12 +489,69 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 #endif
 
+            case "probe-bell-warm-move":
+#if DEBUG
+                if (!int.TryParse(commandArgument, out var movementYalms))
+                {
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-move <yalms>, from 1 through 100.");
+                    break;
+                }
+                ChatGui.Print(
+                    $"[MMF] Warm-session retention: " +
+                    mainWindow.BeginDistanceWarmSessionRetentionProbe(movementYalms));
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-unlock-move":
+#if DEBUG
+                if (!int.TryParse(commandArgument, out var unlockedMovementYalms))
+                {
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-unlock-move <yalms>, from 1 through 100.");
+                    break;
+                }
+                ChatGui.Print(
+                    $"[MMF] Warm-session retention: " +
+                    mainWindow.BeginLocallyUnlockedDistanceWarmSessionRetentionProbe(unlockedMovementYalms));
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
             case "probe-bell-warm-manual":
 #if DEBUG
                 ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.BeginManualWarmSessionRetentionProbe()}");
                 break;
 #else
                 ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-scene2-ui":
+#if DEBUG
+                ChatGui.Print($"[MMF] Scene-2 UI resurrection: {mainWindow.BeginScene2UiResurrectionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Scene-2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-scene2-move":
+#if DEBUG
+                if (!int.TryParse(commandArgument, out var scene2MovementYalms))
+                {
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-scene2-move <yalms>, from 1 through 100.");
+                    break;
+                }
+                ChatGui.Print(
+                    $"[MMF] Scene-2 distance continuation: " +
+                    mainWindow.BeginScene2DistanceContinuationProbe(scene2MovementYalms));
+                break;
+#else
+                ChatGui.Print("[MMF] Scene-2 probes are only available in debug builds.");
                 break;
 #endif
 
@@ -450,6 +602,7 @@ public sealed class Plugin : IDalamudPlugin
         retainerSaleChatObserver.Tick();
         retainerHistoryObserver.Tick();
         mainWindow.RemoteMarketOverlay.IsOpen = true;
+        tradeQueueRunner.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
     }
@@ -487,6 +640,8 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.RemoveHandler(CmdMain);
 
         workshopAssemblyRunner.Dispose();
+        tradeQueueRunner.Dispose();
+        tradeAutomationCoordinator.Dispose();
 
         windowSystem.RemoveAllWindows();
         mainWindow.ProjectBrowser.Dispose();
@@ -494,6 +649,7 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.Dispose();
         reporter.Dispose();
         remoteMarketAccessProbe.Dispose();
+        marketBoardBrowseObserver.Dispose();
         retainerHistoryObserver.Dispose();
         retainerSaleChatObserver.Dispose();
         quartermaster.Dispose();
@@ -523,10 +679,10 @@ public sealed class Plugin : IDalamudPlugin
         {
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
             await Framework.RunOnTick(
-                () => reporter.SendReportAsync(quiet: true),
+                () => reporter.SendDeltaReportAsync(quiet: true),
                 cancellationToken: cancellationToken);
             Log.Information(
-                "[MarketMafioso] Shipped inventory report after Quartermaster revision {Revision}.",
+                "[MarketMafioso] Processed inventory delta after Quartermaster revision {Revision}.",
                 revision);
         }
         catch (OperationCanceledException)

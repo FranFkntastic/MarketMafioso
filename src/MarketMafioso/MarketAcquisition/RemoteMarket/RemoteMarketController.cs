@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Network.Structures;
+using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.MarketBoard;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -42,13 +43,16 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly IGameGui gameGui;
     private readonly ICondition condition;
     private readonly IChatGui chatGui;
+    private readonly INotificationManager notificationManager;
     private readonly IPluginLog log;
     private readonly Func<uint, string?> resolveItemName;
     private readonly Func<uint, string?, MarketBoardItemSearchResult> searchDriver;
+    private readonly IMarketBoardBrowseRuntime browseRuntime;
     private readonly CmbMarketContextClient cmbContext;
     private readonly string evidenceDirectory;
     private readonly Dalamud.Plugin.Ipc.ICallGateProvider<uint, uint?, bool> openRemoteMarketProvider;
     private readonly Dalamud.Plugin.Ipc.ICallGateProvider<bool> remoteMarketAvailableProvider;
+    private readonly RemoteMarketNativePurchaseGuard nativePurchaseGuard;
 
     private readonly List<RemoteMarketBatchItem> batchItems = [];
     private RemoteMarketPurchaseAttempt? attempt;
@@ -59,7 +63,6 @@ internal sealed class RemoteMarketController : IDisposable
     private int listingCaptureQueued;
     private CmbMarketContext? marketContext;
     private long viewRevision;
-    private int debugSearchGeneration;
     private RemoteMarketView cachedView = new(
         0,
         false,
@@ -70,9 +73,17 @@ internal sealed class RemoteMarketController : IDisposable
         null,
         null,
         null,
-        null);
+        null,
+        string.Empty);
     private uint? pendingSelectionMaxPrice;
     private DateTimeOffset pendingSelectionExpiresAtUtc;
+    private bool blockedNativePurchaseRecoveryScheduled;
+    private string? trackedBrowseOperationId;
+    private uint trackedBrowseItemId;
+    private string? trackedBrowseItemName;
+    private bool trackedBrowseTerminalReported;
+    private bool trackedBrowseSearchActive;
+    private DateTimeOffset nextTrackedBrowsePollUtc;
 
     public RemoteMarketController(
         Configuration configuration,
@@ -83,9 +94,13 @@ internal sealed class RemoteMarketController : IDisposable
         IGameGui gameGui,
         ICondition condition,
         IChatGui chatGui,
+        INotificationManager notificationManager,
+        IGameInteropProvider interopProvider,
+        IAddonLifecycle addonLifecycle,
         IPluginLog log,
         Func<uint, string?> resolveItemName,
         Func<uint, string?, MarketBoardItemSearchResult> searchDriver,
+        IMarketBoardBrowseRuntime browseRuntime,
         Dalamud.Plugin.IDalamudPluginInterface pluginInterface,
         string pluginConfigDirectory)
     {
@@ -97,14 +112,22 @@ internal sealed class RemoteMarketController : IDisposable
         this.gameGui = gameGui;
         this.condition = condition;
         this.chatGui = chatGui;
+        this.notificationManager = notificationManager;
         this.log = log;
         this.resolveItemName = resolveItemName;
         this.searchDriver = searchDriver;
+        this.browseRuntime = browseRuntime ?? throw new ArgumentNullException(nameof(browseRuntime));
         cmbContext = new CmbMarketContextClient(pluginInterface, log);
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-market");
+        nativePurchaseGuard = new RemoteMarketNativePurchaseGuard(
+            interopProvider,
+            addonLifecycle,
+            log,
+            ScheduleBlockedNativePurchaseRecovery);
         marketBoard.PurchaseRequested += OnPurchaseRequested;
         marketBoard.ItemPurchased += OnItemPurchased;
         marketBoard.OfferingsReceived += OnOfferingsReceived;
+        framework.Update += OnFrameworkUpdate;
         cmbContext.ContextChanged += OnMarketContextChanged;
         condition.ConditionChange += OnConditionChange;
         openRemoteMarketProvider = pluginInterface.GetIpcProvider<uint, uint?, bool>("MarketMafioso.OpenRemoteMarket");
@@ -114,13 +137,17 @@ internal sealed class RemoteMarketController : IDisposable
     }
 
     public bool IsAvailable =>
-        MarketAcquisitionUnlock.IsUnlocked(configuration) && configuration.EnableRemoteMarketPurchase;
+        MarketAcquisitionUnlock.IsUnlocked(configuration) &&
+        configuration.EnableRemoteMarketPurchase;
 
     public void Dispose()
     {
+        CloseOwnedRemoteMarketAgent();
         marketBoard.PurchaseRequested -= OnPurchaseRequested;
         marketBoard.ItemPurchased -= OnItemPurchased;
         marketBoard.OfferingsReceived -= OnOfferingsReceived;
+        framework.Update -= OnFrameworkUpdate;
+        nativePurchaseGuard.Dispose();
         cmbContext.ContextChanged -= OnMarketContextChanged;
         cmbContext.Dispose();
         condition.ConditionChange -= OnConditionChange;
@@ -144,9 +171,10 @@ internal sealed class RemoteMarketController : IDisposable
     {
         if (!IsAvailable || itemId == 0 || !clientState.IsLoggedIn)
             return false;
-        OpenMarketBoard();
-        var result = searchDriver(itemId, resolveItemName(itemId));
-        if (!result.SearchSent)
+        if (!HasReusableVisibleBrowse(itemId))
+            OpenMarketBoard();
+        var result = SearchItem(itemId, resolveItemName(itemId));
+        if (!result.IsInProgress && !result.ReadyForListings)
             return false;
         pendingSelectionMaxPrice = maxUnitPrice ?? 0;
         pendingSelectionExpiresAtUtc = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
@@ -166,48 +194,44 @@ internal sealed class RemoteMarketController : IDisposable
         if (string.IsNullOrWhiteSpace(itemName))
             return "The requested item name could not be resolved.";
 
-        OpenMarketBoard();
-        var generation = Interlocked.Increment(ref debugSearchGeneration);
-        framework.RunOnTick(
-            () => AdvanceDebugListingSearch(itemId, itemName, generation, DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10)));
-        return $"Listing search queued for {itemName}.";
+        if (!HasReusableVisibleBrowse(itemId))
+            OpenMarketBoard();
+        var result = SearchItem(itemId, itemName);
+        return result.IsInProgress || result.ReadyForListings
+            ? $"Listing search queued for {itemName}."
+            : result.Message;
     }
 
-    private void AdvanceDebugListingSearch(
-        uint itemId,
-        string itemName,
-        int generation,
-        DateTimeOffset deadlineUtc)
+    private unsafe bool HasReusableVisibleBrowse(uint itemId)
     {
-        if (generation != Volatile.Read(ref debugSearchGeneration))
-            return;
-
-        var result = searchDriver(itemId, itemName);
-        if (result.ReadyForListings)
-        {
-            log.Information(
-                "[MarketMafioso] DAB market listing search reached ListingsReady. Item={ItemId}",
-                itemId);
-            return;
-        }
-
-        if (!result.IsInProgress || DateTimeOffset.UtcNow >= deadlineUtc)
-        {
-            log.Warning(
-                "[MarketMafioso] DAB market listing search stopped. Item={ItemId} Status={Status} Message={Message}",
-                itemId,
-                result.Status,
-                result.Message);
-            return;
-        }
-
-        framework.RunOnTick(
-            () => AdvanceDebugListingSearch(itemId, itemName, generation, deadlineUtc),
-            TimeSpan.FromMilliseconds(100));
+        var itemSearchResult = gameGui.GetAddonByName<AddonItemSearchResult>("ItemSearchResult", 1);
+        var resultVisible =
+            itemSearchResult != null &&
+            itemSearchResult->AtkUnitBase.IsReady &&
+            itemSearchResult->AtkUnitBase.IsVisible;
+        var infoProxy = resultVisible ? InfoProxyItemSearch.Instance() : null;
+        var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
+        return MarketBoardItemSearchDriver.ShouldReuseOwnedTerminalResult(
+            browseRuntime.Snapshot,
+            MarketBoardBrowseOwner.RemoteMarketController,
+            itemId,
+            resultVisible,
+            openResultItemId);
     }
 
     private void OnOfferingsReceived(IMarketBoardCurrentOfferings offerings)
     {
+        var browse = browseRuntime.Snapshot;
+        if (!browse.RequestAccepted ||
+            browse.IsFailed ||
+            browse.ItemId == 0 ||
+            browse.RequestId is not { } requestId ||
+            requestId != unchecked((byte)offerings.RequestId) ||
+            offerings.ItemListings.Any(listing => listing.ItemId != browse.ItemId))
+        {
+            return;
+        }
+
         var itemId = offerings.ItemListings.Count > 0 ? offerings.ItemListings[0].ItemId : 0u;
         if (itemId != 0)
         {
@@ -230,13 +254,30 @@ internal sealed class RemoteMarketController : IDisposable
         Volatile.Write(ref listingCaptureQueued, 0);
         var itemNames = new Dictionary<uint, string>();
         var listings = new List<RemoteMarketListingView>();
+        var browse = browseRuntime.Snapshot;
         var proxy = GetItemSearchProxy();
-        if (proxy != null)
+        if (proxy != null &&
+            browse.IsComplete &&
+            browse.ItemId != 0 &&
+            proxy->SearchItemId == browse.ItemId &&
+            proxy->ListingCount == browse.ExpectedListingCount &&
+            (browse.RequestId is null ||
+             proxy->InfoProxyPageInterface.CurrentRequestId == browse.RequestId))
         {
-            var count = (int)Math.Min(proxy->ListingCount, 50);
+            var count = Math.Min(browse.ExpectedListingCount, 50);
             for (var index = 0; index < count; index++)
             {
                 var listing = proxy->Listings[index];
+                if (listing.ItemId != browse.ItemId ||
+                    listing.ListingId == 0 ||
+                    listing.RetainerId == 0 ||
+                    listing.UnitPrice == 0 ||
+                    listing.Quantity == 0)
+                {
+                    listings.Clear();
+                    break;
+                }
+
                 if (!itemNames.TryGetValue(listing.ItemId, out var itemName))
                 {
                     itemName = resolveItemName(listing.ItemId) ?? $"Item {listing.ItemId}";
@@ -289,6 +330,13 @@ internal sealed class RemoteMarketController : IDisposable
 
     public string? GetPurchaseContextBlockReason()
     {
+        if (!browseRuntime.IsAvailable)
+            return browseRuntime.AvailabilityMessage;
+        var browse = browseRuntime.Snapshot;
+        if (!browse.IsComplete)
+            return $"Remote listings are not verified: {browse.Message}";
+        if (!nativePurchaseGuard.IsAvailable)
+            return "The native-purchase guard is unavailable, so remote purchases are blocked.";
         foreach (var flag in PurchaseBlockingConditions)
         {
             if (condition[flag])
@@ -297,6 +345,92 @@ internal sealed class RemoteMarketController : IDisposable
         if (configuration.RemoteMarketRejectedTerritories.Contains(clientState.TerritoryType))
             return "Purchases have been rejected in this area before.";
         return null;
+    }
+
+    public void ClearRejectedTerritories()
+    {
+        configuration.RemoteMarketRejectedTerritories.Clear();
+        configuration.Save();
+        RebuildView();
+    }
+
+    public void SetDebugOutcome(string message)
+    {
+        lastOutcome = message;
+        RebuildView();
+    }
+
+    public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName)
+    {
+        trackedBrowseItemId = itemId;
+        trackedBrowseItemName = itemName;
+        trackedBrowseSearchActive = true;
+        nextTrackedBrowsePollUtc = DateTimeOffset.UtcNow;
+        return AdvanceTrackedBrowseSearch();
+    }
+
+    private MarketBoardItemSearchResult AdvanceTrackedBrowseSearch()
+    {
+        var result = searchDriver(trackedBrowseItemId, trackedBrowseItemName);
+        nextTrackedBrowsePollUtc = DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(500);
+        if (result.BrowseEvidence is { } browse &&
+            !string.IsNullOrWhiteSpace(browse.OperationId))
+        {
+            trackedBrowseOperationId = browse.OperationId;
+            trackedBrowseTerminalReported = false;
+        }
+
+        if (!result.IsInProgress && !result.ReadyForListings)
+        {
+            lastOutcome = result.Message;
+            trackedBrowseSearchActive = false;
+        }
+        else if (result.ReadyForListings)
+        {
+            trackedBrowseSearchActive = false;
+        }
+
+        RebuildView();
+        return result;
+    }
+
+    public unsafe string RunNativePurchaseGuardSelfTest()
+    {
+        if (!IsAvailable || !nativePurchaseGuard.IsAvailable)
+            return "Native-purchase guard is unavailable.";
+        if (!nativePurchaseGuard.IsRemoteSessionActive)
+            return "Open the board through MMF before testing the native-purchase guard.";
+
+        var proxy = GetItemSearchProxy();
+        if (proxy == null)
+            return "ItemSearch proxy is unavailable.";
+        if (proxy->LastPurchasedMarketboardItem.ListingId != 0)
+            return "Guard test refused: a real listing is currently staged.";
+
+        var blockedBefore = nativePurchaseGuard.BlockedNativePurchaseCount;
+        var sent = proxy->SendPurchaseRequestPacket();
+        var blockedAfter = nativePurchaseGuard.BlockedNativePurchaseCount;
+        if (sent || blockedAfter <= blockedBefore)
+            return "Guard test failed: the normal client entry point was not intercepted.";
+
+        const string result = "Guard test passed: the normal client entry point was blocked with no listing staged.";
+        log.Information("[MarketMafioso] {Result}", result);
+        return result;
+    }
+
+    public unsafe string CloseMarketBoardForTesting()
+    {
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
+        if (agent == null || !agent->IsAgentActive())
+            return "Market board is already closed.";
+
+        agent->Hide();
+        AbandonTrackedBrowse("Remote market board closed during testing.");
+        nativePurchaseGuard.ObserveMarketAgentActive(false);
+        ClearStagedPurchase();
+        DismissLingeringConfirmationDialogs();
+        return "Market board closed and remote ownership released.";
     }
 
     public string OpenMarketBoard()
@@ -311,8 +445,10 @@ internal sealed class RemoteMarketController : IDisposable
             var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
             if (agent == null)
                 return "ItemSearch agent is unavailable.";
+            var wasActive = agent->IsAgentActive();
             agent->Show();
             var opened = agent->IsAgentActive();
+            nativePurchaseGuard.ObserveRemoteOpen(wasActive, opened);
             log.Information("[MarketMafioso] Remote market board opened. Territory={Territory} AgentActive={AgentActive}", clientState.TerritoryType, opened);
             return opened ? "Market board opened." : "Market board was shown but did not activate.";
         }
@@ -322,6 +458,7 @@ internal sealed class RemoteMarketController : IDisposable
 
     private void RebuildView()
     {
+        var browse = browseRuntime.Snapshot;
         var listings = listingSnapshot
             .Select(listing => listing with
             {
@@ -340,7 +477,7 @@ internal sealed class RemoteMarketController : IDisposable
 
         cachedView = new RemoteMarketView(
             ++viewRevision,
-            IsAvailable,
+            IsAvailable && browse.IsComplete,
             listings,
             batch,
             lastOutcome,
@@ -348,7 +485,8 @@ internal sealed class RemoteMarketController : IDisposable
             GetCurrentGil(),
             marketContext,
             BuildEconomics(listings, marketContext),
-            BuildMarketContextSummary(listings, marketContext));
+            BuildMarketContextSummary(listings, marketContext),
+            browse.Message);
     }
 
     private static RemoteMarketEconomicsView? BuildEconomics(
@@ -487,7 +625,7 @@ internal sealed class RemoteMarketController : IDisposable
                 var listingPointer = (MarketBoardListing*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref staged);
                 if (!proxy->SetLastPurchasedItem(listingPointer))
                     failure = "The client refused to stage the listing.";
-                else if (!proxy->SendPurchaseRequestPacket())
+                else if (!nativePurchaseGuard.SendOwned(proxy))
                     failure = "The client refused to send the purchase request.";
             }
         }
@@ -680,6 +818,118 @@ internal sealed class RemoteMarketController : IDisposable
     private void DismissLingeringConfirmationDialogsSoon() =>
         framework.RunOnTick(DismissLingeringConfirmationDialogs, TimeSpan.FromMilliseconds(500));
 
+    private void OnFrameworkUpdate(IFramework _)
+    {
+        if (trackedBrowseSearchActive && DateTimeOffset.UtcNow >= nextTrackedBrowsePollUtc)
+            AdvanceTrackedBrowseSearch();
+        ObserveTrackedBrowse();
+        unsafe
+        {
+            var agentModule = AgentModule.Instance();
+            var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
+            nativePurchaseGuard.ObserveMarketAgentActive(agent != null && agent->IsAgentActive());
+        }
+    }
+
+    private void ObserveTrackedBrowse()
+    {
+        if (trackedBrowseTerminalReported ||
+            string.IsNullOrWhiteSpace(trackedBrowseOperationId))
+        {
+            return;
+        }
+
+        var browse = browseRuntime.Snapshot;
+        if (!string.Equals(browse.OperationId, trackedBrowseOperationId, StringComparison.Ordinal) ||
+            browse.ItemId != trackedBrowseItemId ||
+            !browse.IsTerminal)
+        {
+            return;
+        }
+
+        trackedBrowseTerminalReported = true;
+        lastOutcome = browse.Message;
+        if (browse.IsFailed)
+        {
+            log.Warning(
+                "[MarketMafioso] Remote market browse failed closed. OperationId={OperationId} Code={Code} Message={Message}",
+                browse.OperationId,
+                browse.FailureCode ?? "Unknown",
+                browse.Message);
+            RebuildView();
+        }
+        else
+        {
+            log.Information(
+                "[MarketMafioso] Remote market browse completed. OperationId={OperationId} ItemId={ItemId} Listings={Listings} Pages={Pages}",
+                browse.OperationId,
+                browse.ItemId,
+                browse.ExpectedListingCount,
+                browse.PageCount);
+            CaptureListingSnapshot();
+        }
+    }
+
+    private unsafe void CloseOwnedRemoteMarketAgent()
+    {
+        AbandonTrackedBrowse("Remote market controller disposed or closed its owned agent.");
+        if (!nativePurchaseGuard.IsRemoteSessionActive)
+            return;
+
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
+        if (agent != null && agent->IsAgentActive())
+        {
+            log.Information("[MarketMafioso] Closing MMF-owned remote market agent during plugin disposal.");
+            agent->Hide();
+        }
+
+        nativePurchaseGuard.ObserveMarketAgentActive(false);
+        ClearStagedPurchase();
+    }
+
+    private void AbandonTrackedBrowse(string reason)
+    {
+        var browse = browseRuntime.Snapshot;
+        if (browse.IsActive &&
+            browse.Owner == MarketBoardBrowseOwner.RemoteMarketController &&
+            !string.IsNullOrWhiteSpace(browse.OperationId))
+        {
+            browseRuntime.TryAbandon(
+                MarketBoardBrowseOwner.RemoteMarketController,
+                browse.OperationId,
+                reason,
+                out _);
+        }
+
+        trackedBrowseSearchActive = false;
+        RebuildView();
+    }
+
+    private void ScheduleBlockedNativePurchaseRecovery()
+    {
+        if (blockedNativePurchaseRecoveryScheduled)
+            return;
+
+        blockedNativePurchaseRecoveryScheduled = true;
+        framework.RunOnTick(() =>
+        {
+            blockedNativePurchaseRecoveryScheduled = false;
+            ClearStagedPurchase();
+            DismissLingeringConfirmationDialogs();
+            lastOutcome = "Native purchase blocked locally; no request was sent and this area was not marked as rejecting purchases.";
+            RebuildView();
+            notificationManager.AddNotification(new Notification
+            {
+                Title = "MMF Remote Market",
+                Content = "Native market-board purchases aren't available remotely. Select the listing in MMF and confirm it there.",
+                Type = NotificationType.Warning,
+                InitialDuration = TimeSpan.FromSeconds(8),
+                Minimized = false,
+            });
+        });
+    }
+
     private void DismissLingeringConfirmationDialogs()
     {
         string[] dialogAddons = ["SelectYesno", "SelectOk"];
@@ -836,7 +1086,8 @@ internal sealed record RemoteMarketView(
     uint? GilOnHand,
     CmbMarketContext? MarketContext,
     RemoteMarketEconomicsView? Economics,
-    string? MarketContextSummary);
+    string? MarketContextSummary,
+    string BrowseMessage);
 
 internal sealed class RemoteMarketPurchaseAttempt(
     RemoteMarketSelectionView selection,

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
@@ -7,6 +8,8 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Items;
+using Franthropy.Dalamud.UI.Tables;
+using MarketMafioso.AgentBridge;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.MarketAcquisition.ExactAuthority;
@@ -22,7 +25,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private readonly MarketAcquisitionRequestBuilderController controller;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly DalamudItemAutocompleteState itemAutocomplete = new();
-    private readonly HashSet<uint> expandedEvidenceItems = [];
 
     private string quantityMode = "AllBelowThreshold";
     private string targetQuantityBuffer = string.Empty;
@@ -30,6 +32,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private string gilCapBuffer = string.Empty;
     private string hqPolicy = "Either";
     private bool isAppraising;
+    private bool selectedLineInspectorRequested;
 
     private MarketAcquisitionRequestDocument document => controller.Document;
     private string status => controller.Status;
@@ -62,6 +65,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     public bool HasExactAcquisitionAuthority => document.ExactAcquisitionAuthority is not null;
 
+    public bool HasPreviousWorkbench => controller.HasPreviousWorkbench;
+
     public void MarkPlanPrepared(string planHash) => controller.MarkPlanPrepared(planHash);
 
     public void AdoptRequest(MarketAcquisitionRequestView request) => controller.AdoptRequest(request);
@@ -71,6 +76,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     public int StageLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
         controller.AddLines(lines);
+
+    public int StageLines(
+        IEnumerable<MarketAcquisitionRequestLineDocument> lines,
+        string sourceLabel) =>
+        controller.AddLines(lines, sourceLabel);
 
     public void StageExactAcquisitionTransfer(ExactAcquisitionWorkbenchTransfer transfer) =>
         controller.StageExactAcquisitionTransfer(transfer);
@@ -92,6 +102,22 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         string world) =>
         controller.LoadComposition(composition, characterName, world);
 
+    public void StartBlankWorkbench(MarketAcquisitionRequestBuilderContext context)
+    {
+        controller.StartBlankWorkbench(
+            context.HasCharacterScope ? context.CharacterName : string.Empty,
+            context.HasCharacterScope ? context.World : string.Empty);
+        ClearLineEditor();
+    }
+
+    public bool RestorePreviousWorkbench()
+    {
+        var restored = controller.RestorePreviousWorkbench();
+        if (restored)
+            ClearLineEditor();
+        return restored;
+    }
+
     public void Draw(MarketAcquisitionRequestBuilderContext context, float reservedFooterHeight = 0)
     {
         craftAppraisal.State.WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes;
@@ -106,7 +132,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.Spacing();
         DrawExceptionalStatus(context);
         ImGuiUi.SectionHeader("Buy list", MainWindow.ColHeader);
-        DrawCompactLineTable(context, reservedFooterHeight);
+        DrawSelectedLineWorkspace(context, reservedFooterHeight);
     }
 
     public bool IsSynchronizing => controller.IsSyncing;
@@ -132,6 +158,34 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             var sum = (ulong)total + line.TargetQuantity;
             return sum > uint.MaxValue ? uint.MaxValue : (uint)sum;
         });
+
+    public AgentBridgeCraftAppraisalTruth CreateAgentBridgeCraftAppraisalTruth()
+    {
+        var selected = craftAppraisal.State.SelectedLine;
+        var quote = selected is null
+            ? craftAppraisal.State.LatestQuote
+            : craftAppraisal.State.GetLineQuote(selected)?.Quote;
+        return new AgentBridgeCraftAppraisalTruth
+        {
+            IsFetching = isAppraising || craftAppraisal.IsFetchingCraftQuote,
+            Status = craftAppraisal.State.CraftQuoteStatus,
+            WorkshopHostEnabled = craftAppraisal.State.WorkshopHostEnabled,
+            WorkshopHostAvailable = craftAppraisal.State.WorkshopHostAvailable,
+            SelectedItemId = selected?.ItemId,
+            SelectedItemName = selected?.ItemName,
+            RequestedQuantity = selected?.Quantity,
+            HqPolicy = selected?.HqPolicy,
+            Region = selected?.Region,
+            HasQuote = quote is not null,
+            QuoteComplete = quote?.IsComplete == true,
+            QuoteUnitCost = quote?.EstimatedUnitCost,
+            QuoteSource = quote?.Source,
+            QuoteConfidence = quote?.Confidence,
+            WarningCount = quote?.Warnings.Count ?? 0,
+            PlanId = quote?.PlanId,
+            CanOpenPlan = !string.IsNullOrWhiteSpace(quote?.PlanUrl),
+        };
+    }
 
     private void DrawExactAcquisitionAuthority(MarketAcquisitionRequestBuilderContext context)
     {
@@ -200,13 +254,55 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
     }
 
-    private void DrawCompactLineTable(MarketAcquisitionRequestBuilderContext context, float reservedFooterHeight)
+    private void DrawSelectedLineWorkspace(
+        MarketAcquisitionRequestBuilderContext context,
+        float reservedFooterHeight)
     {
+        var selection = BuildSelectedLinePresentation(context);
+        var surface = MarketAcquisitionSelectedLinePresenter.ResolveSurface(
+            selectedLineInspectorRequested,
+            selection);
+        if (surface == MarketAcquisitionSelectedLineSurface.CommandBar)
+            DrawSelectedLineCommandBar(context, selection);
+
         var tableHeight = Math.Max(150f, ImGui.GetContentRegionAvail().Y - Math.Max(0, reservedFooterHeight));
+        if (surface == MarketAcquisitionSelectedLineSurface.Inspector)
+            DrawCompactLineTableWithInspector(context, tableHeight, selection!);
+        else
+            DrawCompactLineTable(context, tableHeight);
+    }
+
+    private void DrawCompactLineTableWithInspector(
+        MarketAcquisitionRequestBuilderContext context,
+        float tableHeight,
+        MarketAcquisitionSelectedLinePresentation selection)
+    {
+        var flags = ImGuiTableFlags.SizingStretchProp |
+                    ImGuiTableFlags.BordersInnerV |
+                    ImGuiTableFlags.NoSavedSettings;
+        if (!ImGui.BeginTable("AcquisitionWorkbenchSelectionLayout", 2, flags, new Vector2(0, tableHeight)))
+            return;
+
+        ImGui.TableSetupColumn("Buy list", ImGuiTableColumnFlags.WidthStretch, 1f);
+        ImGui.TableSetupColumn("Selected line", ImGuiTableColumnFlags.WidthFixed, 330f);
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        DrawCompactLineTable(context, tableHeight);
+        ImGui.TableNextColumn();
+        if (ImGui.BeginChild("AcquisitionWorkbenchSelectedLineInspector", new Vector2(0, tableHeight), true))
+            DrawSelectedLineInspector(context, selection);
+        ImGui.EndChild();
+        ImGui.EndTable();
+    }
+
+    private void DrawCompactLineTable(
+        MarketAcquisitionRequestBuilderContext context,
+        float tableHeight)
+    {
         var flags = AcquisitionRequestTableStyle.LineTableFlags |
                     ImGuiTableFlags.SizingStretchProp |
                     ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV2", 8, flags, new Vector2(0, tableHeight)))
+        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV3", 8, flags, new Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.4f);
@@ -215,7 +311,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TableSetupColumn("Unit ceiling", ImGuiTableColumnFlags.WidthStretch, 1.1f);
         ImGui.TableSetupColumn("Spend ceiling", ImGuiTableColumnFlags.WidthStretch, 1.2f);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthStretch, 0.8f);
-        ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch, 1f);
+        ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch, 1.4f);
         ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed, 72f);
         ImGui.TableHeadersRow();
 
@@ -223,8 +319,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         {
             var line = document.Lines[index];
             DrawCompactLineRow(context, line, index);
-            if (expandedEvidenceItems.Contains(line.ItemId))
-                DrawCompactEvidenceRow(context, line, index);
         }
 
         DrawCompactAddRow(context);
@@ -242,26 +336,30 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TableNextRow();
 
         ImGui.TableNextColumn();
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextUnformatted(FormatLineItemName(line));
-        ImGui.SameLine();
-        var detailsOpen = expandedEvidenceItems.Contains(line.ItemId);
-        void ToggleDetails()
+        var isSelected = controller.SelectedLineIndex == index;
+        var selectionCursor = ImGui.GetCursorPos();
+        var selection = DalamudTableSelectionRenderer.DrawRow(
+            "##SelectLine",
+            isSelected,
+            new Vector2(0f, ImGui.GetTextLineHeightWithSpacing()));
+        if (selection.Activated)
         {
-            if (expandedEvidenceItems.Contains(line.ItemId))
-                expandedEvidenceItems.Remove(line.ItemId);
-            else
-                expandedEvidenceItems.Add(line.ItemId);
+            controller.SelectLine(index);
+            selectedLineInspectorRequested = false;
         }
-        if (ImGuiUi.Button(detailsOpen ? "Hide" : "Details", true))
-            ToggleDetails();
         RegisterLastControl(
-            $"acquisition.workbench.line.{line.ItemId}.details",
-            $"{(detailsOpen ? "Hide" : "Show")} pricing evidence for {FormatLineItemName(line)}",
-            true,
-            detailsOpen,
-            line.ItemId.ToString(),
-            ToggleDetails);
+            $"acquisition.workbench.line.{line.ItemId}.select",
+            $"Select {FormatLineItemName(line)} in the Workbench",
+            enabled: true,
+            selected: isSelected,
+            value: line.ItemId.ToString(),
+            () =>
+            {
+                controller.SelectLine(index);
+                selectedLineInspectorRequested = false;
+            });
+        ImGui.SetCursorPos(selectionCursor);
+        ImGui.TextUnformatted(FormatLineItemName(line));
 
         if (!canEdit || isExactAcquisitionLine)
             ImGui.BeginDisabled();
@@ -287,17 +385,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         if (!canEdit || isExactAcquisitionLine)
             ImGui.EndDisabled();
-
-        ImGui.TableNextColumn();
-        if (ImGuiUi.Button("Remove", canEdit))
-            RemoveLine(index);
-        RegisterLastControl(
-            $"acquisition.workbench.line.{line.ItemId}.{line.HqPolicy.ToLowerInvariant()}.remove",
-            $"Remove {FormatLineItemName(line)} from the Workbench",
-            canEdit,
-            false,
-            line.ItemId.ToString(),
-            () => RemoveLine(index));
 
         ImGui.PopID();
     }
@@ -380,7 +467,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
         var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
         var canFetch = canEdit &&
-                       craftAppraisal.State.WorkshopHostEnabled &&
                        !isAppraising &&
                        line.ItemId != 0;
         if (ImGuiUi.MenuItem(
@@ -394,6 +480,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGuiUi.MenuItem("Use Craft Architect quote", canEdit && line.MaxUnitPrice != threshold.Value))
         {
             SetLineMaxUnitPrice(index, threshold.Value, "Unit ceiling set from Craft Architect quote.");
+        }
+
+        var quote = craftAppraisal.State.GetLineQuote(identity)?.Quote;
+        if (!string.IsNullOrWhiteSpace(quote?.PlanUrl) &&
+            ImGuiUi.MenuItem("Open Craft Architect plan", enabled: true))
+        {
+            OpenCraftArchitectPlan(quote.PlanUrl);
         }
 
         ImGui.EndPopup();
@@ -431,108 +524,307 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
         var quote = craftAppraisal.State.GetLineQuote(identity)?.Quote;
         var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
-        if (threshold is > 0)
-        {
-            var hasWarnings = quote?.Warnings.Count > 0;
-            ImGui.TextColored(
-                hasWarnings ? MainWindow.ColWarning : MainWindow.ColSuccess,
-                hasWarnings ? "Quote warning" : "Quote ready");
-        }
-        else if (line.MaxUnitPrice > 0)
-            ImGui.TextColored(MainWindow.ColMuted, "Manual");
-        else
-            ImGui.TextColored(MainWindow.ColWarning, "Missing");
-    }
-
-    private void DrawCompactEvidenceRow(
-        MarketAcquisitionRequestBuilderContext context,
-        MarketAcquisitionRequestLineDocument line,
-        int index)
-    {
-        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
-        var lineQuote = craftAppraisal.State.GetLineQuote(identity);
-        var quote = lineQuote?.Quote;
-        var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
-        ImGui.TableNextRow();
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(MainWindow.ColHeader, "Pricing evidence");
-        ImGui.SameLine();
-        ImGui.TextColored(MainWindow.ColMuted, FormatLineItemName(line));
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(
-            quote?.Source.Contains("last-good", StringComparison.OrdinalIgnoreCase) == true
-                ? MainWindow.ColWarning
-                : MainWindow.ColMuted,
-            quote?.Source ?? "Craft Architect");
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(MainWindow.ColMuted, quote?.Confidence ?? "-");
-
-        ImGui.TableNextColumn();
-        if (threshold is > 0)
-            ImGui.TextColored(MainWindow.ColSuccess, $"{threshold.Value:N0} gil");
-        else
-            ImGui.TextColored(MainWindow.ColMuted, "No quote");
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(
-            quote is null ? MainWindow.ColWarning : MainWindow.ColMuted,
-            quote is null
-                ? craftAppraisal.State.CraftQuoteStatus
-                : CraftQuoteDisplayFormatter.FormatQuoteSummary(quote, DateTimeOffset.UtcNow));
-
-        ImGui.TableNextColumn();
         var warningCount = quote?.Warnings.Count ?? 0;
+        var summary = MarketAcquisitionSelectedLinePresenter.FormatEvidenceSummary(
+            line,
+            quote,
+            threshold,
+            warningCount);
         ImGui.TextColored(
-            warningCount > 0 ? MainWindow.ColWarning : MainWindow.ColMuted,
-            warningCount == 0 ? "No warnings" : $"{warningCount:N0} warning(s)");
+            warningCount > 0 || threshold is null && line.MaxUnitPrice == 0
+                ? MainWindow.ColWarning
+                : threshold is > 0
+                    ? MainWindow.ColSuccess
+                    : MainWindow.ColMuted,
+            summary);
         if (warningCount > 0 && ImGui.IsItemHovered())
         {
             ImGui.BeginTooltip();
+            ImGui.PushTextWrapPos(ImGui.GetFontSize() * 34f);
             foreach (var warning in quote!.Warnings)
                 ImGui.TextWrapped(warning);
+            ImGui.PopTextWrapPos();
             ImGui.EndTooltip();
         }
+    }
 
-        ImGui.TableNextColumn();
-        var canFetch = craftAppraisal.State.WorkshopHostEnabled && !isAppraising && line.ItemId != 0;
-        var fetchLabel = threshold is > 0 ? "Refresh quote" : "Get quote";
-        if (ImGuiUi.Button(fetchLabel, canFetch))
-            _ = FetchCraftQuoteEvidenceAsync(index);
-        RegisterLastControl(
-            $"acquisition.workbench.line.{line.ItemId}.quote.refresh",
-            $"{fetchLabel} for {FormatLineItemName(line)}",
-            canFetch,
+    private MarketAcquisitionSelectedLinePresentation? BuildSelectedLinePresentation(
+        MarketAcquisitionRequestBuilderContext context)
+    {
+        var index = controller.SelectedLineIndex;
+        var isExactLine = index >= 0 &&
+                          index < document.Lines.Count &&
+                          controller.IsExactAcquisitionLine(index);
+        return MarketAcquisitionSelectedLinePresenter.Build(
+            document,
+            index,
+            craftAppraisal.State,
+            CanEdit(context),
             isAppraising,
-            quote?.Source,
-            () => _ = FetchCraftQuoteEvidenceAsync(index));
-        if (threshold is > 0)
+            isExactLine,
+            DateTimeOffset.UtcNow);
+    }
+
+    private void DrawSelectedLineCommandBar(
+        MarketAcquisitionRequestBuilderContext context,
+        MarketAcquisitionSelectedLinePresentation? selection)
+    {
+        var height = ImGui.GetFrameHeightWithSpacing() + 10f;
+        if (!ImGui.BeginChild("AcquisitionWorkbenchSelectedLineCommandBar", new Vector2(0, height), true))
         {
-            ImGui.SameLine();
-            var canApply = !context.IsBusy &&
-                           !context.IsRouteActive &&
-                           !IsSynchronizing &&
-                           line.MaxUnitPrice != threshold.Value;
-            if (ImGuiUi.Button("Use quote", canApply))
-                SetLineMaxUnitPrice(index, threshold.Value, "Unit ceiling set from Craft Architect quote.");
-            RegisterLastControl(
-                $"acquisition.workbench.line.{line.ItemId}.quote.apply",
-                $"Use Craft Architect quote for {FormatLineItemName(line)}",
-                canApply,
-                line.MaxUnitPrice == threshold.Value,
-                threshold.Value.ToString(),
-                () => SetLineMaxUnitPrice(index, threshold.Value, "Unit ceiling set from Craft Architect quote."));
+            ImGui.EndChild();
+            return;
         }
 
-        ImGui.TableNextColumn();
-        ImGui.TextUnformatted(string.Empty);
+        ImGui.AlignTextToFramePadding();
+        if (selection is null)
+        {
+            ImGui.TextColored(MainWindow.ColMuted, "Select a buy-list line to work with it.");
+            DrawDisabledSelectionActions();
+        }
+        else
+        {
+            ImGui.TextColored(MainWindow.ColHeader, selection.ItemName);
+            ImGui.SameLine();
+            ImGui.TextColored(
+                selection.QuoteUnitPrice is > 0 ? MainWindow.ColSuccess : MainWindow.ColMuted,
+                selection.QuoteUnitPrice is > 0
+                    ? $"{selection.QuoteUnitPrice.Value:N0} gil"
+                    : selection.CurrentUnitPrice > 0
+                        ? $"{selection.CurrentUnitPrice:N0} gil manual"
+                        : "No quote");
+            if (selection.Warnings.Count > 0)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(
+                    MainWindow.ColWarning,
+                    $"{selection.Warnings.Count:N0} warning{(selection.Warnings.Count == 1 ? string.Empty : "s")}");
+                DrawWarningsTooltip(selection.Warnings);
+            }
+
+            var actionWidth = CalculateSelectionActionWidth(selection, includeDetails: true);
+            ImGuiUi.SameLineRight(actionWidth);
+            if (ImGuiUi.Button("Details", enabled: true))
+                selectedLineInspectorRequested = true;
+            RegisterLastControl(
+                $"acquisition.workbench.line.{selection.ItemId}.details",
+                $"Show pricing evidence for {selection.ItemName}",
+                enabled: true,
+                selected: false,
+                value: selection.ItemId.ToString(),
+                () => selectedLineInspectorRequested = true);
+            DrawSelectedLineActions(context, selection, sameLine: true);
+        }
+
+        ImGui.EndChild();
+    }
+
+    private void DrawSelectedLineInspector(
+        MarketAcquisitionRequestBuilderContext context,
+        MarketAcquisitionSelectedLinePresentation selection)
+    {
+        ImGui.TextColored(MainWindow.ColHeader, selection.ItemName);
+        var closeWidth = ImGui.CalcTextSize("Close details").X + (ImGui.GetStyle().FramePadding.X * 2f);
+        ImGuiUi.SameLineRight(closeWidth);
+        if (ImGuiUi.Button("Close details", enabled: true))
+            selectedLineInspectorRequested = false;
+        RegisterLastControl(
+            $"acquisition.workbench.line.{selection.ItemId}.details.close",
+            $"Close pricing evidence for {selection.ItemName}",
+            enabled: true,
+            selected: true,
+            value: selection.ItemId.ToString(),
+            () => selectedLineInspectorRequested = false);
+        ImGui.Separator();
+
+        ImGui.TextColored(MainWindow.ColMuted, "CRAFT ARCHITECT QUOTE");
+        ImGui.TextColored(
+            selection.QuoteUnitPrice is > 0 ? MainWindow.ColSuccess : MainWindow.ColMuted,
+            selection.QuoteUnitPrice is > 0
+                ? $"{selection.QuoteUnitPrice.Value:N0} gil"
+                : "No complete quote");
+        ImGui.TextColored(
+            MainWindow.ColMuted,
+            $"{selection.QuoteSource} · {selection.QuoteConfidence} confidence");
+        ImGui.Spacing();
+
+        ImGui.TextColored(MainWindow.ColMuted, "CURRENT UNIT CEILING");
+        ImGui.TextUnformatted(
+            selection.CurrentUnitPrice > 0
+                ? $"{selection.CurrentUnitPrice:N0} gil"
+                : "Unset");
+        ImGui.Spacing();
+
+        ImGui.TextColored(MainWindow.ColMuted, "QUOTE STATUS");
+        ImGui.PushTextWrapPos();
+        ImGui.TextWrapped(selection.QuoteStatus);
+        ImGui.PopTextWrapPos();
+
+        if (selection.Warnings.Count > 0)
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(
+                MainWindow.ColWarning,
+                $"QUOTE WARNING{(selection.Warnings.Count == 1 ? string.Empty : "S")}");
+            foreach (var warning in selection.Warnings)
+            {
+                ImGui.PushTextWrapPos();
+                ImGui.TextWrapped(warning);
+                ImGui.PopTextWrapPos();
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        DrawSelectedLineActions(context, selection, sameLine: false);
+    }
+
+    private void DrawSelectedLineActions(
+        MarketAcquisitionRequestBuilderContext context,
+        MarketAcquisitionSelectedLinePresentation selection,
+        bool sameLine)
+    {
+        _ = context;
+        foreach (var action in selection.Actions)
+        {
+            if (sameLine)
+                ImGui.SameLine();
+
+            var clicked = action.IsPrimary
+                ? ImGuiUi.PrimaryButton(action.Label, action.Enabled)
+                : ImGuiUi.Button(action.Label, action.Enabled);
+            if (clicked)
+                InvokeSelectedLineAction(selection, action.Kind);
+
+            RegisterLastControl(
+                BuildSelectedLineControlId(selection, action.Kind),
+                BuildSelectedLineControlLabel(selection, action),
+                action.Enabled,
+                action.Kind == MarketAcquisitionSelectedLineActionKind.UseQuote &&
+                selection.QuoteUnitPrice == selection.CurrentUnitPrice,
+                action.Value,
+                () => InvokeSelectedLineAction(selection, action.Kind));
+        }
+    }
+
+    private void InvokeSelectedLineAction(
+        MarketAcquisitionSelectedLinePresentation selection,
+        MarketAcquisitionSelectedLineActionKind kind)
+    {
+        switch (kind)
+        {
+            case MarketAcquisitionSelectedLineActionKind.RefreshQuote:
+                _ = FetchCraftQuoteEvidenceAsync(selection.LineIndex);
+                break;
+            case MarketAcquisitionSelectedLineActionKind.UseQuote:
+                if (selection.QuoteUnitPrice is > 0)
+                {
+                    SetLineMaxUnitPrice(
+                        selection.LineIndex,
+                        selection.QuoteUnitPrice.Value,
+                        "Unit ceiling set from Craft Architect quote.");
+                }
+                break;
+            case MarketAcquisitionSelectedLineActionKind.OpenPlan:
+                if (!string.IsNullOrWhiteSpace(selection.PlanUrl))
+                    OpenCraftArchitectPlan(selection.PlanUrl);
+                break;
+            case MarketAcquisitionSelectedLineActionKind.RemoveLine:
+                RemoveLine(selection.LineIndex);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown selected-line action.");
+        }
+    }
+
+    private static string BuildSelectedLineControlId(
+        MarketAcquisitionSelectedLinePresentation selection,
+        MarketAcquisitionSelectedLineActionKind kind) =>
+        kind switch
+        {
+            MarketAcquisitionSelectedLineActionKind.RefreshQuote =>
+                $"acquisition.workbench.line.{selection.ItemId}.quote.refresh",
+            MarketAcquisitionSelectedLineActionKind.UseQuote =>
+                $"acquisition.workbench.line.{selection.ItemId}.quote.apply",
+            MarketAcquisitionSelectedLineActionKind.OpenPlan =>
+                $"acquisition.workbench.line.{selection.ItemId}.quote.open-plan",
+            MarketAcquisitionSelectedLineActionKind.RemoveLine =>
+                $"acquisition.workbench.line.{selection.ItemId}.remove",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown selected-line action."),
+        };
+
+    private static string BuildSelectedLineControlLabel(
+        MarketAcquisitionSelectedLinePresentation selection,
+        MarketAcquisitionSelectedLineActionPresentation action) =>
+        action.Kind switch
+        {
+            MarketAcquisitionSelectedLineActionKind.RefreshQuote =>
+                $"{action.Label} for {selection.ItemName}",
+            MarketAcquisitionSelectedLineActionKind.UseQuote =>
+                $"Use Craft Architect quote for {selection.ItemName}",
+            MarketAcquisitionSelectedLineActionKind.OpenPlan =>
+                $"Open quoted Craft Architect plan for {selection.ItemName}",
+            MarketAcquisitionSelectedLineActionKind.RemoveLine =>
+                $"Remove {selection.ItemName} from the Workbench",
+            _ => action.Label,
+        };
+
+    private static float CalculateSelectionActionWidth(
+        MarketAcquisitionSelectedLinePresentation selection,
+        bool includeDetails)
+    {
+        var style = ImGui.GetStyle();
+        var labels = selection.Actions.Select(action => action.Label).ToList();
+        if (includeDetails)
+            labels.Insert(0, "Details");
+        return labels.Sum(label => ImGui.CalcTextSize(label).X + (style.FramePadding.X * 2f)) +
+               (Math.Max(0, labels.Count - 1) * style.ItemSpacing.X);
+    }
+
+    private static void DrawDisabledSelectionActions()
+    {
+        var labels = new[] { "Details", "Get quote", "Use quote", "Open plan", "Remove line" };
+        var style = ImGui.GetStyle();
+        var width = labels.Sum(label => ImGui.CalcTextSize(label).X + (style.FramePadding.X * 2f)) +
+                    ((labels.Length - 1) * style.ItemSpacing.X);
+        ImGuiUi.SameLineRight(width);
+        foreach (var label in labels)
+        {
+            if (!string.Equals(label, labels[0], StringComparison.Ordinal))
+                ImGui.SameLine();
+            ImGuiUi.Button(label, enabled: false);
+        }
+    }
+
+    private static void DrawWarningsTooltip(IReadOnlyList<string> warnings)
+    {
+        if (!ImGui.IsItemHovered())
+            return;
+
+        ImGui.BeginTooltip();
+        ImGui.PushTextWrapPos(ImGui.GetFontSize() * 34f);
+        foreach (var warning in warnings)
+            ImGui.TextWrapped(warning);
+        ImGui.PopTextWrapPos();
+        ImGui.EndTooltip();
+    }
+
+    private void OpenCraftArchitectPlan(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            craftAppraisal.State.CraftQuoteStatus = "Opened the quoted Craft Architect plan.";
+        }
+        catch (Exception ex)
+        {
+            craftAppraisal.State.CraftQuoteStatus = $"Could not open the Craft Architect plan: {ex.Message}";
+        }
     }
 
     private void DrawCompactAddRow(MarketAcquisitionRequestBuilderContext context)
     {
-        var canEdit = !context.IsBusy && !context.IsRouteActive && !IsSynchronizing;
+        var canEdit = CanEdit(context);
         ImGui.PushID("AcquisitionWorkbenchAddRow");
         ImGui.TableNextRow();
 
@@ -587,7 +879,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             gilCapBuffer);
         if (ImGuiUi.PrimaryButton("Add", canAdd))
         {
-            ApplyEditorLine();
+            AddEditorLine();
             ClearLineEditor();
         }
         RegisterLastControl(
@@ -598,7 +890,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             itemAutocomplete.SelectedItem?.ItemId.ToString(),
             () =>
             {
-                ApplyEditorLine();
+                AddEditorLine();
                 ClearLineEditor();
             });
 
@@ -606,6 +898,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGui.EndDisabled();
         ImGui.PopID();
     }
+
+    private bool CanEdit(MarketAcquisitionRequestBuilderContext context) =>
+        !context.IsBusy &&
+        !context.IsRouteActive &&
+        !IsSynchronizing;
 
     private static void DrawInlineCombo(string id, IReadOnlyList<string> values, ref string current)
     {
@@ -723,7 +1020,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
     }
 
-    private void ApplyEditorLine()
+    private void AddEditorLine()
     {
         if (itemAutocomplete.SelectedItem is not { } item)
             return;
@@ -739,15 +1036,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             MaxUnitPrice = ParseUInt(maxUnitPriceBuffer),
             GilCap = ParseUInt(gilCapBuffer),
         };
-        controller.ApplyEditorLine(line);
+        controller.AddEditorLine(line);
     }
 
     private void RemoveLine(int index)
     {
-        if (index >= 0 && index < document.Lines.Count)
-            expandedEvidenceItems.Remove(document.Lines[index].ItemId);
         if (controller.RemoveLine(index))
-            ClearLineEditor();
+        {
+            ResetLineEditor();
+            if (controller.SelectedLineIndex < 0)
+                selectedLineInspectorRequested = false;
+        }
     }
 
     private void RemoveLineByItemId(uint itemId)
@@ -781,6 +1080,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private void ClearLineEditor()
     {
+        ResetLineEditor();
+        controller.ClearSelection();
+        selectedLineInspectorRequested = false;
+    }
+
+    private void ResetLineEditor()
+    {
         itemAutocomplete.SelectedItem = null;
         itemAutocomplete.SearchBuffer = string.Empty;
         quantityMode = "AllBelowThreshold";
@@ -788,7 +1094,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         maxUnitPriceBuffer = string.Empty;
         gilCapBuffer = string.Empty;
         hqPolicy = "Either";
-        controller.ClearSelection();
     }
 
     private static uint ParseUInt(string value) =>

@@ -4,9 +4,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>MarketMafioso.ContractTests</RootNamespace>
     <Platforms>x64</Platforms>
     <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
-    <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,12 +22,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="$(CraftArchitectCoreProject)" />
     <ProjectReference Include="..\..\src\MarketMafioso\MarketMafioso.csproj" />
     <ProjectReference Include="..\..\src\MarketMafioso.Server\MarketMafioso.Server.csproj" />
   </ItemGroup>
 
-  <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(CraftArchitectCoreProject)')">
-    <Error Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Check out the sibling 'FFXIV Craft Architect C# Edition' repository or set /p:CraftArchitectCoreProject=&quot;path/to/FFXIV Craft Architect.Core.csproj&quot;." />
-  </Target>
 </Project>

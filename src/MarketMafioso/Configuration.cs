@@ -1,5 +1,7 @@
 using Dalamud.Configuration;
+using MarketMafioso.MarketAcquisition;
 using MarketMafioso.RetainerRestock;
+using MarketMafioso.TradeQueue;
 using MarketMafioso.WorkshopPrep;
 using Newtonsoft.Json;
 using System;
@@ -18,6 +20,7 @@ public class Configuration : IPluginConfiguration
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
     public PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
     public PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
+    public PersistedMarketAcquisitionRequestDocument? PreviousMarketAcquisitionRequestDocument { get; set; }
     [JsonProperty("OutfitterRouteExecutionStateJson")]
     public string? ExactAcquisitionRouteExecutionStateJson { get; set; }
     public string? ShardAcquisitionCheckpointStateJson { get; set; }
@@ -26,7 +29,11 @@ public class Configuration : IPluginConfiguration
     public bool EnableMarketAcquisition { get; set; } = false;
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
+    public MarketAcquisitionRouteDiagnosticsLevel MarketAcquisitionRouteDiagnostics { get; set; } =
+        MarketAcquisitionRouteDiagnosticsLevel.Summary;
+    [Obsolete("Use MarketAcquisitionRouteDiagnostics. Retained only to deserialize older configurations.")]
     public bool CreateMarketAcquisitionRouteDiagnosticPackages { get; set; } = false;
+    public bool ShouldSerializeCreateMarketAcquisitionRouteDiagnosticPackages() => false;
     public bool EnableMarketAcquisitionDryRunTools { get; set; } = false;
 
     public bool EnableRemoteMarketPurchase { get; set; } = false;
@@ -75,12 +82,18 @@ public class Configuration : IPluginConfiguration
     public bool ShouldSerializeLegacyRetainerCache() => false;
 
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
+    public List<TradeQueueItem> TradeQueueItems { get; set; } = new();
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
     public bool SplitWorkshopQueueAndMaterials { get; set; }
     [JsonProperty("RetainerRestockPlanItems")]
     public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();
 
     public Dictionary<string, QuartermasterWorkshopRequestState> QuartermasterWorkshopRequests { get; set; } = new();
+    public bool AutomaticallyBuyWorkshopVendorMaterials { get; set; }
+    public Dictionary<uint, int> WorkshopVendorApprovedQuantities { get; set; } = new();
+    public List<uint> WorkshopVendorIncludedItems { get; set; } = new();
+    public List<uint> WorkshopVendorExcludedItems { get; set; } = new();
+    public PersistedWorkshopVendorRestockRun? ActiveWorkshopVendorRestock { get; set; }
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
     [JsonProperty("Squire")]

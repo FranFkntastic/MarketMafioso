@@ -1,4 +1,3 @@
-using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.Server;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.Dashboard;
@@ -35,8 +34,8 @@ builder.Services.AddSingleton<MarketDiagnosticAlertSink>();
 builder.Services.AddSingleton<MarketDiagnosticCollector>();
 if (builder.Configuration.GetValue<bool>("MarketMafioso:MarketDiagnostics:Enabled"))
     builder.Services.AddHostedService<MarketDiagnosticBackgroundService>();
-builder.Services.AddWorkshopHostCraftAppraisal();
-builder.Services.AddScoped<IWorkshopHostCraftQuoteService, CraftArchitectWorkshopHostCraftQuoteService>();
+builder.Services.AddHttpClient<IWorkshopHostCraftQuoteService, CraftArchitectWorkshopHostCraftQuoteService>(
+    client => client.Timeout = TimeSpan.FromSeconds(60));
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
@@ -174,7 +173,9 @@ static WorkshopHostCredentialScope? RequiredWorkshopHostScope(HttpRequest reques
 static bool IsInventoryPost(HttpRequest request) =>
     HttpMethods.IsPost(request.Method) &&
     (request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
-     request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase));
+     request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase) ||
+     request.Path.Equals("/inventory/delta", StringComparison.OrdinalIgnoreCase) ||
+     request.Path.Equals("/api/inventory/delta", StringComparison.OrdinalIgnoreCase));
 
 static bool IsMarketDiagnosticSalePost(HttpRequest request) =>
     HttpMethods.IsPost(request.Method) &&
