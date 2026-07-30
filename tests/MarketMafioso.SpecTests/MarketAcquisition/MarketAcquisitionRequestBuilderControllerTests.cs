@@ -8,6 +8,27 @@ namespace MarketMafioso.SpecTests.MarketAcquisition;
 public sealed class MarketAcquisitionRequestBuilderControllerTests
 {
     [Fact]
+    public void AddEditorLine_AppendsWithoutReplacingSelectedLine()
+    {
+        var existing = Line(36183, "Rose Gold Ingot") with { MaxUnitPrice = 999 };
+        var added = Line(7017, "Varnish") with { MaxUnitPrice = 1_600 };
+        var controller = CreateController(
+            MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh") with
+            {
+                Lines = [existing],
+                SyncStatus = "SyncedClean",
+            });
+        Assert.True(controller.SelectLine(0));
+
+        controller.AddEditorLine(added);
+
+        Assert.Equal(2, controller.Document.Lines.Count);
+        Assert.Equal(existing, controller.Document.Lines[0]);
+        Assert.Equal(added, controller.Document.Lines[1]);
+        Assert.Equal(1, controller.SelectedLineIndex);
+    }
+
+    [Fact]
     public void Selection_ReusesExistingItemAndBuildsSharedActionPresentation()
     {
         var existing = Line(36183, "Rose Gold Ingot");

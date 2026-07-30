@@ -316,6 +316,24 @@ public sealed class MarketAcquisitionRequestBuilderController
         FinishLocalEdit("Work-order draft updated.");
     }
 
+    public void AddEditorLine(MarketAcquisitionRequestLineDocument line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        var duplicateIndex = Document.Lines.FindIndex(existing => existing.ItemId == line.ItemId);
+        if (duplicateIndex >= 0)
+        {
+            SelectedLineIndex = duplicateIndex;
+            Status = $"{line.ItemName} is already in the Workbench; selected the existing line.";
+            return;
+        }
+
+        var previous = Document;
+        Document = RequestDocumentMutation.AddLine(Document, line);
+        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
+        SelectedLineIndex = Document.Lines.Count - 1;
+        FinishLocalEdit("Work-order draft updated.");
+    }
+
     public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
         AddLines(lines, "ExactAcquisition");
 
