@@ -22,7 +22,9 @@ internal sealed class MarketAcquisitionRouteEngineState
     public string? ActivePurchaseLineId { get; set; }
     public uint ActiveLinePurchasedQuantity { get; set; }
     public uint ActiveLineSpentGil { get; set; }
-    public string? PostPurchasePreviousBrowseOperationId { get; set; }
+    public string? PurchaseRecoveryPreviousBrowseOperationId { get; set; }
+    public bool PurchaseRecoveryRefreshRequired { get; set; }
+    public bool UseProjectedMarketBoardSnapshot { get; set; }
     public string? ManualRecoveryBlockedReason { get; set; }
     public bool ProbeRunning { get; set; }
     public bool EvidenceRefreshOnly { get; set; }
@@ -44,7 +46,9 @@ internal sealed class MarketAcquisitionRouteEngineState
         ActivePurchaseLineId = null;
         ActiveLinePurchasedQuantity = 0;
         ActiveLineSpentGil = 0;
-        PostPurchasePreviousBrowseOperationId = null;
+        PurchaseRecoveryPreviousBrowseOperationId = null;
+        PurchaseRecoveryRefreshRequired = false;
+        UseProjectedMarketBoardSnapshot = false;
         ManualRecoveryBlockedReason = null;
         ProbeRunning = false;
         EvidenceRefreshOnly = false;

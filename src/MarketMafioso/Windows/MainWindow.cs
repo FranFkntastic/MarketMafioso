@@ -471,6 +471,11 @@ public class MainWindow : Window, IDisposable
             () => _ = StopGuidedRouteAsync(),
             () => _ = RestartGuidedRouteAsync(),
             () => _ = ReprepareGuidedRouteAsync(),
+            purchaseOccurred => routeEngine.ReconcileTerminalPurchaseEvidence(
+                purchaseOccurred,
+                purchaseOccurred
+                    ? "The user confirmed that the submitted purchase completed."
+                    : "The user confirmed that the submitted purchase did not complete."),
             () => routeEngine.RequestExactAcquisitionRecovery(acquisitionRequestBuilder.CurrentDocument),
             ReturnToExactAcquisitionAdvisor,
             marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary,

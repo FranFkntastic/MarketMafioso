@@ -59,7 +59,7 @@ public sealed class MarketAcquisitionRouteRecoveryTests
     }
 
     [Fact]
-    public void PostPurchaseRefreshPending_DoesNotConfirmPurchaseFromClosedResultWindow()
+    public void OutcomeRefreshPending_DoesNotConfirmPurchaseFromClosedResultWindow()
     {
         var now = DateTimeOffset.UtcNow;
         var session = MarketBoardPurchaseSession.Start(
@@ -87,7 +87,7 @@ public sealed class MarketAcquisitionRouteRecoveryTests
         session = session.RecordFreshRead(
             new MarketBoardReadResult
             {
-                Status = "PostPurchaseRefreshPending",
+                Status = "FallbackOutcomeRefreshPending",
                 Message = "The old result window was closed; a new browse is starting.",
                 ReadState = MarketBoardListingReadState.Loading,
                 ItemId = 5067,
@@ -97,7 +97,108 @@ public sealed class MarketAcquisitionRouteRecoveryTests
 
         Assert.True(session.IsActive);
         Assert.True(session.ConfirmationWasSubmitted);
-        Assert.Equal(MarketBoardPurchaseSessionPhase.WaitingForListingRemoval, session.Phase);
+        Assert.Equal(MarketBoardPurchaseSessionPhase.WaitingForOutcome, session.Phase);
+    }
+
+    [Fact]
+    public void ClosedResultWindow_IsNotPurchaseSuccessEvidence()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var session = ConfirmedSession(now);
+
+        session = session.RecordFreshRead(
+            new MarketBoardReadResult
+            {
+                Status = "MarketBoardNotOpen",
+                Message = "Result window closed.",
+                ReadState = MarketBoardListingReadState.Unavailable,
+                ItemId = 5067,
+                WorldName = "Siren",
+            },
+            now.AddSeconds(1));
+
+        Assert.True(session.IsActive);
+        Assert.Equal(MarketBoardPurchaseSessionPhase.WaitingForOutcome, session.Phase);
+    }
+
+    [Fact]
+    public void EvidenceBackedPurchase_DoesNotRefreshListingsWhileAwaitingOutcome()
+    {
+        var now = DateTimeOffset.UtcNow;
+        using var controller = new MarketBoardAutomationController();
+        var candidate = new MarketBoardPurchaseCandidate
+        {
+            ItemId = 5067,
+            WorldName = "Siren",
+            ListingId = "listing-1",
+            RetainerId = "retainer-1",
+            UnitPrice = 49,
+            Quantity = 17,
+        };
+        controller.RecordPurchaseSelection(
+            new MarketBoardPurchaseResult
+            {
+                Status = "PurchaseSelectionSent",
+                Message = "Selected.",
+                Candidate = candidate,
+            },
+            now,
+            TimeSpan.FromSeconds(15));
+        controller.ScheduleNextMonitor(now, TimeSpan.Zero);
+        var listingReadCount = 0;
+
+        var tick = controller.MonitorPurchase(
+            now,
+            TimeSpan.FromMilliseconds(500),
+            TimeSpan.FromSeconds(30),
+            selected => new MarketBoardPurchaseResult
+            {
+                Status = "ConfirmationSubmitted",
+                Message = "Submitted.",
+                Candidate = selected,
+            },
+            () =>
+            {
+                listingReadCount++;
+                return Snapshot(Listing("listing-1", 49, 17));
+            },
+            verifyOutcomeFromListings: false);
+
+        Assert.True(tick.DidWork);
+        Assert.Equal(0, listingReadCount);
+        Assert.Equal(MarketBoardPurchaseSessionPhase.WaitingForOutcome, tick.Session?.Phase);
+    }
+
+    [Fact]
+    public void ConfirmedPurchase_ProjectsRemovalWithoutChangingBrowseEpoch()
+    {
+        var snapshot = Snapshot(
+            Listing("listing-1", 49, 17),
+            Listing("listing-2", 52, 3));
+        var candidate = MarketBoardPurchaseCandidate.FromLiveListing(snapshot.Listings[0]);
+
+        var projected = MarketBoardPurchaseSnapshotProjector.ApplyConfirmedPurchase(snapshot, candidate);
+
+        Assert.Equal("Ready", projected.Status);
+        Assert.Equal("browse-1", projected.BrowseOperationId);
+        Assert.Equal(1, projected.ReportedListingCount);
+        Assert.Single(projected.Listings);
+        Assert.Equal("listing-2", projected.Listings[0].ListingId);
+    }
+
+    [Fact]
+    public void ConfirmedLastPurchase_ProjectsAuthoritativeEmptySnapshot()
+    {
+        var snapshot = Snapshot(Listing("listing-1", 49, 17));
+
+        var projected = MarketBoardPurchaseSnapshotProjector.ApplyConfirmedPurchase(
+            snapshot,
+            MarketBoardPurchaseCandidate.FromLiveListing(snapshot.Listings[0]));
+
+        Assert.Equal("NoListings", projected.Status);
+        Assert.True(projected.IsFresh);
+        Assert.Empty(projected.Listings);
+        Assert.Equal(0, projected.ReportedListingCount);
     }
 
     [Fact]
@@ -112,6 +213,60 @@ public sealed class MarketAcquisitionRouteRecoveryTests
         Assert.Equal("Jenova", session.ActiveStop?.WorldName);
         Assert.Equal("Pending", session.ActiveStop?.Status);
     }
+
+    private static MarketBoardPurchaseSession ConfirmedSession(DateTimeOffset now)
+    {
+        var session = MarketBoardPurchaseSession.Start(
+            new MarketBoardPurchaseCandidate
+            {
+                ItemId = 5067,
+                WorldName = "Siren",
+                ListingId = "listing-1",
+                RetainerId = "retainer-1",
+                UnitPrice = 49,
+                Quantity = 17,
+            },
+            now,
+            TimeSpan.FromSeconds(15));
+        return session.RecordConfirmationAttempt(
+            new MarketBoardPurchaseResult
+            {
+                Status = "ConfirmationSubmitted",
+                Message = "Submitted.",
+                Candidate = session.Candidate,
+            },
+            now,
+            TimeSpan.FromSeconds(30));
+    }
+
+    private static MarketBoardReadResult Snapshot(params MarketBoardLiveListing[] listings) =>
+        new()
+        {
+            Status = "Ready",
+            Message = "Snapshot ready.",
+            ReadState = MarketBoardListingReadState.FreshComplete,
+            ItemId = 5067,
+            WorldName = "Siren",
+            ReportedListingCount = listings.Length,
+            ListingCapacity = 100,
+            BrowseOperationId = "browse-1",
+            BrowseHeaderStatus = 0,
+            BrowseExpectedPageCount = 1,
+            BrowseObservedPageCount = 1,
+            BrowseHistoryItemId = 5067,
+            Listings = listings,
+        };
+
+    private static MarketBoardLiveListing Listing(string listingId, uint unitPrice, uint quantity) =>
+        new()
+        {
+            ItemId = 5067,
+            WorldName = "Siren",
+            ListingId = listingId,
+            RetainerId = $"retainer-{listingId}",
+            UnitPrice = unitPrice,
+            Quantity = quantity,
+        };
 
     private static MarketAcquisitionPlan CreatePlan(params string[] worlds) =>
         new()
