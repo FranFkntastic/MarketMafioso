@@ -282,6 +282,30 @@ public sealed class MarketPurchaseEvidenceCoordinatorTests
     }
 
     [Fact]
+    public void InjectedFrameworkAuthorityDoesNotAssumeTheConstructionThread()
+    {
+        var queue = Queue();
+        var frameworkThreadId = 0;
+        var coordinator = new MarketPurchaseEvidenceCoordinator(
+            new MemoryStore(),
+            queue,
+            () => Environment.CurrentManagedThreadId == Volatile.Read(ref frameworkThreadId));
+        MarketPurchaseIntentArmResult? result = null;
+        var frameworkThread = new Thread(() =>
+        {
+            Volatile.Write(ref frameworkThreadId, Environment.CurrentManagedThreadId);
+            result = coordinator.TryArm(Draft());
+        });
+
+        frameworkThread.Start();
+        frameworkThread.Join();
+
+        Assert.NotNull(result);
+        Assert.True(result.IsArmed);
+        Assert.IsType<PendingMarketPurchase>(coordinator.State);
+    }
+
+    [Fact]
     public void FileStore_RoundTripsTerminalHistoryAndRecoversBackupWhenPrimaryIsCorrupt()
     {
         using var directory = new TemporaryDirectory();
