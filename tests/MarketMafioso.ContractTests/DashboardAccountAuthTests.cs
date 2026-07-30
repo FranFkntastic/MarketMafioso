@@ -45,6 +45,8 @@ public sealed class DashboardAccountAuthTests
     [Theory]
     [InlineData("/inventory")]
     [InlineData("/api/inventory")]
+    [InlineData("/inventory/delta")]
+    [InlineData("/api/inventory/delta")]
     public async Task InventoryIngest_WhenApiKeysAreOptionalDoesNotRequireDashboardSession(string path)
     {
         await using var application = CreateApplication();

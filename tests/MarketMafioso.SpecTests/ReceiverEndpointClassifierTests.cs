@@ -21,6 +21,9 @@ public sealed class ReceiverEndpointClassifierTests
             "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition",
             ReceiverEndpointClassifier.BuildAcquisitionBaseUrl(serverUrl));
         Assert.Equal(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory/delta",
+            ReceiverEndpointClassifier.BuildInventoryDeltaUrl(serverUrl));
+        Assert.Equal(
             "https://dev.xivcraftarchitect.com/marketmafioso/api/market-diagnostics/sales",
             ReceiverEndpointClassifier.BuildMarketDiagnosticSaleUrl(serverUrl));
     }

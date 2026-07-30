@@ -679,10 +679,10 @@ public sealed class Plugin : IDalamudPlugin
         {
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
             await Framework.RunOnTick(
-                () => reporter.SendReportAsync(quiet: true),
+                () => reporter.SendDeltaReportAsync(quiet: true),
                 cancellationToken: cancellationToken);
             Log.Information(
-                "[MarketMafioso] Shipped inventory report after Quartermaster revision {Revision}.",
+                "[MarketMafioso] Processed inventory delta after Quartermaster revision {Revision}.",
                 revision);
         }
         catch (OperationCanceledException)

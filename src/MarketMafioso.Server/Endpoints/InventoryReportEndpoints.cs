@@ -39,6 +39,32 @@ internal static class InventoryReportEndpoints
                 requireApiKey,
                 publicOrigin,
                 token));
+        app.MapPost("/inventory/delta", (
+            HttpRequest request,
+            InventoryReportStore store,
+            IngestKeyAccountResolver accountResolver,
+            WorkshopHostCredentialStore credentialStore,
+            CancellationToken token) => SaveInventoryDelta(
+                request,
+                store,
+                accountResolver,
+                credentialStore,
+                requireApiKey,
+                publicOrigin,
+                token));
+        app.MapPost("/api/inventory/delta", (
+            HttpRequest request,
+            InventoryReportStore store,
+            IngestKeyAccountResolver accountResolver,
+            WorkshopHostCredentialStore credentialStore,
+            CancellationToken token) => SaveInventoryDelta(
+                request,
+                store,
+                accountResolver,
+                credentialStore,
+                requireApiKey,
+                publicOrigin,
+                token));
 
         app.MapGet("/api/reports", async (
             HttpContext context,
@@ -262,6 +288,91 @@ internal static class InventoryReportEndpoints
             ReportUrl = PublicAppUrl(request, publicOrigin, $"/inventory?snapshotId={Uri.EscapeDataString(stored.Id)}"),
             ApiReportUrl = PublicAppUrl(request, publicOrigin, $"/api/reports/{stored.Id}"),
         };
+
+    private static async Task<IResult> SaveInventoryDelta(
+        HttpRequest request,
+        InventoryReportStore store,
+        IngestKeyAccountResolver accountResolver,
+        WorkshopHostCredentialStore credentialStore,
+        bool requireApiKey,
+        string? publicOrigin,
+        CancellationToken token)
+    {
+        var suppliedApiKey = request.Headers["X-Api-Key"].Count == 1
+            ? request.Headers["X-Api-Key"][0]
+            : null;
+        if (requireApiKey &&
+            !await credentialStore.IsAuthorizedAsync(
+                suppliedApiKey,
+                WorkshopHostCredentialScope.InventoryWrite,
+                token))
+        {
+            return InvalidApiKey();
+        }
+
+        InventoryReportDelta? delta;
+        try
+        {
+            delta = await JsonSerializer.DeserializeAsync<InventoryReportDelta>(
+                request.Body,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web),
+                token);
+        }
+        catch (JsonException)
+        {
+            return Results.BadRequest(new { error = "invalid_json" });
+        }
+
+        if (delta == null || string.IsNullOrWhiteSpace(delta.BaseSnapshotId))
+            return Results.BadRequest(new { error = "invalid_inventory_delta" });
+
+        var accountId = await accountResolver.ResolveAccountIdAsync(suppliedApiKey, token) ?? 1;
+        var baseSnapshot = await store.GetAsync(accountId, delta.BaseSnapshotId, token);
+        if (baseSnapshot == null)
+        {
+            return Results.Conflict(new
+            {
+                error = "inventory_delta_base_missing",
+                baseSnapshotId = delta.BaseSnapshotId,
+            });
+        }
+
+        InventoryReport reconstructed;
+        try
+        {
+            reconstructed = InventoryReportDeltaApplier.Apply(
+                baseSnapshot.Id,
+                baseSnapshot.Report,
+                delta);
+        }
+        catch (InventoryDeltaConflictException exception)
+        {
+            return Results.Conflict(new
+            {
+                error = "inventory_delta_conflict",
+                detail = exception.Message,
+            });
+        }
+
+        if (reconstructed.PlayerInventory.Count == 0 && reconstructed.Retainers.Count == 0)
+            return Results.BadRequest(new { error = "Report must include at least one player inventory bag or retainer." });
+
+        var rawJson = JsonSerializer.Serialize(
+            reconstructed,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            {
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            });
+        var stored = await store.SaveAsync(
+            accountId,
+            reconstructed,
+            suppliedApiKey ?? string.Empty,
+            rawJson,
+            token);
+        return Results.Created(
+            AppUrl(request.PathBase, $"/api/reports/{stored.Id}"),
+            CreateInventoryReportResponse(request, publicOrigin, stored));
+    }
 
     private static IResult RawJsonResult(RawInventoryReportJson? report)
     {
