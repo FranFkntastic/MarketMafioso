@@ -191,7 +191,8 @@ public class MainWindow : Window, IDisposable
             new MarketPurchaseEvidenceFileStore(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
                 "market-purchase-evidence.json")),
-            marketPurchasePacketObserver.Queue);
+            marketPurchasePacketObserver.Queue,
+            () => Plugin.Framework.IsInFrameworkUpdateThread);
         remoteMarketController = new RemoteMarketController(
             config,
             Plugin.MarketBoard,
@@ -471,11 +472,12 @@ public class MainWindow : Window, IDisposable
             () => _ = StopGuidedRouteAsync(),
             () => _ = RestartGuidedRouteAsync(),
             () => _ = ReprepareGuidedRouteAsync(),
-            purchaseOccurred => routeEngine.ReconcileTerminalPurchaseEvidence(
-                purchaseOccurred,
-                purchaseOccurred
-                    ? "The user confirmed that the submitted purchase completed."
-                    : "The user confirmed that the submitted purchase did not complete."),
+            purchaseOccurred => _ = Plugin.Framework.RunOnTick(() =>
+                routeEngine.ReconcileTerminalPurchaseEvidence(
+                    purchaseOccurred,
+                    purchaseOccurred
+                        ? "The user confirmed that the submitted purchase completed."
+                        : "The user confirmed that the submitted purchase did not complete.")),
             () => routeEngine.RequestExactAcquisitionRecovery(acquisitionRequestBuilder.CurrentDocument),
             ReturnToExactAcquisitionAdvisor,
             marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary,

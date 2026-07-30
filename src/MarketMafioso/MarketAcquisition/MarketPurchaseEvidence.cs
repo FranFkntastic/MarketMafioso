@@ -280,16 +280,24 @@ public sealed class MarketPurchaseEvidenceCoordinator
 
     private readonly IMarketPurchaseEvidenceStateStore store;
     private readonly IMarketPurchasePacketEvidenceQueue packetQueue;
-    private readonly int frameworkThreadId;
+    private readonly Func<bool> isMutationThread;
     private MarketPurchaseEvidenceSnapshot snapshot;
 
     public MarketPurchaseEvidenceCoordinator(
         IMarketPurchaseEvidenceStateStore store,
         IMarketPurchasePacketEvidenceQueue packetQueue)
+        : this(store, packetQueue, CaptureCurrentThreadAuthority())
+    {
+    }
+
+    public MarketPurchaseEvidenceCoordinator(
+        IMarketPurchaseEvidenceStateStore store,
+        IMarketPurchasePacketEvidenceQueue packetQueue,
+        Func<bool> isMutationThread)
     {
         this.store = store ?? throw new ArgumentNullException(nameof(store));
         this.packetQueue = packetQueue ?? throw new ArgumentNullException(nameof(packetQueue));
-        frameworkThreadId = Environment.CurrentManagedThreadId;
+        this.isMutationThread = isMutationThread ?? throw new ArgumentNullException(nameof(isMutationThread));
         snapshot = Clone(store.Load() ?? new MarketPurchaseEvidenceSnapshot());
     }
 
@@ -532,8 +540,14 @@ public sealed class MarketPurchaseEvidenceCoordinator
 
     private void EnsureFrameworkThread()
     {
-        if (Environment.CurrentManagedThreadId != frameworkThreadId)
+        if (!isMutationThread())
             throw new InvalidOperationException("Purchase evidence state may only be armed, applied, or resolved on its framework thread.");
+    }
+
+    private static Func<bool> CaptureCurrentThreadAuthority()
+    {
+        var ownerThreadId = Environment.CurrentManagedThreadId;
+        return () => Environment.CurrentManagedThreadId == ownerThreadId;
     }
 
     private static string? Validate(MarketPurchaseIntentDraft draft)
