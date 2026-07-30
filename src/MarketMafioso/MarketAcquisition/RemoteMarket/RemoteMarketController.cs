@@ -60,6 +60,7 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly HashSet<ulong> purchasedListingIds = [];
     private readonly Dictionary<uint, Dictionary<ulong, string>> retainerNamesByItem = [];
     private RemoteMarketListingView[] listingSnapshot = [];
+    private RemoteMarketListingSnapshotIdentity? listingSnapshotIdentity;
     private int listingCaptureQueued;
     private CmbMarketContext? marketContext;
     private long viewRevision;
@@ -254,16 +255,20 @@ internal sealed class RemoteMarketController : IDisposable
         Volatile.Write(ref listingCaptureQueued, 0);
         var itemNames = new Dictionary<uint, string>();
         var listings = new List<RemoteMarketListingView>();
+        RemoteMarketListingSnapshotIdentity? capturedIdentity = null;
         var browse = browseRuntime.Snapshot;
         var proxy = GetItemSearchProxy();
         if (proxy != null &&
             browse.IsComplete &&
+            browse.Owner == MarketBoardBrowseOwner.RemoteMarketController &&
+            !string.IsNullOrWhiteSpace(browse.OperationId) &&
             browse.ItemId != 0 &&
             proxy->SearchItemId == browse.ItemId &&
             proxy->ListingCount == browse.ExpectedListingCount &&
             (browse.RequestId is null ||
              proxy->InfoProxyPageInterface.CurrentRequestId == browse.RequestId))
         {
+            var valid = true;
             var count = Math.Min(browse.ExpectedListingCount, 50);
             for (var index = 0; index < count; index++)
             {
@@ -275,6 +280,7 @@ internal sealed class RemoteMarketController : IDisposable
                     listing.Quantity == 0)
                 {
                     listings.Clear();
+                    valid = false;
                     break;
                 }
 
@@ -301,9 +307,19 @@ internal sealed class RemoteMarketController : IDisposable
                     false,
                     null));
             }
+
+            if (valid)
+            {
+                capturedIdentity = new RemoteMarketListingSnapshotIdentity(
+                    browse.OperationId,
+                    browse.ItemId,
+                    browse.RequestId,
+                    browse.ExpectedListingCount);
+            }
         }
 
         listingSnapshot = listings.ToArray();
+        listingSnapshotIdentity = capturedIdentity;
         marketContext = listingSnapshot.Length == 0
             ? null
             : cmbContext.Request(listingSnapshot[0].ItemId, listingSnapshot[0].IsHighQuality);
@@ -978,9 +994,39 @@ internal sealed class RemoteMarketController : IDisposable
 
     public unsafe bool IsMarketBoardResultVisible()
     {
-        var addon = (FFXIVClientStructs.FFXIV.Component.GUI.AtkUnitBase*)gameGui.GetAddonByName("ItemSearchResult", 1).Address;
-        return addon != null && addon->IsVisible;
+        var addon = gameGui.GetAddonByName<AddonItemSearchResult>("ItemSearchResult", 1);
+        var resultVisible =
+            addon != null &&
+            addon->AtkUnitBase.IsReady &&
+            addon->AtkUnitBase.IsVisible;
+        var proxy = resultVisible ? GetItemSearchProxy() : null;
+        return IsListingSnapshotCurrent(
+            listingSnapshotIdentity,
+            browseRuntime.Snapshot,
+            resultVisible,
+            proxy == null ? 0 : proxy->SearchItemId,
+            proxy == null ? 0 : proxy->ListingCount,
+            proxy == null ? null : proxy->InfoProxyPageInterface.CurrentRequestId);
     }
+
+    internal static bool IsListingSnapshotCurrent(
+        RemoteMarketListingSnapshotIdentity? identity,
+        MarketBoardBrowseSnapshot browse,
+        bool resultVisible,
+        uint nativeItemId,
+        uint nativeListingCount,
+        byte? nativeRequestId) =>
+        resultVisible &&
+        identity is not null &&
+        browse.IsComplete &&
+        browse.Owner == MarketBoardBrowseOwner.RemoteMarketController &&
+        string.Equals(browse.OperationId, identity.OperationId, StringComparison.Ordinal) &&
+        browse.ItemId == identity.ItemId &&
+        browse.RequestId == identity.RequestId &&
+        browse.ExpectedListingCount == identity.ExpectedListingCount &&
+        nativeItemId == identity.ItemId &&
+        nativeListingCount == (uint)identity.ExpectedListingCount &&
+        (identity.RequestId is null || nativeRequestId == identity.RequestId);
 
     public unsafe bool TryGetResultAnchor(out System.Numerics.Vector2 anchor)
     {
@@ -1075,6 +1121,12 @@ internal sealed record RemoteMarketEconomicsView(
     uint MedianUnitPrice,
     double MeanUnitPrice,
     double? TrendDelta);
+
+internal sealed record RemoteMarketListingSnapshotIdentity(
+    string OperationId,
+    uint ItemId,
+    byte? RequestId,
+    int ExpectedListingCount);
 
 internal sealed record RemoteMarketView(
     long Revision,

@@ -37,6 +37,15 @@ public sealed class RenderPathBoundaryTests
         Assert.Contains(declaration, source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RemoteMarketOverlayVisibilityRequiresCurrentSnapshotIdentity()
+    {
+        var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "RemoteMarket", "RemoteMarketController.cs");
+        var body = ExtractMethodBody(source, "IsMarketBoardResultVisible");
+
+        Assert.Contains("IsListingSnapshotCurrent(", body, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("Draw")]
     [InlineData("DrawHeader")]
