@@ -525,6 +525,7 @@ public class MainWindow : Window, IDisposable
             WorkspaceBusy = acquisitionWorkspace.IsBusy,
             ClaimedRequestId = acquisitionWorkspace.ClaimedRequest?.Id,
             PreparedPlanStatus = acquisitionWorkspace.PreparedPlan?.Status,
+            CraftAppraisal = acquisitionRequestBuilder.CreateAgentBridgeCraftAppraisalTruth(),
             WorkshopRestock = new AgentBridgeWorkshopRestockTruth
             {
                 QueueSignature = workshopReview.QueueSignature,

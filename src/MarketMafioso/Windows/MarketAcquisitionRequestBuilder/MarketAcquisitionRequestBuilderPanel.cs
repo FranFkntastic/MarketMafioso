@@ -9,6 +9,7 @@ using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Items;
 using Franthropy.Dalamud.UI.Tables;
+using MarketMafioso.AgentBridge;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.MarketAcquisition.ExactAuthority;
@@ -157,6 +158,34 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             var sum = (ulong)total + line.TargetQuantity;
             return sum > uint.MaxValue ? uint.MaxValue : (uint)sum;
         });
+
+    public AgentBridgeCraftAppraisalTruth CreateAgentBridgeCraftAppraisalTruth()
+    {
+        var selected = craftAppraisal.State.SelectedLine;
+        var quote = selected is null
+            ? craftAppraisal.State.LatestQuote
+            : craftAppraisal.State.GetLineQuote(selected)?.Quote;
+        return new AgentBridgeCraftAppraisalTruth
+        {
+            IsFetching = isAppraising || craftAppraisal.IsFetchingCraftQuote,
+            Status = craftAppraisal.State.CraftQuoteStatus,
+            WorkshopHostEnabled = craftAppraisal.State.WorkshopHostEnabled,
+            WorkshopHostAvailable = craftAppraisal.State.WorkshopHostAvailable,
+            SelectedItemId = selected?.ItemId,
+            SelectedItemName = selected?.ItemName,
+            RequestedQuantity = selected?.Quantity,
+            HqPolicy = selected?.HqPolicy,
+            Region = selected?.Region,
+            HasQuote = quote is not null,
+            QuoteComplete = quote?.IsComplete == true,
+            QuoteUnitCost = quote?.EstimatedUnitCost,
+            QuoteSource = quote?.Source,
+            QuoteConfidence = quote?.Confidence,
+            WarningCount = quote?.Warnings.Count ?? 0,
+            PlanId = quote?.PlanId,
+            CanOpenPlan = !string.IsNullOrWhiteSpace(quote?.PlanUrl),
+        };
+    }
 
     private void DrawExactAcquisitionAuthority(MarketAcquisitionRequestBuilderContext context)
     {
