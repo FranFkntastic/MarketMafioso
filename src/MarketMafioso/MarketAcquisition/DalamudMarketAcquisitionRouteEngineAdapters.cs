@@ -371,17 +371,12 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
             ReadState = readState,
             ReportedListingCount = Math.Max(report.ReadResult.ReportedListingCount, report.ReadResult.Listings.Count),
             ListingCapacity = report.ReadResult.ListingCapacity,
-            IsTruncated = report.ReadResult.IsListingCountTruncated || report.ReadResult.HasIncompleteCoverage,
+            IsTruncated = report.ReadResult.IsListingCountTruncated ||
+                          (report.HasIncompleteCoverage ?? report.ReadResult.HasIncompleteCoverage),
             ObservedAtUtc = report.ObservedAtUtc,
-            Listings = report.ReadResult.Listings.Select(listing => new MarketAcquisitionMarketObservationListing
-            {
-                ListingId = listing.ListingId,
-                RetainerId = listing.RetainerId,
-                RetainerName = listing.RetainerName,
-                Quantity = listing.Quantity,
-                UnitPrice = listing.UnitPrice,
-                IsHq = listing.IsHq,
-            }).ToList(),
+            // Coverage proves route liveness. Purchase audits carry the exact
+            // listing selected; ordinary reads do not need a durable row copy.
+            Listings = [],
         }, cancellationToken).ConfigureAwait(false);
     }
 }

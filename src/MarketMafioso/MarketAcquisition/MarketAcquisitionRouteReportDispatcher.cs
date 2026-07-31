@@ -63,6 +63,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         quarantinedEntryCount = this.deadLetterOutbox.Snapshot().Count;
         CompactDuplicateRouteProgress();
+        DiscardPersistedRawMarketObservations();
         LoadPendingOutboxEntries();
         QueuePendingRequestHeads();
         replayLoop = Task.Run(() => ReplayLoopAsync(lifetimeCancellation.Token));
@@ -151,11 +152,16 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     public void EnqueueMarketObservation(MarketAcquisitionMarketObservationReport report)
     {
         ArgumentNullException.ThrowIfNull(report);
+        var durableReport = report with
+        {
+            HasIncompleteCoverage = report.HasIncompleteCoverage ?? report.ReadResult.HasIncompleteCoverage,
+            ReadResult = report.ReadResult with { Listings = [] },
+        };
         TrackAndQueue(Persist(
             $"observation|{report.RequestId}|{report.AttemptId}|{report.Sequence}",
             MarketObservationType,
             report.RequestId,
-            report));
+            durableReport));
     }
 
     private MarketAcquisitionReportOutboxEntry Persist<T>(
@@ -239,6 +245,28 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             outbox.RemoveMany(duplicateIds);
     }
 
+    private void DiscardPersistedRawMarketObservations()
+    {
+        var staleListingSnapshots = new List<string>();
+        foreach (var entry in outbox.Snapshot()
+                     .Where(candidate => candidate.ReportType.Equals(MarketObservationType, StringComparison.Ordinal)))
+        {
+            try
+            {
+                var report = outbox.Deserialize<MarketAcquisitionMarketObservationReport>(entry);
+                if (report.ReadResult.Listings.Count > 0)
+                    staleListingSnapshots.Add(entry.Id);
+            }
+            catch
+            {
+                // Preserve unreadable legacy evidence for the normal quarantine path.
+            }
+        }
+
+        if (staleListingSnapshots.Count > 0)
+            outbox.RemoveMany(staleListingSnapshots);
+    }
+
     private void ForgetPendingRouteEntry(MarketAcquisitionReportOutboxEntry entry)
     {
         if (!entry.ReportType.Equals(RouteProgressType, StringComparison.Ordinal))
@@ -263,6 +291,9 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
 
     private void QueuePendingRequestHeads()
     {
+        if (!reporter.CanReport)
+            return;
+
         string[] requestIds;
         lock (sync)
             requestIds = [.. pendingEntriesByRequest.Keys];
@@ -272,6 +303,9 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
 
     private void QueueRequestHead(string requestId)
     {
+        if (!reporter.CanReport)
+            return;
+
         lock (sync)
         {
             if (inFlightRequestIds.Contains(requestId) ||

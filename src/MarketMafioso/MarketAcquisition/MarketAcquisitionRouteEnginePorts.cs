@@ -241,4 +241,5 @@ public sealed record MarketAcquisitionMarketObservationReport(
     string DataCenter,
     string WorldName,
     DateTimeOffset ObservedAtUtc,
-    MarketBoardReadResult ReadResult);
+    MarketBoardReadResult ReadResult,
+    bool? HasIncompleteCoverage = null);

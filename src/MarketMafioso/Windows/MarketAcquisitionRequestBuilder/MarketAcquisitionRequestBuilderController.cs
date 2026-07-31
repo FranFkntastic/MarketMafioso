@@ -469,7 +469,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         catch (Exception ex)
         {
             Document = Document with { SyncStatus = "SyncFailed", UpdatedAtUtc = DateTimeOffset.UtcNow };
-            Status = $"Synchronization failed; retrying automatically. {ex.Message}";
+            Status = $"Hosted synchronization failed; the local Workbench remains executable. Retrying automatically. {ex.Message}";
             RequestAutomaticSync(AutomaticRetryDelay);
             SaveDocument();
         }

@@ -36,10 +36,7 @@ public static class MarketAcquisitionWorkbenchFinalizationPresenter
                           state.IsDraftValid &&
                           state.HasCharacterScope &&
                           !state.IsBusy &&
-                          !state.IsRouteActive &&
-                          !state.IsSynchronizing &&
-                          IsSyncedClean(state.SyncStatus) &&
-                          state.ClaimStatus is "Claimed" or "AcceptedInPlugin" or "Running" or "Failed";
+                          !state.IsRouteActive;
 
         return new MarketAcquisitionWorkbenchFinalizationPresentation(
             canFinalize,
@@ -57,27 +54,17 @@ public static class MarketAcquisitionWorkbenchFinalizationPresenter
             return "Route in progress";
         if (!state.IsDraftValid)
             return "Complete the Workbench";
-        if (state.IsSynchronizing || !IsSyncedClean(state.SyncStatus))
-        {
-            return state.SyncStatus.Equals("SyncFailed", StringComparison.OrdinalIgnoreCase)
-                ? "Workbench needs attention"
-                : "Saving Workbench changes...";
-        }
         if (state.IsBusy)
             return "Updating work order...";
-        if (!state.HasClaimedRequest)
-            return "Waiting for work-order ownership";
         if (state.HasCurrentPlan && !state.IsCurrentPlanStale)
             return "Plan finalized";
-        return "Ready to finalize";
+        return state.HasClaimedRequest ? "Ready to finalize" : "Ready to finalize locally";
     }
 
     private static string BuildDetail(MarketAcquisitionWorkbenchFinalizationState state)
     {
         if (!state.IsDraftValid)
             return state.FirstDraftError ?? "Workbench input needs attention.";
-        if (state.SyncStatus.Equals("SyncFailed", StringComparison.OrdinalIgnoreCase))
-            return state.VisibleSyncStatus;
         if (state.IsBusy)
             return state.WorkspaceStatus;
 
@@ -87,9 +74,9 @@ public static class MarketAcquisitionWorkbenchFinalizationPresenter
         var targetText = state.TargetQuantityTotal == 0
             ? "no target-quantity lines"
             : $"{state.TargetQuantityTotal:N0} target units";
-        return $"{state.LineCount:N0} line(s); {targetText}; {spendText}.";
+        var hosting = state.HasClaimedRequest
+            ? "hosted work order attached"
+            : "local execution; hosting optional";
+        return $"{state.LineCount:N0} line(s); {targetText}; {spendText}; {hosting}.";
     }
-
-    private static bool IsSyncedClean(string status) =>
-        status.Equals("SyncedClean", StringComparison.OrdinalIgnoreCase);
 }

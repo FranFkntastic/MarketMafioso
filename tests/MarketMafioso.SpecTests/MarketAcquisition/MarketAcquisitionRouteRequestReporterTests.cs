@@ -66,6 +66,62 @@ public sealed class MarketAcquisitionRouteRequestReporterTests
         Assert.Contains("\"clientTimestampUtc\":\"2026-07-31T01:02:03+00:00\"", handler.Bodies[0]);
     }
 
+    [Fact]
+    public async Task MarketObservation_SendsCoverageWithoutRawListingRows()
+    {
+        var handler = new RecordingHandler();
+        var reporter = new MarketAcquisitionRouteRequestReporter(
+            new Configuration
+            {
+                ServerUrl = "http://localhost/api/inventory",
+                ApiKey = "api-key",
+                PluginInstanceId = "plugin-instance",
+            },
+            new MarketAcquisitionRequestClient(new HttpClient(handler)));
+        var report = new MarketAcquisitionMarketObservationReport(
+            "request-a",
+            "claim-token",
+            "attempt-1",
+            7,
+            "line-1",
+            5339,
+            "Rose Gold Ingot",
+            "Aether",
+            "Siren",
+            DateTimeOffset.UnixEpoch,
+            new MarketBoardReadResult
+            {
+                ReadState = MarketBoardListingReadState.FreshComplete,
+                ItemId = 5339,
+                WorldName = "Siren",
+                ReportedListingCount = 1,
+                ListingCapacity = 100,
+                Listings =
+                [
+                    new MarketBoardLiveListing
+                    {
+                        ItemId = 5339,
+                        WorldName = "Siren",
+                        ListingId = "listing-1",
+                        RetainerId = "retainer-1",
+                        RetainerName = "Seller",
+                        Quantity = 3,
+                        UnitPrice = 50,
+                    },
+                ],
+            });
+
+        await reporter.ReportMarketObservationAsync(report, CancellationToken.None);
+
+        var body = Assert.Single(handler.Bodies);
+        Assert.Contains("\"reportedListingCount\":1", body);
+        Assert.Contains("\"listingCapacity\":100", body);
+        Assert.Contains("\"isTruncated\":false", body);
+        Assert.Contains("\"listings\":[]", body);
+        Assert.DoesNotContain("listing-1", body);
+        Assert.DoesNotContain("Seller", body);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<string> Bodies { get; } = [];
@@ -78,9 +134,9 @@ public sealed class MarketAcquisitionRouteRequestReporterTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    """
-                    {"request":{"id":"request-a","status":"Running"},"result":"accepted"}
-                    """,
+                    request.RequestUri?.AbsolutePath.EndsWith("/observations", StringComparison.Ordinal) == true
+                        ? """{"observationId":"observation-1"}"""
+                        : """{"request":{"id":"request-a","status":"Running"},"result":"accepted"}""",
                     Encoding.UTF8,
                     "application/json"),
             };
