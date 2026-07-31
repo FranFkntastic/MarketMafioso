@@ -67,6 +67,16 @@ public sealed record QuartermasterRetainerSnapshot(
     public DateTimeOffset? ListingsObservedAtUtc { get; init; }
 }
 
+public sealed record QuartermasterRetainerListingCapture(
+    string CaptureId,
+    ulong RetainerId,
+    DateTimeOffset CapturedAtUtc,
+    ImmutableArray<QuartermasterRetainerListingCaptureItem> Items);
+
+public sealed record QuartermasterRetainerListingCaptureItem(
+    uint ItemId,
+    string? ItemName);
+
 public sealed record QuartermasterSnapshot(
     string ProviderInstanceId,
     long Revision,
@@ -77,6 +87,7 @@ public sealed record QuartermasterSnapshot(
     public ImmutableArray<string> PlayerRequestedSources { get; init; } = [];
     public ImmutableArray<string> PlayerObservedSources { get; init; } = [];
     public ImmutableArray<QuartermasterStowagePlanSnapshot> StowagePlans { get; init; } = [];
+    public QuartermasterRetainerListingCapture? LatestRetainerListingCapture { get; init; }
 }
 
 public sealed record QuartermasterStowagePlanSnapshot(
@@ -190,6 +201,7 @@ public sealed record QuartermasterOperationReceipt(
 public sealed record QuartermasterChanged(
     string ProviderInstanceId,
     long Revision,
+    string? Kind,
     string? OperationId);
 
 internal sealed class QuartermasterCapabilitiesWire
@@ -212,6 +224,21 @@ internal sealed class QuartermasterSnapshotWire
     public QuartermasterStorageSourcesWire? PlayerStorage { get; init; }
     public List<QuartermasterRetainerWire>? Retainers { get; init; }
     public JsonElement? StowagePlans { get; init; }
+    public QuartermasterRetainerListingCaptureWire? LatestRetainerListingCapture { get; init; }
+}
+
+internal sealed class QuartermasterRetainerListingCaptureWire
+{
+    public string? CaptureId { get; init; }
+    public ulong RetainerId { get; init; }
+    public string? CapturedAtUtc { get; init; }
+    public List<QuartermasterRetainerListingCaptureItemWire>? Items { get; init; }
+}
+
+internal sealed class QuartermasterRetainerListingCaptureItemWire
+{
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
 }
 
 internal sealed class QuartermasterStowageEnvelopeWire
@@ -411,5 +438,6 @@ internal sealed class QuartermasterChangedWire
     public string? Schema { get; init; }
     public string? ProviderInstanceId { get; init; }
     public long Revision { get; init; }
+    public string? Kind { get; init; }
     public string? OperationId { get; init; }
 }

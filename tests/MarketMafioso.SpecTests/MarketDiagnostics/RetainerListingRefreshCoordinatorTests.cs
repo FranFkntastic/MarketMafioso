@@ -16,23 +16,23 @@ public sealed class RetainerListingRefreshCoordinatorTests
         config.EnableMarketAcquisition = false;
         var coordinator = CreateCoordinator(config, source, runtime);
 
-        CloseRetainerSession(coordinator, Start);
-        coordinator.Tick(Start.AddSeconds(3), false, true);
+        coordinator.Tick(Start, true);
         Assert.Empty(runtime.RequestedItems);
 
         config.EnableMarketAcquisition = true;
         config.EnableRetainerListingRefresh = false;
-        CloseRetainerSession(coordinator, Start.AddMinutes(1));
-        coordinator.Tick(Start.AddMinutes(1).AddSeconds(3), false, true);
+        coordinator.Tick(Start.AddMinutes(1), true);
         Assert.Empty(runtime.RequestedItems);
     }
 
     [Fact]
-    public void Retainer_close_unions_baseline_and_post_close_items_then_serializes_requests()
+    public void Explicit_capture_serializes_distinct_market_requests()
     {
-        var source = new FakeSource(
-            new RetainerListingRefreshCandidate[] { new(100, "Iron Ore") },
-            new RetainerListingRefreshCandidate[] { new(200, "Cobalt Ore") });
+        var source = new FakeSource(new RetainerListingRefreshCandidate[]
+        {
+            new(100, "Iron Ore"),
+            new(200, "Cobalt Ore"),
+        });
         var runtime = new FakeRuntime();
         var config = CreateConfig();
         var coordinator = CreateCoordinator(
@@ -41,18 +41,17 @@ public sealed class RetainerListingRefreshCoordinatorTests
             runtime,
             nextSuccessDelay: () => TimeSpan.FromSeconds(3));
 
-        CloseRetainerSession(coordinator, Start);
-        coordinator.Tick(Start.AddSeconds(3), false, true);
+        coordinator.Tick(Start, true);
 
         Assert.Equal([100u], runtime.RequestedItems);
         Assert.Equal([100u, 200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
 
         runtime.Complete(26, 3);
-        coordinator.Tick(Start.AddSeconds(4), false, true);
-        coordinator.Tick(Start.AddSeconds(6), false, true);
+        coordinator.Tick(Start.AddSeconds(1), true);
+        coordinator.Tick(Start.AddSeconds(3), true);
         Assert.Equal([100u], runtime.RequestedItems);
 
-        coordinator.Tick(Start.AddSeconds(7), false, true);
+        coordinator.Tick(Start.AddSeconds(4), true);
         Assert.Equal([100u, 200u], runtime.RequestedItems);
     }
 
@@ -69,8 +68,7 @@ public sealed class RetainerListingRefreshCoordinatorTests
         var config = CreateConfig();
         var coordinator = CreateCoordinator(config, source, runtime, notifications);
 
-        CloseRetainerSession(coordinator, Start);
-        coordinator.Tick(Start.AddSeconds(3), false, true);
+        coordinator.Tick(Start, true);
 
         var deferred = Assert.Single(config.RetainerListingRefresh.Items);
         Assert.Equal(RetainerListingRefreshItemState.Deferred, deferred.State);
@@ -78,9 +76,9 @@ public sealed class RetainerListingRefreshCoordinatorTests
         Assert.Empty(notifications);
 
         runtime.DispatchFailureCode = null;
-        coordinator.Tick(Start.AddSeconds(17), false, true);
+        coordinator.Tick(Start.AddSeconds(14), true);
         Assert.Empty(runtime.RequestedItems);
-        coordinator.Tick(Start.AddSeconds(18), false, true);
+        coordinator.Tick(Start.AddSeconds(15), true);
         Assert.Equal([100u], runtime.RequestedItems);
     }
 
@@ -97,17 +95,16 @@ public sealed class RetainerListingRefreshCoordinatorTests
         var config = CreateConfig();
         var coordinator = CreateCoordinator(config, source, runtime);
 
-        CloseRetainerSession(coordinator, Start);
-        coordinator.Tick(Start.AddSeconds(3), false, true);
+        coordinator.Tick(Start, true);
         var deferred = Assert.Single(config.RetainerListingRefresh.Items);
         Assert.Equal(1, deferred.Attempts);
         Assert.Equal(RetainerListingRefreshItemState.Deferred, deferred.State);
 
         runtime.DispatchFailureCode = null;
         runtime.FailureObservedRequest = false;
-        coordinator.Tick(Start.AddSeconds(47), false, true);
+        coordinator.Tick(Start.AddSeconds(44), true);
         Assert.Empty(runtime.RequestedItems);
-        coordinator.Tick(Start.AddSeconds(48), false, true);
+        coordinator.Tick(Start.AddSeconds(45), true);
         Assert.Equal([100u], runtime.RequestedItems);
     }
 
@@ -119,17 +116,16 @@ public sealed class RetainerListingRefreshCoordinatorTests
         var config = CreateConfig();
         var coordinator = CreateCoordinator(config, source, runtime);
 
-        CloseRetainerSession(coordinator, Start);
-        coordinator.Tick(Start.AddSeconds(3), false, true);
+        coordinator.Tick(Start, true);
         runtime.Fail("BrowseTimeout", "Accepted request did not complete.");
-        coordinator.Tick(Start.AddSeconds(19), false, true);
+        coordinator.Tick(Start.AddSeconds(16), true);
 
         var reconciling = Assert.Single(config.RetainerListingRefresh.Items);
         Assert.Equal(RetainerListingRefreshItemState.NeedsReconciliation, reconciling.State);
 
-        coordinator.Tick(Start.AddMinutes(2).AddSeconds(18), false, true);
+        coordinator.Tick(Start.AddMinutes(2).AddSeconds(15), true);
         Assert.Equal([100u], runtime.RequestedItems);
-        coordinator.Tick(Start.AddMinutes(2).AddSeconds(19), false, true);
+        coordinator.Tick(Start.AddMinutes(2).AddSeconds(16), true);
         Assert.Equal([100u, 100u], runtime.RequestedItems);
     }
 
@@ -147,9 +143,8 @@ public sealed class RetainerListingRefreshCoordinatorTests
         var config = CreateConfig();
         var coordinator = CreateCoordinator(config, source, runtime, notifications);
 
-        CloseRetainerSession(coordinator, Start);
-        coordinator.Tick(Start.AddSeconds(3), false, true);
-        coordinator.Tick(Start.AddMinutes(1), false, true);
+        coordinator.Tick(Start, true);
+        coordinator.Tick(Start.AddMinutes(1), true);
 
         var blocked = Assert.Single(config.RetainerListingRefresh.Items);
         Assert.Equal(RetainerListingRefreshItemState.Blocked, blocked.State);
@@ -159,7 +154,7 @@ public sealed class RetainerListingRefreshCoordinatorTests
     }
 
     [Fact]
-    public void Snapshot_failure_retries_without_sending_and_becomes_visible_after_three_attempts()
+    public void Missing_capture_stays_quiet_and_sends_nothing()
     {
         var source = new FakeSource("Quartermaster unavailable.");
         var runtime = new FakeRuntime();
@@ -167,39 +162,77 @@ public sealed class RetainerListingRefreshCoordinatorTests
         var config = CreateConfig();
         var coordinator = CreateCoordinator(config, source, runtime, notifications);
 
-        CloseRetainerSession(coordinator, Start);
-        coordinator.Tick(Start.AddSeconds(3), false, true);
-        coordinator.Tick(Start.AddSeconds(8), false, true);
-        coordinator.Tick(Start.AddSeconds(23), false, true);
+        coordinator.Tick(Start, true);
+        coordinator.Tick(Start.AddSeconds(5), true);
+        coordinator.Tick(Start.AddMinutes(1), true);
 
         Assert.Empty(runtime.RequestedItems);
-        Assert.True(config.RetainerListingRefresh.CapturePending);
-        Assert.True(config.RetainerListingRefresh.NeedsAttention);
-        Assert.Single(notifications);
+        Assert.False(config.RetainerListingRefresh.NeedsAttention);
+        Assert.Empty(notifications);
     }
 
     [Fact]
-    public void Stale_post_close_listing_evidence_stays_pending_until_fresh_snapshot_arrives()
+    public void New_capture_id_reconciles_the_pending_item_set_exactly_once()
     {
         var source = new FakeSource(
-            Snapshot(7, Start.AddMinutes(-5), new RetainerListingRefreshCandidate(100, "Iron Ore")),
-            Snapshot(7, Start.AddMinutes(-5), new RetainerListingRefreshCandidate(100, "Iron Ore")),
-            Snapshot(8, Start.AddSeconds(2), new RetainerListingRefreshCandidate(200, "Cobalt Ore")));
+            Snapshot("capture-1", new RetainerListingRefreshCandidate(100, "Iron Ore")),
+            Snapshot("capture-2", new RetainerListingRefreshCandidate(200, "Cobalt Ore")));
         var runtime = new FakeRuntime();
         var config = CreateConfig();
         var coordinator = CreateCoordinator(config, source, runtime);
 
-        CloseRetainerSession(coordinator, Start);
-        coordinator.Tick(Start.AddSeconds(3), false, true);
+        coordinator.Tick(Start, false);
 
         Assert.Empty(runtime.RequestedItems);
-        Assert.True(config.RetainerListingRefresh.CapturePending);
-        Assert.Equal("SnapshotDeferred", config.RetainerListingRefresh.StatusCode);
+        Assert.Equal([100u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
 
-        coordinator.Tick(Start.AddSeconds(8), false, true);
+        coordinator.NotifyListingCaptureChanged();
+        coordinator.Tick(Start.AddSeconds(1), false);
 
-        Assert.Equal([100u], runtime.RequestedItems);
-        Assert.Equal([100u, 200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
+        Assert.Empty(runtime.RequestedItems);
+        Assert.Equal([200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
+        Assert.Equal("capture-2", config.RetainerListingRefresh.LastObservedCaptureId);
+
+        coordinator.NotifyListingCaptureChanged();
+        coordinator.Tick(Start.AddSeconds(2), false);
+        Assert.Equal([200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
+    }
+
+    [Fact]
+    public void New_capture_preserves_blocked_and_reconciling_safety_history()
+    {
+        var source = new FakeSource(new RetainerListingRefreshCandidate[] { new(300, "Silver Ore") });
+        var runtime = new FakeRuntime();
+        var config = CreateConfig();
+        config.RetainerListingRefresh.Items =
+        [
+            new PersistedRetainerListingRefreshItem
+            {
+                ItemId = 100,
+                State = RetainerListingRefreshItemState.Blocked,
+                LastCode = "RequestIdDiscontinuity",
+            },
+            new PersistedRetainerListingRefreshItem
+            {
+                ItemId = 200,
+                State = RetainerListingRefreshItemState.NeedsReconciliation,
+                Attempts = 1,
+                NextAttemptAtUtc = Start.AddMinutes(2).UtcDateTime,
+            },
+        ];
+        var coordinator = CreateCoordinator(config, source, runtime);
+
+        coordinator.Tick(Start, false);
+
+        Assert.Equal(
+            [
+                (100u, RetainerListingRefreshItemState.Blocked),
+                (200u, RetainerListingRefreshItemState.NeedsReconciliation),
+                (300u, RetainerListingRefreshItemState.Deferred),
+            ],
+            config.RetainerListingRefresh.Items
+                .OrderBy(item => item.ItemId)
+                .Select(item => (item.ItemId, item.State)));
     }
 
     private static Configuration CreateConfig() => new()
@@ -222,23 +255,12 @@ public sealed class RetainerListingRefreshCoordinatorTests
             message => notifications?.Add(message),
             nextSuccessDelay: nextSuccessDelay ?? (() => TimeSpan.Zero));
 
-    private static void CloseRetainerSession(
-        RetainerListingRefreshCoordinator coordinator,
-        DateTimeOffset at)
-    {
-        coordinator.Tick(at, true, false);
-        coordinator.Tick(at.AddSeconds(1), false, false);
-    }
-
     private static RetainerListingRefreshSnapshot Snapshot(
-        long revision,
-        DateTimeOffset listingsObservedAtUtc,
+        string captureId,
         params RetainerListingRefreshCandidate[] items) =>
         new(
             items,
-            "quartermaster:test",
-            revision,
-            listingsObservedAtUtc);
+            captureId);
 
     private sealed class FakeSource : IRetainerListingRefreshSource
     {
@@ -247,21 +269,11 @@ public sealed class RetainerListingRefreshCoordinatorTests
 
         public FakeSource(params IReadOnlyList<RetainerListingRefreshCandidate>[] snapshots)
         {
-            foreach (var snapshot in snapshots)
+            for (var index = 0; index < snapshots.Length; index++)
             {
                 this.snapshots.Enqueue(Snapshot(
-                    this.snapshots.Count + 1,
-                    Start.AddSeconds(this.snapshots.Count + 1),
-                    snapshot.ToArray()));
-            }
-
-            if (this.snapshots.Count == 1)
-            {
-                var baseline = this.snapshots.Peek();
-                this.snapshots.Enqueue(Snapshot(
-                    baseline.Revision + 1,
-                    Start.AddSeconds(2),
-                    baseline.Items.ToArray()));
+                    $"capture-{index + 1}",
+                    snapshots[index].ToArray()));
             }
         }
 
@@ -289,7 +301,7 @@ public sealed class RetainerListingRefreshCoordinatorTests
                 ? snapshots.Dequeue()
                 : snapshots.TryPeek(out var current)
                     ? current
-                    : Snapshot(1, Start, []);
+                    : Snapshot("capture-empty", []);
             error = string.Empty;
             return true;
         }

@@ -621,7 +621,6 @@ public sealed class Plugin : IDalamudPlugin
         var (refreshReady, refreshDeferredReason) = GetRetainerListingRefreshReadiness(retainerSessionActive);
         retainerListingRefresh.Tick(
             DateTimeOffset.UtcNow,
-            retainerSessionActive,
             refreshReady,
             refreshDeferredReason);
         mainWindow.MarketListingOverlay.IsOpen = true;
@@ -717,6 +716,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnQuartermasterChanged(QuartermasterChanged changed)
     {
+        if (string.Equals(changed.Kind, "retainer_listings", StringComparison.Ordinal))
+            retainerListingRefresh.NotifyListingCaptureChanged();
+
         if (!Configuration.EnableMarketDiagnostics)
             return;
 
