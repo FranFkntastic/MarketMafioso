@@ -5,14 +5,17 @@
     <ExpectedFranthropyDalamudProject>$([System.IO.Path]::GetFullPath('$(FranthropyRootFullPath)\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj'))</ExpectedFranthropyDalamudProject>
     <ExpectedFranthropyFilteringProject>$([System.IO.Path]::GetFullPath('$(FranthropyRootFullPath)\src\Franthropy.Filtering\Franthropy.Filtering.csproj'))</ExpectedFranthropyFilteringProject>
     <ExpectedFranthropyFfxivProject>$([System.IO.Path]::GetFullPath('$(FranthropyRootFullPath)\src\Franthropy.FFXIV\Franthropy.FFXIV.csproj'))</ExpectedFranthropyFfxivProject>
+    <ExpectedFranthropyObservationsProject>$([System.IO.Path]::GetFullPath('$(FranthropyRootFullPath)\src\Franthropy.Observations\Franthropy.Observations.csproj'))</ExpectedFranthropyObservationsProject>
     <ExpectedFranthropyWebProject>$([System.IO.Path]::GetFullPath('$(FranthropyRootFullPath)\src\Franthropy.Web\Franthropy.Web.csproj'))</ExpectedFranthropyWebProject>
     <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">$(ExpectedFranthropyDalamudProject)</FranthropyDalamudProject>
     <FranthropyFilteringProject Condition="'$(FranthropyFilteringProject)' == ''">$(ExpectedFranthropyFilteringProject)</FranthropyFilteringProject>
     <FranthropyFfxivProject Condition="'$(FranthropyFfxivProject)' == ''">$(ExpectedFranthropyFfxivProject)</FranthropyFfxivProject>
+    <FranthropyObservationsProject Condition="'$(FranthropyObservationsProject)' == ''">$(ExpectedFranthropyObservationsProject)</FranthropyObservationsProject>
     <FranthropyWebProject Condition="'$(FranthropyWebProject)' == ''">$(ExpectedFranthropyWebProject)</FranthropyWebProject>
     <FranthropyDalamudProjectFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyDalamudProject)'))</FranthropyDalamudProjectFullPath>
     <FranthropyFilteringProjectFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyFilteringProject)'))</FranthropyFilteringProjectFullPath>
     <FranthropyFfxivProjectFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyFfxivProject)'))</FranthropyFfxivProjectFullPath>
+    <FranthropyObservationsProjectFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyObservationsProject)'))</FranthropyObservationsProjectFullPath>
     <FranthropyWebProjectFullPath>$([System.IO.Path]::GetFullPath('$(FranthropyWebProject)'))</FranthropyWebProjectFullPath>
   </PropertyGroup>
 </Project>

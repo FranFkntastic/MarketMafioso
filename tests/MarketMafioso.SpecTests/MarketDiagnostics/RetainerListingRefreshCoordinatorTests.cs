@@ -172,6 +172,28 @@ public sealed class RetainerListingRefreshCoordinatorTests
     }
 
     [Fact]
+    public void Event_driven_source_is_not_polled_again_after_a_failed_read()
+    {
+        var config = CreateConfig();
+        var source = new FakeSource("Shared database unavailable.")
+        {
+            RetryOnReadFailure = false,
+            SurfaceReadFailure = true,
+        };
+        var coordinator = CreateCoordinator(config, source, new FakeRuntime());
+
+        coordinator.Tick(Start, true);
+        coordinator.Tick(Start.AddSeconds(5), true);
+        coordinator.Tick(Start.AddHours(1), true);
+        Assert.Equal(1, source.ReadCount);
+        Assert.Equal("ListingEvidenceUnavailable", config.RetainerListingRefresh.StatusCode);
+
+        coordinator.NotifyListingCaptureChanged();
+        coordinator.Tick(Start.AddHours(1).AddSeconds(1), true);
+        Assert.Equal(2, source.ReadCount);
+    }
+
+    [Fact]
     public void New_capture_id_accumulates_changed_items_exactly_once()
     {
         var source = new FakeSource(
@@ -285,6 +307,9 @@ public sealed class RetainerListingRefreshCoordinatorTests
     {
         private readonly Queue<RetainerListingRefreshSnapshot> snapshots = [];
         private readonly string? failure;
+        public bool RetryOnReadFailure { get; init; } = true;
+        public bool SurfaceReadFailure { get; init; }
+        public int ReadCount { get; private set; }
 
         public FakeSource(params IReadOnlyList<RetainerListingRefreshCandidate>[] snapshots)
         {
@@ -309,6 +334,7 @@ public sealed class RetainerListingRefreshCoordinatorTests
 
         public bool TryRead(out RetainerListingRefreshSnapshot? snapshot, out string error)
         {
+            ReadCount++;
             if (failure is not null)
             {
                 snapshot = null;
