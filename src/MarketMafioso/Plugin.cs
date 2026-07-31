@@ -161,12 +161,14 @@ public sealed class Plugin : IDalamudPlugin
         tradeQueueIo = new DalamudTradeQueueIo(
             GameGui,
             TargetManager,
+            ObjectTable,
             Condition,
             SigScanner,
             DataManager,
             Log);
         tradeQueueRunner = new TradeQueueRunner(
             Configuration.TradeQueueItems,
+            Configuration.TradeQueueTiming,
             Configuration.Save,
             tradeQueueIo,
             tradeAutomationCoordinator,

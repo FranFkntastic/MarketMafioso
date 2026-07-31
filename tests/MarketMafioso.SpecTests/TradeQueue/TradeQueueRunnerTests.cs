@@ -25,6 +25,7 @@ public sealed class TradeQueueRunnerTests
         using var coordinator = Coordinator(stopRequests);
         using var runner = new TradeQueueRunner(
             queue,
+            new TradeQueueTimingOptions(),
             () => { },
             io,
             coordinator,
@@ -40,6 +41,8 @@ public sealed class TradeQueueRunnerTests
         runner.Tick();
         clock.Advance(TimeSpan.FromMilliseconds(300));
         runner.Tick();
+        runner.Tick();
+        clock.Advance(TimeSpan.FromMilliseconds(300));
         runner.Tick();
         clock.Advance(TimeSpan.FromMilliseconds(300));
         runner.Tick();
@@ -62,6 +65,7 @@ public sealed class TradeQueueRunnerTests
         using var coordinator = Coordinator(new());
         using var runner = new TradeQueueRunner(
             queue,
+            new TradeQueueTimingOptions(),
             () => { },
             io,
             coordinator,
@@ -76,6 +80,8 @@ public sealed class TradeQueueRunnerTests
         runner.Tick();
         clock.Advance(TimeSpan.FromMilliseconds(300));
         runner.Tick();
+        runner.Tick();
+        clock.Advance(TimeSpan.FromMilliseconds(300));
         runner.Tick();
         clock.Advance(TimeSpan.FromMilliseconds(300));
         runner.Tick();
@@ -95,6 +101,7 @@ public sealed class TradeQueueRunnerTests
         using var coordinator = Coordinator(stopRequests);
         using var runner = new TradeQueueRunner(
             queue,
+            new TradeQueueTimingOptions(),
             () => { },
             new FakeIo(Inventory(2)),
             coordinator,
@@ -122,6 +129,7 @@ public sealed class TradeQueueRunnerTests
         using var coordinator = Coordinator(new());
         using var runner = new TradeQueueRunner(
             queue,
+            new TradeQueueTimingOptions(),
             () => { },
             io,
             coordinator,
@@ -133,6 +141,8 @@ public sealed class TradeQueueRunnerTests
         io.IsTradeOpenValue = true;
         clock.Advance(TimeSpan.FromSeconds(4));
         runner.Tick();
+        runner.Tick();
+        clock.Advance(TimeSpan.FromMilliseconds(300));
         runner.Tick();
         clock.Advance(TimeSpan.FromMilliseconds(300));
         runner.Tick();
@@ -150,6 +160,73 @@ public sealed class TradeQueueRunnerTests
         Assert.Equal(600_000, io.SubmittedGil);
         Assert.Equal(TradeQueueExecutionState.Completed, runner.Snapshot.State);
         Assert.Empty(queue);
+    }
+
+    [Fact]
+    public void Runner_HonorsConfiguredTradeCommandRetry()
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2));
+        var clock = new TestClock();
+        var timing = new TradeQueueTimingOptions
+        {
+            TradeRetryMilliseconds = 1_500,
+        };
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            timing,
+            () => { },
+            io,
+            coordinator,
+            TestPluginLog.Create(),
+            clock.Read);
+
+        Assert.True(runner.Start().Success);
+        runner.Tick();
+        Assert.Equal(1, io.OpenTradeAttempts);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1_499));
+        runner.Tick();
+        Assert.Equal(1, io.OpenTradeAttempts);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        runner.Tick();
+        Assert.Equal(2, io.OpenTradeAttempts);
+    }
+
+    [Fact]
+    public void Runner_HonorsConfiguredActionDelayAfterTradeOpens()
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2));
+        var clock = new TestClock();
+        var timing = new TradeQueueTimingOptions
+        {
+            ActionDelayMilliseconds = 400,
+        };
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            timing,
+            () => { },
+            io,
+            coordinator,
+            TestPluginLog.Create(),
+            clock.Read);
+
+        Assert.True(runner.Start().Success);
+        runner.Tick();
+        io.IsTradeOpenValue = true;
+        runner.Tick();
+
+        clock.Advance(TimeSpan.FromMilliseconds(399));
+        runner.Tick();
+        Assert.Equal(0, io.OfferItemAttempts);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        runner.Tick();
+        Assert.Equal(1, io.OfferItemAttempts);
     }
 
     private static List<TradeQueueItem> Queue(int quantity) =>
@@ -173,19 +250,25 @@ public sealed class TradeQueueRunnerTests
         public bool IsNumericInputOpen { get; private set; }
         public int OfferedSlotCount { get; private set; }
         public int SubmittedGil { get; private set; }
+        public int OpenTradeAttempts { get; private set; }
+        public int OfferItemAttempts { get; private set; }
         private bool gilInputRequested;
 
         public IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory() => Inventory;
 
-        public bool TryGetFocusPartner(out TradeQueuePartner partner)
+        public bool TryGetSelectedPartner(out TradeQueuePartner partner)
         {
             partner = new(1, "Recipient", 2);
             return true;
         }
 
-        public bool FocusPartnerMatches(TradeQueuePartner partner) => true;
+        public bool PartnerIsAvailable(TradeQueuePartner partner) => true;
 
-        public bool TryOpenTrade(TradeQueuePartner partner) => true;
+        public bool TryOpenTrade(TradeQueuePartner partner)
+        {
+            OpenTradeAttempts++;
+            return true;
+        }
 
         public bool TryOpenGilInput(out string error)
         {
@@ -198,6 +281,7 @@ public sealed class TradeQueueRunnerTests
         public bool TryOfferItem(TradeQueueBatchLine line, out string error)
         {
             error = string.Empty;
+            OfferItemAttempts++;
             if (line.SourceStackQuantity > 1)
                 IsNumericInputOpen = true;
             else
