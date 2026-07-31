@@ -159,5 +159,6 @@ public sealed class MarketMafiosoBridgeProviderTests
         OfferedSlotCount = 0,
         CanReceiverReady = false,
         CanReceiverConfirm = false,
+        CanReceiverCancel = false,
     };
 }

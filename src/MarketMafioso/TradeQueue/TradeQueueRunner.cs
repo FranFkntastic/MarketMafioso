@@ -530,6 +530,21 @@ public sealed class TradeQueueRunner : IDisposable
 
     private void Finish(TradeQueueExecutionState state, string message)
     {
+        if (state is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped &&
+            io.IsTradeOpen)
+        {
+            if (io.TryCancelTrade(out var cancelError))
+            {
+                message += " The in-progress trade was canceled.";
+            }
+            else
+            {
+                message += string.IsNullOrWhiteSpace(cancelError)
+                    ? " The in-progress trade is still open because its exact Cancel control was unavailable."
+                    : $" The in-progress trade is still open: {cancelError}";
+            }
+        }
+
         if (qualityLowering.Snapshot.IsActive)
             qualityLowering.Stop("Trade Queue released quality-lowering ownership.");
         externalAutomation.RestoreTradeAutoConfirm();

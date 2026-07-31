@@ -125,6 +125,31 @@ public sealed class TradeQueueRunnerTests
         Assert.DoesNotContain("MarketMafioso", stopRequests);
     }
 
+    [Fact]
+    public void StopCancelsTheRunnerOwnedTradeAndPreservesTheCheckpoint()
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2)) { IsTradeOpenValue = true };
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            new TradeQueueTimingOptions(),
+            () => { },
+            io,
+            new FakeQualityLowering(),
+            coordinator,
+            TestPluginLog.Create());
+
+        Assert.True(runner.Start().Success);
+        runner.Tick();
+        runner.Stop();
+
+        Assert.False(io.IsTradeOpen);
+        Assert.True(runner.HasResumeCheckpoint);
+        Assert.Contains("trade was canceled", runner.Snapshot.Message, StringComparison.Ordinal);
+        Assert.Equal(2, Assert.Single(queue).Quantity);
+    }
+
     private static void QualityLoweringStartupFailureReleasesAutoConfirm()
     {
         var queue = Queue(2);
@@ -548,6 +573,7 @@ public sealed class TradeQueueRunnerTests
         public bool PartnerIsAvailable(TradeQueuePartner partner) => true;
         public bool CanClickReady => IsTradeOpen;
         public bool CanConfirmTrade => IsTradeOpen;
+        public bool CanCancelTrade => IsTradeOpen;
 
         public bool TryOpenTrade(TradeQueuePartner partner)
         {
@@ -599,6 +625,13 @@ public sealed class TradeQueueRunnerTests
         public bool TryConfirmTrade(out string error)
         {
             error = string.Empty;
+            return true;
+        }
+
+        public bool TryCancelTrade(out string error)
+        {
+            error = string.Empty;
+            IsTradeOpenValue = false;
             return true;
         }
     }

@@ -617,6 +617,7 @@ public class MainWindow : Window, IDisposable
                 OfferedSlotCount = tradeQueueIo.IsTradeOpen ? tradeQueueIo.OfferedSlotCount : 0,
                 CanReceiverReady = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanClickReady,
                 CanReceiverConfirm = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanConfirmTrade,
+                CanReceiverCancel = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanCancelTrade,
                 SelectedPartner = selectedTradePartner,
                 AvailablePartners = availableTradePartners,
                 Queue = config.TradeQueueItems

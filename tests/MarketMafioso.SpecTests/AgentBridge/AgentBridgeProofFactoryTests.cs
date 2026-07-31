@@ -119,6 +119,7 @@ public sealed class AgentBridgeProofFactoryTests
             OfferedSlotCount = 5,
             CanReceiverReady = true,
             CanReceiverConfirm = false,
+            CanReceiverCancel = true,
             AvailablePartners =
             [
                 new AgentBridgeTradePartnerTruth
