@@ -10,6 +10,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using ECommons;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using Franthropy.Dalamud.Observations;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Runtime;
@@ -64,6 +65,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly DalamudMarketBoardBrowseObserver marketBoardBrowseObserver;
     private readonly RetainerListingRefreshCoordinator retainerListingRefresh;
     private readonly FranthropyRetainerListingRefreshSource? sharedObservationListings;
+    private readonly DalamudSharedObservationHost? sharedObservationHost;
     private readonly RemoteMarketAccessProbe remoteMarketAccessProbe;
     private readonly RemoteMarketProbeWindow remoteMarketProbeWindow;
     private readonly QuartermasterIpcClient quartermaster;
@@ -94,6 +96,31 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        try
+        {
+            sharedObservationHost = new DalamudSharedObservationHost(new DalamudSharedObservationHostOptions
+            {
+                PluginConfigDirectory = PluginInterface.GetPluginConfigDirectory(),
+                PluginName = "MarketMafioso",
+                PluginInstanceId = Guid.NewGuid().ToString("N"),
+                GameBuild = Franthropy.Dalamud.Diagnostics.GamePatchCompatibilityGate.ReadCurrentGameVersion(),
+                GameInventory = GameInventory,
+                PlayerState = PlayerState,
+                AddonLifecycle = AddonLifecycle,
+                Diagnostic = (message, exception) =>
+                {
+                    if (exception is null)
+                        Log.Warning("[MarketMafioso] {Message}", message);
+                    else
+                        Log.Error(exception, "[MarketMafioso] {Message}", message);
+                },
+            });
+            sharedObservationHost.Start();
+        }
+        catch (Exception exception)
+        {
+            Log.Error(exception, "[MarketMafioso] Shared observation hosting is unavailable.");
+        }
         Legacy.LegacyRetainerMigrationSource.Preserve(
             Configuration,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));
@@ -728,6 +755,7 @@ public sealed class Plugin : IDalamudPlugin
             sharedObservationListings.Changed -= retainerListingRefresh.NotifyListingCaptureChanged;
             sharedObservationListings.Dispose();
         }
+        sharedObservationHost?.Dispose();
         quartermaster.Dispose();
         ECommonsMain.Dispose();
     }
