@@ -13,7 +13,8 @@ internal sealed record RetainerListingRefreshCandidate(uint ItemId, string? Item
 
 internal sealed record RetainerListingRefreshSnapshot(
     IReadOnlyList<RetainerListingRefreshCandidate> Items,
-    string CaptureId);
+    string CaptureId,
+    bool ComparisonAvailable = true);
 
 internal interface IRetainerListingRefreshSource
 {
@@ -56,7 +57,8 @@ internal sealed class QuartermasterRetainerListingRefreshSource(
             capture.Items
                 .Select(item => new RetainerListingRefreshCandidate(item.ItemId, item.ItemName))
                 .ToArray(),
-            capture.CaptureId);
+            capture.CaptureId,
+            capture.ComparisonAvailable);
         return true;
     }
 }
@@ -169,6 +171,18 @@ internal sealed class RetainerListingRefreshCoordinator
         if (string.Equals(state.LastObservedCaptureId, snapshot!.CaptureId, StringComparison.Ordinal))
             return;
 
+        if (!snapshot.ComparisonAvailable)
+        {
+            state.LastObservedCaptureId = snapshot.CaptureId;
+            state.NeedsAttention = state.Items.Any(item => item.State == RetainerListingRefreshItemState.Blocked);
+            state.AttentionNotified = false;
+            UpdateStatus(
+                "BaselineEstablished",
+                "Captured the current retainer listings as a baseline; no background market request was queued.",
+                persistState: true);
+            return;
+        }
+
         var candidates = snapshot.Items
             .Where(item => item.ItemId != 0)
             .GroupBy(item => item.ItemId)
@@ -177,11 +191,6 @@ internal sealed class RetainerListingRefreshCoordinator
                 group.Select(item => item.ItemName).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))))
             .OrderBy(item => item.ItemId)
             .ToArray();
-        var candidateIds = candidates.Select(candidate => candidate.ItemId).ToHashSet();
-        state.Items.RemoveAll(item =>
-            item.State == RetainerListingRefreshItemState.Deferred &&
-            !candidateIds.Contains(item.ItemId));
-
         foreach (var candidate in candidates)
         {
             var existing = state.Items.FirstOrDefault(item => item.ItemId == candidate.ItemId);
@@ -198,8 +207,8 @@ internal sealed class RetainerListingRefreshCoordinator
                 ItemName = candidate.ItemName,
                 State = RetainerListingRefreshItemState.Deferred,
                 NextAttemptAtUtc = nowUtc.UtcDateTime,
-                LastCode = "QueuedFromListingCapture",
-                LastMessage = "Queued from Quartermaster's explicit retainer-listing capture.",
+                LastCode = "QueuedFromListingDelta",
+                LastMessage = "Queued because Quartermaster observed a new, changed, or removed listing.",
             });
         }
 
@@ -209,8 +218,8 @@ internal sealed class RetainerListingRefreshCoordinator
         UpdateStatus(
             candidates.Length == 0 ? "Idle" : "Queued",
             candidates.Length == 0
-                ? "No listed items need a background refresh."
-                : $"Queued {candidates.Length} distinct listed item(s) for background refresh.",
+                ? "No retainer listing changes need a background refresh."
+                : $"Queued {candidates.Length} changed listed item(s) for background refresh.",
             persistState: true);
     }
 

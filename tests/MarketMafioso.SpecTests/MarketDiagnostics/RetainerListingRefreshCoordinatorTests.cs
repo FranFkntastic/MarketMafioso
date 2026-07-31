@@ -172,7 +172,7 @@ public sealed class RetainerListingRefreshCoordinatorTests
     }
 
     [Fact]
-    public void New_capture_id_reconciles_the_pending_item_set_exactly_once()
+    public void New_capture_id_accumulates_changed_items_exactly_once()
     {
         var source = new FakeSource(
             Snapshot("capture-1", new RetainerListingRefreshCandidate(100, "Iron Ore")),
@@ -190,12 +190,31 @@ public sealed class RetainerListingRefreshCoordinatorTests
         coordinator.Tick(Start.AddSeconds(1), false);
 
         Assert.Empty(runtime.RequestedItems);
-        Assert.Equal([200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
+        Assert.Equal([100u, 200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
         Assert.Equal("capture-2", config.RetainerListingRefresh.LastObservedCaptureId);
 
         coordinator.NotifyListingCaptureChanged();
         coordinator.Tick(Start.AddSeconds(2), false);
-        Assert.Equal([200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
+        Assert.Equal([100u, 200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
+    }
+
+    [Fact]
+    public void Capture_without_comparison_baseline_sends_nothing_and_records_baseline()
+    {
+        var source = new FakeSource(new RetainerListingRefreshSnapshot(
+            [new RetainerListingRefreshCandidate(100, "Iron Ore")],
+            "capture-1",
+            ComparisonAvailable: false));
+        var runtime = new FakeRuntime();
+        var config = CreateConfig();
+        var coordinator = CreateCoordinator(config, source, runtime);
+
+        coordinator.Tick(Start, true);
+
+        Assert.Empty(runtime.RequestedItems);
+        Assert.Empty(config.RetainerListingRefresh.Items);
+        Assert.Equal("capture-1", config.RetainerListingRefresh.LastObservedCaptureId);
+        Assert.Equal("BaselineEstablished", config.RetainerListingRefresh.StatusCode);
     }
 
     [Fact]

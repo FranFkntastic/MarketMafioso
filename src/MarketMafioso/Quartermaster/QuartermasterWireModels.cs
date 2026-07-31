@@ -68,10 +68,15 @@ public sealed record QuartermasterRetainerSnapshot(
 }
 
 public sealed record QuartermasterRetainerListingCapture(
+    string Semantics,
+    bool ComparisonAvailable,
     string CaptureId,
     ulong RetainerId,
     DateTimeOffset CapturedAtUtc,
-    ImmutableArray<QuartermasterRetainerListingCaptureItem> Items);
+    ImmutableArray<QuartermasterRetainerListingCaptureItem> Items)
+{
+    public const string ChangedListingsV1 = "changed-listings/v1";
+}
 
 public sealed record QuartermasterRetainerListingCaptureItem(
     uint ItemId,
@@ -229,6 +234,8 @@ internal sealed class QuartermasterSnapshotWire
 
 internal sealed class QuartermasterRetainerListingCaptureWire
 {
+    public string? Semantics { get; init; }
+    public bool ComparisonAvailable { get; init; }
     public string? CaptureId { get; init; }
     public ulong RetainerId { get; init; }
     public string? CapturedAtUtc { get; init; }
