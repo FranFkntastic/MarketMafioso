@@ -38,6 +38,7 @@ public sealed class MarketMafiosoBridgeProviderTests
             surface.Target.Contains("Retainer", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(surfaces, surface => surface.Id == "workshop-logistics.combined" && surface.Target == "Workshop Logistics/Combined");
         Assert.Contains(surfaces, surface => surface.Id == "workshop-logistics.materials" && surface.Target == "Workshop Logistics/Materials");
+        Assert.Contains(surfaces, surface => surface.Id == "trade-queue" && surface.Target == "Trade Queue");
         Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.inbox" && surface.Target == "Market Acquisition/Inbox");
         Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.workbench" && surface.Target == "Market Acquisition/Workbench");
         Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.route" && surface.Target == "Market Acquisition/Route");
@@ -91,6 +92,7 @@ public sealed class MarketMafiosoBridgeProviderTests
         WorkspaceBusy = false,
         ClaimedRequestId = null,
         PreparedPlanStatus = null,
+        TradeQueue = CreateTradeQueueTruth(),
         RemoteMarket = new AgentBridgeRemoteMarketTruth
         {
             Available = false,
@@ -135,5 +137,27 @@ public sealed class MarketMafiosoBridgeProviderTests
         Distance = null,
         OrdinaryInteractionDistance = null,
         LastEvidencePath = null,
+    };
+
+    private static AgentBridgeTradeQueueTruth CreateTradeQueueTruth() => new()
+    {
+        State = "Idle",
+        Message = "Trade queue is idle.",
+        IsActive = false,
+        CanResume = false,
+        BatchNumber = 0,
+        CompletedBatchCount = 0,
+        InitialUnitCount = 0,
+        CompletedUnitCount = 0,
+        RemainingLineCount = 0,
+        RemainingUnitCount = 0,
+        QueueValid = false,
+        QueueValidationMessage = "Trade Queue is empty.",
+        ActionDelayMilliseconds = 50,
+        TradeRetryMilliseconds = 1_000,
+        IsTradeOpen = false,
+        OfferedSlotCount = 0,
+        CanReceiverReady = false,
+        CanReceiverConfirm = false,
     };
 }

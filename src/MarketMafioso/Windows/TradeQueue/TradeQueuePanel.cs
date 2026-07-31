@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.TradeQueue;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.WorkshopPrep;
@@ -10,21 +11,31 @@ namespace MarketMafioso.Windows.TradeQueue;
 
 internal sealed class TradeQueuePanel
 {
+    private static readonly AgentBridgeActionArgumentSchema ExactRecipientSchema = new(
+    [
+        new("recipientName", AgentBridgeActionArgumentKind.String),
+        new("homeWorld", AgentBridgeActionArgumentKind.String),
+    ]);
+
     private readonly Configuration config;
     private readonly MarketMafioso.TradeQueue.TradeQueueRunner runner;
     private readonly ITradeQueueIo io;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private string inventoryFilter = string.Empty;
     private bool showOnlySelected;
     private bool confirmClear;
+    private string receiverStatus = "No incoming trade action has been invoked.";
 
     public TradeQueuePanel(
         Configuration config,
         MarketMafioso.TradeQueue.TradeQueueRunner runner,
-        ITradeQueueIo io)
+        ITradeQueueIo io,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.config = config;
         this.runner = runner;
         this.io = io;
+        this.reviewRegistry = reviewRegistry;
     }
 
     public bool HasItems => config.TradeQueueItems.Any(item => item.Quantity > 0);
@@ -237,6 +248,26 @@ internal sealed class TradeQueuePanel
         {
             if (ImGui.Button("Stop Trading"))
                 runner.Stop();
+            RegisterLastAction(
+                "trade-queue.stop",
+                "Stop the active Trade Queue run",
+                enabled: true,
+                value: runner.Snapshot.RunId,
+                arguments: null,
+                _ =>
+                {
+                    runner.Stop();
+                    return AgentBridgeUiActionResult.Ok(
+                        "Trade Queue stopped at the last verified checkpoint.",
+                        runner.Snapshot.RunId,
+                        runner.Snapshot);
+                });
+            return;
+        }
+
+        if (io.IsTradeOpen)
+        {
+            DrawReceiverControls();
             return;
         }
 
@@ -253,12 +284,120 @@ internal sealed class TradeQueuePanel
         {
             runner.Start();
         }
+        var availablePartners = io.GetAvailablePartners();
+        RegisterLastAction(
+            "trade-queue.start-exact",
+            "Start Trade Queue for an exact nearby recipient",
+            validation.Success && availablePartners.Count > 0,
+            $"queue={config.TradeQueueItems.Count:N0} lines/{config.TradeQueueItems.Sum(item => item.Quantity):N0} units; " +
+            $"nearby={string.Join(", ", availablePartners.Select(candidate => $"{candidate.Name} @ {candidate.HomeWorldName}"))}",
+            ExactRecipientSchema,
+            arguments => StartExactRecipient(arguments));
 
         if (!validation.Success && validation.Code != TradeQueueValidationCode.Empty)
             ImGui.TextColored(MainWindow.ColWarning, validation.Message);
         else if (!hasPartner && HasItems)
             ImGui.TextColored(MainWindow.ColMuted, "Target or focus-target the receiving player to begin.");
     }
+
+    private void DrawReceiverControls()
+    {
+        ImGui.TextColored(
+            MainWindow.ColHeader,
+            "Incoming trade controls");
+        ImGui.TextColored(
+            MainWindow.ColMuted,
+            "These one-shot controls act only on the currently open, patch-approved trade window.");
+
+        var canReady = io.CanClickReady;
+        if (ImGuiUi.Button("Ready Incoming Trade", canReady))
+            receiverStatus = InvokeReceiverReady().Message;
+        RegisterLastAction(
+            "trade-queue.receiver-ready",
+            "Ready the current incoming trade",
+            canReady,
+            receiverStatus,
+            arguments: null,
+            _ => InvokeReceiverReady());
+
+        ImGui.SameLine();
+        var canConfirm = io.CanConfirmTrade;
+        if (ImGuiUi.Button("Confirm Incoming Trade", canConfirm))
+            receiverStatus = InvokeReceiverConfirm().Message;
+        RegisterLastAction(
+            "trade-queue.receiver-confirm",
+            "Confirm the current incoming trade",
+            canConfirm,
+            receiverStatus,
+            arguments: null,
+            _ => InvokeReceiverConfirm());
+
+        ImGui.TextColored(MainWindow.ColMuted, receiverStatus);
+    }
+
+    private AgentBridgeUiActionResult StartExactRecipient(System.Text.Json.JsonElement? arguments)
+    {
+        var recipientName = arguments!.Value.GetProperty("recipientName").GetString()!;
+        var homeWorld = arguments.Value.GetProperty("homeWorld").GetString()!;
+        if (!io.TryGetPartner(recipientName, homeWorld, out var partner))
+        {
+            return AgentBridgeUiActionResult.Fail(
+                $"{recipientName} @ {homeWorld} is not an exact, targetable nearby player.");
+        }
+
+        var result = runner.Start(partner);
+        return result.Success
+            ? AgentBridgeUiActionResult.Ok(result.Message, runner.Snapshot.RunId, runner.Snapshot)
+            : AgentBridgeUiActionResult.Fail(result.Message, runner.Snapshot);
+    }
+
+    private AgentBridgeUiActionResult InvokeReceiverReady()
+    {
+        if (!io.TryClickReady(out var error))
+        {
+            return AgentBridgeUiActionResult.Fail(
+                string.IsNullOrWhiteSpace(error)
+                    ? "The incoming trade is not ready for recipient confirmation."
+                    : error);
+        }
+
+        return AgentBridgeUiActionResult.Ok("Recipient marked the current trade ready.");
+    }
+
+    private AgentBridgeUiActionResult InvokeReceiverConfirm()
+    {
+        if (!io.TryConfirmTrade(out var error))
+        {
+            return AgentBridgeUiActionResult.Fail(
+                string.IsNullOrWhiteSpace(error)
+                    ? "The exact trade confirmation is not currently available."
+                    : error);
+        }
+
+        return AgentBridgeUiActionResult.Ok("Recipient confirmed the current trade.");
+    }
+
+    private void RegisterLastAction(
+        string id,
+        string label,
+        bool enabled,
+        string? value,
+        AgentBridgeActionArgumentSchema? arguments,
+        Func<System.Text.Json.JsonElement?, AgentBridgeUiActionResult> invoke) =>
+        reviewRegistry.Register(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            selected: false,
+            value,
+            arguments,
+            surfaceId: "trade-queue",
+            mutating: true,
+            completionOperationKind: null,
+            invoke);
 
     private void DrawTimingControls()
     {

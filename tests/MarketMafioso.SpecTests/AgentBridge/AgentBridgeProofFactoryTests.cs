@@ -64,6 +64,22 @@ public sealed class AgentBridgeProofFactoryTests
         Assert.Contains("\"canOpenPlan\":true", json, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Serialize_ExposesTradeQueueCheckpointAndExactNearbyRecipients()
+    {
+        var receipt = AgentBridgeProofFactory.Create(CreateTruth(), 1);
+
+        var json = AgentBridgeProofFactory.Serialize(receipt);
+
+        Assert.Contains("\"tradeQueue\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"runId\":\"trade-run-1\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"completedBatchCount\":2", json, StringComparison.Ordinal);
+        Assert.Contains("\"completedUnitCount\":5000", json, StringComparison.Ordinal);
+        Assert.Contains("\"name\":\"Eriana Ning\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"homeWorld\":\"Siren\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"canReceiverReady\":true", json, StringComparison.Ordinal);
+    }
+
     private static AgentBridgeTruth CreateTruth() => new()
     {
         SchemaVersion = 1,
@@ -81,6 +97,47 @@ public sealed class AgentBridgeProofFactoryTests
         WorkspaceBusy = false,
         ClaimedRequestId = "request-1",
         PreparedPlanStatus = "Ready",
+        TradeQueue = new AgentBridgeTradeQueueTruth
+        {
+            State = "WaitingForPartner",
+            Message = "Batch 3 is loaded.",
+            RunId = "trade-run-1",
+            IsActive = true,
+            CanResume = false,
+            PartnerName = "Eriana Ning",
+            BatchNumber = 3,
+            CompletedBatchCount = 2,
+            InitialUnitCount = 10_500,
+            CompletedUnitCount = 5_000,
+            RemainingLineCount = 12,
+            RemainingUnitCount = 5_500,
+            QueueValid = true,
+            QueueValidationMessage = "Trade Queue is ready.",
+            ActionDelayMilliseconds = 50,
+            TradeRetryMilliseconds = 1_000,
+            IsTradeOpen = true,
+            OfferedSlotCount = 5,
+            CanReceiverReady = true,
+            CanReceiverConfirm = false,
+            AvailablePartners =
+            [
+                new AgentBridgeTradePartnerTruth
+                {
+                    Name = "Eriana Ning",
+                    HomeWorld = "Siren",
+                    GameObjectId = "40001234",
+                },
+            ],
+            Queue =
+            [
+                new AgentBridgeTradeQueueLineTruth
+                {
+                    ItemId = 5074,
+                    ItemName = "Cobalt Plate",
+                    Quantity = 840,
+                },
+            ],
+        },
         CraftAppraisal = new AgentBridgeCraftAppraisalTruth
         {
             IsFetching = false,

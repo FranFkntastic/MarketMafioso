@@ -43,7 +43,11 @@ public readonly record struct TradeQueueItemKey(uint ItemId);
 
 public readonly record struct TradeQueueInventoryKey(uint ItemId, bool IsHighQuality);
 
-public sealed record TradeQueuePartner(ulong GameObjectId, string Name, uint HomeWorldId);
+public sealed record TradeQueuePartner(
+    ulong GameObjectId,
+    string Name,
+    uint HomeWorldId,
+    string HomeWorldName = "");
 
 [Serializable]
 public sealed class TradeQueueTimingOptions
@@ -103,6 +107,7 @@ public enum TradeQueueExecutionState
 public sealed record TradeQueueExecutionSnapshot(
     TradeQueueExecutionState State,
     string Message,
+    string? RunId,
     string? PartnerName,
     int BatchNumber,
     int BatchSlotCount,

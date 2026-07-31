@@ -38,6 +38,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         new("workshop-logistics.queue", "Workshop Logistics - Queue", "select-main-tab", "Workshop Logistics/Queue", 42),
         new("workshop-logistics.materials", "Workshop Logistics - Materials", "select-main-tab", "Workshop Logistics/Materials", 43),
         new("workshop-logistics.assembly", "Workshop Logistics - Assembly", "select-main-tab", "Workshop Logistics/Assembly", 44),
+        new("trade-queue", "Trade Queue", "select-main-tab", "Trade Queue", 45),
         new("diagnostics", "Diagnostics", "select-main-tab", "Diagnostics", 70),
         new("settings", "Settings", "select-main-tab", "Settings", 80),
         new("status", "Status", "select-main-tab", "Status", 90),

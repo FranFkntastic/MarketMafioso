@@ -20,11 +20,15 @@ namespace MarketMafioso.TradeQueue;
 public interface ITradeQueueIo
 {
     IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory();
+    IReadOnlyList<TradeQueuePartner> GetAvailablePartners();
     bool TryGetSelectedPartner(out TradeQueuePartner partner);
+    bool TryGetPartner(string name, string homeWorld, out TradeQueuePartner partner);
     bool PartnerIsAvailable(TradeQueuePartner partner);
     bool IsTradeOpen { get; }
     bool IsNumericInputOpen { get; }
     int OfferedSlotCount { get; }
+    bool CanClickReady { get; }
+    bool CanConfirmTrade { get; }
     bool TryOpenTrade(TradeQueuePartner partner);
     bool TryOpenGilInput(out string error);
     bool TryOfferItem(TradeQueueBatchLine line, out string error);
@@ -92,6 +96,10 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     }
 
     public bool IsTradeOpen => condition[ConditionFlag.TradeOpen];
+
+    public unsafe bool CanClickReady => TryGetReadyButton(out _, out _);
+
+    public unsafe bool CanConfirmTrade => TryGetTradeConfirmation(out _);
 
     public unsafe bool IsNumericInputOpen
     {
@@ -194,7 +202,33 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
             return false;
         }
 
-        partner = new(player.GameObjectId, player.Name.TextValue, player.HomeWorld.RowId);
+        partner = CreatePartner(player);
+        return true;
+    }
+
+    public IReadOnlyList<TradeQueuePartner> GetAvailablePartners() =>
+        EnumeratePartnerCandidates()
+            .Where(player => player.IsTargetable)
+            .GroupBy(player => player.GameObjectId)
+            .Select(group => CreatePartner(group.First()))
+            .OrderBy(candidate => candidate.Name, StringComparer.Ordinal)
+            .ThenBy(candidate => candidate.HomeWorldName, StringComparer.Ordinal)
+            .ToArray();
+
+    public bool TryGetPartner(string name, string homeWorld, out TradeQueuePartner partner)
+    {
+        var player = EnumeratePartnerCandidates()
+            .FirstOrDefault(candidate =>
+                candidate.IsTargetable &&
+                string.Equals(candidate.Name.TextValue, name, StringComparison.Ordinal) &&
+                string.Equals(ResolveHomeWorldName(candidate), homeWorld, StringComparison.Ordinal));
+        if (player == null)
+        {
+            partner = new(0, string.Empty, 0);
+            return false;
+        }
+
+        partner = CreatePartner(player);
         return true;
     }
 
@@ -355,13 +389,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
         if (!TryAuthorizePatchContract(out error))
             return false;
 
-        var addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
-        if (!IsReady(addon) || addon->UldManager.NodeListCount <= 3)
-            return false;
-
-        var node = addon->UldManager.NodeList[3];
-        var button = node == null ? null : (AtkComponentButton*)node->GetComponent();
-        if (button == null || !button->IsEnabled)
+        if (!TryGetReadyButton(out var addon, out var button))
             return false;
 
         button->ClickAddonButton(addon);
@@ -387,6 +415,42 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
         addon->AtkUnitBase.FireCallbackInt(0);
         return true;
     }
+
+    private unsafe bool TryGetReadyButton(
+        out AtkUnitBase* addon,
+        out AtkComponentButton* button)
+    {
+        addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
+        button = null;
+        if (!IsReady(addon) || addon->UldManager.NodeListCount <= 3)
+            return false;
+
+        var node = addon->UldManager.NodeList[3];
+        button = node == null ? null : (AtkComponentButton*)node->GetComponent();
+        return button != null && button->IsEnabled;
+    }
+
+    private unsafe bool TryGetTradeConfirmation(out AddonSelectYesno* addon)
+    {
+        addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
+        if (addon == null || !IsReady(&addon->AtkUnitBase))
+            return false;
+
+        var prompt = addon->PromptText->NodeText.ExtractText();
+        return string.Equals(prompt, tradeConfirmationText, StringComparison.Ordinal);
+    }
+
+    private static TradeQueuePartner CreatePartner(IPlayerCharacter player) =>
+        new(
+            player.GameObjectId,
+            player.Name.TextValue,
+            player.HomeWorld.RowId,
+            ResolveHomeWorldName(player));
+
+    private static string ResolveHomeWorldName(IPlayerCharacter player) =>
+        player.HomeWorld.IsValid
+            ? player.HomeWorld.Value.Name.ToString()
+            : string.Empty;
 
     private static unsafe bool IsReady(AtkUnitBase* addon) =>
         addon != null && addon->IsReady && addon->IsVisible;

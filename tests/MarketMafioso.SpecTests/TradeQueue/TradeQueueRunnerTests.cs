@@ -294,6 +294,8 @@ public sealed class TradeQueueRunnerTests
             clock.Read);
 
         Assert.True(runner.Start().Success);
+        var runId = runner.Snapshot.RunId;
+        Assert.False(string.IsNullOrWhiteSpace(runId));
         runner.Tick();
         runner.Tick();
         Assert.Equal(1, io.OpenTradeAttempts);
@@ -331,6 +333,30 @@ public sealed class TradeQueueRunnerTests
         Assert.Equal(2, runner.Snapshot.BatchNumber);
         Assert.Equal(1, runner.Snapshot.CompletedBatchCount);
         Assert.Equal(6, runner.Snapshot.InitialUnitCount);
+        Assert.Equal(runId, runner.Snapshot.RunId);
+    }
+
+    [Fact]
+    public void Runner_StartsForAnExactBridgeResolvedPartnerWithoutAmbientTargetState()
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2));
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            new TradeQueueTimingOptions(),
+            () => { },
+            io,
+            new FakeQualityLowering(),
+            coordinator,
+            TestPluginLog.Create());
+
+        Assert.True(io.TryGetPartner("Recipient", "Siren", out var exactPartner));
+        var result = runner.Start(exactPartner);
+
+        Assert.True(result.Success);
+        Assert.Equal("Recipient", runner.Snapshot.PartnerName);
+        Assert.False(string.IsNullOrWhiteSpace(runner.Snapshot.RunId));
     }
 
     [Fact]
@@ -387,10 +413,17 @@ public sealed class TradeQueueRunnerTests
         Assert.True(runner.Start().Success);
         runner.Stop();
         Assert.True(runner.CanResume);
+        Assert.True(runner.HasResumeCheckpoint);
+
+        io.HasSelectedPartner = false;
+        Assert.False(runner.CanResume);
+        Assert.True(runner.HasResumeCheckpoint);
+        io.HasSelectedPartner = true;
 
         queue[0].Quantity = 1;
         io.Inventory = Inventory(1);
         Assert.False(runner.CanResume);
+        Assert.False(runner.HasResumeCheckpoint);
 
         var restart = runner.Start();
         Assert.True(restart.Success);
@@ -486,17 +519,35 @@ public sealed class TradeQueueRunnerTests
         public int SubmittedGil { get; private set; }
         public int OpenTradeAttempts { get; private set; }
         public int OfferItemAttempts { get; private set; }
+        public bool HasSelectedPartner { get; set; } = true;
         private bool gilInputRequested;
 
         public IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory() => Inventory;
 
+        public IReadOnlyList<TradeQueuePartner> GetAvailablePartners() =>
+            [new(1, "Recipient", 2, "Siren")];
+
         public bool TryGetSelectedPartner(out TradeQueuePartner partner)
         {
-            partner = new(1, "Recipient", 2);
-            return true;
+            partner = new(1, "Recipient", 2, "Siren");
+            return HasSelectedPartner;
+        }
+
+        public bool TryGetPartner(string name, string homeWorld, out TradeQueuePartner partner)
+        {
+            if (name == "Recipient" && homeWorld == "Siren")
+            {
+                partner = new(1, name, 2, homeWorld);
+                return true;
+            }
+
+            partner = new(0, string.Empty, 0);
+            return false;
         }
 
         public bool PartnerIsAvailable(TradeQueuePartner partner) => true;
+        public bool CanClickReady => IsTradeOpen;
+        public bool CanConfirmTrade => IsTradeOpen;
 
         public bool TryOpenTrade(TradeQueuePartner partner)
         {
