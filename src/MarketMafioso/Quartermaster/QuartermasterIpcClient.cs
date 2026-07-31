@@ -777,6 +777,14 @@ public sealed class QuartermasterIpcClient : IDisposable
         QuartermasterRetainerListingCapture? latestListingCapture = null;
         if (wire.LatestRetainerListingCapture is { } captureWire)
         {
+            if (!string.Equals(
+                    captureWire.Semantics,
+                    QuartermasterRetainerListingCapture.ChangedListingsV1,
+                    StringComparison.Ordinal))
+            {
+                error = "Quartermaster's retainer-listing capture does not provide changed-listing semantics.";
+                return false;
+            }
             if (string.IsNullOrWhiteSpace(captureWire.CaptureId) ||
                 captureWire.RetainerId == 0 ||
                 !TryParseTimestamp(captureWire.CapturedAtUtc, out var capturedAtUtc))
@@ -793,6 +801,8 @@ public sealed class QuartermasterIpcClient : IDisposable
                 .OrderBy(item => item.ItemId)
                 .ToImmutableArray();
             latestListingCapture = new(
+                QuartermasterRetainerListingCapture.ChangedListingsV1,
+                captureWire.ComparisonAvailable,
                 captureWire.CaptureId,
                 captureWire.RetainerId,
                 capturedAtUtc,

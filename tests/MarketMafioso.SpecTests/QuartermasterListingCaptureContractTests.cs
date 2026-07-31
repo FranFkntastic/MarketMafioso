@@ -32,6 +32,8 @@ public sealed class QuartermasterListingCaptureContractTests
                 retainers = Array.Empty<object>(),
                 latestRetainerListingCapture = new
                 {
+                    semantics = QuartermasterRetainerListingCapture.ChangedListingsV1,
+                    comparisonAvailable = true,
                     captureId = "capture-1",
                     retainerId = 20,
                     capturedAtUtc = "2026-07-31T17:29:59Z",
@@ -45,6 +47,8 @@ public sealed class QuartermasterListingCaptureContractTests
 
         Assert.True(client.TryGetSnapshot(out var snapshot, out var error), error);
         var capture = Assert.IsType<QuartermasterRetainerListingCapture>(snapshot!.LatestRetainerListingCapture);
+        Assert.Equal(QuartermasterRetainerListingCapture.ChangedListingsV1, capture.Semantics);
+        Assert.True(capture.ComparisonAvailable);
         Assert.Equal("capture-1", capture.CaptureId);
         Assert.Equal((uint)100, Assert.Single(capture.Items).ItemId);
 
@@ -57,6 +61,46 @@ public sealed class QuartermasterListingCaptureContractTests
         }));
 
         Assert.Equal("retainer_listings", changed!.Kind);
+    }
+
+    [Fact]
+    public void Client_rejects_legacy_broad_listing_capture_semantics()
+    {
+        var adapter = new FakeAdapter
+        {
+            CapabilitiesJson = JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.CapabilitiesSchema,
+                providerInstanceId = "provider-1",
+                revision = 1,
+            }),
+            SnapshotJson = JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.SnapshotSchema,
+                providerInstanceId = "provider-1",
+                revision = 1,
+                generatedAtUtc = "2026-07-31T17:30:00Z",
+                owner = new
+                {
+                    localContentId = 10,
+                    homeWorldId = 57,
+                    characterName = "Recipient",
+                    homeWorldName = "Siren",
+                },
+                retainers = Array.Empty<object>(),
+                latestRetainerListingCapture = new
+                {
+                    captureId = "capture-1",
+                    retainerId = 20,
+                    capturedAtUtc = "2026-07-31T17:29:59Z",
+                    items = new[] { new { itemId = 100, itemName = "Iron Ore" } },
+                },
+            }),
+        };
+        using var client = new QuartermasterIpcClient(adapter);
+
+        Assert.False(client.TryGetSnapshot(out _, out var error));
+        Assert.Contains("changed-listing semantics", error, StringComparison.Ordinal);
     }
 
     private sealed class FakeAdapter : IQuartermasterIpcAdapter
