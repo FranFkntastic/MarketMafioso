@@ -20,6 +20,8 @@ public sealed record MarketAcquisitionRequestBuilderRefreshOutcome(
 
 public sealed class MarketAcquisitionRequestWorkspace : IDisposable
 {
+    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan PlanPreparationTimeout = TimeSpan.FromMinutes(5);
     private readonly Configuration config;
     private readonly MarketAcquisitionRequestClient client;
     private readonly MarketAcquisitionRequestSyncService syncService;
@@ -469,7 +471,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             Status = claimed.Origin == MarketAcquisitionOrigins.LocalWorkbench
                 ? $"{result.StatusMessage} Prepared from the local Workbench; Workshop Host is optional."
                 : result.StatusMessage;
-        });
+        }, PlanPreparationTimeout);
 
     public Task<MarketAcquisitionPlanPreparationResult> PrepareRecoveryPlanAsync(
         MarketAcquisitionClaimView remainingClaim,
@@ -512,7 +514,9 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             await action(request, token).ConfigureAwait(false);
         });
 
-    public async Task RunAsync(Func<CancellationToken, Task> action)
+    public async Task RunAsync(
+        Func<CancellationToken, Task> action,
+        TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(action);
         if (IsBusy)
@@ -520,7 +524,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
 
         IsBusy = true;
         requestCancellation?.Dispose();
-        requestCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        requestCancellation = new CancellationTokenSource(timeout ?? DefaultRequestTimeout);
         try
         {
             await action(requestCancellation.Token).ConfigureAwait(false);
