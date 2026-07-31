@@ -15,7 +15,8 @@ namespace MarketMafioso.MarketAcquisition.MarketBoard;
 internal sealed class MarketListingPurchaseCoordinator : IDisposable
 {
     private static readonly TimeSpan PurchaseDeadline = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan BatchPacingDelay = TimeSpan.FromMilliseconds(1600);
+    private const int MinimumBatchPacingMilliseconds = 1300;
+    private const int MaximumBatchPacingMilliseconds = 1900;
 
     private readonly Configuration configuration;
     private readonly IMarketBoard marketBoard;
@@ -318,8 +319,13 @@ internal sealed class MarketListingPurchaseCoordinator : IDisposable
             pending.PacketMatchesIntent,
             message);
         WriteEvidence(pending);
-        framework.RunOnTick(Advance, BatchPacingDelay);
+        framework.RunOnTick(Advance, NextBatchPacingDelay());
     }
+
+    private static TimeSpan NextBatchPacingDelay() =>
+        TimeSpan.FromMilliseconds(Random.Shared.Next(
+            MinimumBatchPacingMilliseconds,
+            MaximumBatchPacingMilliseconds + 1));
 
     private void Finish(string? abortReason)
     {

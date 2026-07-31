@@ -70,7 +70,9 @@ public sealed class RenderPathBoundaryTests
         Assert.Contains("purchasedListingIds.Add(pending.Selection.ListingId)", confirmation, StringComparison.Ordinal);
         Assert.Contains("reconcileConfirmedPurchase(pending.Selection.ListingId)", confirmation, StringComparison.Ordinal);
         Assert.Contains("listingSession.ConfirmPurchase(listingId)", controller, StringComparison.Ordinal);
-        Assert.Contains("framework.RunOnTick(Advance, BatchPacingDelay)", completion, StringComparison.Ordinal);
+        Assert.Contains("framework.RunOnTick(Advance, NextBatchPacingDelay())", completion, StringComparison.Ordinal);
+        Assert.Contains("MinimumBatchPacingMilliseconds = 1300", coordinator, StringComparison.Ordinal);
+        Assert.Contains("MaximumBatchPacingMilliseconds = 1900", coordinator, StringComparison.Ordinal);
         Assert.Contains("proxy->SetLastPurchasedItem", coordinator, StringComparison.Ordinal);
         Assert.DoesNotContain("BeginPostPurchaseRefresh", coordinator, StringComparison.Ordinal);
         Assert.DoesNotContain("pendingPostPurchaseRefresh", coordinator, StringComparison.Ordinal);
