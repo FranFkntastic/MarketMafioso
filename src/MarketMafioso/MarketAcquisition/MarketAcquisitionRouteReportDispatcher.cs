@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,6 +26,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     private readonly IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher;
     private readonly IMarketAcquisitionReportOutbox outbox;
     private readonly VolatileMarketAcquisitionReportOutbox volatileFallback = new();
+    private readonly IMarketAcquisitionReportOutbox deadLetterOutbox;
     private readonly CancellationTokenSource lifetimeCancellation = new();
     private readonly Func<DateTimeOffset> utcNow;
     private readonly Dictionary<string, Queue<MarketAcquisitionReportOutboxEntry>> pendingEntriesByRequest = new(StringComparer.Ordinal);
@@ -40,19 +43,25 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     private string? lastSuccessfulRouteKey;
     private string? lastFailureKind;
     private DateTimeOffset? lastFailureAtUtc;
+    private int quarantinedEntryCount;
+    private string? lastQuarantineStatus;
+    private DateTimeOffset? lastQuarantineAtUtc;
 
     public MarketAcquisitionRouteReportDispatcher(
         IMarketAcquisitionRouteReporter reporter,
         MarketAcquisitionClaimLifecycleController claimLifecycle,
         IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
         IMarketAcquisitionReportOutbox? outbox = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        IMarketAcquisitionReportOutbox? deadLetterOutbox = null)
     {
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         this.claimLifecycle = claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle));
         this.callbackDispatcher = callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher));
         this.outbox = outbox ?? new VolatileMarketAcquisitionReportOutbox();
+        this.deadLetterOutbox = deadLetterOutbox ?? new VolatileMarketAcquisitionReportOutbox();
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        quarantinedEntryCount = this.deadLetterOutbox.Snapshot().Count;
         CompactDuplicateRouteProgress();
         LoadPendingOutboxEntries();
         QueuePendingRequestHeads();
@@ -297,15 +306,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         try
         {
             await SendAsync(entry, cancellationToken).ConfigureAwait(false);
-            outbox.Remove(entry.Id);
-            volatileFallback.Remove(entry.Id);
-            lock (sync)
-            {
-                entrySessionVersions.Remove(entry.Id);
-                ForgetPendingRouteEntry(entry);
-                AcknowledgePendingEntry(entry, requestId);
-                retryStatesByRequest.Remove(requestId);
-            }
+            AcknowledgeDeliveredEntry(entry, requestId);
             acknowledged = true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -313,12 +314,34 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         }
         catch (Exception ex)
         {
-            RegisterFailure(requestId, ex);
-            if (IsForCurrentClaim(entry))
+            var failure = ex;
+            ReportFailureResolution resolution;
+            try
             {
-                await callbackDispatcher.DispatchAsync(() =>
-                    claimLifecycle.SetStatus($"Report retained for automatic retry after {MaxAttempts} attempts: {ex.Message}"))
+                resolution = await TryResolveFailureAsync(entry, requestId, ex, cancellationToken)
                     .ConfigureAwait(false);
+            }
+            catch (Exception reconciliationException)
+            {
+                resolution = ReportFailureResolution.Unresolved;
+                failure = new InvalidOperationException(
+                    "Could not durably reconcile the retained report.",
+                    reconciliationException);
+            }
+            if (resolution == ReportFailureResolution.AlreadyDelivered)
+            {
+                AcknowledgeDeliveredEntry(entry, requestId);
+                acknowledged = true;
+            }
+            else if (resolution == ReportFailureResolution.Unresolved)
+            {
+                RegisterFailure(requestId, failure);
+                if (IsForCurrentClaim(entry))
+                {
+                    await callbackDispatcher.DispatchAsync(() =>
+                        claimLifecycle.SetStatus($"Report retained for automatic retry after {MaxAttempts} attempts: {failure.Message}"))
+                        .ConfigureAwait(false);
+                }
             }
         }
         finally
@@ -330,6 +353,148 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         if (acknowledged)
             QueueRequestHead(requestId);
     }
+
+    private void AcknowledgeDeliveredEntry(
+        MarketAcquisitionReportOutboxEntry entry,
+        string requestId)
+    {
+        outbox.Remove(entry.Id);
+        volatileFallback.Remove(entry.Id);
+        lock (sync)
+        {
+            entrySessionVersions.Remove(entry.Id);
+            ForgetPendingRouteEntry(entry);
+            AcknowledgePendingEntry(entry, requestId);
+            retryStatesByRequest.Remove(requestId);
+        }
+    }
+
+    private async Task<ReportFailureResolution> TryResolveFailureAsync(
+        MarketAcquisitionReportOutboxEntry entry,
+        string requestId,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        if (exception is not HttpRequestException { StatusCode: { } statusCode } ||
+            (int)statusCode is < 400 or >= 500)
+        {
+            return ReportFailureResolution.Unresolved;
+        }
+
+        MarketAcquisitionRequestView remote;
+        try
+        {
+            remote = await reporter.GetRequestAsync(requestId, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            return ReportFailureResolution.Unresolved;
+        }
+
+        if (IsTerminalStatus(remote.Status))
+        {
+            QuarantineTerminalRequest(requestId, remote.Status, exception);
+            return ReportFailureResolution.Quarantined;
+        }
+
+        if (entry.ReportType.Equals(RouteProgressType, StringComparison.Ordinal) &&
+            statusCode == HttpStatusCode.Conflict &&
+            exception is MarketAcquisitionLifecycleHttpException lifecycleException &&
+            lifecycleException.Error?.Contains("Idempotency key", StringComparison.OrdinalIgnoreCase) == true &&
+            await ServerHasRouteEventAsync(entry, requestId, cancellationToken).ConfigureAwait(false))
+        {
+            return ReportFailureResolution.AlreadyDelivered;
+        }
+
+        return ReportFailureResolution.Unresolved;
+    }
+
+    private async Task<bool> ServerHasRouteEventAsync(
+        MarketAcquisitionReportOutboxEntry entry,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        DurableRouteProgress durable;
+        try
+        {
+            durable = outbox.Deserialize<DurableRouteProgress>(entry);
+        }
+        catch
+        {
+            return false;
+        }
+
+        MarketAcquisitionRequestTimelineView timeline;
+        try
+        {
+            timeline = await reporter.GetRequestTimelineAsync(requestId, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            return false;
+        }
+
+        var expectedEventType = MarketAcquisitionRouteProgressReporter.ResolveAction(durable.Report.RouteState);
+        return timeline.AttemptEvents.Any(candidate =>
+            candidate.AttemptId.Equals(durable.Report.AttemptId, StringComparison.Ordinal) &&
+            candidate.Sequence == durable.Report.Sequence &&
+            candidate.EventType.Equals(expectedEventType, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void QuarantineTerminalRequest(
+        string requestId,
+        string remoteStatus,
+        Exception exception)
+    {
+        MarketAcquisitionReportOutboxEntry[] entries;
+        lock (sync)
+        {
+            if (!pendingEntriesByRequest.TryGetValue(requestId, out var pending) || pending.Count == 0)
+                return;
+            entries = pending.ToArray();
+        }
+
+        var quarantinedAtUtc = utcNow();
+        var failureKind = exception is HttpRequestException { StatusCode: { } statusCode }
+            ? $"HTTP {(int)statusCode}"
+            : exception.GetType().Name;
+        foreach (var entry in entries)
+        {
+            deadLetterOutbox.Put(
+                entry.Id,
+                entry.ReportType,
+                requestId,
+                new DeadLetteredReport(entry, remoteStatus, failureKind, quarantinedAtUtc));
+        }
+
+        var ids = entries.Select(candidate => candidate.Id).ToArray();
+        outbox.RemoveMany(ids);
+        volatileFallback.RemoveMany(ids);
+        lock (sync)
+        {
+            foreach (var entry in entries)
+            {
+                entrySessionVersions.Remove(entry.Id);
+                ForgetPendingRouteEntry(entry);
+                pendingEntryIds.Remove(entry.Id);
+                legacyRequestIdsByEntryId.Remove(entry.Id);
+            }
+            pendingEntriesByRequest.Remove(requestId);
+            retryStatesByRequest.Remove(requestId);
+            quarantinedEntryCount = deadLetterOutbox.Snapshot().Count;
+            lastQuarantineStatus = remoteStatus;
+            lastQuarantineAtUtc = quarantinedAtUtc;
+        }
+    }
+
+    private static bool IsTerminalStatus(string? status) =>
+        status is MarketAcquisitionStatuses.Complete
+            or MarketAcquisitionStatuses.Failed
+            or MarketAcquisitionStatuses.Rejected
+            or MarketAcquisitionStatuses.Expired
+            or MarketAcquisitionStatuses.Cancelled
+            or MarketAcquisitionStatuses.Shelved
+            or MarketAcquisitionStatuses.Archived;
 
     private void AcknowledgePendingEntry(MarketAcquisitionReportOutboxEntry entry, string requestId)
     {
@@ -443,7 +608,10 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
                 oldest,
                 nextRetry,
                 lastFailureKind,
-                lastFailureAtUtc);
+                lastFailureAtUtc,
+                quarantinedEntryCount,
+                lastQuarantineStatus,
+                lastQuarantineAtUtc);
         }
     }
 
@@ -611,6 +779,19 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         int FailureCount,
         DateTimeOffset NextAttemptAtUtc,
         string FailureKind);
+
+    private sealed record DeadLetteredReport(
+        MarketAcquisitionReportOutboxEntry Entry,
+        string RemoteStatus,
+        string FailureKind,
+        DateTimeOffset QuarantinedAtUtc);
+
+    private enum ReportFailureResolution
+    {
+        Unresolved,
+        AlreadyDelivered,
+        Quarantined,
+    }
 }
 
 public sealed record MarketAcquisitionReportBacklogSnapshot(
@@ -620,4 +801,7 @@ public sealed record MarketAcquisitionReportBacklogSnapshot(
     DateTimeOffset? OldestEnqueuedAtUtc,
     DateTimeOffset? NextRetryAtUtc,
     string? LastFailureKind,
-    DateTimeOffset? LastFailureAtUtc);
+    DateTimeOffset? LastFailureAtUtc,
+    int QuarantinedEntryCount,
+    string? LastQuarantineStatus,
+    DateTimeOffset? LastQuarantineAtUtc);

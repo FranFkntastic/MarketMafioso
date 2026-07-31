@@ -259,15 +259,42 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
         !string.IsNullOrWhiteSpace(config.ServerUrl) &&
         !string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config));
 
+    public Task<MarketAcquisitionRequestView> GetRequestAsync(
+        string requestId,
+        CancellationToken cancellationToken) =>
+        client.GetBatchAsync(
+            config.ServerUrl,
+            WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
+            requestId,
+            cancellationToken);
+
+    public Task<MarketAcquisitionRequestTimelineView> GetRequestTimelineAsync(
+        string requestId,
+        CancellationToken cancellationToken) =>
+        client.GetRequestTimelineAsync(
+            config.ServerUrl,
+            WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
+            requestId,
+            cancellationToken);
+
     public async Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken)
     {
         var action = MarketAcquisitionRouteProgressReporter.ResolveAction(report.RouteState);
         var apiKey = WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config);
+        var pluginInstanceId = string.IsNullOrWhiteSpace(report.PluginInstanceId)
+            ? config.PluginInstanceId
+            : report.PluginInstanceId;
+        var pluginVersion = string.IsNullOrWhiteSpace(report.PluginVersion)
+            ? PluginBuildInfo.DisplayVersion
+            : report.PluginVersion;
+        var clientTimestampUtc = report.ClientTimestampUtc == default
+            ? DateTimeOffset.UtcNow
+            : report.ClientTimestampUtc;
         var result = action switch
         {
-            MarketAcquisitionRouteProgressReporter.FailAction => await client.FailAttemptAsync(config.ServerUrl, apiKey, report.RequestId, report.ClaimToken, config.PluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, PluginBuildInfo.DisplayVersion, cancellationToken).ConfigureAwait(false),
-            MarketAcquisitionRouteProgressReporter.CompleteAction => await client.CompleteAttemptAsync(config.ServerUrl, apiKey, report.RequestId, report.ClaimToken, config.PluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, PluginBuildInfo.DisplayVersion, cancellationToken).ConfigureAwait(false),
-            _ => await client.ReportAttemptProgressAsync(config.ServerUrl, apiKey, report.RequestId, report.ClaimToken, config.PluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, PluginBuildInfo.DisplayVersion, cancellationToken).ConfigureAwait(false),
+            MarketAcquisitionRouteProgressReporter.FailAction => await client.FailAttemptAsync(config.ServerUrl, apiKey, report.RequestId, report.ClaimToken, pluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, pluginVersion, clientTimestampUtc, cancellationToken).ConfigureAwait(false),
+            MarketAcquisitionRouteProgressReporter.CompleteAction => await client.CompleteAttemptAsync(config.ServerUrl, apiKey, report.RequestId, report.ClaimToken, pluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, pluginVersion, clientTimestampUtc, cancellationToken).ConfigureAwait(false),
+            _ => await client.ReportAttemptProgressAsync(config.ServerUrl, apiKey, report.RequestId, report.ClaimToken, pluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, pluginVersion, clientTimestampUtc, cancellationToken).ConfigureAwait(false),
         };
         return new MarketAcquisitionRouteProgressReportOutcome(action, result.Request);
     }

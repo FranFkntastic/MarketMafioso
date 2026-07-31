@@ -28,6 +28,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly IMarketAcquisitionRouteEvidenceRecorder evidence;
     private readonly MarketAcquisitionRouteReportDispatcher reportDispatcher;
     private readonly IMarketAcquisitionRouteClock clock;
+    private readonly string reportPluginInstanceId;
+    private readonly string? reportPluginVersion;
     private readonly MarketBoardListingReadAccumulator listingReadAccumulator = new();
     private readonly MarketBoardAutomationController purchaseAutomation = new();
     private readonly MarketAcquisitionRouteOperationExecutor operationExecutor = new();
@@ -61,7 +63,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         IMarketAcquisitionRouteClock clock,
         IExactAcquisitionRouteExecutionStateStore exactAcquisitionStateStore,
         IMarketAcquisitionReportOutbox? reportOutbox = null,
-        IShardAcquisitionCheckpointCoordinator? shardCheckpoints = null)
+        IShardAcquisitionCheckpointCoordinator? shardCheckpoints = null,
+        IMarketAcquisitionReportOutbox? reportDeadLetter = null,
+        string? reportPluginInstanceId = null,
+        string? reportPluginVersion = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -74,8 +79,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             reporter ?? throw new ArgumentNullException(nameof(reporter)),
             claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle)),
             callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher)),
-            reportOutbox);
+            reportOutbox,
+            deadLetterOutbox: reportDeadLetter);
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        this.reportPluginInstanceId = reportPluginInstanceId ?? string.Empty;
+        this.reportPluginVersion = reportPluginVersion;
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
         this.shardCheckpoints = shardCheckpoints;
     }
@@ -2302,7 +2310,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             activeStop == null ? null : $"{activeStop.DataCenter}:{activeStop.WorldName}",
             activeStop?.WorldName,
             activeStop?.Status ?? routeState,
-            message);
+            message,
+            reportPluginInstanceId,
+            reportPluginVersion,
+            clock.UtcNow);
         reportDispatcher.EnqueueRouteProgress(report);
     }
 

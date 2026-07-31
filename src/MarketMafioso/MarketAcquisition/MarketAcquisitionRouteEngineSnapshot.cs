@@ -43,5 +43,5 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public ExactAcquisitionRouteExecutionState? ExactAcquisitionExecution { get; init; }
     public ShardAcquisitionCheckpointSnapshot? ShardCheckpoint { get; init; }
     public MarketAcquisitionReportBacklogSnapshot ReportBacklog { get; init; } =
-        new(0, 0, 0, null, null, null, null);
+        new(0, 0, 0, null, null, null, null, 0, null, null);
 }
