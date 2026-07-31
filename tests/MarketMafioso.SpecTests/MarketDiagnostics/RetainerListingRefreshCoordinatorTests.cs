@@ -178,6 +178,30 @@ public sealed class RetainerListingRefreshCoordinatorTests
         Assert.Single(notifications);
     }
 
+    [Fact]
+    public void Stale_post_close_listing_evidence_stays_pending_until_fresh_snapshot_arrives()
+    {
+        var source = new FakeSource(
+            Snapshot(7, Start.AddMinutes(-5), new RetainerListingRefreshCandidate(100, "Iron Ore")),
+            Snapshot(7, Start.AddMinutes(-5), new RetainerListingRefreshCandidate(100, "Iron Ore")),
+            Snapshot(8, Start.AddSeconds(2), new RetainerListingRefreshCandidate(200, "Cobalt Ore")));
+        var runtime = new FakeRuntime();
+        var config = CreateConfig();
+        var coordinator = CreateCoordinator(config, source, runtime);
+
+        CloseRetainerSession(coordinator, Start);
+        coordinator.Tick(Start.AddSeconds(3), false, true);
+
+        Assert.Empty(runtime.RequestedItems);
+        Assert.True(config.RetainerListingRefresh.CapturePending);
+        Assert.Equal("SnapshotDeferred", config.RetainerListingRefresh.StatusCode);
+
+        coordinator.Tick(Start.AddSeconds(8), false, true);
+
+        Assert.Equal([100u], runtime.RequestedItems);
+        Assert.Equal([100u, 200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
+    }
+
     private static Configuration CreateConfig() => new()
     {
         EnableMarketAcquisition = true,
@@ -206,12 +230,42 @@ public sealed class RetainerListingRefreshCoordinatorTests
         coordinator.Tick(at.AddSeconds(1), false, false);
     }
 
+    private static RetainerListingRefreshSnapshot Snapshot(
+        long revision,
+        DateTimeOffset listingsObservedAtUtc,
+        params RetainerListingRefreshCandidate[] items) =>
+        new(
+            items,
+            "quartermaster:test",
+            revision,
+            listingsObservedAtUtc);
+
     private sealed class FakeSource : IRetainerListingRefreshSource
     {
-        private readonly Queue<IReadOnlyList<RetainerListingRefreshCandidate>> snapshots = [];
+        private readonly Queue<RetainerListingRefreshSnapshot> snapshots = [];
         private readonly string? failure;
 
         public FakeSource(params IReadOnlyList<RetainerListingRefreshCandidate>[] snapshots)
+        {
+            foreach (var snapshot in snapshots)
+            {
+                this.snapshots.Enqueue(Snapshot(
+                    this.snapshots.Count + 1,
+                    Start.AddSeconds(this.snapshots.Count + 1),
+                    snapshot.ToArray()));
+            }
+
+            if (this.snapshots.Count == 1)
+            {
+                var baseline = this.snapshots.Peek();
+                this.snapshots.Enqueue(Snapshot(
+                    baseline.Revision + 1,
+                    Start.AddSeconds(2),
+                    baseline.Items.ToArray()));
+            }
+        }
+
+        public FakeSource(params RetainerListingRefreshSnapshot[] snapshots)
         {
             foreach (var snapshot in snapshots)
                 this.snapshots.Enqueue(snapshot);
@@ -222,20 +276,20 @@ public sealed class RetainerListingRefreshCoordinatorTests
             this.failure = failure;
         }
 
-        public bool TryRead(out IReadOnlyList<RetainerListingRefreshCandidate> items, out string error)
+        public bool TryRead(out RetainerListingRefreshSnapshot? snapshot, out string error)
         {
             if (failure is not null)
             {
-                items = [];
+                snapshot = null;
                 error = failure;
                 return false;
             }
 
-            items = snapshots.Count > 1
+            snapshot = snapshots.Count > 1
                 ? snapshots.Dequeue()
-                : snapshots.TryPeek(out var snapshot)
-                    ? snapshot
-                    : [];
+                : snapshots.TryPeek(out var current)
+                    ? current
+                    : Snapshot(1, Start, []);
             error = string.Empty;
             return true;
         }

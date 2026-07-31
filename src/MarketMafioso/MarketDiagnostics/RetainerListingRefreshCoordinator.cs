@@ -11,18 +11,24 @@ namespace MarketMafioso.MarketDiagnostics;
 
 internal sealed record RetainerListingRefreshCandidate(uint ItemId, string? ItemName);
 
+internal sealed record RetainerListingRefreshSnapshot(
+    IReadOnlyList<RetainerListingRefreshCandidate> Items,
+    string ProviderInstanceId,
+    long Revision,
+    DateTimeOffset? ListingsObservedAtUtc);
+
 internal interface IRetainerListingRefreshSource
 {
-    bool TryRead(out IReadOnlyList<RetainerListingRefreshCandidate> items, out string error);
+    bool TryRead(out RetainerListingRefreshSnapshot? snapshot, out string error);
 }
 
 internal sealed class QuartermasterRetainerListingRefreshSource(
     QuartermasterIpcClient quartermaster,
     IPlayerState playerState) : IRetainerListingRefreshSource
 {
-    public bool TryRead(out IReadOnlyList<RetainerListingRefreshCandidate> items, out string error)
+    public bool TryRead(out RetainerListingRefreshSnapshot? result, out string error)
     {
-        items = [];
+        result = null;
         error = string.Empty;
         var owner = new QuartermasterOwnerScope(
             playerState.ContentId == 0 ? null : playerState.ContentId,
@@ -43,7 +49,7 @@ internal sealed class QuartermasterRetainerListingRefreshSource(
             return false;
         }
 
-        items = snapshot.Retainers
+        var items = snapshot.Retainers
             .SelectMany(retainer => retainer.Listings)
             .Where(listing => listing.ItemId != 0)
             .GroupBy(listing => listing.ItemId)
@@ -52,6 +58,16 @@ internal sealed class QuartermasterRetainerListingRefreshSource(
                 group.Select(listing => listing.ItemName).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))))
             .OrderBy(item => item.ItemId)
             .ToArray();
+        var listingsObservedAtUtc = snapshot.Retainers
+            .Where(retainer => retainer.ObservedSources.Contains("RetainerMarket", StringComparer.Ordinal))
+            .Select(retainer => retainer.ListingsObservedAtUtc)
+            .Where(observedAt => observedAt.HasValue)
+            .Max();
+        result = new RetainerListingRefreshSnapshot(
+            items,
+            snapshot.ProviderInstanceId,
+            snapshot.Revision,
+            listingsObservedAtUtc);
         return true;
     }
 }
@@ -112,8 +128,9 @@ internal sealed class RetainerListingRefreshCoordinator
 
         if (retainerSessionActive)
         {
-            if (!sessionWasActive)
-                CaptureSessionBaseline();
+            if (!sessionWasActive ||
+                config.RetainerListingRefresh.SessionStartedAtUtc is null)
+                CaptureSessionBaseline(nowUtc);
             sessionWasActive = true;
             return;
         }
@@ -166,13 +183,25 @@ internal sealed class RetainerListingRefreshCoordinator
         Dispatch(next, nowUtc);
     }
 
-    private void CaptureSessionBaseline()
+    private void CaptureSessionBaseline(DateTimeOffset nowUtc)
     {
-        if (!source.TryRead(out var items, out _))
-            return;
-
         var state = config.RetainerListingRefresh;
-        state.SessionListings = items
+        state.SessionStartedAtUtc = nowUtc.UtcDateTime;
+        state.SessionClosedAtUtc = null;
+        state.SessionSnapshotProviderInstanceId = null;
+        state.SessionSnapshotRevision = null;
+        state.SessionListingsObservedAtUtc = null;
+        state.SessionListings.Clear();
+        if (!source.TryRead(out var snapshot, out _))
+        {
+            persist();
+            return;
+        }
+
+        state.SessionSnapshotProviderInstanceId = snapshot!.ProviderInstanceId;
+        state.SessionSnapshotRevision = snapshot.Revision;
+        state.SessionListingsObservedAtUtc = snapshot.ListingsObservedAtUtc?.UtcDateTime;
+        state.SessionListings = snapshot.Items
             .Select(item => new PersistedRetainerListingRefreshCandidate
             {
                 ItemId = item.ItemId,
@@ -200,7 +229,8 @@ internal sealed class RetainerListingRefreshCoordinator
     private void CapturePostCloseListings(DateTimeOffset nowUtc)
     {
         var state = config.RetainerListingRefresh;
-        if (!source.TryRead(out var current, out var error))
+        if (!source.TryRead(out var snapshot, out var error) ||
+            !HasFreshListingEvidence(state, snapshot, out error))
         {
             state.CaptureAttempts++;
             state.CaptureNotBeforeUtc = nowUtc.UtcDateTime + CaptureRetryDelay(state.CaptureAttempts);
@@ -225,7 +255,7 @@ internal sealed class RetainerListingRefreshCoordinator
 
         var candidates = state.SessionListings
             .Select(item => new RetainerListingRefreshCandidate(item.ItemId, item.ItemName))
-            .Concat(current)
+            .Concat(snapshot!.Items)
             .Where(item => item.ItemId != 0)
             .GroupBy(item => item.ItemId)
             .Select(group => new RetainerListingRefreshCandidate(
@@ -258,6 +288,11 @@ internal sealed class RetainerListingRefreshCoordinator
         state.CapturePending = false;
         state.CaptureNotBeforeUtc = null;
         state.CaptureAttempts = 0;
+        state.SessionStartedAtUtc = null;
+        state.SessionClosedAtUtc = null;
+        state.SessionSnapshotProviderInstanceId = null;
+        state.SessionSnapshotRevision = null;
+        state.SessionListingsObservedAtUtc = null;
         state.SessionListings.Clear();
         state.NeedsAttention = state.Items.Any(item => item.State == RetainerListingRefreshItemState.Blocked);
         state.AttentionNotified = false;
@@ -267,6 +302,48 @@ internal sealed class RetainerListingRefreshCoordinator
                 ? "The closed retainer session had no listed items to refresh."
                 : $"Queued {candidates.Length} distinct listed item(s) for serialized background refresh.",
             persistState: true);
+    }
+
+    private static bool HasFreshListingEvidence(
+        PersistedRetainerListingRefreshState state,
+        RetainerListingRefreshSnapshot? snapshot,
+        out string error)
+    {
+        if (snapshot is null)
+        {
+            error = "Quartermaster did not return a listing snapshot.";
+            return false;
+        }
+
+        if (snapshot.ListingsObservedAtUtc is not { } listingsObservedAtUtc)
+        {
+            error = "Quartermaster has not observed the RetainerMarket source for this session.";
+            return false;
+        }
+
+        var baselineObservedAtUtc = state.SessionListingsObservedAtUtc ??
+                                    state.SessionStartedAtUtc ??
+                                    state.SessionClosedAtUtc;
+        if (baselineObservedAtUtc is { } baseline &&
+            listingsObservedAtUtc.UtcDateTime <= baseline)
+        {
+            error = "Quartermaster's retainer-listing evidence has not advanced past the session baseline.";
+            return false;
+        }
+
+        if (state.SessionSnapshotRevision is { } baselineRevision &&
+            string.Equals(
+                state.SessionSnapshotProviderInstanceId,
+                snapshot.ProviderInstanceId,
+                StringComparison.Ordinal) &&
+            snapshot.Revision <= baselineRevision)
+        {
+            error = "Quartermaster's snapshot revision has not advanced past the session baseline.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     private bool ObserveActiveRequest(DateTimeOffset nowUtc)

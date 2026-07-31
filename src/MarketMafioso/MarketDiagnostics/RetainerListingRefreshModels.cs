@@ -7,9 +7,13 @@ namespace MarketMafioso;
 public sealed class PersistedRetainerListingRefreshState
 {
     public bool CapturePending { get; set; }
+    public DateTime? SessionStartedAtUtc { get; set; }
     public DateTime? SessionClosedAtUtc { get; set; }
     public DateTime? CaptureNotBeforeUtc { get; set; }
     public int CaptureAttempts { get; set; }
+    public string? SessionSnapshotProviderInstanceId { get; set; }
+    public long? SessionSnapshotRevision { get; set; }
+    public DateTime? SessionListingsObservedAtUtc { get; set; }
     public List<PersistedRetainerListingRefreshCandidate> SessionListings { get; set; } = [];
     public List<PersistedRetainerListingRefreshItem> Items { get; set; } = [];
     public DateTime? LastCompletedAtUtc { get; set; }
