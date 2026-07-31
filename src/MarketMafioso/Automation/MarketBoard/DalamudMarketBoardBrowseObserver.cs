@@ -11,7 +11,7 @@ using MarketMafioso.Automation.Runtime;
 
 namespace MarketMafioso.Automation.MarketBoard;
 
-internal sealed unsafe class DalamudMarketBoardBrowseObserver : IMarketBoardBrowseRuntime, IDisposable
+internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketBoardBrowseRuntime, IDisposable
 {
     internal const string ApprovedGameVersion = "2026.07.16.0001.0000";
     internal const string PatchContractId = "mmf.market-board-browse";
@@ -29,6 +29,7 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IMarketBoardBrow
 
     private readonly IPluginLog log;
     private readonly IFramework framework;
+    private readonly IGameGui gameGui;
     private readonly MarketBoardBrowseOperationGate gate = new();
     private Hook<InfoProxyItemSearch.Delegates.RequestData>? requestDataHook;
     private Hook<PacketDispatcher.Delegates.HandleMarketBoardItemRequestStartPacket>? headerHook;
@@ -38,10 +39,12 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IMarketBoardBrow
     public DalamudMarketBoardBrowseObserver(
         IGameInteropProvider interopProvider,
         IFramework framework,
+        IGameGui gameGui,
         IPluginLog log)
     {
         ArgumentNullException.ThrowIfNull(interopProvider);
         this.framework = framework ?? throw new ArgumentNullException(nameof(framework));
+        this.gameGui = gameGui ?? throw new ArgumentNullException(nameof(gameGui));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         framework.Update += OnFrameworkUpdate;
 
@@ -149,7 +152,91 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IMarketBoardBrow
         out MarketBoardBrowseSnapshot snapshot) =>
         gate.TryAbandon(owner, operationId, reason, out snapshot);
 
+    public bool TryRequestExactItem(
+        MarketBoardBrowseOwner owner,
+        uint itemId,
+        out MarketBoardBrowseSnapshot snapshot)
+    {
+        snapshot = Snapshot;
+        if (!IsAvailable)
+        {
+            snapshot = MarketBoardBrowseSnapshot.Idle with
+            {
+                Phase = MarketBoardBrowsePhase.Failed,
+                FailureCode = GamePatchCompatibility.FailureCode,
+                ItemId = itemId,
+                Message = AvailabilityMessage,
+            };
+            return false;
+        }
+        if (itemId == 0)
+            return false;
+
+        if (IsAddonVisible("ItemSearch") || IsAddonVisible("ItemSearchResult"))
+        {
+            snapshot = MarketBoardBrowseSnapshot.Idle with
+            {
+                Phase = MarketBoardBrowsePhase.Failed,
+                FailureCode = "MarketBoardUiActive",
+                ItemId = itemId,
+                Message = "A visible market-board search owns the native listing cache; the background refresh was deferred.",
+            };
+            return false;
+        }
+
+        var proxy = InfoProxyItemSearch.Instance();
+        if (proxy == null || proxy->VirtualTable == null)
+        {
+            snapshot = MarketBoardBrowseSnapshot.Idle with
+            {
+                Phase = MarketBoardBrowsePhase.Failed,
+                FailureCode = "InfoProxyUnavailable",
+                ItemId = itemId,
+                Message = "InfoProxyItemSearch is unavailable; the background refresh was deferred.",
+            };
+            return false;
+        }
+
+        if (!TryBegin(owner, itemId, out snapshot))
+            return false;
+        if (!TryClaimActivation(owner, itemId, out snapshot))
+        {
+            TryAbandon(owner, snapshot.OperationId, "The exact-item background activation could not be claimed.", out snapshot);
+            return false;
+        }
+
+        try
+        {
+            var proxyBytes = (byte*)proxy;
+            proxy->WaitingForListings = false;
+            proxy->SearchItemId = 0;
+            proxyBytes[0x24] = 2;
+            proxyBytes[0x25] = 9;
+            *(uint*)(proxyBytes + 0x28) = 99;
+            proxy->SearchItemId = itemId;
+
+            var accepted = proxy->RequestData();
+            snapshot = Snapshot;
+            return accepted && snapshot.RequestAccepted && !snapshot.IsFailed;
+        }
+        catch (Exception exception)
+        {
+            snapshot = Snapshot;
+            log.Error(
+                exception,
+                "[MarketMafioso] Exact-item background RequestData failed for item {ItemId}.",
+                itemId);
+            return false;
+        }
+    }
+
     private void OnFrameworkUpdate(IFramework _) => gate.Advance(DateTimeOffset.UtcNow);
+
+    private bool IsAddonVisible(string name)
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(name, 1);
+        return addon != null && addon->IsReady && addon->IsVisible;
+    }
 
     private bool RequestDataDetour(InfoProxyItemSearch* proxy)
     {

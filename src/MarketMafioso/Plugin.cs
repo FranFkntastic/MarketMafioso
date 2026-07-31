@@ -3,11 +3,13 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Command;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using ECommons;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Runtime;
@@ -60,6 +62,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly RetainerSaleChatObserver retainerSaleChatObserver;
     private readonly RetainerHistoryObserver retainerHistoryObserver;
     private readonly DalamudMarketBoardBrowseObserver marketBoardBrowseObserver;
+    private readonly RetainerListingRefreshCoordinator retainerListingRefresh;
     private readonly RemoteMarketAccessProbe remoteMarketAccessProbe;
     private readonly RemoteMarketProbeWindow remoteMarketProbeWindow;
     private readonly QuartermasterIpcClient quartermaster;
@@ -116,7 +119,15 @@ public sealed class Plugin : IDalamudPlugin
         marketBoardBrowseObserver = new DalamudMarketBoardBrowseObserver(
             GameInteropProvider,
             Framework,
+            GameGui,
             Log);
+        retainerListingRefresh = new RetainerListingRefreshCoordinator(
+            Configuration,
+            new QuartermasterRetainerListingRefreshSource(quartermaster, PlayerState),
+            marketBoardBrowseObserver,
+            Configuration.Save,
+            message => ChatGui.PrintError($"[MMF] {message}"),
+            message => Log.Information("[MarketMafioso] {Message}", message));
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         remoteMarketAccessProbe = new RemoteMarketAccessProbe(
             Configuration,
@@ -606,10 +617,50 @@ public sealed class Plugin : IDalamudPlugin
     {
         retainerSaleChatObserver.Tick();
         retainerHistoryObserver.Tick();
+        var retainerSessionActive = IsRetainerSessionActive();
+        var (refreshReady, refreshDeferredReason) = GetRetainerListingRefreshReadiness(retainerSessionActive);
+        retainerListingRefresh.Tick(
+            DateTimeOffset.UtcNow,
+            retainerSessionActive,
+            refreshReady,
+            refreshDeferredReason);
         mainWindow.MarketListingOverlay.IsOpen = true;
         tradeQueueRunner.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
+    }
+
+    private static (bool Ready, string? Reason) GetRetainerListingRefreshReadiness(bool retainerSessionActive)
+    {
+        if (!ClientState.IsLoggedIn || PlayerState.ContentId == 0)
+            return (false, "Waiting for a logged-in character before refreshing retainer listings.");
+        if (retainerSessionActive)
+            return (false, "Waiting for the retainer session to close completely.");
+        if (Condition[ConditionFlag.InCombat] ||
+            Condition[ConditionFlag.Crafting] ||
+            Condition[ConditionFlag.Gathering] ||
+            Condition[ConditionFlag.WatchingCutscene] ||
+            Condition[ConditionFlag.WatchingCutscene78] ||
+            Condition[ConditionFlag.OccupiedInCutSceneEvent] ||
+            Condition[ConditionFlag.OccupiedInEvent] ||
+            Condition[ConditionFlag.OccupiedInQuestEvent])
+        {
+            return (false, "Waiting for ordinary character activity to become idle before refreshing retainer listings.");
+        }
+
+        return (true, null);
+    }
+
+    private static unsafe bool IsRetainerSessionActive() =>
+        Condition[ConditionFlag.OccupiedSummoningBell] ||
+        IsAddonVisible("RetainerList") ||
+        IsAddonVisible("RetainerSellList") ||
+        IsAddonVisible("RetainerSell");
+
+    private static unsafe bool IsAddonVisible(string name)
+    {
+        var addon = GameGui.GetAddonByName<AtkUnitBase>(name, 1);
+        return addon != null && addon->IsReady && addon->IsVisible;
     }
 
     private void DrawUI()
