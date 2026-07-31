@@ -673,6 +673,13 @@ public class MainWindow : Window, IDisposable
                     0ul,
                     (sum, line) => checked(sum + line.RequiredQuantity - line.PurchasedQuantity)) ?? 0,
                 ActiveExactAcquisitionRemainingGil = AgentBridgeRouteTruthProjection.ResolveActiveExactAcquisitionRemainingGil(snapshot),
+                ReportBacklogEntryCount = snapshot.ReportBacklog.PendingEntryCount,
+                ReportBacklogRequestCount = snapshot.ReportBacklog.PendingRequestCount,
+                ReportBacklogInFlightRequestCount = snapshot.ReportBacklog.InFlightRequestCount,
+                ReportBacklogOldestEnqueuedAtUtc = snapshot.ReportBacklog.OldestEnqueuedAtUtc,
+                ReportBacklogNextRetryAtUtc = snapshot.ReportBacklog.NextRetryAtUtc,
+                ReportBacklogLastFailureKind = snapshot.ReportBacklog.LastFailureKind,
+                ReportBacklogLastFailureAtUtc = snapshot.ReportBacklog.LastFailureAtUtc,
             },
         };
     }

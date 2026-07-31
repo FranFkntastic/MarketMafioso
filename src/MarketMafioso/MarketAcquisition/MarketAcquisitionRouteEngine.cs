@@ -154,6 +154,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         LastRunDiagnosticSummary = runner.LastRunDiagnosticSummary,
         ExactAcquisitionExecution = exactAcquisitionAuthority?.State,
         ShardCheckpoint = shardCheckpoints?.Snapshot,
+        ReportBacklog = reportDispatcher.GetBacklogSnapshot(),
     };
 
     public MarketAcquisitionRouteActionResult Start(

@@ -181,6 +181,13 @@ public sealed record AgentBridgeRouteTruth
     public ulong PersistedExactAcquisitionSunkGil { get; init; }
     public ulong ActiveExactAcquisitionRemainingQuantity { get; init; }
     public ulong ActiveExactAcquisitionRemainingGil { get; init; }
+    public int ReportBacklogEntryCount { get; init; }
+    public int ReportBacklogRequestCount { get; init; }
+    public int ReportBacklogInFlightRequestCount { get; init; }
+    public DateTimeOffset? ReportBacklogOldestEnqueuedAtUtc { get; init; }
+    public DateTimeOffset? ReportBacklogNextRetryAtUtc { get; init; }
+    public string? ReportBacklogLastFailureKind { get; init; }
+    public DateTimeOffset? ReportBacklogLastFailureAtUtc { get; init; }
 }
 
 public static class AgentBridgeRouteTruthProjection
