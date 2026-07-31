@@ -385,6 +385,42 @@ public sealed class TradeQueueRunnerTests
     }
 
     [Fact]
+    public void Runner_SubmitsStackQuantityBeforeAdvancingPastAnEarlyVisibleTradeSlot()
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2)) { ExposeSlotBeforeQuantity = true };
+        var clock = new TestClock();
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            new TradeQueueTimingOptions(),
+            () => { },
+            io,
+            new FakeQualityLowering(),
+            coordinator,
+            TestPluginLog.Create(),
+            clock.Read);
+
+        Assert.True(runner.Start().Success);
+        runner.Tick();
+        io.IsTradeOpenValue = true;
+        runner.Tick();
+        clock.Advance(TimeSpan.FromMilliseconds(300));
+        runner.Tick();
+
+        Assert.True(io.IsNumericInputOpen);
+        Assert.Equal(1, io.OfferedSlotCount);
+
+        runner.Tick();
+        Assert.False(io.IsNumericInputOpen);
+        Assert.Equal(2, io.LastSubmittedQuantity);
+
+        runner.Tick();
+        runner.Tick();
+        Assert.Equal(TradeQueueExecutionState.WaitingForPartner, runner.Snapshot.State);
+    }
+
+    [Fact]
     public void Runner_AcceptsInventoryEvidenceThatSettlesAfterTradeClosure()
     {
         var queue = Queue(2);
@@ -545,6 +581,8 @@ public sealed class TradeQueueRunnerTests
         public int OpenTradeAttempts { get; private set; }
         public int OfferItemAttempts { get; private set; }
         public bool HasSelectedPartner { get; set; } = true;
+        public bool ExposeSlotBeforeQuantity { get; set; }
+        public int LastSubmittedQuantity { get; private set; }
         private bool gilInputRequested;
 
         public IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory() => Inventory;
@@ -594,7 +632,11 @@ public sealed class TradeQueueRunnerTests
             error = string.Empty;
             OfferItemAttempts++;
             if (line.SourceStackQuantity > 1)
+            {
                 IsNumericInputOpen = true;
+                if (ExposeSlotBeforeQuantity)
+                    OfferedSlotCount++;
+            }
             else
                 OfferedSlotCount++;
             return true;
@@ -603,13 +645,14 @@ public sealed class TradeQueueRunnerTests
         public bool TrySubmitQuantity(int quantity, out string error)
         {
             error = string.Empty;
+            LastSubmittedQuantity = quantity;
             IsNumericInputOpen = false;
             if (gilInputRequested)
             {
                 SubmittedGil = quantity;
                 gilInputRequested = false;
             }
-            else
+            else if (!ExposeSlotBeforeQuantity)
             {
                 OfferedSlotCount++;
             }

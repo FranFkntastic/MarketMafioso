@@ -16,6 +16,10 @@ internal sealed class TradeQueuePanel
         new("recipientName", AgentBridgeActionArgumentKind.String),
         new("homeWorld", AgentBridgeActionArgumentKind.String),
     ]);
+    private static readonly AgentBridgeActionArgumentSchema AutoAcceptSchema = new(
+    [
+        new("enabled", AgentBridgeActionArgumentKind.Boolean),
+    ]);
 
     private readonly Configuration config;
     private readonly MarketMafioso.TradeQueue.TradeQueueRunner runner;
@@ -101,6 +105,39 @@ internal sealed class TradeQueuePanel
                         snapshot.IsActive ? MainWindow.ColHeader : MainWindow.ColMuted),
             ]);
         ImGui.TextColored(StatusColor(snapshot.State), snapshot.Message);
+        ImGui.Spacing();
+
+        var autoAcceptIncomingTrades = config.AutoAcceptIncomingTrades;
+        if (ImGui.Checkbox("Auto-accept incoming trades", ref autoAcceptIncomingTrades))
+        {
+            config.AutoAcceptIncomingTrades = autoAcceptIncomingTrades;
+            config.Save();
+        }
+        reviewRegistry.Register(
+            "trade-queue.auto-accept",
+            "Auto-accept incoming trades",
+            AgentBridgeUiControlKind.Toggle,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled: true,
+            selected: config.AutoAcceptIncomingTrades,
+            value: config.AutoAcceptIncomingTrades ? "enabled" : "disabled",
+            arguments: AutoAcceptSchema,
+            surfaceId: "trade-queue",
+            mutating: true,
+            completionOperationKind: null,
+            arguments =>
+            {
+                config.AutoAcceptIncomingTrades =
+                    arguments!.Value.GetProperty("enabled").GetBoolean();
+                config.Save();
+                return AgentBridgeUiActionResult.Ok(
+                    config.AutoAcceptIncomingTrades
+                        ? "Incoming trade auto-accept enabled."
+                        : "Incoming trade auto-accept disabled.");
+            });
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Accept incoming player trade requests while enabled.");
         ImGui.Spacing();
 
         DrawInventoryHeader();

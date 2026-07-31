@@ -51,6 +51,7 @@ public sealed record AgentBridgeTradeQueueTruth
     public required string QueueValidationMessage { get; init; }
     public required int ActionDelayMilliseconds { get; init; }
     public required int TradeRetryMilliseconds { get; init; }
+    public required bool AutoAcceptIncomingTrades { get; init; }
     public required bool IsTradeOpen { get; init; }
     public required int OfferedSlotCount { get; init; }
     public required bool CanReceiverReady { get; init; }

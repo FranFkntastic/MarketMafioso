@@ -337,14 +337,6 @@ public sealed class TradeQueueRunner : IDisposable
         var offeredSlots = io.OfferedSlotCount;
         if (waitingForOfferedSlot)
         {
-            if (offeredSlots > offeredLineIndex)
-            {
-                offeredLineIndex++;
-                waitingForOfferedSlot = false;
-                quantitySubmitted = false;
-                return;
-            }
-
             var pendingLine = batch.Lines[offeredLineIndex];
             if (!quantitySubmitted && pendingLine.SourceStackQuantity > 1 && io.IsNumericInputOpen)
             {
@@ -356,6 +348,14 @@ public sealed class TradeQueueRunner : IDisposable
                 }
                 quantitySubmitted = true;
                 nextActionAt = now + timing.ActionDelay;
+                return;
+            }
+
+            if (quantitySubmitted && offeredSlots > offeredLineIndex)
+            {
+                offeredLineIndex++;
+                waitingForOfferedSlot = false;
+                quantitySubmitted = false;
             }
             return;
         }

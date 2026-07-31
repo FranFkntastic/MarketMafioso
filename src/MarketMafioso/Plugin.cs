@@ -625,6 +625,7 @@ public sealed class Plugin : IDalamudPlugin
             refreshReady,
             refreshDeferredReason);
         mainWindow.MarketListingOverlay.IsOpen = true;
+        tradeQueueIo.TickIncomingTradeAutoAccept(Configuration.AutoAcceptIncomingTrades);
         tradeQueueRunner.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();

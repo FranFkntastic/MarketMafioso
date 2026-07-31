@@ -115,6 +115,7 @@ public sealed class AgentBridgeProofFactoryTests
             QueueValidationMessage = "Trade Queue is ready.",
             ActionDelayMilliseconds = 50,
             TradeRetryMilliseconds = 1_000,
+            AutoAcceptIncomingTrades = true,
             IsTradeOpen = true,
             OfferedSlotCount = 5,
             CanReceiverReady = true,
