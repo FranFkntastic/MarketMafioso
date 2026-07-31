@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.SpecTests.MarketAcquisition;
@@ -47,6 +48,132 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
         Assert.Empty(outbox.Snapshot());
         Assert.Equal(0, dispatcher.GetBacklogSnapshot().PendingEntryCount);
     }
+
+    [Fact]
+    public async Task HostingDisabled_RetainsOutboxWithoutAttemptingDelivery()
+    {
+        var outbox = new VolatileMarketAcquisitionReportOutbox();
+        AddLineReports(outbox, "request-a", 3);
+        var reporter = new DisabledReporter();
+
+        using var dispatcher = CreateDispatcher(outbox, reporter);
+        dispatcher.RetryPendingReports();
+        await dispatcher.DrainAsync();
+
+        Assert.Equal(0, reporter.Attempts);
+        Assert.Equal(3, outbox.Snapshot().Count);
+    }
+
+    [Fact]
+    public void MarketObservation_IsCompactedBeforeEnteringOutbox()
+    {
+        var outbox = new VolatileMarketAcquisitionReportOutbox();
+        using var dispatcher = CreateDispatcher(outbox, new DisabledReporter());
+        dispatcher.EnqueueMarketObservation(new MarketAcquisitionMarketObservationReport(
+            "request-a",
+            "claim-token",
+            "attempt-1",
+            1,
+            "line-1",
+            5339,
+            "Rose Gold Ingot",
+            "Aether",
+            "Siren",
+            DateTimeOffset.UnixEpoch,
+            new MarketBoardReadResult
+            {
+                ReportedListingCount = 1,
+                ListingCapacity = 100,
+                Listings =
+                [
+                    new MarketBoardLiveListing
+                    {
+                        ListingId = "listing-never-persisted",
+                        RetainerName = "seller-never-persisted",
+                        Quantity = 3,
+                        UnitPrice = 50,
+                    },
+                ],
+            }));
+
+        var entry = Assert.Single(outbox.Snapshot());
+        var durable = outbox.Deserialize<MarketAcquisitionMarketObservationReport>(entry);
+        Assert.Empty(durable.ReadResult.Listings);
+        Assert.False(durable.HasIncompleteCoverage);
+        Assert.DoesNotContain("listing-never-persisted", entry.PayloadJson);
+        Assert.DoesNotContain("seller-never-persisted", entry.PayloadJson);
+    }
+
+    [Fact]
+    public void LegacyMarketObservation_WithRawRowsIsDiscardedBeforeReplay()
+    {
+        var outbox = new VolatileMarketAcquisitionReportOutbox();
+        outbox.Put(
+            "observation|request-a|attempt-1|1",
+            "market-observation.v1",
+            "request-a",
+            CreateObservationWithListing());
+
+        using var dispatcher = CreateDispatcher(outbox, new DisabledReporter());
+
+        Assert.Empty(outbox.Snapshot());
+    }
+
+    [Fact]
+    public void LegacyFileOutboxObservation_WithRawRowsIsDiscardedOnStartup()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-outbox-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "route-reports.jsonl");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var outbox = new FileMarketAcquisitionReportOutbox(path);
+            outbox.Put(
+                "observation|request-a|attempt-1|1",
+                "market-observation.v1",
+                "request-a",
+                CreateObservationWithListing());
+
+            using (var dispatcher = CreateDispatcher(outbox, new DisabledReporter()))
+            {
+            }
+
+            var reloaded = new FileMarketAcquisitionReportOutbox(path);
+            Assert.Empty(reloaded.Snapshot());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static MarketAcquisitionMarketObservationReport CreateObservationWithListing() =>
+        new(
+            "request-a",
+            "claim-token",
+            "attempt-1",
+            1,
+            "line-1",
+            5339,
+            "Rose Gold Ingot",
+            "Aether",
+            "Siren",
+            DateTimeOffset.UnixEpoch,
+            new MarketBoardReadResult
+            {
+                ReportedListingCount = 1,
+                ListingCapacity = 100,
+                Listings =
+                [
+                    new MarketBoardLiveListing
+                    {
+                        ListingId = "listing-never-persisted",
+                        RetainerName = "seller-never-persisted",
+                        Quantity = 3,
+                        UnitPrice = 50,
+                    },
+                ],
+            });
 
     [Fact]
     public async Task LegacyRequestIds_AreDeserializedOnceAndCachedAcrossReplayScans()
@@ -222,6 +349,44 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
             MarketAcquisitionMarketObservationReport report,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class DisabledReporter : IMarketAcquisitionRouteReporter
+    {
+        public bool CanReport => false;
+        public int Attempts { get; private set; }
+
+        public Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(
+            MarketAcquisitionRouteProgressReport report,
+            CancellationToken cancellationToken)
+        {
+            Attempts++;
+            throw new NotSupportedException();
+        }
+
+        public Task ReportPurchaseAuditAsync(
+            MarketAcquisitionPurchaseAuditReport report,
+            CancellationToken cancellationToken)
+        {
+            Attempts++;
+            throw new NotSupportedException();
+        }
+
+        public Task ReportLineProgressAsync(
+            MarketAcquisitionLineProgressReport report,
+            CancellationToken cancellationToken)
+        {
+            Attempts++;
+            throw new NotSupportedException();
+        }
+
+        public Task ReportMarketObservationAsync(
+            MarketAcquisitionMarketObservationReport report,
+            CancellationToken cancellationToken)
+        {
+            Attempts++;
+            throw new NotSupportedException();
+        }
     }
 
     private sealed class TerminalReporter(string remoteStatus) : IMarketAcquisitionRouteReporter

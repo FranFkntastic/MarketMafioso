@@ -125,7 +125,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         controller.PumpAutomaticSynchronization(
             context.CharacterName,
             context.World,
-            context.HasCharacterScope && !context.IsBusy && !context.IsRouteActive);
+            context.HasCharacterScope &&
+            !context.IsBusy &&
+            !context.IsRouteActive &&
+            !string.IsNullOrWhiteSpace(config.ServerUrl) &&
+            !string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config)));
 
         DrawExactAcquisitionAuthority(context);
         DrawRouteScope(context);
@@ -242,7 +246,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         if (document.SyncStatus.Equals("SyncFailed", StringComparison.OrdinalIgnoreCase))
         {
-            ImGui.TextColored(MainWindow.ColError, status);
+            ImGui.TextColored(MainWindow.ColWarning, status);
             ImGui.Spacing();
             return;
         }

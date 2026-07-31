@@ -429,9 +429,10 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         RunAsync(async token =>
         {
             EnsureConnected();
-            var claimed = await EnsureClaimReadyAsync(
-                RequireClaimedRequest("No dashboard request is accepted."),
-                token).ConfigureAwait(false);
+            var claimed = ClaimedRequest is { } hostedClaim &&
+                          CanUseHostedClaim(finalizedDocument, hostedClaim)
+                ? await EnsureClaimReadyAsync(hostedClaim, token).ConfigureAwait(false)
+                : BuildLocalExecutionRequest(finalizedDocument);
             var preparedAt = DateTimeOffset.UtcNow;
             MarketAcquisitionPlanPreparationResult result;
             if (finalizedDocument?.ExactAcquisitionAuthority?.FinalizedContract is { Transfer.DryRunOnly: true } contract)
@@ -465,7 +466,9 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             PreparedPlanHash = getCurrentIntentHash!();
             markPlanPrepared!(PreparedPlanHash);
             resetRoute!("No route has started.");
-            Status = result.StatusMessage;
+            Status = claimed.Origin == MarketAcquisitionOrigins.LocalWorkbench
+                ? $"{result.StatusMessage} Prepared from the local Workbench; Workshop Host is optional."
+                : result.StatusMessage;
         });
 
     public Task<MarketAcquisitionPlanPreparationResult> PrepareRecoveryPlanAsync(
@@ -487,21 +490,26 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             token);
     }
 
-    public Task RunWithReportableClaimAsync(
+    public Task RunWithExecutionRequestAsync(
+        MarketAcquisitionRequestDocument document,
         Func<MarketAcquisitionClaimView, CancellationToken, Task> action) =>
         RunAsync(async token =>
         {
+            ArgumentNullException.ThrowIfNull(document);
             ArgumentNullException.ThrowIfNull(action);
-            var claimed = await EnsureClaimReadyAsync(
-                RequireClaimedRequest("No dashboard request is accepted."),
-                token).ConfigureAwait(false);
-            if (!MarketAcquisitionRouteProgressReporter.CanReportForRequestStatus(claimed.Status))
+
+            var request = ClaimedRequest is { } hostedClaim &&
+                          CanUseHostedClaim(document, hostedClaim)
+                ? await EnsureClaimReadyAsync(hostedClaim, token).ConfigureAwait(false)
+                : BuildLocalExecutionRequest(document);
+            if (request.Origin != MarketAcquisitionOrigins.LocalWorkbench &&
+                !MarketAcquisitionRouteProgressReporter.CanReportForRequestStatus(request.Status))
             {
                 throw new InvalidOperationException(
-                    $"Request status {claimed.Status} cannot start a route. Fetch or accept a dashboard request first.");
+                    $"Hosted work order status {request.Status} cannot start a route.");
             }
 
-            await action(claimed, token).ConfigureAwait(false);
+            await action(request, token).ConfigureAwait(false);
         });
 
     public async Task RunAsync(Func<CancellationToken, Task> action)
@@ -542,6 +550,11 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
     public MarketAcquisitionClaimView RequireClaimedRequest(string message) =>
         ClaimedRequest ?? throw new InvalidOperationException(message);
 
+    public MarketAcquisitionClaimView ResolveExecutionRequest(MarketAcquisitionRequestDocument document) =>
+        ClaimedRequest is { } hostedClaim && CanUseHostedClaim(document, hostedClaim)
+            ? hostedClaim
+            : BuildLocalExecutionRequest(document);
+
     public void ReplacePreparedPlan(MarketAcquisitionPlan plan)
     {
         PreparedPlan = plan ?? throw new ArgumentNullException(nameof(plan));
@@ -560,9 +573,8 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         EnsureConnected();
         try
         {
-            var claim = ClaimedRequest ??
-                throw new InvalidOperationException("The accepted dry-run claim is missing; restore or re-finalize the Workbench request.");
-            PreparedPlan = ExactAcquisitionDryRunPreparedPlanRestorer.Restore(contract, document, claim, persisted);
+            var request = ResolveExecutionRequest(document);
+            PreparedPlan = ExactAcquisitionDryRunPreparedPlanRestorer.Restore(contract, document, request, persisted);
             PreparedPlanHash = getCurrentIntentHash!();
             Status = "Restored the finalized non-spending external exact-acquisition plan from durable listing authority and applied persisted sunk receipts once.";
             resetRoute!("Restored dry-run plan is ready; no route has started.");
@@ -639,6 +651,33 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             .ToList();
         Status = "Failed request was reopened and accepted locally. Preparing a fresh plan.";
         return ClaimedRequest;
+    }
+
+    private static MarketAcquisitionClaimView BuildLocalExecutionRequest(
+        MarketAcquisitionRequestDocument? document)
+    {
+        if (document is null)
+            throw new InvalidOperationException("The local Workbench is required before preparing an acquisition plan.");
+
+        return MarketAcquisitionRequestDocumentMapper.BuildLocalExecutionRequest(
+            document,
+            document.TargetCharacterName,
+            document.TargetWorld);
+    }
+
+    internal static bool CanUseHostedClaim(
+        MarketAcquisitionRequestDocument? document,
+        MarketAcquisitionClaimView claim)
+    {
+        if (document is null)
+            return true;
+
+        return !string.IsNullOrWhiteSpace(document.RemoteRequestId) &&
+               document.RemoteRequestId.Equals(claim.Id, StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(document.LastSyncedHash) &&
+               document.LastSyncedHash.Equals(
+                   MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document),
+                   StringComparison.Ordinal);
     }
 
     private void ClearPreparedPlan()

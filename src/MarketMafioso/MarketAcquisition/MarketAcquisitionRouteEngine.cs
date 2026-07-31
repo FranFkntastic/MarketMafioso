@@ -240,7 +240,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         if (executionMode == MarketAcquisitionExecutionMode.Live)
-            reportDispatcher.BeginSession(claimed);
+            BeginHostedReportingSession(claimed);
         MarketAcquisitionRouteActionResult result;
         try
         {
@@ -288,7 +288,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             claimedRequest = remainingClaim;
             ClearExecutionState(preserveExecutionMode: true);
             if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
-                reportDispatcher.BeginSession(remainingClaim);
+                BeginHostedReportingSession(remainingClaim);
             var result = runner.Start(
                 plan,
                 enableDiagnostics: state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun,
@@ -381,7 +381,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         claimedRequest = claimed;
         ClearExecutionState();
         state.EvidenceRefreshOnly = true;
-        reportDispatcher.BeginSession(claimed);
+        BeginHostedReportingSession(claimed);
         var result = runner.Start(
             plan,
             enableDiagnostics,
@@ -484,7 +484,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.PurchaseRecoveryRefreshRequired = false;
         state.UseProjectedMarketBoardSnapshot = false;
         state.NextRouteMonitorUtc = clock.UtcNow;
-        reportDispatcher.BeginSession(claimed);
+        BeginHostedReportingSession(claimed);
         freshnessCancellation.Cancel();
         freshnessCancellation.Dispose();
         freshnessCancellation = new CancellationTokenSource();
@@ -521,7 +521,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
-            reportDispatcher.BeginSession(claimed);
+            BeginHostedReportingSession(claimed);
         var result = runner.Restart(plan);
         if (!result.Success && exactAcquisitionAuthority is not null)
         {
@@ -558,7 +558,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
-            reportDispatcher.BeginSession(claimed);
+            BeginHostedReportingSession(claimed);
         var result = runner.ReprepareAndRestart(plan, preparedAtUtc);
         if (!result.Success && exactAcquisitionAuthority is not null)
         {
@@ -2186,6 +2186,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             worldName,
             clock.UtcNow,
             readResult));
+    }
+
+    private void BeginHostedReportingSession(MarketAcquisitionClaimView request)
+    {
+        if (reportDispatcher.CanReport && !string.IsNullOrWhiteSpace(request.ClaimToken))
+            reportDispatcher.BeginSession(request);
+        else
+            reportDispatcher.ResetSession();
     }
 
     private string GetActiveRouteLineId(MarketAcquisitionClaimView claimed)
