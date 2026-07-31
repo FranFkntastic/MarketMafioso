@@ -18,7 +18,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MarketBoardPurchaseOutcomeWatchdog = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan MarketBoardPurchaseMonitorInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan UniversalisFreshnessVerificationDelay = TimeSpan.FromSeconds(10);
     private readonly MarketAcquisitionRouteRunner runner;
     private readonly IMarketAcquisitionRouteContext context;
@@ -1662,7 +1661,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var requireServerEvidence = exactAcquisitionAuthority is not null;
             var tick = purchaseAutomation.MonitorPurchase(
                 now,
-                MarketBoardPurchaseMonitorInterval,
+                MarketAcquisitionRoutePacing.PurchaseEvidencePollInterval,
                 MarketBoardPurchaseOutcomeWatchdog,
                 candidate => canUseServerEvidence || requireServerEvidence
                     ? purchase.TryConfirmPendingPurchase(candidate, CreatePurchaseIntentContext())
@@ -1702,7 +1701,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         switch (evidenceState)
         {
             case PendingMarketPurchase:
-                purchaseAutomation.ScheduleNextMonitor(nowUtc, MarketBoardPurchaseMonitorInterval);
+                purchaseAutomation.ScheduleNextMonitor(nowUtc, MarketAcquisitionRoutePacing.PurchaseEvidencePollInterval);
                 state.AcquisitionStatus = "Purchase: waiting for durable server confirmation evidence.";
                 return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
             case ConfirmedMarketPurchase confirmed:
@@ -1917,9 +1916,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ClearMarketBoardAutomationState();
 
         var nextStop = runner.ActiveStop;
-        if (nextStop == null || !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+        var shouldCloseMarketBoard =
+            MarketAcquisitionRoutePacing.ShouldCloseMarketBoardForNextStop(currentWorld, nextStop);
+        if (shouldCloseMarketBoard)
             uiAutomation.TryCloseMarketBoardWindows();
-        if (nextStop == null || !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+        if (shouldCloseMarketBoard)
         {
             state.ActiveWorldPurchasedQuantity = 0;
             state.ActiveWorldSpentGil = 0;
@@ -1928,7 +1929,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveLinePurchasedQuantity = 0;
             state.ActiveLineSpentGil = 0;
         }
-        else if (activeSubtask != null && nextStop.ActiveItemSubtask != null &&
+        else if (activeSubtask != null && nextStop is not null && nextStop.ActiveItemSubtask != null &&
                  !activeSubtask.LineId.Equals(nextStop.ActiveItemSubtask.LineId, StringComparison.Ordinal))
         {
             ResetMarketBoardStateForNextRouteItem();
@@ -1970,7 +1971,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.LiveCandidatePlan = null;
         ClearMarketBoardAutomationState();
         runner.ClearSearchSubmission("Advancing to next route item.");
-        uiAutomation.TryCloseMarketBoardWindows();
         state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
     }
 
