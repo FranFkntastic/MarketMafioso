@@ -147,6 +147,36 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
         }
     }
 
+    [Fact]
+    public void DeadLetterObservation_WithRawRowsIsDiscardedOnStartup()
+    {
+        var outbox = new VolatileMarketAcquisitionReportOutbox();
+        var deadLetter = new VolatileMarketAcquisitionReportOutbox();
+        var observation = CreateObservationWithListing();
+        var originalEntry = outbox.Put(
+            "observation|request-a|attempt-1|1",
+            "market-observation.v1",
+            "request-a",
+            observation);
+        deadLetter.Put(
+            originalEntry.Id,
+            originalEntry.ReportType,
+            originalEntry.RequestId!,
+            new
+            {
+                Entry = originalEntry,
+                RemoteStatus = "Archived",
+                FailureKind = "HTTP 409",
+                QuarantinedAtUtc = DateTimeOffset.UnixEpoch,
+            });
+        outbox.Remove(originalEntry.Id);
+
+        using var dispatcher = CreateDispatcher(outbox, new DisabledReporter(), deadLetter: deadLetter);
+
+        Assert.Empty(deadLetter.Snapshot());
+        Assert.Equal(0, dispatcher.GetBacklogSnapshot().QuarantinedEntryCount);
+    }
+
     private static MarketAcquisitionMarketObservationReport CreateObservationWithListing() =>
         new(
             "request-a",
