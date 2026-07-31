@@ -18,6 +18,8 @@ internal sealed record RetainerListingRefreshSnapshot(
 
 internal interface IRetainerListingRefreshSource
 {
+    bool RetryOnReadFailure => true;
+    bool SurfaceReadFailure => false;
     bool TryRead(out RetainerListingRefreshSnapshot? snapshot, out string error);
 }
 
@@ -161,9 +163,20 @@ internal sealed class RetainerListingRefreshCoordinator
 
         System.Threading.Interlocked.Exchange(ref captureReadRequested, 0);
         nextCaptureReadAt = DateTimeOffset.MaxValue;
-        if (!source.TryRead(out var snapshot, out _))
+        if (!source.TryRead(out var snapshot, out var readError))
         {
-            nextCaptureReadAt = nowUtc + CaptureReadRetryDelay;
+            nextCaptureReadAt = source.RetryOnReadFailure
+                ? nowUtc + CaptureReadRetryDelay
+                : DateTimeOffset.MaxValue;
+            if (source.SurfaceReadFailure)
+            {
+                UpdateStatus(
+                    "ListingEvidenceUnavailable",
+                    string.IsNullOrWhiteSpace(readError)
+                        ? "Shared retainer-listing evidence is unavailable."
+                        : readError,
+                    persistState: true);
+            }
             return;
         }
 
@@ -208,7 +221,7 @@ internal sealed class RetainerListingRefreshCoordinator
                 State = RetainerListingRefreshItemState.Deferred,
                 NextAttemptAtUtc = nowUtc.UtcDateTime,
                 LastCode = "QueuedFromListingDelta",
-                LastMessage = "Queued because Quartermaster observed a new, changed, or removed listing.",
+                LastMessage = "Queued because a trusted retainer-listing observation changed.",
             });
         }
 

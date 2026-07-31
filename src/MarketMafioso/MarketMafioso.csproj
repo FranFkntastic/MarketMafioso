@@ -39,6 +39,7 @@
   <ItemGroup>
     <ProjectReference Include="$(FranthropyDalamudProject)" />
     <ProjectReference Include="$(FranthropyFfxivProject)" />
+    <ProjectReference Include="$(FranthropyObservationsProject)" />
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
   </ItemGroup>
 
