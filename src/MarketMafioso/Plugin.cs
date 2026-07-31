@@ -96,31 +96,6 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        try
-        {
-            sharedObservationHost = new DalamudSharedObservationHost(new DalamudSharedObservationHostOptions
-            {
-                PluginConfigDirectory = PluginInterface.GetPluginConfigDirectory(),
-                PluginName = "MarketMafioso",
-                PluginInstanceId = Guid.NewGuid().ToString("N"),
-                GameBuild = Franthropy.Dalamud.Diagnostics.GamePatchCompatibilityGate.ReadCurrentGameVersion(),
-                GameInventory = GameInventory,
-                PlayerState = PlayerState,
-                AddonLifecycle = AddonLifecycle,
-                Diagnostic = (message, exception) =>
-                {
-                    if (exception is null)
-                        Log.Warning("[MarketMafioso] {Message}", message);
-                    else
-                        Log.Error(exception, "[MarketMafioso] {Message}", message);
-                },
-            });
-            sharedObservationHost.Start();
-        }
-        catch (Exception exception)
-        {
-            Log.Error(exception, "[MarketMafioso] Shared observation hosting is unavailable.");
-        }
         Legacy.LegacyRetainerMigrationSource.Preserve(
             Configuration,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));
@@ -328,8 +303,35 @@ public sealed class Plugin : IDalamudPlugin
         quartermaster.Changed += OnQuartermasterChanged;
 
         StartTimer();
-
         Log.Information("[MarketMafioso] Plugin loaded. Use /mmf to open settings.");
+
+        try
+        {
+            sharedObservationHost = new DalamudSharedObservationHost(new DalamudSharedObservationHostOptions
+            {
+                PluginConfigDirectory = PluginInterface.GetPluginConfigDirectory(),
+                PluginName = "MarketMafioso",
+                PluginInstanceId = Guid.NewGuid().ToString("N"),
+                GameBuild = Franthropy.Dalamud.Diagnostics.GamePatchCompatibilityGate.ReadCurrentGameVersion(),
+                GameInventory = GameInventory,
+                PlayerState = PlayerState,
+                AddonLifecycle = AddonLifecycle,
+                Diagnostic = (message, exception) =>
+                {
+                    if (exception is null)
+                        Log.Warning("[MarketMafioso] {Message}", message);
+                    else
+                        Log.Error(exception, "[MarketMafioso] {Message}", message);
+                },
+            });
+            sharedObservationHost.Start();
+        }
+        catch (Exception exception)
+        {
+            sharedObservationHost?.Dispose();
+            sharedObservationHost = null;
+            Log.Error(exception, "[MarketMafioso] Shared observation hosting is unavailable.");
+        }
     }
 
     private void OnCommand(string command, string args)
