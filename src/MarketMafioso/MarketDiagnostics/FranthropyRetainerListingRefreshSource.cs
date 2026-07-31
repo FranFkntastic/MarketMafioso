@@ -16,6 +16,7 @@ internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingR
     private readonly ObservationStoreOptions options;
     private readonly ObservationDatabaseChangeMonitor monitor;
     private IReadOnlySet<uint> previousItems = new HashSet<uint>();
+    private ObservationOwner? previousOwner;
     private int changeObserved;
     private bool disposed;
 
@@ -55,6 +56,17 @@ internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingR
         if (owner is null)
         {
             error = "The current character identity is unavailable.";
+            return false;
+        }
+        if (owner != previousOwner)
+        {
+            previousOwner = owner;
+            previousItems = new HashSet<uint>();
+            Interlocked.Exchange(ref changeObserved, 0);
+        }
+        if (!string.IsNullOrWhiteSpace(monitor.LastNotificationError))
+        {
+            error = $"Shared listing change observation is unavailable: {monitor.LastNotificationError}";
             return false;
         }
 

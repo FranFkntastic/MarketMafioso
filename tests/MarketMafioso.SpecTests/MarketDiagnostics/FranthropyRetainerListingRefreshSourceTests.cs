@@ -55,6 +55,50 @@ public sealed class FranthropyRetainerListingRefreshSourceTests
         }
     }
 
+    [Fact]
+    public async Task Owner_switch_starts_a_new_baseline_without_prior_character_items()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "MMF.SharedObservation.Tests", Guid.NewGuid().ToString("N"));
+        var pluginConfig = Path.Combine(root, "XIVLauncher", "pluginConfigs", "MarketMafioso");
+        Directory.CreateDirectory(pluginConfig);
+        var paths = SharedObservationPaths.FromPluginConfigDirectory(pluginConfig);
+        var options = new ObservationStoreOptions
+        {
+            DatabasePath = paths.DatabasePath,
+            BackupDirectory = paths.BackupsDirectory,
+            MigrationLockPath = paths.MigrationLockPath,
+            ChangeSignalPath = paths.ChangeSignalPath,
+        };
+        var firstOwner = new ObservationOwner(100, 74);
+        var secondOwner = new ObservationOwner(101, 74);
+        var currentOwner = firstOwner;
+        var open = await SqliteObservationStore.OpenAsync(options);
+        Assert.True(open.IsReady, open.Message);
+        try
+        {
+            await open.Store!.WriteAsync(Listings(firstOwner, 200, 1, [100]));
+            using var source = new FranthropyRetainerListingRefreshSource(pluginConfig, () => currentOwner);
+            Assert.True(source.TryRead(out var first, out var error), error);
+            Assert.Equal([100u], first!.Items.Select(item => item.ItemId));
+
+            currentOwner = secondOwner;
+            var changedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            source.Changed += () => changedSignal.TrySetResult();
+            await open.Store.WriteAsync(Listings(secondOwner, 300, 1, [400]));
+            await changedSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(source.TryRead(out var second, out error), error);
+            Assert.Equal([400u], second!.Items.Select(item => item.ItemId));
+            Assert.False(second.ComparisonAvailable);
+        }
+        finally
+        {
+            await open.Store!.DisposeAsync();
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static ObservationEnvelope Listings(
         ObservationOwner owner,
         ulong retainerId,
