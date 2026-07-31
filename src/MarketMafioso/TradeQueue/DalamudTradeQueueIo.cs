@@ -70,6 +70,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     private readonly IReadOnlyDictionary<uint, string> itemNames;
     private readonly string tradeConfirmationText;
     private OfferItemTradeDelegate? offerItemTrade;
+    private DateTimeOffset nextIncomingTradeAcceptAt;
     private bool patchBlockLogged;
 
     public DalamudTradeQueueIo(
@@ -104,6 +105,27 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     public unsafe bool CanConfirmTrade => TryGetTradeConfirmation(out _);
 
     public unsafe bool CanCancelTrade => TryGetCancelButton(out _, out _);
+
+    public unsafe void TickIncomingTradeAutoAccept(bool enabled)
+    {
+        if (!enabled || DateTimeOffset.UtcNow < nextIncomingTradeAcceptAt)
+            return;
+
+        if (!TryGetIncomingTradeRequest(out var addon))
+            return;
+
+        if (!TryAuthorizePatchContract(out var error))
+        {
+            nextIncomingTradeAcceptAt = DateTimeOffset.UtcNow.AddSeconds(1);
+            if (!string.IsNullOrWhiteSpace(error))
+                log.Warning("[MarketMafioso] Incoming trade auto-accept unavailable: {Reason}", error);
+            return;
+        }
+
+        addon->AtkUnitBase.FireCallbackInt(0);
+        nextIncomingTradeAcceptAt = DateTimeOffset.UtcNow.AddSeconds(1);
+        log.Debug("[MarketMafioso] Accepted an incoming trade request.");
+    }
 
     public unsafe bool IsNumericInputOpen
     {
@@ -454,6 +476,29 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
         var prompt = addon->PromptText->NodeText.ExtractText();
         return string.Equals(prompt, tradeConfirmationText, StringComparison.Ordinal);
+    }
+
+    private unsafe bool TryGetIncomingTradeRequest(out AddonSelectYesno* addon)
+    {
+        addon = null;
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null ||
+            inventoryManager->TradeLocalState != TradeState.TradeRequestPending &&
+            inventoryManager->TradeRemoteState != TradeState.TradeRequestPending)
+        {
+            return false;
+        }
+
+        var candidate = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
+        if (candidate == null || !IsReady(&candidate->AtkUnitBase))
+            return false;
+
+        var prompt = candidate->PromptText->NodeText.ExtractText();
+        if (!prompt.Contains("trade", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        addon = candidate;
+        return true;
     }
 
     private unsafe bool TryGetCancelButton(

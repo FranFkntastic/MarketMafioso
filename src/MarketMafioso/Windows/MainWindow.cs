@@ -613,6 +613,7 @@ public class MainWindow : Window, IDisposable
                 QueueValidationMessage = tradeValidation.Message,
                 ActionDelayMilliseconds = config.TradeQueueTiming.ActionDelayMilliseconds,
                 TradeRetryMilliseconds = config.TradeQueueTiming.TradeRetryMilliseconds,
+                AutoAcceptIncomingTrades = config.AutoAcceptIncomingTrades,
                 IsTradeOpen = tradeQueueIo.IsTradeOpen,
                 OfferedSlotCount = tradeQueueIo.IsTradeOpen ? tradeQueueIo.OfferedSlotCount : 0,
                 CanReceiverReady = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanClickReady,

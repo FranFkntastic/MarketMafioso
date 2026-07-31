@@ -155,6 +155,7 @@ public sealed class MarketMafiosoBridgeProviderTests
         QueueValidationMessage = "Trade Queue is empty.",
         ActionDelayMilliseconds = 50,
         TradeRetryMilliseconds = 1_000,
+        AutoAcceptIncomingTrades = false,
         IsTradeOpen = false,
         OfferedSlotCount = 0,
         CanReceiverReady = false,

@@ -89,6 +89,7 @@ public class Configuration : IPluginConfiguration
 
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
     public List<TradeQueueItem> TradeQueueItems { get; set; } = new();
+    public bool AutoAcceptIncomingTrades { get; set; }
     public TradeQueueTimingOptions TradeQueueTiming
     {
         get => tradeQueueTiming ??= new();
