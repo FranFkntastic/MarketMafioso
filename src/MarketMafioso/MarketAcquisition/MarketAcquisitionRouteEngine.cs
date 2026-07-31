@@ -18,7 +18,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MarketBoardPurchaseOutcomeWatchdog = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan MarketBoardPurchaseMonitorInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan UniversalisFreshnessVerificationDelay = TimeSpan.FromSeconds(10);
     private readonly MarketAcquisitionRouteRunner runner;
     private readonly IMarketAcquisitionRouteContext context;
@@ -29,6 +28,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly IMarketAcquisitionRouteEvidenceRecorder evidence;
     private readonly MarketAcquisitionRouteReportDispatcher reportDispatcher;
     private readonly IMarketAcquisitionRouteClock clock;
+    private readonly string reportPluginInstanceId;
+    private readonly string? reportPluginVersion;
     private readonly MarketBoardListingReadAccumulator listingReadAccumulator = new();
     private readonly MarketBoardAutomationController purchaseAutomation = new();
     private readonly MarketAcquisitionRouteOperationExecutor operationExecutor = new();
@@ -62,7 +63,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         IMarketAcquisitionRouteClock clock,
         IExactAcquisitionRouteExecutionStateStore exactAcquisitionStateStore,
         IMarketAcquisitionReportOutbox? reportOutbox = null,
-        IShardAcquisitionCheckpointCoordinator? shardCheckpoints = null)
+        IShardAcquisitionCheckpointCoordinator? shardCheckpoints = null,
+        IMarketAcquisitionReportOutbox? reportDeadLetter = null,
+        string? reportPluginInstanceId = null,
+        string? reportPluginVersion = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -75,8 +79,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             reporter ?? throw new ArgumentNullException(nameof(reporter)),
             claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle)),
             callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher)),
-            reportOutbox);
+            reportOutbox,
+            deadLetterOutbox: reportDeadLetter);
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        this.reportPluginInstanceId = reportPluginInstanceId ?? string.Empty;
+        this.reportPluginVersion = reportPluginVersion;
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
         this.shardCheckpoints = shardCheckpoints;
     }
@@ -155,6 +162,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         LastRunDiagnosticSummary = runner.LastRunDiagnosticSummary,
         ExactAcquisitionExecution = exactAcquisitionAuthority?.State,
         ShardCheckpoint = shardCheckpoints?.Snapshot,
+        ReportBacklog = reportDispatcher.GetBacklogSnapshot(),
     };
 
     public MarketAcquisitionRouteActionResult Start(
@@ -232,7 +240,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         if (executionMode == MarketAcquisitionExecutionMode.Live)
-            reportDispatcher.BeginSession(claimed);
+            BeginHostedReportingSession(claimed);
         MarketAcquisitionRouteActionResult result;
         try
         {
@@ -280,7 +288,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             claimedRequest = remainingClaim;
             ClearExecutionState(preserveExecutionMode: true);
             if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
-                reportDispatcher.BeginSession(remainingClaim);
+                BeginHostedReportingSession(remainingClaim);
             var result = runner.Start(
                 plan,
                 enableDiagnostics: state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun,
@@ -373,7 +381,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         claimedRequest = claimed;
         ClearExecutionState();
         state.EvidenceRefreshOnly = true;
-        reportDispatcher.BeginSession(claimed);
+        BeginHostedReportingSession(claimed);
         var result = runner.Start(
             plan,
             enableDiagnostics,
@@ -476,7 +484,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.PurchaseRecoveryRefreshRequired = false;
         state.UseProjectedMarketBoardSnapshot = false;
         state.NextRouteMonitorUtc = clock.UtcNow;
-        reportDispatcher.BeginSession(claimed);
+        BeginHostedReportingSession(claimed);
         freshnessCancellation.Cancel();
         freshnessCancellation.Dispose();
         freshnessCancellation = new CancellationTokenSource();
@@ -513,7 +521,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
-            reportDispatcher.BeginSession(claimed);
+            BeginHostedReportingSession(claimed);
         var result = runner.Restart(plan);
         if (!result.Success && exactAcquisitionAuthority is not null)
         {
@@ -550,7 +558,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
-            reportDispatcher.BeginSession(claimed);
+            BeginHostedReportingSession(claimed);
         var result = runner.ReprepareAndRestart(plan, preparedAtUtc);
         if (!result.Success && exactAcquisitionAuthority is not null)
         {
@@ -1662,7 +1670,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var requireServerEvidence = exactAcquisitionAuthority is not null;
             var tick = purchaseAutomation.MonitorPurchase(
                 now,
-                MarketBoardPurchaseMonitorInterval,
+                MarketAcquisitionRoutePacing.PurchaseEvidencePollInterval,
                 MarketBoardPurchaseOutcomeWatchdog,
                 candidate => canUseServerEvidence || requireServerEvidence
                     ? purchase.TryConfirmPendingPurchase(candidate, CreatePurchaseIntentContext())
@@ -1702,7 +1710,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         switch (evidenceState)
         {
             case PendingMarketPurchase:
-                purchaseAutomation.ScheduleNextMonitor(nowUtc, MarketBoardPurchaseMonitorInterval);
+                purchaseAutomation.ScheduleNextMonitor(nowUtc, MarketAcquisitionRoutePacing.PurchaseEvidencePollInterval);
                 state.AcquisitionStatus = "Purchase: waiting for durable server confirmation evidence.";
                 return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
             case ConfirmedMarketPurchase confirmed:
@@ -1917,9 +1925,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ClearMarketBoardAutomationState();
 
         var nextStop = runner.ActiveStop;
-        if (nextStop == null || !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+        var shouldCloseMarketBoard =
+            MarketAcquisitionRoutePacing.ShouldCloseMarketBoardForNextStop(currentWorld, nextStop);
+        if (shouldCloseMarketBoard)
             uiAutomation.TryCloseMarketBoardWindows();
-        if (nextStop == null || !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+        if (shouldCloseMarketBoard)
         {
             state.ActiveWorldPurchasedQuantity = 0;
             state.ActiveWorldSpentGil = 0;
@@ -1928,7 +1938,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveLinePurchasedQuantity = 0;
             state.ActiveLineSpentGil = 0;
         }
-        else if (activeSubtask != null && nextStop.ActiveItemSubtask != null &&
+        else if (activeSubtask != null && nextStop is not null && nextStop.ActiveItemSubtask != null &&
                  !activeSubtask.LineId.Equals(nextStop.ActiveItemSubtask.LineId, StringComparison.Ordinal))
         {
             ResetMarketBoardStateForNextRouteItem();
@@ -1970,7 +1980,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.LiveCandidatePlan = null;
         ClearMarketBoardAutomationState();
         runner.ClearSearchSubmission("Advancing to next route item.");
-        uiAutomation.TryCloseMarketBoardWindows();
         state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
     }
 
@@ -2179,6 +2188,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             readResult));
     }
 
+    private void BeginHostedReportingSession(MarketAcquisitionClaimView request)
+    {
+        if (reportDispatcher.CanReport && !string.IsNullOrWhiteSpace(request.ClaimToken))
+            reportDispatcher.BeginSession(request);
+        else
+            reportDispatcher.ResetSession();
+    }
+
     private string GetActiveRouteLineId(MarketAcquisitionClaimView claimed)
     {
         var lineId = runner.ActiveStop?.ActiveItemSubtask?.LineId;
@@ -2301,7 +2318,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             activeStop == null ? null : $"{activeStop.DataCenter}:{activeStop.WorldName}",
             activeStop?.WorldName,
             activeStop?.Status ?? routeState,
-            message);
+            message,
+            reportPluginInstanceId,
+            reportPluginVersion,
+            clock.UtcNow);
         reportDispatcher.EnqueueRouteProgress(report);
     }
 

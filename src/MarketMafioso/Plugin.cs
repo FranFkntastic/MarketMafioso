@@ -172,14 +172,19 @@ public sealed class Plugin : IDalamudPlugin
         tradeQueueIo = new DalamudTradeQueueIo(
             GameGui,
             TargetManager,
+            ObjectTable,
             Condition,
             SigScanner,
             DataManager,
             Log);
         tradeQueueRunner = new TradeQueueRunner(
             Configuration.TradeQueueItems,
+            Configuration.TradeQueueTiming,
             Configuration.Save,
             tradeQueueIo,
+            new Franthropy.Dalamud.Automation.Inventory.DalamudItemQualityLoweringAutomation(
+                GameGui,
+                DalamudTradeQueueIo.SupportedInventories),
             tradeAutomationCoordinator,
             Log);
         mainWindow = new MainWindow(

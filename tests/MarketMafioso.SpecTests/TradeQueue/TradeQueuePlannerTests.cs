@@ -9,7 +9,7 @@ public sealed class TradeQueuePlannerTests
     [Fact]
     public void Planner_EnforcesInventoryBatchingEvidenceAndWorkshopHandoffContracts()
     {
-        ValidateRequiresExactQualityAndEnoughTradeableInventory();
+        ValidateCountsHqAndNqTogether();
         BuildNextBatchSplitsSourceStacksAndStopsAtFiveSlots();
         InventoryDeltaAndCompletedBatchRequireExactEvidence();
         GilUsesCurrencyCapacityWithoutConsumingAnItemSlot();
@@ -17,11 +17,11 @@ public sealed class TradeQueuePlannerTests
         InventoryProjectionGroupsQueuedRowsBeforeAvailableInventory();
     }
 
-    private static void ValidateRequiresExactQualityAndEnoughTradeableInventory()
+    private static void ValidateCountsHqAndNqTogether()
     {
         var queue = new List<TradeQueueItem>
         {
-            new() { ItemId = 100, ItemName = "Cobalt Ingot", IsHighQuality = false, Quantity = 5 },
+            new() { ItemId = 100, ItemName = "Cobalt Ingot", Quantity = 5 },
         };
         var inventory = new List<TradeQueueInventoryStack>
         {
@@ -31,9 +31,10 @@ public sealed class TradeQueuePlannerTests
 
         var result = TradeQueuePlanner.Validate(queue, inventory);
 
-        Assert.False(result.Success);
-        Assert.Equal(TradeQueueValidationCode.InsufficientInventory, result.Code);
-        Assert.Contains("only 4", result.Message);
+        Assert.True(result.Success);
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => TradeQueuePlanner.BuildNextBatch(queue, inventory));
+        Assert.Contains("after quality normalization", exception.Message);
     }
 
     private static void BuildNextBatchSplitsSourceStacksAndStopsAtFiveSlots()
@@ -95,7 +96,6 @@ public sealed class TradeQueuePlannerTests
             {
                 Assert.Equal("Cobalt Ingot", item.ItemName);
                 Assert.Equal(20, item.Quantity);
-                Assert.False(item.IsHighQuality);
             },
             item =>
             {
@@ -136,12 +136,13 @@ public sealed class TradeQueuePlannerTests
             Stack(0, 0, 400, "Zinc Ore", hq: false, 9),
             Stack(0, 1, 100, "Apple", hq: false, 3),
             Stack(0, 2, 300, "Cobalt Ingot", hq: true, 7),
+            Stack(0, 4, 300, "Cobalt Ingot", hq: false, 2),
             Stack(0, 3, 200, "Adamantoise Shell", hq: false, 5),
         };
         var queue = new List<TradeQueueItem>
         {
             new() { ItemId = 400, ItemName = "Zinc Ore", Quantity = 2 },
-            new() { ItemId = 300, ItemName = "Cobalt Ingot", IsHighQuality = true, Quantity = 4 },
+            new() { ItemId = 300, ItemName = "Cobalt Ingot", Quantity = 4 },
             new() { ItemId = 500, ItemName = "Birch Lumber", Quantity = 1 },
         };
 
@@ -152,6 +153,7 @@ public sealed class TradeQueuePlannerTests
             rows.Select(row => row.ItemName));
         Assert.Equal([1, 4, 2, 0, 0], rows.Select(row => row.SelectedQuantity));
         Assert.Equal(0, rows[0].AvailableQuantity);
+        Assert.Equal(9, rows[1].AvailableQuantity);
     }
 
     private static TradeQueueInventoryStack Stack(

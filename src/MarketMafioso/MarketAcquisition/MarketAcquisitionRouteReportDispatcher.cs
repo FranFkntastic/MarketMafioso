@@ -1,5 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -15,6 +19,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ReplayInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan MaximumReplayBackoff = TimeSpan.FromMinutes(15);
 
     private readonly object sync = new();
     private readonly IMarketAcquisitionRouteReporter reporter;
@@ -22,8 +27,14 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     private readonly IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher;
     private readonly IMarketAcquisitionReportOutbox outbox;
     private readonly VolatileMarketAcquisitionReportOutbox volatileFallback = new();
+    private readonly IMarketAcquisitionReportOutbox deadLetterOutbox;
     private readonly CancellationTokenSource lifetimeCancellation = new();
-    private readonly HashSet<string> inFlightEntryIds = new(StringComparer.Ordinal);
+    private readonly Func<DateTimeOffset> utcNow;
+    private readonly Dictionary<string, Queue<MarketAcquisitionReportOutboxEntry>> pendingEntriesByRequest = new(StringComparer.Ordinal);
+    private readonly HashSet<string> pendingEntryIds = new(StringComparer.Ordinal);
+    private readonly HashSet<string> inFlightRequestIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> legacyRequestIdsByEntryId = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ReportRetryState> retryStatesByRequest = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> entrySessionVersions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> pendingRouteEntryIdsByKey = new(StringComparer.Ordinal);
     private readonly Task replayLoop;
@@ -31,19 +42,32 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     private MarketAcquisitionClaimView? claimed;
     private long sessionVersion;
     private string? lastSuccessfulRouteKey;
+    private string? lastFailureKind;
+    private DateTimeOffset? lastFailureAtUtc;
+    private int quarantinedEntryCount;
+    private string? lastQuarantineStatus;
+    private DateTimeOffset? lastQuarantineAtUtc;
 
     public MarketAcquisitionRouteReportDispatcher(
         IMarketAcquisitionRouteReporter reporter,
         MarketAcquisitionClaimLifecycleController claimLifecycle,
         IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
-        IMarketAcquisitionReportOutbox? outbox = null)
+        IMarketAcquisitionReportOutbox? outbox = null,
+        Func<DateTimeOffset>? utcNow = null,
+        IMarketAcquisitionReportOutbox? deadLetterOutbox = null)
     {
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         this.claimLifecycle = claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle));
         this.callbackDispatcher = callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher));
         this.outbox = outbox ?? new VolatileMarketAcquisitionReportOutbox();
+        this.deadLetterOutbox = deadLetterOutbox ?? new VolatileMarketAcquisitionReportOutbox();
+        this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         CompactDuplicateRouteProgress();
-        QueuePendingOutboxEntries();
+        DiscardPersistedRawMarketObservations();
+        DiscardDeadLetteredRawMarketObservations();
+        quarantinedEntryCount = this.deadLetterOutbox.Snapshot().Count;
+        LoadPendingOutboxEntries();
+        QueuePendingRequestHeads();
         replayLoop = Task.Run(() => ReplayLoopAsync(lifetimeCancellation.Token));
     }
 
@@ -59,7 +83,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             lastSuccessfulRouteKey = null;
         }
 
-        QueuePendingOutboxEntries();
+        QueuePendingRequestHeads();
     }
 
     public void ResetSession()
@@ -92,10 +116,12 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             var entry = Persist(
                 $"route|{report.RequestId}|{report.AttemptId}|{report.Sequence}",
                 RouteProgressType,
+                report.RequestId,
                 new DurableRouteProgress(report, sessionClaim, routeKey));
             lock (sync)
                 pendingRouteEntryIdsByKey[routeKey] = entry.Id;
-            QueueOutboxEntry(entry);
+            TrackPendingEntry(entry);
+            QueueRequestHead(report.RequestId);
         }
         catch
         {
@@ -108,35 +134,47 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     public void EnqueuePurchaseAudit(MarketAcquisitionPurchaseAuditReport report)
     {
         ArgumentNullException.ThrowIfNull(report);
-        QueueOutboxEntry(Persist(
+        TrackAndQueue(Persist(
             $"purchase|{report.RequestId}|{report.AttemptId}|{report.Sequence}",
             PurchaseAuditType,
+            report.RequestId,
             report));
     }
 
     public void EnqueueLineProgress(MarketAcquisitionLineProgressReport report)
     {
         ArgumentNullException.ThrowIfNull(report);
-        QueueOutboxEntry(Persist(
+        TrackAndQueue(Persist(
             $"line|{report.RequestId}|{report.AttemptId}|{report.Sequence}",
             LineProgressType,
+            report.RequestId,
             report));
     }
 
     public void EnqueueMarketObservation(MarketAcquisitionMarketObservationReport report)
     {
         ArgumentNullException.ThrowIfNull(report);
-        QueueOutboxEntry(Persist(
+        var durableReport = report with
+        {
+            HasIncompleteCoverage = report.HasIncompleteCoverage ?? report.ReadResult.HasIncompleteCoverage,
+            ReadResult = report.ReadResult with { Listings = [] },
+        };
+        TrackAndQueue(Persist(
             $"observation|{report.RequestId}|{report.AttemptId}|{report.Sequence}",
             MarketObservationType,
-            report));
+            report.RequestId,
+            durableReport));
     }
 
-    private MarketAcquisitionReportOutboxEntry Persist<T>(string id, string reportType, T payload)
+    private MarketAcquisitionReportOutboxEntry Persist<T>(
+        string id,
+        string reportType,
+        string requestId,
+        T payload)
     {
         try
         {
-            var entry = outbox.Put(id, reportType, payload);
+            var entry = outbox.Put(id, reportType, requestId, payload);
             lock (sync)
                 entrySessionVersions[id] = sessionVersion;
             return entry;
@@ -144,20 +182,43 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         catch (Exception ex)
         {
             claimLifecycle.SetStatus($"Could not persist the report outbox; sending this report without crash recovery: {ex.Message}");
-            var entry = volatileFallback.Put(id, reportType, payload);
+            var entry = volatileFallback.Put(id, reportType, requestId, payload);
             lock (sync)
                 entrySessionVersions[id] = sessionVersion;
             return entry;
         }
     }
 
-    private void QueuePendingOutboxEntries()
+    private void TrackAndQueue(MarketAcquisitionReportOutboxEntry entry)
     {
-        foreach (var entry in outbox.Snapshot())
-            QueueOutboxEntry(entry);
+        var requestId = TrackPendingEntry(entry);
+        QueueRequestHead(requestId);
     }
 
-    internal void RetryPendingReports() => QueuePendingOutboxEntries();
+    private void LoadPendingOutboxEntries()
+    {
+        foreach (var entry in outbox.Snapshot())
+            TrackPendingEntry(entry);
+    }
+
+    private string TrackPendingEntry(MarketAcquisitionReportOutboxEntry entry)
+    {
+        var requestId = GetRequestId(entry);
+        lock (sync)
+        {
+            if (!pendingEntryIds.Add(entry.Id))
+                return requestId;
+            if (!pendingEntriesByRequest.TryGetValue(requestId, out var pending))
+            {
+                pending = new Queue<MarketAcquisitionReportOutboxEntry>();
+                pendingEntriesByRequest.Add(requestId, pending);
+            }
+            pending.Enqueue(entry);
+        }
+        return requestId;
+    }
+
+    internal void RetryPendingReports() => QueuePendingRequestHeads();
 
     private void CompactDuplicateRouteProgress()
     {
@@ -186,6 +247,59 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             outbox.RemoveMany(duplicateIds);
     }
 
+    private void DiscardPersistedRawMarketObservations()
+    {
+        var staleListingSnapshots = new List<string>();
+        foreach (var entry in outbox.Snapshot()
+                     .Where(candidate => candidate.ReportType.Equals(MarketObservationType, StringComparison.Ordinal)))
+        {
+            try
+            {
+                var report = outbox.Deserialize<MarketAcquisitionMarketObservationReport>(entry);
+                if (report.ReadResult.Listings.Count > 0)
+                    staleListingSnapshots.Add(entry.Id);
+            }
+            catch
+            {
+                // Preserve unreadable legacy evidence for the normal quarantine path.
+            }
+        }
+
+        if (staleListingSnapshots.Count > 0)
+            outbox.RemoveMany(staleListingSnapshots);
+    }
+
+    private void DiscardDeadLetteredRawMarketObservations()
+    {
+        var staleListingSnapshots = new List<string>();
+        foreach (var entry in deadLetterOutbox.Snapshot()
+                     .Where(candidate => candidate.ReportType.Equals(MarketObservationType, StringComparison.Ordinal)))
+        {
+            try
+            {
+                var deadLetter = deadLetterOutbox.Deserialize<DeadLetteredReport>(entry);
+                if (ContainsRawListingRows(deadLetter.Entry.PayloadJson))
+                    staleListingSnapshots.Add(entry.Id);
+            }
+            catch
+            {
+                // Preserve unreadable legacy evidence rather than guessing at its contents.
+            }
+        }
+
+        if (staleListingSnapshots.Count > 0)
+            deadLetterOutbox.RemoveMany(staleListingSnapshots);
+    }
+
+    private static bool ContainsRawListingRows(string payloadJson)
+    {
+        using var document = JsonDocument.Parse(payloadJson);
+        return document.RootElement.TryGetProperty("readResult", out var readResult) &&
+               readResult.TryGetProperty("listings", out var listings) &&
+               listings.ValueKind == JsonValueKind.Array &&
+               listings.GetArrayLength() > 0;
+    }
+
     private void ForgetPendingRouteEntry(MarketAcquisitionReportOutboxEntry entry)
     {
         if (!entry.ReportType.Equals(RouteProgressType, StringComparison.Ordinal))
@@ -208,17 +322,41 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         }
     }
 
-    private void QueueOutboxEntry(MarketAcquisitionReportOutboxEntry entry)
+    private void QueuePendingRequestHeads()
     {
+        if (!reporter.CanReport)
+            return;
+
+        string[] requestIds;
+        lock (sync)
+            requestIds = [.. pendingEntriesByRequest.Keys];
+        foreach (var requestId in requestIds)
+            QueueRequestHead(requestId);
+    }
+
+    private void QueueRequestHead(string requestId)
+    {
+        if (!reporter.CanReport)
+            return;
+
         lock (sync)
         {
-            if (!inFlightEntryIds.Add(entry.Id))
+            if (inFlightRequestIds.Contains(requestId) ||
+                !pendingEntriesByRequest.TryGetValue(requestId, out var pending) ||
+                pending.Count == 0 ||
+                retryStatesByRequest.TryGetValue(requestId, out var retry) && retry.NextAttemptAtUtc > utcNow())
+            {
                 return;
+            }
 
+            var entry = pending.Peek();
+            inFlightRequestIds.Add(requestId);
             var token = lifetimeCancellation.Token;
             queueTail = queueTail
                 .ContinueWith(
-                    _ => token.IsCancellationRequested ? Task.CompletedTask : SendAndAcknowledgeAsync(entry, token),
+                    _ => token.IsCancellationRequested
+                        ? Task.CompletedTask
+                        : SendAndAcknowledgeAsync(entry, requestId, token),
                     CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default)
@@ -228,53 +366,215 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
 
     private async Task SendAndAcknowledgeAsync(
         MarketAcquisitionReportOutboxEntry entry,
+        string requestId,
         CancellationToken cancellationToken)
     {
+        var acknowledged = false;
         try
         {
-            if (HasEarlierPendingEntryForSameRequest(entry))
-                return;
-
             await SendAsync(entry, cancellationToken).ConfigureAwait(false);
-            outbox.Remove(entry.Id);
-            volatileFallback.Remove(entry.Id);
-            lock (sync)
-            {
-                entrySessionVersions.Remove(entry.Id);
-                ForgetPendingRouteEntry(entry);
-            }
+            AcknowledgeDeliveredEntry(entry, requestId);
+            acknowledged = true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            if (IsForCurrentClaim(entry))
+            var failure = ex;
+            ReportFailureResolution resolution;
+            try
             {
-                await callbackDispatcher.DispatchAsync(() =>
-                    claimLifecycle.SetStatus($"Report retained for automatic retry after {MaxAttempts} attempts: {ex.Message}"))
+                resolution = await TryResolveFailureAsync(entry, requestId, ex, cancellationToken)
                     .ConfigureAwait(false);
+            }
+            catch (Exception reconciliationException)
+            {
+                resolution = ReportFailureResolution.Unresolved;
+                failure = new InvalidOperationException(
+                    "Could not durably reconcile the retained report.",
+                    reconciliationException);
+            }
+            if (resolution == ReportFailureResolution.AlreadyDelivered)
+            {
+                AcknowledgeDeliveredEntry(entry, requestId);
+                acknowledged = true;
+            }
+            else if (resolution == ReportFailureResolution.Unresolved)
+            {
+                RegisterFailure(requestId, failure);
+                if (IsForCurrentClaim(entry))
+                {
+                    await callbackDispatcher.DispatchAsync(() =>
+                        claimLifecycle.SetStatus($"Report retained for automatic retry after {MaxAttempts} attempts: {failure.Message}"))
+                        .ConfigureAwait(false);
+                }
             }
         }
         finally
         {
             lock (sync)
-                inFlightEntryIds.Remove(entry.Id);
+                inFlightRequestIds.Remove(requestId);
+        }
+
+        if (acknowledged)
+            QueueRequestHead(requestId);
+    }
+
+    private void AcknowledgeDeliveredEntry(
+        MarketAcquisitionReportOutboxEntry entry,
+        string requestId)
+    {
+        outbox.Remove(entry.Id);
+        volatileFallback.Remove(entry.Id);
+        lock (sync)
+        {
+            entrySessionVersions.Remove(entry.Id);
+            ForgetPendingRouteEntry(entry);
+            AcknowledgePendingEntry(entry, requestId);
+            retryStatesByRequest.Remove(requestId);
         }
     }
 
-    private bool HasEarlierPendingEntryForSameRequest(MarketAcquisitionReportOutboxEntry entry)
+    private async Task<ReportFailureResolution> TryResolveFailureAsync(
+        MarketAcquisitionReportOutboxEntry entry,
+        string requestId,
+        Exception exception,
+        CancellationToken cancellationToken)
     {
-        var requestId = GetRequestId(entry);
-        foreach (var candidate in outbox.Snapshot())
+        if (exception is not HttpRequestException { StatusCode: { } statusCode } ||
+            (int)statusCode is < 400 or >= 500)
         {
-            if (candidate.Id.Equals(entry.Id, StringComparison.Ordinal))
-                return false;
-            if (requestId.Equals(GetRequestId(candidate), StringComparison.Ordinal))
-                return true;
+            return ReportFailureResolution.Unresolved;
         }
 
-        return false;
+        MarketAcquisitionRequestView remote;
+        try
+        {
+            remote = await reporter.GetRequestAsync(requestId, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            return ReportFailureResolution.Unresolved;
+        }
+
+        if (IsTerminalStatus(remote.Status))
+        {
+            QuarantineTerminalRequest(requestId, remote.Status, exception);
+            return ReportFailureResolution.Quarantined;
+        }
+
+        if (entry.ReportType.Equals(RouteProgressType, StringComparison.Ordinal) &&
+            statusCode == HttpStatusCode.Conflict &&
+            exception is MarketAcquisitionLifecycleHttpException lifecycleException &&
+            lifecycleException.Error?.Contains("Idempotency key", StringComparison.OrdinalIgnoreCase) == true &&
+            await ServerHasRouteEventAsync(entry, requestId, cancellationToken).ConfigureAwait(false))
+        {
+            return ReportFailureResolution.AlreadyDelivered;
+        }
+
+        return ReportFailureResolution.Unresolved;
+    }
+
+    private async Task<bool> ServerHasRouteEventAsync(
+        MarketAcquisitionReportOutboxEntry entry,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        DurableRouteProgress durable;
+        try
+        {
+            durable = outbox.Deserialize<DurableRouteProgress>(entry);
+        }
+        catch
+        {
+            return false;
+        }
+
+        MarketAcquisitionRequestTimelineView timeline;
+        try
+        {
+            timeline = await reporter.GetRequestTimelineAsync(requestId, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            return false;
+        }
+
+        var expectedEventType = MarketAcquisitionRouteProgressReporter.ResolveAction(durable.Report.RouteState);
+        return timeline.AttemptEvents.Any(candidate =>
+            candidate.AttemptId.Equals(durable.Report.AttemptId, StringComparison.Ordinal) &&
+            candidate.Sequence == durable.Report.Sequence &&
+            candidate.EventType.Equals(expectedEventType, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void QuarantineTerminalRequest(
+        string requestId,
+        string remoteStatus,
+        Exception exception)
+    {
+        MarketAcquisitionReportOutboxEntry[] entries;
+        lock (sync)
+        {
+            if (!pendingEntriesByRequest.TryGetValue(requestId, out var pending) || pending.Count == 0)
+                return;
+            entries = pending.ToArray();
+        }
+
+        var quarantinedAtUtc = utcNow();
+        var failureKind = exception is HttpRequestException { StatusCode: { } statusCode }
+            ? $"HTTP {(int)statusCode}"
+            : exception.GetType().Name;
+        foreach (var entry in entries)
+        {
+            deadLetterOutbox.Put(
+                entry.Id,
+                entry.ReportType,
+                requestId,
+                new DeadLetteredReport(entry, remoteStatus, failureKind, quarantinedAtUtc));
+        }
+
+        var ids = entries.Select(candidate => candidate.Id).ToArray();
+        outbox.RemoveMany(ids);
+        volatileFallback.RemoveMany(ids);
+        lock (sync)
+        {
+            foreach (var entry in entries)
+            {
+                entrySessionVersions.Remove(entry.Id);
+                ForgetPendingRouteEntry(entry);
+                pendingEntryIds.Remove(entry.Id);
+                legacyRequestIdsByEntryId.Remove(entry.Id);
+            }
+            pendingEntriesByRequest.Remove(requestId);
+            retryStatesByRequest.Remove(requestId);
+            quarantinedEntryCount = deadLetterOutbox.Snapshot().Count;
+            lastQuarantineStatus = remoteStatus;
+            lastQuarantineAtUtc = quarantinedAtUtc;
+        }
+    }
+
+    private static bool IsTerminalStatus(string? status) =>
+        status is MarketAcquisitionStatuses.Complete
+            or MarketAcquisitionStatuses.Failed
+            or MarketAcquisitionStatuses.Rejected
+            or MarketAcquisitionStatuses.Expired
+            or MarketAcquisitionStatuses.Cancelled
+            or MarketAcquisitionStatuses.Shelved
+            or MarketAcquisitionStatuses.Archived;
+
+    private void AcknowledgePendingEntry(MarketAcquisitionReportOutboxEntry entry, string requestId)
+    {
+        if (pendingEntriesByRequest.TryGetValue(requestId, out var pending) &&
+            pending.Count > 0 &&
+            pending.Peek().Id.Equals(entry.Id, StringComparison.Ordinal))
+        {
+            pending.Dequeue();
+            if (pending.Count == 0)
+                pendingEntriesByRequest.Remove(requestId);
+        }
+        pendingEntryIds.Remove(entry.Id);
+        legacyRequestIdsByEntryId.Remove(entry.Id);
     }
 
     private bool IsForCurrentClaim(MarketAcquisitionReportOutboxEntry entry)
@@ -296,14 +596,91 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         return currentRequestId.Equals(entryRequestId, StringComparison.Ordinal);
     }
 
-    private string GetRequestId(MarketAcquisitionReportOutboxEntry entry) => entry.ReportType switch
+    private string GetRequestId(MarketAcquisitionReportOutboxEntry entry)
     {
-        RouteProgressType => outbox.Deserialize<DurableRouteProgress>(entry).Report.RequestId,
-        PurchaseAuditType => outbox.Deserialize<MarketAcquisitionPurchaseAuditReport>(entry).RequestId,
-        LineProgressType => outbox.Deserialize<MarketAcquisitionLineProgressReport>(entry).RequestId,
-        MarketObservationType => outbox.Deserialize<MarketAcquisitionMarketObservationReport>(entry).RequestId,
-        _ => string.Empty,
-    };
+        if (!string.IsNullOrWhiteSpace(entry.RequestId))
+            return entry.RequestId;
+
+        lock (sync)
+        {
+            if (legacyRequestIdsByEntryId.TryGetValue(entry.Id, out var cached))
+                return cached;
+        }
+
+        var requestId = entry.ReportType switch
+        {
+            RouteProgressType => outbox.Deserialize<DurableRouteProgress>(entry).Report.RequestId,
+            PurchaseAuditType => outbox.Deserialize<MarketAcquisitionPurchaseAuditReport>(entry).RequestId,
+            LineProgressType => outbox.Deserialize<MarketAcquisitionLineProgressReport>(entry).RequestId,
+            MarketObservationType => outbox.Deserialize<MarketAcquisitionMarketObservationReport>(entry).RequestId,
+            _ => string.Empty,
+        };
+        if (string.IsNullOrWhiteSpace(requestId))
+            throw new InvalidOperationException($"Outbox entry '{entry.Id}' does not identify an acquisition request.");
+
+        lock (sync)
+            legacyRequestIdsByEntryId[entry.Id] = requestId;
+        return requestId;
+    }
+
+    private void RegisterFailure(string requestId, Exception exception)
+    {
+        var now = utcNow();
+        lock (sync)
+        {
+            var failureCount = retryStatesByRequest.TryGetValue(requestId, out var current)
+                ? current.FailureCount + 1
+                : 1;
+            var exponent = Math.Min(failureCount - 1, 5);
+            var backoff = TimeSpan.FromTicks(ReplayInterval.Ticks * (1L << exponent));
+            if (backoff > MaximumReplayBackoff)
+                backoff = MaximumReplayBackoff;
+            var failureKind = exception is HttpRequestException { StatusCode: { } statusCode }
+                ? $"HTTP {(int)statusCode}"
+                : exception.GetType().Name;
+            retryStatesByRequest[requestId] = new ReportRetryState(
+                failureCount,
+                now + backoff,
+                failureKind);
+            lastFailureKind = failureKind;
+            lastFailureAtUtc = now;
+        }
+    }
+
+    public MarketAcquisitionReportBacklogSnapshot GetBacklogSnapshot()
+    {
+        lock (sync)
+        {
+            DateTimeOffset? oldest = null;
+            foreach (var pending in pendingEntriesByRequest.Values)
+            {
+                if (pending.Count == 0)
+                    continue;
+                var enqueuedAt = pending.Peek().EnqueuedAtUtc;
+                if (oldest == null || enqueuedAt < oldest)
+                    oldest = enqueuedAt;
+            }
+
+            DateTimeOffset? nextRetry = null;
+            foreach (var retry in retryStatesByRequest.Values)
+            {
+                if (nextRetry == null || retry.NextAttemptAtUtc < nextRetry)
+                    nextRetry = retry.NextAttemptAtUtc;
+            }
+
+            return new MarketAcquisitionReportBacklogSnapshot(
+                pendingEntryIds.Count,
+                pendingEntriesByRequest.Count,
+                inFlightRequestIds.Count,
+                oldest,
+                nextRetry,
+                lastFailureKind,
+                lastFailureAtUtc,
+                quarantinedEntryCount,
+                lastQuarantineStatus,
+                lastQuarantineAtUtc);
+        }
+    }
 
     private Task SendAsync(MarketAcquisitionReportOutboxEntry entry, CancellationToken cancellationToken) =>
         entry.ReportType switch
@@ -384,7 +761,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             while (true)
             {
                 await Task.Delay(ReplayInterval, cancellationToken).ConfigureAwait(false);
-                QueuePendingOutboxEntries();
+                QueuePendingRequestHeads();
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -449,7 +826,11 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         lock (sync)
         {
             claimed = null;
-            inFlightEntryIds.Clear();
+            pendingEntriesByRequest.Clear();
+            pendingEntryIds.Clear();
+            inFlightRequestIds.Clear();
+            legacyRequestIdsByEntryId.Clear();
+            retryStatesByRequest.Clear();
             entrySessionVersions.Clear();
             pendingRouteEntryIdsByKey.Clear();
         }
@@ -460,4 +841,34 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         MarketAcquisitionRouteProgressReport Report,
         MarketAcquisitionClaimView Claim,
         string RouteKey);
+
+    private sealed record ReportRetryState(
+        int FailureCount,
+        DateTimeOffset NextAttemptAtUtc,
+        string FailureKind);
+
+    private sealed record DeadLetteredReport(
+        MarketAcquisitionReportOutboxEntry Entry,
+        string RemoteStatus,
+        string FailureKind,
+        DateTimeOffset QuarantinedAtUtc);
+
+    private enum ReportFailureResolution
+    {
+        Unresolved,
+        AlreadyDelivered,
+        Quarantined,
+    }
 }
+
+public sealed record MarketAcquisitionReportBacklogSnapshot(
+    int PendingEntryCount,
+    int PendingRequestCount,
+    int InFlightRequestCount,
+    DateTimeOffset? OldestEnqueuedAtUtc,
+    DateTimeOffset? NextRetryAtUtc,
+    string? LastFailureKind,
+    DateTimeOffset? LastFailureAtUtc,
+    int QuarantinedEntryCount,
+    string? LastQuarantineStatus,
+    DateTimeOffset? LastQuarantineAtUtc);

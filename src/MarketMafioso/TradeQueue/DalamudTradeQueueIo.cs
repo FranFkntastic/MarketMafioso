@@ -20,8 +20,8 @@ namespace MarketMafioso.TradeQueue;
 public interface ITradeQueueIo
 {
     IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory();
-    bool TryGetFocusPartner(out TradeQueuePartner partner);
-    bool FocusPartnerMatches(TradeQueuePartner partner);
+    bool TryGetSelectedPartner(out TradeQueuePartner partner);
+    bool PartnerIsAvailable(TradeQueuePartner partner);
     bool IsTradeOpen { get; }
     bool IsNumericInputOpen { get; }
     int OfferedSlotCount { get; }
@@ -45,7 +45,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     private const string OfferItemTradeSignature =
         "48 89 6C 24 ?? 48 89 74 24 ?? 57 48 83 EC 30 83 B9 ?? ?? ?? ?? ?? 41 8B F0";
 
-    private static readonly InventoryType[] SupportedInventories =
+    internal static readonly InventoryType[] SupportedInventories =
     [
         InventoryType.Inventory1,
         InventoryType.Inventory2,
@@ -56,6 +56,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     private readonly IGameGui gameGui;
     private readonly ITargetManager targetManager;
+    private readonly IObjectTable objectTable;
     private readonly ICondition condition;
     private readonly ISigScanner sigScanner;
     private readonly IPluginLog log;
@@ -68,6 +69,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     public DalamudTradeQueueIo(
         IGameGui gameGui,
         ITargetManager targetManager,
+        IObjectTable objectTable,
         ICondition condition,
         ISigScanner sigScanner,
         IDataManager dataManager,
@@ -75,6 +77,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     {
         this.gameGui = gameGui;
         this.targetManager = targetManager;
+        this.objectTable = objectTable;
         this.condition = condition;
         this.sigScanner = sigScanner;
         this.log = log;
@@ -178,9 +181,14 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
         return stacks;
     }
 
-    public bool TryGetFocusPartner(out TradeQueuePartner partner)
+    public bool TryGetSelectedPartner(out TradeQueuePartner partner)
     {
-        if (targetManager.FocusTarget is not IPlayerCharacter player || !player.IsTargetable)
+        var selected = targetManager.Target as IPlayerCharacter;
+        var focused = targetManager.FocusTarget as IPlayerCharacter;
+        var player = selected is { IsTargetable: true }
+            ? selected
+            : focused is { IsTargetable: true } ? focused : null;
+        if (player == null)
         {
             partner = new(0, string.Empty, 0);
             return false;
@@ -190,17 +198,15 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
         return true;
     }
 
-    public bool FocusPartnerMatches(TradeQueuePartner partner) =>
-        TryGetFocusPartner(out var current) &&
-        current.GameObjectId == partner.GameObjectId &&
-        current.HomeWorldId == partner.HomeWorldId;
+    public bool PartnerIsAvailable(TradeQueuePartner partner) =>
+        TryResolvePartner(partner, out _);
 
     public bool TryOpenTrade(TradeQueuePartner partner)
     {
         if (!TryAuthorizePatchContract(out _))
             return false;
 
-        if (!FocusPartnerMatches(partner) || targetManager.FocusTarget is not IPlayerCharacter player)
+        if (!TryResolvePartner(partner, out var player))
             return false;
 
         if (targetManager.Target?.GameObjectId != player.GameObjectId)
@@ -211,6 +217,38 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
         Chat.SendMessage("/trade");
         return true;
+    }
+
+    private bool TryResolvePartner(TradeQueuePartner partner, out IPlayerCharacter player)
+    {
+        player = EnumeratePartnerCandidates()
+            .FirstOrDefault(candidate =>
+                candidate.IsTargetable &&
+                candidate.GameObjectId == partner.GameObjectId &&
+                candidate.HomeWorld.RowId == partner.HomeWorldId)!;
+        return player != null;
+    }
+
+    private IEnumerable<IPlayerCharacter> EnumeratePartnerCandidates()
+    {
+        var selected = targetManager.Target as IPlayerCharacter;
+        if (selected != null)
+            yield return selected;
+        var focused = targetManager.FocusTarget as IPlayerCharacter;
+        if (focused != null &&
+            focused.GameObjectId != selected?.GameObjectId)
+        {
+            yield return focused;
+        }
+
+        foreach (var player in objectTable.OfType<IPlayerCharacter>())
+        {
+            if (player.GameObjectId != selected?.GameObjectId &&
+                player.GameObjectId != focused?.GameObjectId)
+            {
+                yield return player;
+            }
+        }
     }
 
     public unsafe bool TryOpenGilInput(out string error)

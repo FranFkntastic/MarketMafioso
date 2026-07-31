@@ -12,13 +12,14 @@ public sealed record MarketAcquisitionReportOutboxEntry
 {
     public string Id { get; init; } = string.Empty;
     public string ReportType { get; init; } = string.Empty;
+    public string? RequestId { get; init; }
     public string PayloadJson { get; init; } = string.Empty;
     public DateTimeOffset EnqueuedAtUtc { get; init; }
 }
 
 public interface IMarketAcquisitionReportOutbox
 {
-    MarketAcquisitionReportOutboxEntry Put<T>(string id, string reportType, T payload);
+    MarketAcquisitionReportOutboxEntry Put<T>(string id, string reportType, string requestId, T payload);
     IReadOnlyList<MarketAcquisitionReportOutboxEntry> Snapshot();
     void Remove(string id);
     void RemoveMany(IReadOnlyCollection<string> ids);
@@ -71,12 +72,14 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
         RewriteJournal();
     }
 
-    public MarketAcquisitionReportOutboxEntry Put<T>(string id, string reportType, T payload)
+    public MarketAcquisitionReportOutboxEntry Put<T>(string id, string reportType, string requestId, T payload)
     {
         if (string.IsNullOrWhiteSpace(id))
             throw new ArgumentException("An outbox entry id is required.", nameof(id));
         if (string.IsNullOrWhiteSpace(reportType))
             throw new ArgumentException("A report type is required.", nameof(reportType));
+        if (string.IsNullOrWhiteSpace(requestId))
+            throw new ArgumentException("An acquisition request id is required.", nameof(requestId));
 
         lock (sync)
         {
@@ -88,6 +91,7 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
             {
                 Id = id,
                 ReportType = reportType,
+                RequestId = requestId,
                 PayloadJson = JsonSerializer.Serialize(payload, JsonOptions),
                 EnqueuedAtUtc = DateTimeOffset.UtcNow,
             };
@@ -314,8 +318,11 @@ internal sealed class VolatileMarketAcquisitionReportOutbox : IMarketAcquisition
     private readonly object sync = new();
     private readonly List<MarketAcquisitionReportOutboxEntry> entries = [];
 
-    public MarketAcquisitionReportOutboxEntry Put<T>(string id, string reportType, T payload)
+    public MarketAcquisitionReportOutboxEntry Put<T>(string id, string reportType, string requestId, T payload)
     {
+        if (string.IsNullOrWhiteSpace(requestId))
+            throw new ArgumentException("An acquisition request id is required.", nameof(requestId));
+
         lock (sync)
         {
             var existing = entries.FirstOrDefault(candidate => candidate.Id.Equals(id, StringComparison.Ordinal));
@@ -325,6 +332,7 @@ internal sealed class VolatileMarketAcquisitionReportOutbox : IMarketAcquisition
             {
                 Id = id,
                 ReportType = reportType,
+                RequestId = requestId,
                 PayloadJson = JsonSerializer.Serialize(payload, JsonOptions),
                 EnqueuedAtUtc = DateTimeOffset.UtcNow,
             };

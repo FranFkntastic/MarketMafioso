@@ -50,7 +50,7 @@ public sealed class MarketAcquisitionPlanPreparationService
         CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var claimed = request.Claim ?? throw new InvalidOperationException("No dashboard request is accepted.");
+        var claimed = request.Claim ?? throw new InvalidOperationException("No acquisition request is available.");
         var planLines = GetPlanLines(claimed);
         var listings = new List<MarketAcquisitionListing>();
         var sweepWorldExclusions = new List<MarketAcquisitionSweepWorldExclusion>();

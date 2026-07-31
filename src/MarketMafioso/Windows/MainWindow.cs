@@ -278,7 +278,12 @@ public class MainWindow : Window, IDisposable
             new FileMarketAcquisitionReportOutbox(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
                 "market-acquisition-report-outbox.json")),
-            shardCheckpoints);
+            shardCheckpoints,
+            new FileMarketAcquisitionReportOutbox(Path.Combine(
+                Plugin.PluginInterface.GetPluginConfigDirectory(),
+                "market-acquisition-report-dead-letter.json")),
+            config.PluginInstanceId,
+            PluginBuildInfo.DisplayVersion);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -673,6 +678,16 @@ public class MainWindow : Window, IDisposable
                     0ul,
                     (sum, line) => checked(sum + line.RequiredQuantity - line.PurchasedQuantity)) ?? 0,
                 ActiveExactAcquisitionRemainingGil = AgentBridgeRouteTruthProjection.ResolveActiveExactAcquisitionRemainingGil(snapshot),
+                ReportBacklogEntryCount = snapshot.ReportBacklog.PendingEntryCount,
+                ReportBacklogRequestCount = snapshot.ReportBacklog.PendingRequestCount,
+                ReportBacklogInFlightRequestCount = snapshot.ReportBacklog.InFlightRequestCount,
+                ReportBacklogOldestEnqueuedAtUtc = snapshot.ReportBacklog.OldestEnqueuedAtUtc,
+                ReportBacklogNextRetryAtUtc = snapshot.ReportBacklog.NextRetryAtUtc,
+                ReportBacklogLastFailureKind = snapshot.ReportBacklog.LastFailureKind,
+                ReportBacklogLastFailureAtUtc = snapshot.ReportBacklog.LastFailureAtUtc,
+                ReportQuarantinedEntryCount = snapshot.ReportBacklog.QuarantinedEntryCount,
+                ReportLastQuarantineStatus = snapshot.ReportBacklog.LastQuarantineStatus,
+                ReportLastQuarantineAtUtc = snapshot.ReportBacklog.LastQuarantineAtUtc,
             },
         };
     }
@@ -1492,7 +1507,7 @@ public class MainWindow : Window, IDisposable
             claimed = acquisitionWorkspace.ClaimedRequest;
         }
 
-        if (claimed is null ||
+        if (claimed is not null &&
             !MarketAcquisitionPlanPreparationService.CanPrepareForStatus(claimed.Status))
         {
             return;
@@ -1547,8 +1562,8 @@ public class MainWindow : Window, IDisposable
         {
             var plan = acquisitionWorkspace.RequirePreparedPlan(
                 "Prepare a live candidate plan before probing live market board listings.");
-            var claimed = acquisitionWorkspace.RequireClaimedRequest("No dashboard request is accepted.");
-            routeEngine.ProbePreparedPlan(plan, claimed);
+            var request = acquisitionWorkspace.ResolveExecutionRequest(acquisitionRequestBuilder.CurrentDocument);
+            routeEngine.ProbePreparedPlan(plan, request);
             acquisitionWorkspace.SetStatus(routeEngine.CreateSnapshot().VisibleAcquisitionStatus);
             return Task.CompletedTask;
         });
@@ -1671,27 +1686,34 @@ public class MainWindow : Window, IDisposable
 
     private bool CanStartEvidenceRefresh()
     {
-        var claim = acquisitionWorkspace.ClaimedRequest;
-        if (claim == null || acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive)
+        if (acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive)
             return false;
 
-        if (claim.WorldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase))
-            return true;
+        try
+        {
+            var request = acquisitionWorkspace.ResolveExecutionRequest(acquisitionRequestBuilder.CurrentDocument);
+            if (request.WorldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase))
+                return true;
 
-        return claim.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) &&
-               playerState.CurrentWorld.IsValid;
+            return request.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) &&
+                   playerState.CurrentWorld.IsValid;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private Task StartGuidedRouteAsync()
     {
-        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
+        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, (request, _) =>
         {
             var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before starting a guided route.");
             var diagnosticsLevel = MarketAcquisitionRouteDiagnosticsPolicy.Resolve(
                 config.MarketAcquisitionRouteDiagnostics);
             routeEngine.Start(
                 plan,
-                claimed,
+                request,
                 diagnosticsLevel != MarketAcquisitionRouteDiagnosticsLevel.Off,
                 config.EnableOpportunisticWorldChecks,
                 acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract,
@@ -1704,15 +1726,15 @@ public class MainWindow : Window, IDisposable
 
     private Task StartEvidenceRefreshAsync()
     {
-        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
+        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, (request, _) =>
         {
             var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
-            var plan = MarketAcquisitionEvidenceRefreshPlanBuilder.Build(claimed, currentWorld, DateTimeOffset.UtcNow);
+            var plan = MarketAcquisitionEvidenceRefreshPlanBuilder.Build(request, currentWorld, DateTimeOffset.UtcNow);
             var diagnosticsLevel = MarketAcquisitionRouteDiagnosticsPolicy.Resolve(
                 config.MarketAcquisitionRouteDiagnostics);
             routeEngine.StartEvidenceRefresh(
                 plan,
-                claimed,
+                request,
                 diagnosticsLevel != MarketAcquisitionRouteDiagnosticsLevel.Off,
                 diagnosticsLevel);
             return Task.CompletedTask;
@@ -1735,9 +1757,9 @@ public class MainWindow : Window, IDisposable
 
     private Task RecoverGuidedRouteAsync()
     {
-        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
+        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, (request, _) =>
         {
-            routeEngine.Recover(claimed);
+            routeEngine.Recover(request);
             routeEngine.ReportRouteProgress();
             return Task.CompletedTask;
         });
@@ -1752,10 +1774,10 @@ public class MainWindow : Window, IDisposable
 
     private Task RestartGuidedRouteAsync()
     {
-        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
+        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, (request, _) =>
         {
             var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before restarting a guided route.");
-            routeEngine.Restart(plan, claimed);
+            routeEngine.Restart(plan, request);
             routeEngine.ReportRouteProgress();
             return Task.CompletedTask;
         });
@@ -1763,10 +1785,10 @@ public class MainWindow : Window, IDisposable
 
     private Task ReprepareGuidedRouteAsync()
     {
-        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
+        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, (request, _) =>
         {
             var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before re-preparing a guided route.");
-            var result = routeEngine.ReprepareAndRestart(plan, DateTimeOffset.UtcNow, claimed);
+            var result = routeEngine.ReprepareAndRestart(plan, DateTimeOffset.UtcNow, request);
             var snapshot = routeEngine.CreateSnapshot();
             if (snapshot.ActivePlan != null)
                 acquisitionWorkspace.ReplacePreparedPlan(snapshot.ActivePlan);
@@ -1778,16 +1800,14 @@ public class MainWindow : Window, IDisposable
 
     private Task StartPreparedRouteDryRunAsync()
     {
-        return acquisitionWorkspace.RunAsync(_ =>
+        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, (request, _) =>
         {
             if (!config.EnableMarketAcquisitionDryRunTools)
                 throw new InvalidOperationException("Enable Market Acquisition dry-run tools in Advanced / Testing first.");
-            var claimed = acquisitionWorkspace.ClaimedRequest ??
-                          throw new InvalidOperationException("Accept or restore a Workbench request before starting a dry run.");
             var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before starting a dry run.");
             var result = routeEngine.Start(
                 plan,
-                claimed,
+                request,
                 enableDiagnostics: true,
                 config.EnableOpportunisticWorldChecks,
                 acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract,
@@ -1802,7 +1822,6 @@ public class MainWindow : Window, IDisposable
         config.EnableMarketAcquisitionDryRunTools &&
         !acquisitionWorkspace.IsBusy &&
         !routeEngine.IsRouteActive &&
-        acquisitionWorkspace.ClaimedRequest is not null &&
         acquisitionWorkspace.PreparedPlan?.Status == "Ready" &&
         !acquisitionWorkspace.IsPreparedPlanStale();
 
@@ -1810,16 +1829,17 @@ public class MainWindow : Window, IDisposable
     private bool CanSeedExactAcquisitionDryRunSunkState()
     {
         if (!config.EnableMarketAcquisitionDryRunTools || acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive ||
-            acquisitionWorkspace.ClaimedRequest is not { } claim || acquisitionWorkspace.PreparedPlan is not { Status: "Ready" } plan ||
+            acquisitionWorkspace.PreparedPlan is not { Status: "Ready" } plan ||
             acquisitionWorkspace.IsPreparedPlanStale() ||
             acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract is not { Transfer.DryRunOnly: true } contract)
             return false;
         try
         {
+            var request = acquisitionWorkspace.ResolveExecutionRequest(acquisitionRequestBuilder.CurrentDocument);
             _ = ExactAcquisitionDryRunSunkStateSeeder.CreateSemanticSeed(
                 contract,
                 acquisitionRequestBuilder.CurrentDocument,
-                claim,
+                request,
                 plan);
             return true;
         }
@@ -1833,16 +1853,16 @@ public class MainWindow : Window, IDisposable
     {
         if (!CanSeedExactAcquisitionDryRunSunkState())
             return "DEBUG sunk-state seed is unavailable for the current finalized dry-run route.";
-        var claim = acquisitionWorkspace.ClaimedRequest!;
         var plan = acquisitionWorkspace.PreparedPlan!;
         var document = acquisitionRequestBuilder.CurrentDocument;
+        var request = acquisitionWorkspace.ResolveExecutionRequest(document);
         var contract = document.ExactAcquisitionAuthority!.FinalizedContract!;
-        var seed = ExactAcquisitionDryRunSunkStateSeeder.CreateSemanticSeed(contract, document, claim, plan);
+        var seed = ExactAcquisitionDryRunSunkStateSeeder.CreateSemanticSeed(contract, document, request, plan);
         var result = ExactAcquisitionDryRunSunkStateSeeder.Seed(
             exactAcquisitionRouteStateStore,
             contract,
             document,
-            claim,
+            request,
             plan,
             seed);
         acquisitionWorkspace.SetStatus(result.Message);
@@ -1852,7 +1872,7 @@ public class MainWindow : Window, IDisposable
 
     private Task RecoverExactAcquisitionRouteAsync()
     {
-        return acquisitionWorkspace.RunWithReportableClaimAsync(async (claimed, token) =>
+        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, async (request, token) =>
         {
             if (routeEngine.ConsumeNoViableExactAcquisitionDryRunScenario())
             {
@@ -1861,7 +1881,7 @@ public class MainWindow : Window, IDisposable
                 routeEngine.ReportRouteProgress();
                 return;
             }
-            var remainingClaim = routeEngine.CreateExactAcquisitionRecoveryClaim(claimed);
+            var remainingClaim = routeEngine.CreateExactAcquisitionRecoveryClaim(request);
             var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
             MarketAcquisitionPlanPreparationResult result;
             try
@@ -1933,8 +1953,6 @@ public class MainWindow : Window, IDisposable
             return;
         if (contract.Transfer.DryRunOnly)
             return;
-        if (acquisitionWorkspace.ClaimedRequest is null)
-            return;
         nextExactAcquisitionAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
         exactAcquisitionAutoResumeTask = AutoResumeExactAcquisitionRouteAsync(persisted, contract);
     }
@@ -1943,9 +1961,9 @@ public class MainWindow : Window, IDisposable
         ExactAcquisitionRouteExecutionState persisted,
         ExactAcquisitionExecutionContract contract)
     {
-        return acquisitionWorkspace.RunWithReportableClaimAsync(async (claimed, token) =>
+        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, async (request, token) =>
         {
-            var remainingClaim = ExactAcquisitionRouteAuthoritySession.CreateRecoveryClaim(claimed, persisted);
+            var remainingClaim = ExactAcquisitionRouteAuthoritySession.CreateRecoveryClaim(request, persisted);
             if (remainingClaim.Lines.Count == 0)
             {
                 exactAcquisitionRouteStateStore.Save(persisted with
@@ -2035,7 +2053,7 @@ public class MainWindow : Window, IDisposable
         routeEngine.IsRouteActive;
 
     private bool IsExpectedCharacterScopeGap() =>
-        acquisitionWorkspace.ClaimedRequest != null &&
+        routeEngine.IsRouteActive &&
         routeEngine.CreateSnapshot().ActiveStop?.Status == "TravelCommandSent";
 
     private string GetVisibleAcquisitionStatus()

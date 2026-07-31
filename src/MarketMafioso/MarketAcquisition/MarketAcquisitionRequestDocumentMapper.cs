@@ -81,6 +81,71 @@ public static class MarketAcquisitionRequestDocumentMapper
         };
     }
 
+    public static MarketAcquisitionClaimView BuildLocalExecutionRequest(
+        MarketAcquisitionRequestDocument document,
+        string characterName,
+        string world,
+        DateTimeOffset? createdAtUtc = null)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (string.IsNullOrWhiteSpace(characterName))
+            throw new InvalidOperationException("Current character name is required for a local acquisition plan.");
+        if (string.IsNullOrWhiteSpace(world))
+            throw new InvalidOperationException("Current world is required for a local acquisition plan.");
+
+        var validation = MarketAcquisitionRequestDocumentValidator.ValidateDraft(document);
+        if (!validation.IsValid)
+            throw new InvalidOperationException(validation.Errors[0]);
+
+        var requestId = $"local:{document.LocalRequestId}";
+        var lines = document.Lines
+            .Select((line, ordinal) => new MarketAcquisitionBatchLineView
+            {
+                LineId = $"{requestId}:line:{ordinal + 1}",
+                BatchId = requestId,
+                Ordinal = ordinal,
+                ItemId = line.ItemId,
+                ItemName = line.ItemName,
+                ItemKind = line.ItemKind,
+                QuantityMode = line.QuantityMode,
+                TargetQuantity = line.TargetQuantity,
+                MaxQuantity = line.MaxQuantity,
+                HqPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(line.HqPolicy),
+                MaxUnitPrice = line.MaxUnitPrice,
+                GilCap = line.GilCap,
+                Status = MarketAcquisitionStatuses.AcceptedInPlugin,
+            })
+            .ToList();
+        var first = lines[0];
+        var createdAt = createdAtUtc ?? DateTimeOffset.UtcNow;
+
+        return new MarketAcquisitionClaimView
+        {
+            Id = requestId,
+            Revision = document.LocalRevision,
+            Status = MarketAcquisitionStatuses.AcceptedInPlugin,
+            Origin = MarketAcquisitionOrigins.LocalWorkbench,
+            CreatedAtUtc = createdAt,
+            ExpiresAtUtc = DateTimeOffset.MaxValue,
+            ClaimedAtUtc = createdAt,
+            TargetCharacterName = characterName.Trim(),
+            TargetWorld = world.Trim(),
+            Region = MarketAcquisitionWorldCatalog.NormalizeRegion(document.Region),
+            ItemId = first.ItemId,
+            ItemName = first.ItemName,
+            QuantityMode = first.QuantityMode,
+            Quantity = first.QuantityMode == "TargetQuantity" ? first.TargetQuantity : first.MaxQuantity,
+            HqPolicy = first.HqPolicy,
+            MaxUnitPrice = first.MaxUnitPrice,
+            MaxTotalGil = first.GilCap,
+            WorldMode = NormalizeBuilderWorldMode(document.WorldMode),
+            SweepScope = NormalizeSweepScope(document.SweepScope),
+            SweepDataCenters = NormalizeSweepDataCenters(document.Region, document.SweepDataCenters),
+            Lines = lines,
+            ClaimToken = string.Empty,
+        };
+    }
+
     public static IReadOnlyList<MarketAcquisitionBatchLineView> GetRequestLines(
         MarketAcquisitionRequestView request)
     {

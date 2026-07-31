@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using Franthropy.Dalamud.Persistence;
 
@@ -10,9 +11,14 @@ namespace MarketMafioso.MarketAcquisition;
 public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceStateStore
 {
     private const int CurrentVersion = 2;
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private const int CurrentJournalVersion = 1;
+    private static readonly UTF8Encoding Utf8WithoutBom = new(encoderShouldEmitUTF8Identifier: false);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly object gate = new();
     private readonly string path;
     private readonly string backupPath;
+    private readonly string journalPath;
+    private MarketPurchaseEvidenceSnapshot? lastSnapshot;
 
     public MarketPurchaseEvidenceFileStore(string path)
     {
@@ -20,16 +26,233 @@ public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceSta
             throw new ArgumentException("A purchase evidence state path is required.", nameof(path));
         this.path = path;
         backupPath = path + ".bak";
+        journalPath = path + ".journal";
     }
 
-    public MarketPurchaseEvidenceSnapshot? Load() => LoadCandidate(path) ?? LoadCandidate(backupPath);
+    public MarketPurchaseEvidenceSnapshot? Load()
+    {
+        lock (gate)
+        {
+            lastSnapshot = LoadCore();
+            return lastSnapshot;
+        }
+    }
 
     public void Save(MarketPurchaseEvidenceSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        if (File.Exists(path))
-            File.Copy(path, backupPath, overwrite: true);
-        AtomicJsonFile.Write(path, ToDocument(snapshot), JsonOptions);
+        lock (gate)
+        {
+            lastSnapshot ??= LoadCore();
+            if (lastSnapshot is null)
+            {
+                WriteMirroredBase(snapshot);
+                lastSnapshot = snapshot;
+                return;
+            }
+
+            if (snapshot.Revision != lastSnapshot.Revision + 1)
+                throw new InvalidDataException(
+                    $"Purchase evidence revision must advance exactly once from {lastSnapshot.Revision} to {lastSnapshot.Revision + 1}.");
+
+            AppendJournal(ToJournalEntry(lastSnapshot, snapshot));
+            lastSnapshot = snapshot;
+        }
+    }
+
+    private MarketPurchaseEvidenceSnapshot? LoadCore()
+    {
+        var primary = LoadCandidate(path);
+        var backup = LoadCandidate(backupPath);
+        var baseline = primary switch
+        {
+            null => backup,
+            _ when backup is null || primary.Revision >= backup.Revision => primary,
+            _ => backup,
+        };
+        if (baseline is null)
+        {
+            if (File.Exists(journalPath) && new FileInfo(journalPath).Length > 0)
+                throw new InvalidDataException(
+                    "Purchase evidence journal exists without a recoverable base checkpoint.");
+            return null;
+        }
+
+        var recovered = ReplayJournal(baseline);
+        if (File.Exists(journalPath) || primary is null || primary.Revision != recovered.Revision)
+        {
+            WriteMirroredBase(recovered);
+            File.Delete(journalPath);
+        }
+
+        return recovered;
+    }
+
+    private void WriteMirroredBase(MarketPurchaseEvidenceSnapshot snapshot)
+    {
+        var document = ToDocument(snapshot);
+        AtomicJsonFile.Write(path, document, JsonOptions);
+        try
+        {
+            AtomicJsonFile.Write(backupPath, document, JsonOptions);
+        }
+        catch (IOException)
+        {
+            // The primary atomic checkpoint is authoritative. A later load repairs the mirror.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The primary atomic checkpoint is authoritative. A later load repairs the mirror.
+        }
+    }
+
+    private void AppendJournal(JournalEntry entry)
+    {
+        var fullPath = Path.GetFullPath(journalPath);
+        var directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var payload = JsonSerializer.SerializeToUtf8Bytes(entry, JsonOptions);
+        using var stream = new FileStream(
+            fullPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.Read,
+            bufferSize: 4096,
+            FileOptions.WriteThrough);
+        TrimUncommittedTrailingFragment(stream);
+        stream.Seek(0, SeekOrigin.End);
+        stream.Write(payload);
+        stream.WriteByte((byte)'\n');
+        stream.Flush(flushToDisk: true);
+    }
+
+    private static void TrimUncommittedTrailingFragment(FileStream stream)
+    {
+        if (stream.Length == 0)
+            return;
+
+        stream.Seek(-1, SeekOrigin.End);
+        if (stream.ReadByte() == '\n')
+            return;
+
+        for (var offset = stream.Length - 2; offset >= 0; offset--)
+        {
+            stream.Seek(offset, SeekOrigin.Begin);
+            if (stream.ReadByte() != '\n')
+                continue;
+            stream.SetLength(offset + 1);
+            stream.Flush(flushToDisk: true);
+            return;
+        }
+
+        stream.SetLength(0);
+        stream.Flush(flushToDisk: true);
+    }
+
+    private MarketPurchaseEvidenceSnapshot ReplayJournal(MarketPurchaseEvidenceSnapshot baseline)
+    {
+        if (!File.Exists(journalPath))
+            return baseline;
+
+        var text = File.ReadAllText(journalPath, Utf8WithoutBom);
+        var hasTerminatedFinalRecord = text.EndsWith('\n');
+        var lines = text.Split('\n');
+        var current = baseline;
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index].TrimEnd('\r');
+            if (line.Length == 0)
+                continue;
+            if (index == lines.Length - 1 && !hasTerminatedFinalRecord)
+                break;
+
+            JournalEntry entry;
+            try
+            {
+                entry = JsonSerializer.Deserialize<JournalEntry>(line, JsonOptions)
+                    ?? throw new InvalidDataException("Purchase evidence journal entry is empty.");
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidDataException("Purchase evidence journal contains a corrupt committed entry.", exception);
+            }
+
+            if (entry.Version != CurrentJournalVersion)
+                throw new InvalidDataException($"Unsupported purchase evidence journal version {entry.Version}.");
+            if (entry.Revision <= current.Revision)
+                continue;
+            if (entry.Revision != current.Revision + 1)
+                throw new InvalidDataException(
+                    $"Purchase evidence journal skips revision {current.Revision + 1}.");
+            current = ApplyJournalEntry(current, entry);
+        }
+
+        return current;
+    }
+
+    private static JournalEntry ToJournalEntry(
+        MarketPurchaseEvidenceSnapshot previous,
+        MarketPurchaseEvidenceSnapshot next) => new()
+    {
+        Version = CurrentJournalVersion,
+        Revision = next.Revision,
+        State = next.State is null ? null : ToStateDocument(next.State),
+        ObservationCount = next.Observations.Count,
+        AppendedObservations = FindAppended(previous.Observations, next.Observations).ToList(),
+        HistoryCount = next.History.Count,
+        AppendedHistory = FindAppended(previous.History, next.History)
+            .Select(entry => new HistoryDocument
+            {
+                State = ToStateDocument(entry.TerminalState),
+                Disposition = entry.Disposition,
+                ResolvedAtUtc = entry.ResolvedAtUtc,
+                Resolution = entry.Resolution,
+            })
+            .ToList(),
+    };
+
+    private static MarketPurchaseEvidenceSnapshot ApplyJournalEntry(
+        MarketPurchaseEvidenceSnapshot current,
+        JournalEntry entry)
+    {
+        if (entry.ObservationCount < 0 ||
+            entry.ObservationCount > MarketPurchaseEvidenceCoordinator.MaxObservationHistory ||
+            entry.HistoryCount < 0 ||
+            entry.HistoryCount > MarketPurchaseEvidenceCoordinator.MaxResolvedAttemptHistory)
+            throw new InvalidDataException("Purchase evidence journal entry exceeds its bounded schema.");
+
+        var observations = current.Observations
+            .Concat(entry.AppendedObservations)
+            .TakeLast(entry.ObservationCount)
+            .ToList();
+        var history = current.History
+            .Concat(entry.AppendedHistory.Select(FromHistoryDocument))
+            .TakeLast(entry.HistoryCount)
+            .ToList();
+        if (observations.Count != entry.ObservationCount || history.Count != entry.HistoryCount)
+            throw new InvalidDataException("Purchase evidence journal entry cannot reconstruct its declared state.");
+
+        return FromDocument(new Document
+        {
+            Version = CurrentVersion,
+            Revision = entry.Revision,
+            State = entry.State,
+            Observations = observations,
+            History = history.Select(ToHistoryDocument).ToList(),
+        });
+    }
+
+    private static IReadOnlyList<T> FindAppended<T>(IReadOnlyList<T> previous, IReadOnlyList<T> next)
+    {
+        for (var overlap = Math.Min(previous.Count, next.Count); overlap >= 0; overlap--)
+        {
+            if (previous.Skip(previous.Count - overlap).SequenceEqual(next.Take(overlap)))
+                return next.Skip(overlap).ToArray();
+        }
+
+        throw new InvalidDataException("Purchase evidence history is not append-only.");
     }
 
     private static MarketPurchaseEvidenceSnapshot? LoadCandidate(string candidatePath)
@@ -76,18 +299,7 @@ public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceSta
             throw new InvalidDataException("Purchase evidence state exceeds its bounded schema.");
 
         var state = document.State is null ? null : FromStateDocument(document.State);
-        var history = document.History.Select(entry =>
-        {
-            if (string.IsNullOrWhiteSpace(entry.Resolution))
-                throw new InvalidDataException("Purchase evidence history has no resolution.");
-            var terminal = FromStateDocument(entry.State);
-            if (terminal is PendingMarketPurchase)
-                throw new InvalidDataException("Purchase evidence history contains a pending intent.");
-            if (!Enum.IsDefined(entry.Disposition) ||
-                entry.Disposition == MarketPurchaseTerminalDisposition.AppliedExactlyOnce && terminal is not ConfirmedMarketPurchase)
-                throw new InvalidDataException("Purchase evidence history has an invalid terminal disposition.");
-            return new MarketPurchaseEvidenceHistoryEntry(terminal, entry.Disposition, entry.ResolvedAtUtc, entry.Resolution);
-        }).ToArray();
+        var history = document.History.Select(FromHistoryDocument).ToArray();
         return new MarketPurchaseEvidenceSnapshot
         {
             Revision = document.Revision,
@@ -95,6 +307,32 @@ public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceSta
             Observations = document.Observations.ToArray(),
             History = history,
         };
+    }
+
+    private static HistoryDocument ToHistoryDocument(MarketPurchaseEvidenceHistoryEntry entry) => new()
+    {
+        State = ToStateDocument(entry.TerminalState),
+        Disposition = entry.Disposition,
+        ResolvedAtUtc = entry.ResolvedAtUtc,
+        Resolution = entry.Resolution,
+    };
+
+    private static MarketPurchaseEvidenceHistoryEntry FromHistoryDocument(HistoryDocument entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry.Resolution))
+            throw new InvalidDataException("Purchase evidence history has no resolution.");
+        var terminal = FromStateDocument(entry.State);
+        if (terminal is PendingMarketPurchase)
+            throw new InvalidDataException("Purchase evidence history contains a pending intent.");
+        if (!Enum.IsDefined(entry.Disposition) ||
+            entry.Disposition == MarketPurchaseTerminalDisposition.AppliedExactlyOnce &&
+            terminal is not ConfirmedMarketPurchase)
+            throw new InvalidDataException("Purchase evidence history has an invalid terminal disposition.");
+        return new MarketPurchaseEvidenceHistoryEntry(
+            terminal,
+            entry.Disposition,
+            entry.ResolvedAtUtc,
+            entry.Resolution);
     }
 
     private static StateDocument ToStateDocument(MarketPurchaseEvidenceState state) => new()
@@ -200,5 +438,16 @@ public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceSta
         public MarketPurchaseTerminalDisposition Disposition { get; init; }
         public DateTimeOffset ResolvedAtUtc { get; init; }
         public string Resolution { get; init; } = string.Empty;
+    }
+
+    private sealed record JournalEntry
+    {
+        public int Version { get; init; }
+        public long Revision { get; init; }
+        public StateDocument? State { get; init; }
+        public int ObservationCount { get; init; }
+        public List<MarketPurchasePacketObservation> AppendedObservations { get; init; } = [];
+        public int HistoryCount { get; init; }
+        public List<HistoryDocument> AppendedHistory { get; init; } = [];
     }
 }

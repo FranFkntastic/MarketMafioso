@@ -50,12 +50,12 @@ internal sealed class TradeQueuePanel
     {
         UtilityWorkspaceUi.DrawModuleHeader(
             "Trade Queue",
-            "Select quantities from current tradeable inventory, focus-target the recipient, and trade exact five-slot batches.");
+            "Select quantities from current tradeable inventory, target the recipient, and trade exact five-slot batches.");
 
         var inventory = io.ScanTradeableInventory();
         var rows = TradeQueueInventoryProjection.Build(inventory, config.TradeQueueItems);
         var snapshot = runner.Snapshot;
-        var hasPartner = io.TryGetFocusPartner(out var partner);
+        var hasPartner = io.TryGetSelectedPartner(out var partner);
         var selectedRows = rows.Count(row => row.SelectedQuantity > 0);
         var selectedItemUnits = rows
             .Where(row => row.Key.ItemId != TradeQueuePlanner.GilItemId)
@@ -66,6 +66,12 @@ internal sealed class TradeQueuePanel
         var selectedSummary = $"{selectedRows:N0} row(s); {selectedItemUnits:N0} items";
         if (selectedGil > 0)
             selectedSummary += $"; {selectedGil:N0} gil";
+        var displayedRecipient = snapshot.IsActive ||
+                                 snapshot.State is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped
+            ? snapshot.PartnerName
+            : hasPartner
+                ? partner.Name
+                : null;
         UtilityWorkspaceUi.DrawStatusStrip(
             "##tradeQueueStatus",
             [
@@ -75,11 +81,11 @@ internal sealed class TradeQueuePanel
                     selectedRows > 0 ? MainWindow.ColHeader : MainWindow.ColMuted),
                 new(
                     "Recipient",
-                    hasPartner ? partner.Name : "No focused player",
-                    hasPartner ? MainWindow.ColSuccess : MainWindow.ColWarning),
+                    displayedRecipient ?? "No selected player",
+                    displayedRecipient != null ? MainWindow.ColSuccess : MainWindow.ColWarning),
                 new(
-                    "Execution",
-                    snapshot.State.ToString(),
+                    "Progress",
+                    ProgressLabel(snapshot),
                     snapshot.State is TradeQueueExecutionState.Failed ? MainWindow.ColError :
                         snapshot.IsActive ? MainWindow.ColHeader : MainWindow.ColMuted),
             ]);
@@ -91,6 +97,7 @@ internal sealed class TradeQueuePanel
         DrawInventoryTable(rows);
         ImGui.Spacing();
         DrawExecutionControls(inventory);
+        DrawTimingControls();
     }
 
     private void DrawInventoryHeader()
@@ -137,13 +144,12 @@ internal sealed class TradeQueuePanel
         var flags = ImGuiUi.InteractiveTableFlags | ImGuiTableFlags.ScrollY;
         if (!ImGui.BeginTable(
                 "TradeQueueInventory",
-                3,
+                2,
                 flags,
                 new System.Numerics.Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed, 72);
         ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthFixed, 210);
         ImGui.TableHeadersRow();
 
@@ -159,8 +165,6 @@ internal sealed class TradeQueuePanel
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, rows.Count == 0 ? "No inventory rows." : "No matching inventory rows.");
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
         }
@@ -199,25 +203,17 @@ internal sealed class TradeQueuePanel
         ImGui.TableNextColumn();
         ImGui.TextColored(color, label);
         ImGui.TableNextColumn();
-        ImGui.TextUnformatted(string.Empty);
-        ImGui.TableNextColumn();
         ImGui.TextColored(MainWindow.ColMuted, $"{rowCount:N0} row(s)");
     }
 
     private void DrawInventoryRow(TradeQueueInventoryRow row)
     {
-        ImGui.PushID($"tradeQueueInventory{row.Key.ItemId}-{row.Key.IsHighQuality}");
+        ImGui.PushID($"tradeQueueInventory{row.Key.ItemId}");
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
         ImGui.TextColored(
             row.SelectedQuantity > 0 ? MainWindow.ColSuccess : ImGui.GetStyle().Colors[(int)ImGuiCol.Text],
             row.ItemName);
-
-        ImGui.TableNextColumn();
-        ImGui.TextUnformatted(
-            row.Key.ItemId == TradeQueuePlanner.GilItemId
-                ? "-"
-                : row.Key.IsHighQuality ? "HQ" : "NQ");
 
         ImGui.TableNextColumn();
         if (runner.IsActive)
@@ -245,9 +241,14 @@ internal sealed class TradeQueuePanel
         }
 
         var validation = TradeQueuePlanner.Validate(config.TradeQueueItems, inventory);
-        var hasPartner = io.TryGetFocusPartner(out var partner);
+        var hasPartner = io.TryGetSelectedPartner(out var partner);
+        var canResume = runner.CanResume;
         if (ImGuiUi.Button(
-                hasPartner ? $"Start Trading with {partner.Name}" : "Start Trading",
+                hasPartner
+                    ? canResume
+                        ? $"Resume Trading with {partner.Name}"
+                        : $"Start Trading with {partner.Name}"
+                    : "Start Trading",
                 validation.Success && hasPartner))
         {
             runner.Start();
@@ -256,7 +257,56 @@ internal sealed class TradeQueuePanel
         if (!validation.Success && validation.Code != TradeQueueValidationCode.Empty)
             ImGui.TextColored(MainWindow.ColWarning, validation.Message);
         else if (!hasPartner && HasItems)
-            ImGui.TextColored(MainWindow.ColMuted, "Focus-target the receiving player to begin.");
+            ImGui.TextColored(MainWindow.ColMuted, "Target or focus-target the receiving player to begin.");
+    }
+
+    private void DrawTimingControls()
+    {
+        if (!ImGui.CollapsingHeader("Trade timing##tradeQueueTiming"))
+            return;
+
+        var actionDelay = Math.Clamp(
+            config.TradeQueueTiming.ActionDelayMilliseconds,
+            TradeQueueTimingOptions.MinimumActionDelayMilliseconds,
+            TradeQueueTimingOptions.MaximumActionDelayMilliseconds);
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.SliderInt(
+                "Action delay (ms)##tradeQueueActionDelay",
+                ref actionDelay,
+                TradeQueueTimingOptions.MinimumActionDelayMilliseconds,
+                TradeQueueTimingOptions.MaximumActionDelayMilliseconds))
+        {
+            config.TradeQueueTiming.ActionDelayMilliseconds = actionDelay;
+            config.Save();
+        }
+
+        var tradeRetry = Math.Clamp(
+            config.TradeQueueTiming.TradeRetryMilliseconds,
+            TradeQueueTimingOptions.MinimumTradeRetryMilliseconds,
+            TradeQueueTimingOptions.MaximumTradeRetryMilliseconds);
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.SliderInt(
+                "Trade command retry (ms)##tradeQueueTradeRetry",
+                ref tradeRetry,
+                TradeQueueTimingOptions.MinimumTradeRetryMilliseconds,
+                TradeQueueTimingOptions.MaximumTradeRetryMilliseconds))
+        {
+            config.TradeQueueTiming.TradeRetryMilliseconds = tradeRetry;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            MainWindow.ColMuted,
+            "Action delay paces item and quantity inputs; command retry limits repeated /trade attempts.");
+
+        if (ImGui.Button("Reset timing defaults"))
+        {
+            config.TradeQueueTiming.ActionDelayMilliseconds =
+                TradeQueueTimingOptions.DefaultActionDelayMilliseconds;
+            config.TradeQueueTiming.TradeRetryMilliseconds =
+                TradeQueueTimingOptions.DefaultTradeRetryMilliseconds;
+            config.Save();
+        }
     }
 
     private void SetSelectedQuantity(TradeQueueInventoryRow row, int quantity)
@@ -264,7 +314,7 @@ internal sealed class TradeQueuePanel
         for (var index = config.TradeQueueItems.Count - 1; index >= 0; index--)
         {
             var item = config.TradeQueueItems[index];
-            if (item.ItemId == row.Key.ItemId && item.IsHighQuality == row.Key.IsHighQuality)
+            if (item.ItemId == row.Key.ItemId)
                 config.TradeQueueItems.RemoveAt(index);
         }
 
@@ -274,7 +324,6 @@ internal sealed class TradeQueuePanel
             {
                 ItemId = row.Key.ItemId,
                 ItemName = row.ItemName,
-                IsHighQuality = row.Key.IsHighQuality,
                 Quantity = quantity,
             });
         }
@@ -286,7 +335,6 @@ internal sealed class TradeQueuePanel
     {
         ItemId = item.ItemId,
         ItemName = item.ItemName,
-        IsHighQuality = item.IsHighQuality,
         Quantity = item.Quantity,
     };
 
@@ -297,4 +345,14 @@ internal sealed class TradeQueuePanel
         TradeQueueExecutionState.Stopped => MainWindow.ColWarning,
         _ => MainWindow.ColMuted,
     };
+
+    private static string ProgressLabel(TradeQueueExecutionSnapshot snapshot)
+    {
+        if (snapshot.State == TradeQueueExecutionState.Idle || snapshot.InitialUnitCount <= 0)
+            return "Not started";
+        if (snapshot.State == TradeQueueExecutionState.Completed)
+            return $"{snapshot.CompletedUnitCount:N0} units · {snapshot.CompletedBatchCount:N0} batch(es)";
+
+        return $"{snapshot.CompletedUnitCount:N0} / {snapshot.InitialUnitCount:N0} units · batch {snapshot.BatchNumber:N0}";
+    }
 }
