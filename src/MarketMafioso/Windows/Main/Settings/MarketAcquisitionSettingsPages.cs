@@ -32,8 +32,8 @@ internal sealed class MarketAcquisitionSettingsPages
             () => config.EnableMarketListingPurchases, value => config.EnableMarketListingPurchases = value);
         DrawCheckbox(
             context,
-            "Refresh listed items after closing retainers",
-            "After a complete retainer-session close, quietly refresh every distinct item currently listed by this character. Healthy refreshes stay in the background; deferred or blocked work remains visible in Status.",
+            "Refresh listed items when observed",
+            "When Quartermaster captures retainer listings, quietly refresh every distinct item currently listed by this character. Healthy refreshes stay in the background; deferred or blocked work remains visible in Status.",
             () => config.EnableRetainerListingRefresh,
             value => config.EnableRetainerListingRefresh = value);
         if (config.EnableRetainerListingRefresh &&

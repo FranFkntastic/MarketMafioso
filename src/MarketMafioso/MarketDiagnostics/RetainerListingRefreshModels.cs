@@ -6,6 +6,8 @@ namespace MarketMafioso;
 [Serializable]
 public sealed class PersistedRetainerListingRefreshState
 {
+    public string? LastObservedCaptureId { get; set; }
+    // Retained only so existing typed plugin configuration can deserialize and be normalized.
     public bool CapturePending { get; set; }
     public DateTime? SessionStartedAtUtc { get; set; }
     public DateTime? SessionClosedAtUtc { get; set; }

@@ -13,9 +13,7 @@ internal sealed record RetainerListingRefreshCandidate(uint ItemId, string? Item
 
 internal sealed record RetainerListingRefreshSnapshot(
     IReadOnlyList<RetainerListingRefreshCandidate> Items,
-    string ProviderInstanceId,
-    long Revision,
-    DateTimeOffset? ListingsObservedAtUtc);
+    string CaptureId);
 
 internal interface IRetainerListingRefreshSource
 {
@@ -49,32 +47,23 @@ internal sealed class QuartermasterRetainerListingRefreshSource(
             return false;
         }
 
-        var items = snapshot.Retainers
-            .SelectMany(retainer => retainer.Listings)
-            .Where(listing => listing.ItemId != 0)
-            .GroupBy(listing => listing.ItemId)
-            .Select(group => new RetainerListingRefreshCandidate(
-                group.Key,
-                group.Select(listing => listing.ItemName).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))))
-            .OrderBy(item => item.ItemId)
-            .ToArray();
-        var listingsObservedAtUtc = snapshot.Retainers
-            .Where(retainer => retainer.ObservedSources.Contains("RetainerMarket", StringComparer.Ordinal))
-            .Select(retainer => retainer.ListingsObservedAtUtc)
-            .Where(observedAt => observedAt.HasValue)
-            .Max();
+        if (snapshot.LatestRetainerListingCapture is not { } capture)
+        {
+            error = "Quartermaster has not published a retainer-listing capture yet.";
+            return false;
+        }
         result = new RetainerListingRefreshSnapshot(
-            items,
-            snapshot.ProviderInstanceId,
-            snapshot.Revision,
-            listingsObservedAtUtc);
+            capture.Items
+                .Select(item => new RetainerListingRefreshCandidate(item.ItemId, item.ItemName))
+                .ToArray(),
+            capture.CaptureId);
         return true;
     }
 }
 
 internal sealed class RetainerListingRefreshCoordinator
 {
-    private static readonly TimeSpan CloseStabilityDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan CaptureReadRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan TransientDeferral = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan RejectedRequestDeferral = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan AmbiguousRequestDeferral = TimeSpan.FromMinutes(2);
@@ -87,7 +76,8 @@ internal sealed class RetainerListingRefreshCoordinator
     private readonly Action<string> notifyAttention;
     private readonly Action<string> log;
     private readonly Func<TimeSpan> nextSuccessDelay;
-    private bool sessionWasActive;
+    private int captureReadRequested = 1;
+    private DateTimeOffset nextCaptureReadAt;
 
     public RetainerListingRefreshCoordinator(
         Configuration config,
@@ -116,39 +106,15 @@ internal sealed class RetainerListingRefreshCoordinator
 
     public void Tick(
         DateTimeOffset nowUtc,
-        bool retainerSessionActive,
         bool dispatchReady,
         string? dispatchDeferredReason = null)
     {
         if (!IsEnabled)
-        {
-            sessionWasActive = retainerSessionActive;
             return;
-        }
 
-        if (retainerSessionActive)
-        {
-            if (!sessionWasActive ||
-                config.RetainerListingRefresh.SessionStartedAtUtc is null)
-                CaptureSessionBaseline(nowUtc);
-            sessionWasActive = true;
-            return;
-        }
-
-        if (sessionWasActive)
-        {
-            sessionWasActive = false;
-            QueuePostCloseCapture(nowUtc);
-            return;
-        }
+        ObserveLatestCapture(nowUtc);
 
         var state = config.RetainerListingRefresh;
-        if (state.CapturePending &&
-            state.CaptureNotBeforeUtc is { } captureNotBefore &&
-            nowUtc >= captureNotBefore)
-        {
-            CapturePostCloseListings(nowUtc);
-        }
 
         if (ObserveActiveRequest(nowUtc))
             return;
@@ -183,79 +149,27 @@ internal sealed class RetainerListingRefreshCoordinator
         Dispatch(next, nowUtc);
     }
 
-    private void CaptureSessionBaseline(DateTimeOffset nowUtc)
+    public void NotifyListingCaptureChanged() =>
+        System.Threading.Interlocked.Exchange(ref captureReadRequested, 1);
+
+    private void ObserveLatestCapture(DateTimeOffset nowUtc)
     {
-        var state = config.RetainerListingRefresh;
-        state.SessionStartedAtUtc = nowUtc.UtcDateTime;
-        state.SessionClosedAtUtc = null;
-        state.SessionSnapshotProviderInstanceId = null;
-        state.SessionSnapshotRevision = null;
-        state.SessionListingsObservedAtUtc = null;
-        state.SessionListings.Clear();
+        if (System.Threading.Volatile.Read(ref captureReadRequested) == 0 && nowUtc < nextCaptureReadAt)
+            return;
+
+        System.Threading.Interlocked.Exchange(ref captureReadRequested, 0);
+        nextCaptureReadAt = DateTimeOffset.MaxValue;
         if (!source.TryRead(out var snapshot, out _))
         {
-            persist();
+            nextCaptureReadAt = nowUtc + CaptureReadRetryDelay;
             return;
         }
 
-        state.SessionSnapshotProviderInstanceId = snapshot!.ProviderInstanceId;
-        state.SessionSnapshotRevision = snapshot.Revision;
-        state.SessionListingsObservedAtUtc = snapshot.ListingsObservedAtUtc?.UtcDateTime;
-        state.SessionListings = snapshot.Items
-            .Select(item => new PersistedRetainerListingRefreshCandidate
-            {
-                ItemId = item.ItemId,
-                ItemName = item.ItemName,
-            })
-            .ToList();
-        persist();
-    }
-
-    private void QueuePostCloseCapture(DateTimeOffset nowUtc)
-    {
         var state = config.RetainerListingRefresh;
-        state.CapturePending = true;
-        state.SessionClosedAtUtc = nowUtc.UtcDateTime;
-        state.CaptureNotBeforeUtc = nowUtc.UtcDateTime + CloseStabilityDelay;
-        state.CaptureAttempts = 0;
-        state.NeedsAttention = state.Items.Any(item => item.State == RetainerListingRefreshItemState.Blocked);
-        state.AttentionNotified = false;
-        UpdateStatus(
-            "VerifyingListings",
-            "Retainer session closed; verifying the owner-scoped listing set before background refresh.",
-            persistState: true);
-    }
-
-    private void CapturePostCloseListings(DateTimeOffset nowUtc)
-    {
-        var state = config.RetainerListingRefresh;
-        if (!source.TryRead(out var snapshot, out var error) ||
-            !HasFreshListingEvidence(state, snapshot, out error))
-        {
-            state.CaptureAttempts++;
-            state.CaptureNotBeforeUtc = nowUtc.UtcDateTime + CaptureRetryDelay(state.CaptureAttempts);
-            if (state.CaptureAttempts >= 3)
-            {
-                state.NeedsAttention = true;
-                if (!state.AttentionNotified)
-                {
-                    state.AttentionNotified = true;
-                    notifyAttention(
-                        "Retainer listing refresh is still waiting for an owner-scoped Quartermaster snapshot. " +
-                        "No market request has been sent; MMF will keep recovering in the background.");
-                }
-            }
-
-            UpdateStatus(
-                "SnapshotDeferred",
-                $"Could not verify the retainer listing set. {error} MMF will retry without sending a market request.",
-                persistState: true);
+        if (string.Equals(state.LastObservedCaptureId, snapshot!.CaptureId, StringComparison.Ordinal))
             return;
-        }
 
-        var candidates = state.SessionListings
-            .Select(item => new RetainerListingRefreshCandidate(item.ItemId, item.ItemName))
-            .Concat(snapshot!.Items)
+        var candidates = snapshot.Items
             .Where(item => item.ItemId != 0)
             .GroupBy(item => item.ItemId)
             .Select(group => new RetainerListingRefreshCandidate(
@@ -263,6 +177,10 @@ internal sealed class RetainerListingRefreshCoordinator
                 group.Select(item => item.ItemName).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))))
             .OrderBy(item => item.ItemId)
             .ToArray();
+        var candidateIds = candidates.Select(candidate => candidate.ItemId).ToHashSet();
+        state.Items.RemoveAll(item =>
+            item.State != RetainerListingRefreshItemState.AwaitingEvidence &&
+            !candidateIds.Contains(item.ItemId));
 
         foreach (var candidate in candidates)
         {
@@ -280,70 +198,20 @@ internal sealed class RetainerListingRefreshCoordinator
                 ItemName = candidate.ItemName,
                 State = RetainerListingRefreshItemState.Deferred,
                 NextAttemptAtUtc = nowUtc.UtcDateTime,
-                LastCode = "QueuedAfterRetainerClose",
-                LastMessage = "Queued from the owner-scoped retainer listing snapshot.",
+                LastCode = "QueuedFromListingCapture",
+                LastMessage = "Queued from Quartermaster's explicit retainer-listing capture.",
             });
         }
 
-        state.CapturePending = false;
-        state.CaptureNotBeforeUtc = null;
-        state.CaptureAttempts = 0;
-        state.SessionStartedAtUtc = null;
-        state.SessionClosedAtUtc = null;
-        state.SessionSnapshotProviderInstanceId = null;
-        state.SessionSnapshotRevision = null;
-        state.SessionListingsObservedAtUtc = null;
-        state.SessionListings.Clear();
+        state.LastObservedCaptureId = snapshot.CaptureId;
         state.NeedsAttention = state.Items.Any(item => item.State == RetainerListingRefreshItemState.Blocked);
         state.AttentionNotified = false;
         UpdateStatus(
             candidates.Length == 0 ? "Idle" : "Queued",
             candidates.Length == 0
-                ? "The closed retainer session had no listed items to refresh."
-                : $"Queued {candidates.Length} distinct listed item(s) for serialized background refresh.",
+                ? "No listed items need a background refresh."
+                : $"Queued {candidates.Length} distinct listed item(s) for background refresh.",
             persistState: true);
-    }
-
-    private static bool HasFreshListingEvidence(
-        PersistedRetainerListingRefreshState state,
-        RetainerListingRefreshSnapshot? snapshot,
-        out string error)
-    {
-        if (snapshot is null)
-        {
-            error = "Quartermaster did not return a listing snapshot.";
-            return false;
-        }
-
-        if (snapshot.ListingsObservedAtUtc is not { } listingsObservedAtUtc)
-        {
-            error = "Quartermaster has not observed the RetainerMarket source for this session.";
-            return false;
-        }
-
-        var baselineObservedAtUtc = state.SessionListingsObservedAtUtc ??
-                                    state.SessionStartedAtUtc ??
-                                    state.SessionClosedAtUtc;
-        if (baselineObservedAtUtc is { } baseline &&
-            listingsObservedAtUtc.UtcDateTime <= baseline)
-        {
-            error = "Quartermaster's retainer-listing evidence has not advanced past the session baseline.";
-            return false;
-        }
-
-        if (state.SessionSnapshotRevision is { } baselineRevision &&
-            string.Equals(
-                state.SessionSnapshotProviderInstanceId,
-                snapshot.ProviderInstanceId,
-                StringComparison.Ordinal) &&
-            snapshot.Revision <= baselineRevision)
-        {
-            error = "Quartermaster's snapshot revision has not advanced past the session baseline.";
-            return false;
-        }
-
-        error = string.Empty;
-        return true;
     }
 
     private bool ObserveActiveRequest(DateTimeOffset nowUtc)
@@ -577,6 +445,22 @@ internal sealed class RetainerListingRefreshCoordinator
         var state = config.RetainerListingRefresh;
         state.Items ??= [];
         state.SessionListings ??= [];
+        state.CapturePending = false;
+        state.SessionStartedAtUtc = null;
+        state.SessionClosedAtUtc = null;
+        state.CaptureNotBeforeUtc = null;
+        state.CaptureAttempts = 0;
+        state.SessionSnapshotProviderInstanceId = null;
+        state.SessionSnapshotRevision = null;
+        state.SessionListingsObservedAtUtc = null;
+        state.SessionListings.Clear();
+        if (state.StatusCode is "SnapshotDeferred" or "VerifyingListings")
+        {
+            state.StatusCode = "Idle";
+            state.StatusMessage = "No retainer listing refresh is pending.";
+            state.NeedsAttention = state.Items.Any(item => item.State == RetainerListingRefreshItemState.Blocked);
+            state.AttentionNotified = false;
+        }
         foreach (var item in state.Items)
         {
             if (item.State == RetainerListingRefreshItemState.AwaitingEvidence)
@@ -609,14 +493,6 @@ internal sealed class RetainerListingRefreshCoordinator
         if (persistState)
             persist();
     }
-
-    private static TimeSpan CaptureRetryDelay(int attempts) => attempts switch
-    {
-        <= 1 => TimeSpan.FromSeconds(5),
-        2 => TimeSpan.FromSeconds(15),
-        3 => TimeSpan.FromMinutes(1),
-        _ => TimeSpan.FromMinutes(5),
-    };
 
     private static string FormatItem(PersistedRetainerListingRefreshItem item) =>
         string.IsNullOrWhiteSpace(item.ItemName)

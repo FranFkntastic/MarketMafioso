@@ -774,11 +774,37 @@ public sealed class QuartermasterIpcClient : IDisposable
                 warning = $"Optional Stowage Plans data was ignored: {stowageError}";
         }
 
+        QuartermasterRetainerListingCapture? latestListingCapture = null;
+        if (wire.LatestRetainerListingCapture is { } captureWire)
+        {
+            if (string.IsNullOrWhiteSpace(captureWire.CaptureId) ||
+                captureWire.RetainerId == 0 ||
+                !TryParseTimestamp(captureWire.CapturedAtUtc, out var capturedAtUtc))
+            {
+                error = "Quartermaster snapshot contained an invalid retainer-listing capture receipt.";
+                return false;
+            }
+            var captureItems = (captureWire.Items ?? [])
+                .Where(item => item.ItemId != 0)
+                .GroupBy(item => item.ItemId)
+                .Select(group => new QuartermasterRetainerListingCaptureItem(
+                    group.Key,
+                    group.Select(item => item.ItemName).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))))
+                .OrderBy(item => item.ItemId)
+                .ToImmutableArray();
+            latestListingCapture = new(
+                captureWire.CaptureId,
+                captureWire.RetainerId,
+                capturedAtUtc,
+                captureItems);
+        }
+
         snapshot = new(wire.ProviderInstanceId, wire.Revision, generatedAt, owner, retainers.ToImmutable())
         {
             PlayerRequestedSources = NormalizeSources(wire.PlayerStorage?.RequestedSources),
             PlayerObservedSources = NormalizeSources(wire.PlayerStorage?.ObservedSources),
             StowagePlans = stowagePlans,
+            LatestRetainerListingCapture = latestListingCapture,
         };
         return true;
     }
@@ -1056,7 +1082,7 @@ public sealed class QuartermasterIpcClient : IDisposable
             return false;
         }
 
-        changed = new(wire.ProviderInstanceId, wire.Revision, wire.OperationId);
+        changed = new(wire.ProviderInstanceId, wire.Revision, wire.Kind, wire.OperationId);
         return true;
     }
 
