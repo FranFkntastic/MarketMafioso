@@ -138,13 +138,12 @@ internal sealed class TradeQueuePanel
         var flags = ImGuiUi.InteractiveTableFlags | ImGuiTableFlags.ScrollY;
         if (!ImGui.BeginTable(
                 "TradeQueueInventory",
-                3,
+                2,
                 flags,
                 new System.Numerics.Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed, 72);
         ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthFixed, 210);
         ImGui.TableHeadersRow();
 
@@ -160,8 +159,6 @@ internal sealed class TradeQueuePanel
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, rows.Count == 0 ? "No inventory rows." : "No matching inventory rows.");
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
         }
@@ -200,25 +197,17 @@ internal sealed class TradeQueuePanel
         ImGui.TableNextColumn();
         ImGui.TextColored(color, label);
         ImGui.TableNextColumn();
-        ImGui.TextUnformatted(string.Empty);
-        ImGui.TableNextColumn();
         ImGui.TextColored(MainWindow.ColMuted, $"{rowCount:N0} row(s)");
     }
 
     private void DrawInventoryRow(TradeQueueInventoryRow row)
     {
-        ImGui.PushID($"tradeQueueInventory{row.Key.ItemId}-{row.Key.IsHighQuality}");
+        ImGui.PushID($"tradeQueueInventory{row.Key.ItemId}");
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
         ImGui.TextColored(
             row.SelectedQuantity > 0 ? MainWindow.ColSuccess : ImGui.GetStyle().Colors[(int)ImGuiCol.Text],
             row.ItemName);
-
-        ImGui.TableNextColumn();
-        ImGui.TextUnformatted(
-            row.Key.ItemId == TradeQueuePlanner.GilItemId
-                ? "-"
-                : row.Key.IsHighQuality ? "HQ" : "NQ");
 
         ImGui.TableNextColumn();
         if (runner.IsActive)
@@ -314,7 +303,7 @@ internal sealed class TradeQueuePanel
         for (var index = config.TradeQueueItems.Count - 1; index >= 0; index--)
         {
             var item = config.TradeQueueItems[index];
-            if (item.ItemId == row.Key.ItemId && item.IsHighQuality == row.Key.IsHighQuality)
+            if (item.ItemId == row.Key.ItemId)
                 config.TradeQueueItems.RemoveAt(index);
         }
 
@@ -324,7 +313,6 @@ internal sealed class TradeQueuePanel
             {
                 ItemId = row.Key.ItemId,
                 ItemName = row.ItemName,
-                IsHighQuality = row.Key.IsHighQuality,
                 Quantity = quantity,
             });
         }
@@ -336,7 +324,6 @@ internal sealed class TradeQueuePanel
     {
         ItemId = item.ItemId,
         ItemName = item.ItemName,
-        IsHighQuality = item.IsHighQuality,
         Quantity = item.Quantity,
     };
 

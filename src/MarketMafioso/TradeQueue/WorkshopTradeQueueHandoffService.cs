@@ -21,7 +21,6 @@ public static class WorkshopTradeQueueHandoffService
             {
                 ItemId = material.ItemId,
                 ItemName = material.ItemName,
-                IsHighQuality = false,
                 Quantity = Math.Min(material.Required, material.PlayerInventory),
             })
             .Where(item => item.Quantity > 0)
