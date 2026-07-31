@@ -14,10 +14,9 @@ public sealed class TradeQueueRunner : IDisposable
     private static readonly TimeSpan OfferItemsTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PartnerTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan OpenRetryDelay = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan ActionDelay = TimeSpan.FromMilliseconds(250);
 
     private readonly IList<TradeQueueItem> queue;
+    private readonly TradeQueueTimingOptions timing;
     private readonly Action save;
     private readonly ITradeQueueIo io;
     private readonly IItemQualityLoweringAutomation qualityLowering;
@@ -40,17 +39,19 @@ public sealed class TradeQueueRunner : IDisposable
 
     public TradeQueueRunner(
         IList<TradeQueueItem> queue,
+        TradeQueueTimingOptions timing,
         Action save,
         ITradeQueueIo io,
         IItemQualityLoweringAutomation qualityLowering,
         ExternalAutomationCoordinator externalAutomation,
         IPluginLog log)
-        : this(queue, save, io, qualityLowering, externalAutomation, log, () => DateTimeOffset.UtcNow)
+        : this(queue, timing, save, io, qualityLowering, externalAutomation, log, () => DateTimeOffset.UtcNow)
     {
     }
 
     internal TradeQueueRunner(
         IList<TradeQueueItem> queue,
+        TradeQueueTimingOptions timing,
         Action save,
         ITradeQueueIo io,
         IItemQualityLoweringAutomation qualityLowering,
@@ -59,6 +60,7 @@ public sealed class TradeQueueRunner : IDisposable
         Func<DateTimeOffset> clock)
     {
         this.queue = queue;
+        this.timing = timing;
         this.save = save;
         this.io = io;
         this.qualityLowering = qualityLowering;
@@ -76,8 +78,8 @@ public sealed class TradeQueueRunner : IDisposable
     {
         if (IsActive)
             return new(false, "Trade queue is already running.");
-        if (!io.TryGetFocusPartner(out var selectedPartner))
-            return new(false, "Focus-target the player who should receive this queue.");
+        if (!io.TryGetSelectedPartner(out var selectedPartner))
+            return new(false, "Select or focus-target the player who should receive this queue.");
 
         var inventory = io.ScanTradeableInventory();
         var validation = TradeQueuePlanner.Validate(queue.ToList(), inventory);
@@ -170,9 +172,9 @@ public sealed class TradeQueueRunner : IDisposable
 
     private void TickOpeningTrade(DateTimeOffset now)
     {
-        if (partner == null || !io.FocusPartnerMatches(partner))
+        if (partner == null || !io.PartnerIsAvailable(partner))
         {
-            Fail("The focused trade partner changed. Queue execution stopped before opening another trade.");
+            Fail("The selected trade partner is no longer available. Queue execution stopped before opening another trade.");
             return;
         }
 
@@ -185,6 +187,7 @@ public sealed class TradeQueueRunner : IDisposable
             gilSubmitted = false;
             readyClicked = false;
             confirmationSubmitted = false;
+            nextActionAt = now + timing.ActionDelay;
             SetActive(
                 TradeQueueExecutionState.OfferingItems,
                 $"Trade opened with {partner.Name}; offering batch {batchNumber:N0}.",
@@ -195,15 +198,15 @@ public sealed class TradeQueueRunner : IDisposable
         if (now < nextActionAt)
             return;
 
-        io.TryOpenTrade(partner);
-        nextActionAt = now + OpenRetryDelay;
+        var commandSent = io.TryOpenTrade(partner);
+        nextActionAt = now + (commandSent ? timing.TradeRetryDelay : timing.ActionDelay);
     }
 
     private void TickNormalizingQuality()
     {
-        if (partner == null || !io.FocusPartnerMatches(partner))
+        if (partner == null || !io.PartnerIsAvailable(partner))
         {
-            Fail("The focused trade partner changed before inventory quality normalization completed.");
+            Fail("The selected trade partner is no longer available before inventory quality normalization completed.");
             return;
         }
 
@@ -211,7 +214,7 @@ public sealed class TradeQueueRunner : IDisposable
             () => IsActive &&
                   Snapshot.State == TradeQueueExecutionState.NormalizingQuality &&
                   partner != null &&
-                  io.FocusPartnerMatches(partner));
+                  io.PartnerIsAvailable(partner));
         if (result.State == ItemQualityLoweringAutomationState.Failed)
         {
             Fail(result.Message);
@@ -254,7 +257,7 @@ public sealed class TradeQueueRunner : IDisposable
                 }
 
                 gilInputRequested = true;
-                nextActionAt = now + ActionDelay;
+                nextActionAt = now + timing.ActionDelay;
                 return;
             }
 
@@ -268,7 +271,7 @@ public sealed class TradeQueueRunner : IDisposable
             }
 
             gilSubmitted = true;
-            nextActionAt = now + ActionDelay;
+            nextActionAt = now + timing.ActionDelay;
             return;
         }
 
@@ -292,7 +295,6 @@ public sealed class TradeQueueRunner : IDisposable
                 offeredLineIndex++;
                 waitingForOfferedSlot = false;
                 quantitySubmitted = false;
-                nextActionAt = now + ActionDelay;
                 return;
             }
 
@@ -306,6 +308,7 @@ public sealed class TradeQueueRunner : IDisposable
                     return;
                 }
                 quantitySubmitted = true;
+                nextActionAt = now + timing.ActionDelay;
             }
             return;
         }
@@ -323,7 +326,7 @@ public sealed class TradeQueueRunner : IDisposable
 
         waitingForOfferedSlot = true;
         quantitySubmitted = line.SourceStackQuantity <= 1;
-        nextActionAt = now + ActionDelay;
+        nextActionAt = now + timing.ActionDelay;
     }
 
     private void TickWaitingForPartner(DateTimeOffset now)
@@ -408,7 +411,7 @@ public sealed class TradeQueueRunner : IDisposable
         }
 
         batchNumber++;
-        nextActionAt = now + TimeSpan.FromSeconds(1);
+        nextActionAt = now + timing.ActionDelay;
         if (!PrepareBatch(inventory, $"{diagnostic} Preparing batch {batchNumber:N0}."))
             return;
     }

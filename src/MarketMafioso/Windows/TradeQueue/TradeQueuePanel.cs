@@ -50,12 +50,12 @@ internal sealed class TradeQueuePanel
     {
         UtilityWorkspaceUi.DrawModuleHeader(
             "Trade Queue",
-            "Select quantities from current tradeable inventory, focus-target the recipient, and trade exact five-slot batches.");
+            "Select quantities from current tradeable inventory, target the recipient, and trade exact five-slot batches.");
 
         var inventory = io.ScanTradeableInventory();
         var rows = TradeQueueInventoryProjection.Build(inventory, config.TradeQueueItems);
         var snapshot = runner.Snapshot;
-        var hasPartner = io.TryGetFocusPartner(out var partner);
+        var hasPartner = io.TryGetSelectedPartner(out var partner);
         var selectedRows = rows.Count(row => row.SelectedQuantity > 0);
         var selectedItemUnits = rows
             .Where(row => row.Key.ItemId != TradeQueuePlanner.GilItemId)
@@ -75,7 +75,7 @@ internal sealed class TradeQueuePanel
                     selectedRows > 0 ? MainWindow.ColHeader : MainWindow.ColMuted),
                 new(
                     "Recipient",
-                    hasPartner ? partner.Name : "No focused player",
+                    hasPartner ? partner.Name : "No selected player",
                     hasPartner ? MainWindow.ColSuccess : MainWindow.ColWarning),
                 new(
                     "Execution",
@@ -91,6 +91,7 @@ internal sealed class TradeQueuePanel
         DrawInventoryTable(rows);
         ImGui.Spacing();
         DrawExecutionControls(inventory);
+        DrawTimingControls();
     }
 
     private void DrawInventoryHeader()
@@ -234,7 +235,7 @@ internal sealed class TradeQueuePanel
         }
 
         var validation = TradeQueuePlanner.Validate(config.TradeQueueItems, inventory);
-        var hasPartner = io.TryGetFocusPartner(out var partner);
+        var hasPartner = io.TryGetSelectedPartner(out var partner);
         if (ImGuiUi.Button(
                 hasPartner ? $"Start Trading with {partner.Name}" : "Start Trading",
                 validation.Success && hasPartner))
@@ -245,7 +246,56 @@ internal sealed class TradeQueuePanel
         if (!validation.Success && validation.Code != TradeQueueValidationCode.Empty)
             ImGui.TextColored(MainWindow.ColWarning, validation.Message);
         else if (!hasPartner && HasItems)
-            ImGui.TextColored(MainWindow.ColMuted, "Focus-target the receiving player to begin.");
+            ImGui.TextColored(MainWindow.ColMuted, "Target or focus-target the receiving player to begin.");
+    }
+
+    private void DrawTimingControls()
+    {
+        if (!ImGui.CollapsingHeader("Trade timing##tradeQueueTiming"))
+            return;
+
+        var actionDelay = Math.Clamp(
+            config.TradeQueueTiming.ActionDelayMilliseconds,
+            TradeQueueTimingOptions.MinimumActionDelayMilliseconds,
+            TradeQueueTimingOptions.MaximumActionDelayMilliseconds);
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.SliderInt(
+                "Action delay (ms)##tradeQueueActionDelay",
+                ref actionDelay,
+                TradeQueueTimingOptions.MinimumActionDelayMilliseconds,
+                TradeQueueTimingOptions.MaximumActionDelayMilliseconds))
+        {
+            config.TradeQueueTiming.ActionDelayMilliseconds = actionDelay;
+            config.Save();
+        }
+
+        var tradeRetry = Math.Clamp(
+            config.TradeQueueTiming.TradeRetryMilliseconds,
+            TradeQueueTimingOptions.MinimumTradeRetryMilliseconds,
+            TradeQueueTimingOptions.MaximumTradeRetryMilliseconds);
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.SliderInt(
+                "Trade command retry (ms)##tradeQueueTradeRetry",
+                ref tradeRetry,
+                TradeQueueTimingOptions.MinimumTradeRetryMilliseconds,
+                TradeQueueTimingOptions.MaximumTradeRetryMilliseconds))
+        {
+            config.TradeQueueTiming.TradeRetryMilliseconds = tradeRetry;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            MainWindow.ColMuted,
+            "Action delay paces item and quantity inputs; command retry limits repeated /trade attempts.");
+
+        if (ImGui.Button("Reset timing defaults"))
+        {
+            config.TradeQueueTiming.ActionDelayMilliseconds =
+                TradeQueueTimingOptions.DefaultActionDelayMilliseconds;
+            config.TradeQueueTiming.TradeRetryMilliseconds =
+                TradeQueueTimingOptions.DefaultTradeRetryMilliseconds;
+            config.Save();
+        }
     }
 
     private void SetSelectedQuantity(TradeQueueInventoryRow row, int quantity)

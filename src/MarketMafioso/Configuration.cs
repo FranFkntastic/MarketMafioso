@@ -12,6 +12,8 @@ namespace MarketMafioso;
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
+    private TradeQueueTimingOptions? tradeQueueTiming = new();
+
     public int Version { get; set; } = 1;
 
     public string ServerUrl { get; set; } = "http://localhost:8080/inventory";
@@ -85,6 +87,11 @@ public class Configuration : IPluginConfiguration
 
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
     public List<TradeQueueItem> TradeQueueItems { get; set; } = new();
+    public TradeQueueTimingOptions TradeQueueTiming
+    {
+        get => tradeQueueTiming ??= new();
+        set => tradeQueueTiming = value ?? new();
+    }
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
     public bool SplitWorkshopQueueAndMaterials { get; set; }
     [JsonProperty("RetainerRestockPlanItems")]
