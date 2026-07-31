@@ -35,6 +35,40 @@ public sealed class UniversalisMarketAcquisitionPlanSourceTests
         });
     }
 
+    [Fact]
+    public async Task FetchListingsAsync_RejectsAListingWithoutAnExplicitHqFlag()
+    {
+        var source = new UniversalisMarketAcquisitionPlanSource(
+            new HttpClient(new StaticJsonHandler(
+                """{"itemIDs":[1],"items":{"1":{"itemID":1,"listings":[{"listingID":"listing-1","worldName":"Gilgamesh","worldID":63,"retainerName":"Retainer","retainerID":"retainer-1","quantity":10,"pricePerUnit":123,"lastReviewTime":1700000000}]}}}""")),
+            new Uri("https://example.test/api/v2/"));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => source.FetchListingsAsync(
+            "Aether",
+            [1],
+            listingLimit: 100,
+            CancellationToken.None));
+
+        Assert.Contains("HQ flag", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FetchListingsAsync_RejectsAnItemWithoutAListingsArray()
+    {
+        var source = new UniversalisMarketAcquisitionPlanSource(
+            new HttpClient(new StaticJsonHandler(
+                """{"itemIDs":[1],"items":{"1":{"itemID":1}}}""")),
+            new Uri("https://example.test/api/v2/"));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => source.FetchListingsAsync(
+            "Aether",
+            [1],
+            listingLimit: 100,
+            CancellationToken.None));
+
+        Assert.Contains("listings array", exception.Message, StringComparison.Ordinal);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<Uri> Requests { get; } = [];
@@ -77,5 +111,16 @@ public sealed class UniversalisMarketAcquisitionPlanSourceTests
                 Content = new StringContent(json, Encoding.UTF8, "application/json"),
             });
         }
+    }
+
+    private sealed class StaticJsonHandler(string json) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            });
     }
 }

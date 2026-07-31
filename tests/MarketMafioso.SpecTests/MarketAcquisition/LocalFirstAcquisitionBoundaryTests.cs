@@ -171,18 +171,12 @@ public sealed class LocalFirstAcquisitionBoundaryTests
             },
         ];
 
-        public Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsAsync(
-            string region,
-            uint itemId,
+        public Task<IReadOnlyDictionary<uint, IReadOnlyList<MarketAcquisitionListing>>> FetchListingsAsync(
+            string worldDataCenterOrRegion,
+            IReadOnlyCollection<uint> itemIds,
             int listingLimit,
             CancellationToken cancellationToken) =>
-            Task.FromResult(Listings);
-
-        public Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsForWorldAsync(
-            string worldName,
-            uint itemId,
-            int listingLimit,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(Listings);
+            Task.FromResult<IReadOnlyDictionary<uint, IReadOnlyList<MarketAcquisitionListing>>>(
+                itemIds.ToDictionary(itemId => itemId, _ => Listings));
     }
 }

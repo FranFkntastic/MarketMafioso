@@ -56,9 +56,16 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
 
         return result.Items.ToDictionary(
             pair => pair.Key,
-            pair => (IReadOnlyList<MarketAcquisitionListing>)pair.Value.Listings
-                .Select(listing => MapListing(pair.Key, listing))
-                .ToArray());
+            pair => MapListings(pair.Key, pair.Value));
+    }
+
+    private static IReadOnlyList<MarketAcquisitionListing> MapListings(
+        uint itemId,
+        UniversalisItemResponse item)
+    {
+        if (item.Listings is null)
+            throw new InvalidOperationException($"Universalis response for item {itemId} had no listings array.");
+        return item.Listings.Select(listing => MapListing(itemId, listing)).ToArray();
     }
 
     private static MarketAcquisitionListing MapListing(uint itemId, UniversalisListingResponse listing)
@@ -71,26 +78,36 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
             throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no retainer name.");
         if (string.IsNullOrWhiteSpace(listing.RetainerId))
             throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no retainer ID.");
+        if (listing.WorldId is null)
+            throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no world ID.");
+        if (listing.Quantity is null)
+            throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no quantity.");
+        if (listing.UnitPrice is null)
+            throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no unit price.");
+        if (listing.IsHq is null)
+            throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no explicit HQ flag.");
+        if (listing.LastReviewTime is null)
+            throw new InvalidOperationException($"Universalis listing {listing.ListingId} had no review time.");
 
         return new MarketAcquisitionListing
         {
             ItemId = itemId,
             ListingId = listing.ListingId,
             WorldName = listing.WorldName,
-            WorldId = listing.WorldId,
+            WorldId = listing.WorldId.Value,
             RetainerName = listing.RetainerName,
             RetainerId = listing.RetainerId,
-            Quantity = listing.Quantity,
-            UnitPrice = listing.UnitPrice,
-            IsHq = listing.IsHq,
-            LastReviewTimeUtc = DateTimeOffset.FromUnixTimeSeconds(listing.LastReviewTime),
+            Quantity = listing.Quantity.Value,
+            UnitPrice = listing.UnitPrice.Value,
+            IsHq = listing.IsHq.Value,
+            LastReviewTimeUtc = DateTimeOffset.FromUnixTimeSeconds(listing.LastReviewTime.Value),
         };
     }
 
     private sealed record UniversalisItemResponse
     {
         [JsonPropertyName("listings")]
-        public IReadOnlyList<UniversalisListingResponse> Listings { get; init; } = [];
+        public IReadOnlyList<UniversalisListingResponse>? Listings { get; init; }
     }
 
     private sealed record UniversalisListingResponse
@@ -102,7 +119,7 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
         public string WorldName { get; init; } = string.Empty;
 
         [JsonPropertyName("worldID")]
-        public uint WorldId { get; init; }
+        public uint? WorldId { get; init; }
 
         [JsonPropertyName("retainerName")]
         public string RetainerName { get; init; } = string.Empty;
@@ -111,16 +128,16 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
         public string RetainerId { get; init; } = string.Empty;
 
         [JsonPropertyName("quantity")]
-        public uint Quantity { get; init; }
+        public uint? Quantity { get; init; }
 
         [JsonPropertyName("pricePerUnit")]
-        public uint UnitPrice { get; init; }
+        public uint? UnitPrice { get; init; }
 
         [JsonPropertyName("hq")]
-        public bool IsHq { get; init; }
+        public bool? IsHq { get; init; }
 
         [JsonPropertyName("lastReviewTime")]
-        public long LastReviewTime { get; init; }
+        public long? LastReviewTime { get; init; }
     }
 }
 
