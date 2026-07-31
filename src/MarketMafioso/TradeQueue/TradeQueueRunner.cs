@@ -10,10 +10,10 @@ namespace MarketMafioso.TradeQueue;
 public sealed class TradeQueueRunner : IDisposable
 {
     private static readonly TimeSpan OpenTradeTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan QualityLoweringTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan OfferItemsTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PartnerTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan InventoryEvidenceSettleDelay = TimeSpan.FromSeconds(1);
 
     private readonly IList<TradeQueueItem> queue;
     private readonly TradeQueueTimingOptions timing;
@@ -28,6 +28,7 @@ public sealed class TradeQueueRunner : IDisposable
     private TradeQueueBatch? batch;
     private DateTimeOffset deadline;
     private DateTimeOffset nextActionAt;
+    private DateTimeOffset verificationStartedAt;
     private int offeredLineIndex;
     private bool waitingForOfferedSlot;
     private bool quantitySubmitted;
@@ -36,6 +37,10 @@ public sealed class TradeQueueRunner : IDisposable
     private bool readyClicked;
     private bool confirmationSubmitted;
     private int batchNumber;
+    private int initialUnitCount;
+    private int completedUnitCount;
+    private int completedBatchCount;
+    private string checkpointQueueSignature = string.Empty;
 
     public TradeQueueRunner(
         IList<TradeQueueItem> queue,
@@ -70,9 +75,27 @@ public sealed class TradeQueueRunner : IDisposable
     }
 
     public TradeQueueExecutionSnapshot Snapshot { get; private set; } =
-        new(TradeQueueExecutionState.Idle, "Trade queue is idle.", null, 0, 0, 0, 0, false);
+        new(TradeQueueExecutionState.Idle, "Trade queue is idle.", null, 0, 0, 0, 0, 0, 0, 0, false);
 
     public bool IsActive => Snapshot.IsActive;
+
+    public bool CanResume
+    {
+        get
+        {
+            if (Snapshot.State is not (TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped) ||
+                queue.Count == 0 ||
+                checkpointQueueSignature != ComputeQueueSignature(queue) ||
+                partner == null ||
+                !io.TryGetSelectedPartner(out var selectedPartner))
+            {
+                return false;
+            }
+
+            return selectedPartner.GameObjectId == partner.GameObjectId &&
+                   selectedPartner.HomeWorldId == partner.HomeWorldId;
+        }
+    }
 
     public TradeQueueStartResult Start()
     {
@@ -86,8 +109,20 @@ public sealed class TradeQueueRunner : IDisposable
         if (!validation.Success)
             return new(false, validation.Message);
 
+        var isResume = CanResume &&
+                       partner != null &&
+                       selectedPartner.GameObjectId == partner.GameObjectId &&
+                       selectedPartner.HomeWorldId == partner.HomeWorldId;
+        if (!isResume)
+        {
+            initialUnitCount = queue.Sum(item => item.Quantity);
+            completedUnitCount = 0;
+            completedBatchCount = 0;
+        }
+
         partner = selectedPartner;
-        batchNumber = 1;
+        batchNumber = completedBatchCount + 1;
+        checkpointQueueSignature = ComputeQueueSignature(queue);
         externalAutomation.SuppressTradeAutoConfirm();
         var qualitySnapshot = qualityLowering.Begin(
             queue
@@ -107,9 +142,13 @@ public sealed class TradeQueueRunner : IDisposable
         SetActive(
             TradeQueueExecutionState.NormalizingQuality,
             qualitySnapshot.Message,
-            QualityLoweringTimeout);
+            null);
 
-        return new(true, $"Started Trade Queue for {partner.Name}.");
+        return new(
+            true,
+            isResume
+                ? $"Resumed Trade Queue for {partner.Name} from the last verified batch."
+                : $"Started Trade Queue for {partner.Name}.");
     }
 
     public void Tick()
@@ -396,24 +435,45 @@ public sealed class TradeQueueRunner : IDisposable
         var inventory = io.ScanTradeableInventory();
         if (!TradeQueuePlanner.HasExpectedInventoryDelta(batch, inventory, out var diagnostic))
         {
-            Fail($"Trade was canceled or inventory evidence did not match. {diagnostic}");
+            if (verificationStartedAt == default)
+                verificationStartedAt = now;
+            if (now - verificationStartedAt < InventoryEvidenceSettleDelay)
+            {
+                Snapshot = Snapshot with
+                {
+                    Message = $"Trade closed; waiting for batch {batchNumber:N0} inventory evidence.",
+                };
+                return;
+            }
+
+            Fail(
+                $"Batch {batchNumber:N0} was not completed. Verified progress through " +
+                $"batch {completedBatchCount:N0} is saved; Resume continues with the remaining queue. {diagnostic}");
             return;
         }
 
+        verificationStartedAt = default;
         TradeQueuePlanner.ApplyCompletedBatch(queue, batch);
+        completedUnitCount = checked(completedUnitCount + batch.UnitCount);
+        completedBatchCount++;
         save();
+        checkpointQueueSignature = ComputeQueueSignature(queue);
         if (queue.Count == 0)
         {
             Finish(
                 TradeQueueExecutionState.Completed,
-                $"Trade Queue completed with {partner?.Name}. {diagnostic}");
+                $"Trade Queue completed with {partner?.Name} across {completedBatchCount:N0} verified batch(es).");
             return;
         }
 
-        batchNumber++;
-        nextActionAt = now + timing.ActionDelay;
-        if (!PrepareBatch(inventory, $"{diagnostic} Preparing batch {batchNumber:N0}."))
+        batchNumber = completedBatchCount + 1;
+        nextActionAt = now;
+        if (!PrepareBatch(
+                inventory,
+                $"Batch {completedBatchCount:N0} completed; opening batch {batchNumber:N0}."))
             return;
+
+        TickOpeningTrade(now);
     }
 
     private bool PrepareBatch(IReadOnlyList<TradeQueueInventoryStack> inventory, string message)
@@ -433,19 +493,25 @@ public sealed class TradeQueueRunner : IDisposable
         gilSubmitted = false;
         readyClicked = false;
         confirmationSubmitted = false;
+        verificationStartedAt = default;
         SetActive(TradeQueueExecutionState.OpeningTrade, message, OpenTradeTimeout);
         return true;
     }
 
-    private void SetActive(TradeQueueExecutionState state, string message, TimeSpan timeout)
+    private void SetActive(TradeQueueExecutionState state, string message, TimeSpan? timeout)
     {
-        deadline = clock() + timeout;
+        deadline = timeout is { } bounded && bounded > TimeSpan.Zero
+            ? clock() + bounded
+            : default;
         Snapshot = new(
             state,
             message,
             partner?.Name,
             batchNumber,
             batch?.SlotCount ?? 0,
+            completedBatchCount,
+            initialUnitCount,
+            completedUnitCount,
             queue.Count,
             queue.Sum(item => item.Quantity),
             true);
@@ -460,6 +526,7 @@ public sealed class TradeQueueRunner : IDisposable
         externalAutomation.RestoreTradeAutoConfirm();
         deadline = default;
         nextActionAt = default;
+        verificationStartedAt = default;
         batch = null;
         Snapshot = new(
             state,
@@ -467,10 +534,22 @@ public sealed class TradeQueueRunner : IDisposable
             partner?.Name,
             batchNumber,
             0,
+            completedBatchCount,
+            initialUnitCount,
+            completedUnitCount,
             queue.Count,
             queue.Sum(item => item.Quantity),
             false);
     }
+
+    private static string ComputeQueueSignature(IEnumerable<TradeQueueItem> items) =>
+        string.Join(
+            "|",
+            items
+                .Where(item => item.Quantity > 0)
+                .GroupBy(item => item.ItemId)
+                .OrderBy(group => group.Key)
+                .Select(group => $"{group.Key}:{group.Sum(item => item.Quantity)}"));
 
     private static string DescribeState(TradeQueueExecutionState state) => state switch
     {

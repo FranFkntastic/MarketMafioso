@@ -106,6 +106,9 @@ public sealed record TradeQueueExecutionSnapshot(
     string? PartnerName,
     int BatchNumber,
     int BatchSlotCount,
+    int CompletedBatchCount,
+    int InitialUnitCount,
+    int CompletedUnitCount,
     int RemainingItemCount,
     int RemainingUnitCount,
     bool IsActive);
