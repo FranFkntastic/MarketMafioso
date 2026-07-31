@@ -332,6 +332,18 @@ internal sealed class TradeQueuePanel
             arguments: null,
             _ => InvokeReceiverConfirm());
 
+        ImGui.SameLine();
+        var canCancel = io.CanCancelTrade;
+        if (ImGuiUi.Button("Cancel Incoming Trade", canCancel))
+            receiverStatus = InvokeReceiverCancel().Message;
+        RegisterLastAction(
+            "trade-queue.receiver-cancel",
+            "Cancel the current incoming trade",
+            canCancel,
+            receiverStatus,
+            arguments: null,
+            _ => InvokeReceiverCancel());
+
         ImGui.TextColored(MainWindow.ColMuted, receiverStatus);
     }
 
@@ -375,6 +387,19 @@ internal sealed class TradeQueuePanel
         }
 
         return AgentBridgeUiActionResult.Ok("Recipient confirmed the current trade.");
+    }
+
+    private AgentBridgeUiActionResult InvokeReceiverCancel()
+    {
+        if (!io.TryCancelTrade(out var error))
+        {
+            return AgentBridgeUiActionResult.Fail(
+                string.IsNullOrWhiteSpace(error)
+                    ? "The exact Cancel control is not currently available."
+                    : error);
+        }
+
+        return AgentBridgeUiActionResult.Ok("Recipient canceled the current trade.");
     }
 
     private void RegisterLastAction(

@@ -55,6 +55,7 @@ public sealed record AgentBridgeTradeQueueTruth
     public required int OfferedSlotCount { get; init; }
     public required bool CanReceiverReady { get; init; }
     public required bool CanReceiverConfirm { get; init; }
+    public required bool CanReceiverCancel { get; init; }
     public AgentBridgeTradePartnerTruth? SelectedPartner { get; init; }
     public IReadOnlyList<AgentBridgeTradePartnerTruth> AvailablePartners { get; init; } = [];
     public IReadOnlyList<AgentBridgeTradeQueueLineTruth> Queue { get; init; } = [];

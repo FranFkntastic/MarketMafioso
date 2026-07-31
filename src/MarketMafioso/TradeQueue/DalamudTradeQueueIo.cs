@@ -29,12 +29,14 @@ public interface ITradeQueueIo
     int OfferedSlotCount { get; }
     bool CanClickReady { get; }
     bool CanConfirmTrade { get; }
+    bool CanCancelTrade { get; }
     bool TryOpenTrade(TradeQueuePartner partner);
     bool TryOpenGilInput(out string error);
     bool TryOfferItem(TradeQueueBatchLine line, out string error);
     bool TrySubmitQuantity(int quantity, out string error);
     bool TryClickReady(out string error);
     bool TryConfirmTrade(out string error);
+    bool TryCancelTrade(out string error);
 }
 
 public sealed class DalamudTradeQueueIo : ITradeQueueIo
@@ -100,6 +102,8 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     public unsafe bool CanClickReady => TryGetReadyButton(out _, out _);
 
     public unsafe bool CanConfirmTrade => TryGetTradeConfirmation(out _);
+
+    public unsafe bool CanCancelTrade => TryGetCancelButton(out _, out _);
 
     public unsafe bool IsNumericInputOpen
     {
@@ -416,6 +420,18 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
         return true;
     }
 
+    public unsafe bool TryCancelTrade(out string error)
+    {
+        if (!TryAuthorizePatchContract(out error))
+            return false;
+
+        if (!TryGetCancelButton(out var addon, out var button))
+            return false;
+
+        button->ClickAddonButton(addon);
+        return true;
+    }
+
     private unsafe bool TryGetReadyButton(
         out AtkUnitBase* addon,
         out AtkComponentButton* button)
@@ -438,6 +454,26 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
         var prompt = addon->PromptText->NodeText.ExtractText();
         return string.Equals(prompt, tradeConfirmationText, StringComparison.Ordinal);
+    }
+
+    private unsafe bool TryGetCancelButton(
+        out AtkUnitBase* addon,
+        out AtkComponentButton* button)
+    {
+        addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
+        button = null;
+        if (!IsReady(addon) || addon->UldManager.NodeListCount <= 2)
+            return false;
+
+        var node = addon->UldManager.NodeList[2];
+        button = node == null ? null : (AtkComponentButton*)node->GetComponent();
+        return button != null &&
+               button->IsEnabled &&
+               button->ButtonTextNode != null &&
+               string.Equals(
+                   button->ButtonTextNode->NodeText.ExtractText(),
+                   "Cancel",
+                   StringComparison.Ordinal);
     }
 
     private static TradeQueuePartner CreatePartner(IPlayerCharacter player) =>
