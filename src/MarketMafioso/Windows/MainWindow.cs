@@ -79,6 +79,8 @@ public class MainWindow : Window, IDisposable
     private readonly ExternalAutomationCoordinator workshopVendorAutomationCoordinator;
     private readonly WorkshopVendorRestockRunner workshopVendorRestockRunner;
     private readonly TradeQueuePanel tradeQueuePanel;
+    private readonly TradeQueueRunner tradeQueueRunner;
+    private readonly ITradeQueueIo tradeQueueIo;
     public AgentBridgeUiReviewRegistry AgentReviewRegistry { get; } = new();
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
@@ -139,6 +141,8 @@ public class MainWindow : Window, IDisposable
         this.workshopCatalog = workshopCatalog;
         this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
         this.workshopAssemblyRunner = workshopAssemblyRunner;
+        this.tradeQueueRunner = tradeQueueRunner;
+        this.tradeQueueIo = tradeQueueIo;
         this.playerState = playerState;
         this.log = log;
         AgentCaptureTransactions = new AgentBridgeUiCaptureTransactionManager(
@@ -359,7 +363,8 @@ public class MainWindow : Window, IDisposable
         tradeQueuePanel = new TradeQueuePanel(
             config,
             tradeQueueRunner,
-            tradeQueueIo);
+            tradeQueueIo,
+            AgentReviewRegistry);
         WorkshopProjectBrowserWindow? projectBrowser = null;
         WorkshopFrozenQueueBrowserWindow? frozenQueueBrowser = null;
         workshopPrepQueue = new WorkshopPrepQueuePanel(
@@ -524,6 +529,15 @@ public class MainWindow : Window, IDisposable
         var workshopRun = workshopVendorRestockRunner.ActiveRun;
         var listingView = marketBoardAcquisition.GetView();
         var nativeListingPresentation = marketBoardAcquisition.GetNativePresentationState();
+        var tradeExecution = tradeQueueRunner.Snapshot;
+        var tradeInventory = tradeQueueIo.ScanTradeableInventory();
+        var tradeValidation = TradeQueuePlanner.Validate(config.TradeQueueItems, tradeInventory);
+        var selectedTradePartner = tradeQueueIo.TryGetSelectedPartner(out var selectedPartner)
+            ? CreateTradePartnerTruth(selectedPartner)
+            : null;
+        var availableTradePartners = tradeQueueIo.GetAvailablePartners()
+            .Select(CreateTradePartnerTruth)
+            .ToArray();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -580,6 +594,40 @@ public class MainWindow : Window, IDisposable
                     0UL,
                     (sum, receipt) => checked(sum + receipt.SpentGil)) ?? 0,
                 ArmedItemId = workshopRun?.ArmedPurchase?.ItemId,
+            },
+            TradeQueue = new AgentBridgeTradeQueueTruth
+            {
+                State = tradeExecution.State.ToString(),
+                Message = tradeExecution.Message,
+                RunId = tradeExecution.RunId,
+                IsActive = tradeExecution.IsActive,
+                CanResume = tradeQueueRunner.HasResumeCheckpoint,
+                PartnerName = tradeExecution.PartnerName,
+                BatchNumber = tradeExecution.BatchNumber,
+                CompletedBatchCount = tradeExecution.CompletedBatchCount,
+                InitialUnitCount = tradeExecution.InitialUnitCount,
+                CompletedUnitCount = tradeExecution.CompletedUnitCount,
+                RemainingLineCount = tradeExecution.RemainingItemCount,
+                RemainingUnitCount = tradeExecution.RemainingUnitCount,
+                QueueValid = tradeValidation.Success,
+                QueueValidationMessage = tradeValidation.Message,
+                ActionDelayMilliseconds = config.TradeQueueTiming.ActionDelayMilliseconds,
+                TradeRetryMilliseconds = config.TradeQueueTiming.TradeRetryMilliseconds,
+                IsTradeOpen = tradeQueueIo.IsTradeOpen,
+                OfferedSlotCount = tradeQueueIo.IsTradeOpen ? tradeQueueIo.OfferedSlotCount : 0,
+                CanReceiverReady = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanClickReady,
+                CanReceiverConfirm = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanConfirmTrade,
+                SelectedPartner = selectedTradePartner,
+                AvailablePartners = availableTradePartners,
+                Queue = config.TradeQueueItems
+                    .Where(item => item.Quantity > 0)
+                    .Select(item => new AgentBridgeTradeQueueLineTruth
+                    {
+                        ItemId = item.ItemId,
+                        ItemName = item.ItemName,
+                        Quantity = item.Quantity,
+                    })
+                    .ToArray(),
             },
             RemoteMarket = new AgentBridgeRemoteMarketTruth
             {
@@ -691,6 +739,14 @@ public class MainWindow : Window, IDisposable
             },
         };
     }
+
+    private static AgentBridgeTradePartnerTruth CreateTradePartnerTruth(TradeQueuePartner partner) =>
+        new()
+        {
+            Name = partner.Name,
+            HomeWorld = partner.HomeWorldName,
+            GameObjectId = partner.GameObjectId.ToString("X"),
+        };
 
     public void OnFrameworkUpdate(IFramework _framework)
     {

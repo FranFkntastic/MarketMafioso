@@ -41,6 +41,7 @@ public sealed class TradeQueueRunner : IDisposable
     private int completedUnitCount;
     private int completedBatchCount;
     private string checkpointQueueSignature = string.Empty;
+    private string? runId;
 
     public TradeQueueRunner(
         IList<TradeQueueItem> queue,
@@ -75,25 +76,24 @@ public sealed class TradeQueueRunner : IDisposable
     }
 
     public TradeQueueExecutionSnapshot Snapshot { get; private set; } =
-        new(TradeQueueExecutionState.Idle, "Trade queue is idle.", null, 0, 0, 0, 0, 0, 0, 0, false);
+        new(TradeQueueExecutionState.Idle, "Trade queue is idle.", null, null, 0, 0, 0, 0, 0, 0, 0, false);
 
     public bool IsActive => Snapshot.IsActive;
+
+    public bool HasResumeCheckpoint =>
+        Snapshot.State is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped &&
+        queue.Count > 0 &&
+        checkpointQueueSignature == ComputeQueueSignature(queue) &&
+        partner != null;
 
     public bool CanResume
     {
         get
         {
-            if (Snapshot.State is not (TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped) ||
-                queue.Count == 0 ||
-                checkpointQueueSignature != ComputeQueueSignature(queue) ||
-                partner == null ||
-                !io.TryGetSelectedPartner(out var selectedPartner))
-            {
+            if (!io.TryGetSelectedPartner(out var selectedPartner))
                 return false;
-            }
 
-            return selectedPartner.GameObjectId == partner.GameObjectId &&
-                   selectedPartner.HomeWorldId == partner.HomeWorldId;
+            return CanResumeWith(selectedPartner);
         }
     }
 
@@ -104,17 +104,25 @@ public sealed class TradeQueueRunner : IDisposable
         if (!io.TryGetSelectedPartner(out var selectedPartner))
             return new(false, "Select or focus-target the player who should receive this queue.");
 
+        return Start(selectedPartner);
+    }
+
+    public TradeQueueStartResult Start(TradeQueuePartner selectedPartner)
+    {
+        if (IsActive)
+            return new(false, "Trade queue is already running.");
+        if (!io.PartnerIsAvailable(selectedPartner))
+            return new(false, $"{selectedPartner.Name} @ {selectedPartner.HomeWorldName} is not an exact visible trade recipient.");
+
         var inventory = io.ScanTradeableInventory();
         var validation = TradeQueuePlanner.Validate(queue.ToList(), inventory);
         if (!validation.Success)
             return new(false, validation.Message);
 
-        var isResume = CanResume &&
-                       partner != null &&
-                       selectedPartner.GameObjectId == partner.GameObjectId &&
-                       selectedPartner.HomeWorldId == partner.HomeWorldId;
+        var isResume = CanResumeWith(selectedPartner);
         if (!isResume)
         {
+            runId = Guid.NewGuid().ToString("N");
             initialUnitCount = queue.Sum(item => item.Quantity);
             completedUnitCount = 0;
             completedBatchCount = 0;
@@ -506,6 +514,7 @@ public sealed class TradeQueueRunner : IDisposable
         Snapshot = new(
             state,
             message,
+            runId,
             partner?.Name,
             batchNumber,
             batch?.SlotCount ?? 0,
@@ -531,6 +540,7 @@ public sealed class TradeQueueRunner : IDisposable
         Snapshot = new(
             state,
             message,
+            runId,
             partner?.Name,
             batchNumber,
             0,
@@ -550,6 +560,11 @@ public sealed class TradeQueueRunner : IDisposable
                 .GroupBy(item => item.ItemId)
                 .OrderBy(group => group.Key)
                 .Select(group => $"{group.Key}:{group.Sum(item => item.Quantity)}"));
+
+    private bool CanResumeWith(TradeQueuePartner selectedPartner) =>
+        HasResumeCheckpoint &&
+        selectedPartner.GameObjectId == partner!.GameObjectId &&
+        selectedPartner.HomeWorldId == partner.HomeWorldId;
 
     private static string DescribeState(TradeQueueExecutionState state) => state switch
     {
