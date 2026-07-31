@@ -198,6 +198,43 @@ public sealed class RetainerListingRefreshCoordinatorTests
         Assert.Equal([200u], config.RetainerListingRefresh.Items.Select(item => item.ItemId));
     }
 
+    [Fact]
+    public void New_capture_preserves_blocked_and_reconciling_safety_history()
+    {
+        var source = new FakeSource(new RetainerListingRefreshCandidate[] { new(300, "Silver Ore") });
+        var runtime = new FakeRuntime();
+        var config = CreateConfig();
+        config.RetainerListingRefresh.Items =
+        [
+            new PersistedRetainerListingRefreshItem
+            {
+                ItemId = 100,
+                State = RetainerListingRefreshItemState.Blocked,
+                LastCode = "RequestIdDiscontinuity",
+            },
+            new PersistedRetainerListingRefreshItem
+            {
+                ItemId = 200,
+                State = RetainerListingRefreshItemState.NeedsReconciliation,
+                Attempts = 1,
+                NextAttemptAtUtc = Start.AddMinutes(2).UtcDateTime,
+            },
+        ];
+        var coordinator = CreateCoordinator(config, source, runtime);
+
+        coordinator.Tick(Start, false);
+
+        Assert.Equal(
+            [
+                (100u, RetainerListingRefreshItemState.Blocked),
+                (200u, RetainerListingRefreshItemState.NeedsReconciliation),
+                (300u, RetainerListingRefreshItemState.Deferred),
+            ],
+            config.RetainerListingRefresh.Items
+                .OrderBy(item => item.ItemId)
+                .Select(item => (item.ItemId, item.State)));
+    }
+
     private static Configuration CreateConfig() => new()
     {
         EnableMarketAcquisition = true,

@@ -179,7 +179,7 @@ internal sealed class RetainerListingRefreshCoordinator
             .ToArray();
         var candidateIds = candidates.Select(candidate => candidate.ItemId).ToHashSet();
         state.Items.RemoveAll(item =>
-            item.State != RetainerListingRefreshItemState.AwaitingEvidence &&
+            item.State == RetainerListingRefreshItemState.Deferred &&
             !candidateIds.Contains(item.ItemId));
 
         foreach (var candidate in candidates)
