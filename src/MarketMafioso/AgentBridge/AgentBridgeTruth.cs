@@ -188,6 +188,9 @@ public sealed record AgentBridgeRouteTruth
     public DateTimeOffset? ReportBacklogNextRetryAtUtc { get; init; }
     public string? ReportBacklogLastFailureKind { get; init; }
     public DateTimeOffset? ReportBacklogLastFailureAtUtc { get; init; }
+    public int ReportQuarantinedEntryCount { get; init; }
+    public string? ReportLastQuarantineStatus { get; init; }
+    public DateTimeOffset? ReportLastQuarantineAtUtc { get; init; }
 }
 
 public static class AgentBridgeRouteTruthProjection

@@ -17,6 +17,12 @@ public interface IMarketAcquisitionRequestClient
         string requestId,
         CancellationToken cancellationToken);
 
+    Task<MarketAcquisitionRequestTimelineView> GetRequestTimelineAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        CancellationToken cancellationToken);
+
     Task<MarketAcquisitionRequestView> CreateBatchAsync(
         string serverUrl,
         string clientApiKey,
@@ -76,6 +82,22 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
             $"{ResolveAcquisitionBaseUrl(serverUrl)}/batches/{Uri.EscapeDataString(requestId)}",
             clientApiKey);
         return await SendJsonAsync<MarketAcquisitionRequestView>(request, "Get batch", cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<MarketAcquisitionRequestTimelineView> GetRequestTimelineAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        using var request = CreateAuthenticatedRequest(
+            HttpMethod.Get,
+            $"{ResolveAcquisitionBaseUrl(serverUrl)}/requests/{Uri.EscapeDataString(requestId)}/timeline",
+            clientApiKey);
+        return await SendJsonAsync<MarketAcquisitionRequestTimelineView>(
+            request,
+            "Get request timeline",
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<MarketAcquisitionRequestView> CreateBatchAsync(
@@ -303,6 +325,37 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
         string? message,
         string? pluginVersion,
         CancellationToken cancellationToken) =>
+        ReportAttemptProgressAsync(
+            serverUrl,
+            clientApiKey,
+            requestId,
+            claimToken,
+            pluginInstanceId,
+            attemptId,
+            eventSequence,
+            routeStopId,
+            worldName,
+            phase,
+            message,
+            pluginVersion,
+            DateTimeOffset.UtcNow,
+            cancellationToken);
+
+    public Task<MarketAcquisitionAttemptEventResult> ReportAttemptProgressAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        string claimToken,
+        string pluginInstanceId,
+        string attemptId,
+        long eventSequence,
+        string? routeStopId,
+        string? worldName,
+        string phase,
+        string? message,
+        string? pluginVersion,
+        DateTimeOffset clientTimestampUtc,
+        CancellationToken cancellationToken) =>
         PostAttemptLifecycleAsync(
             serverUrl,
             clientApiKey,
@@ -320,7 +373,8 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
                 phase,
                 message,
                 reason: null,
-                pluginVersion),
+                pluginVersion,
+                clientTimestampUtc),
             cancellationToken);
 
     public Task<MarketAcquisitionAttemptEventResult> CompleteAttemptAsync(
@@ -336,6 +390,37 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
         string phase,
         string? message,
         string? pluginVersion,
+        CancellationToken cancellationToken) =>
+        CompleteAttemptAsync(
+            serverUrl,
+            clientApiKey,
+            requestId,
+            claimToken,
+            pluginInstanceId,
+            attemptId,
+            eventSequence,
+            routeStopId,
+            worldName,
+            phase,
+            message,
+            pluginVersion,
+            DateTimeOffset.UtcNow,
+            cancellationToken);
+
+    public Task<MarketAcquisitionAttemptEventResult> CompleteAttemptAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        string claimToken,
+        string pluginInstanceId,
+        string attemptId,
+        long eventSequence,
+        string? routeStopId,
+        string? worldName,
+        string phase,
+        string? message,
+        string? pluginVersion,
+        DateTimeOffset clientTimestampUtc,
         CancellationToken cancellationToken) =>
         PostAttemptLifecycleAsync(
             serverUrl,
@@ -354,7 +439,8 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
                 phase,
                 message,
                 reason: null,
-                pluginVersion),
+                pluginVersion,
+                clientTimestampUtc),
             cancellationToken);
 
     public Task<MarketAcquisitionAttemptEventResult> FailAttemptAsync(
@@ -370,6 +456,37 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
         string phase,
         string reason,
         string? pluginVersion,
+        CancellationToken cancellationToken) =>
+        FailAttemptAsync(
+            serverUrl,
+            clientApiKey,
+            requestId,
+            claimToken,
+            pluginInstanceId,
+            attemptId,
+            eventSequence,
+            routeStopId,
+            worldName,
+            phase,
+            reason,
+            pluginVersion,
+            DateTimeOffset.UtcNow,
+            cancellationToken);
+
+    public Task<MarketAcquisitionAttemptEventResult> FailAttemptAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        string claimToken,
+        string pluginInstanceId,
+        string attemptId,
+        long eventSequence,
+        string? routeStopId,
+        string? worldName,
+        string phase,
+        string reason,
+        string? pluginVersion,
+        DateTimeOffset clientTimestampUtc,
         CancellationToken cancellationToken) =>
         PostAttemptLifecycleAsync(
             serverUrl,
@@ -388,7 +505,8 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
                 phase,
                 message: null,
                 reason,
-                pluginVersion),
+                pluginVersion,
+                clientTimestampUtc),
             cancellationToken);
 
     public Task<MarketAcquisitionBatchLineView> PostLineProgressAsync(
@@ -546,7 +664,8 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
         string? runnerState,
         string? message,
         string? reason,
-        string? pluginVersion) =>
+        string? pluginVersion,
+        DateTimeOffset clientTimestampUtc) =>
         new()
         {
             ClaimToken = claimToken,
@@ -562,7 +681,7 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
             Message = message,
             Reason = reason,
             PluginVersion = pluginVersion,
-            ClientTimestampUtc = DateTimeOffset.UtcNow,
+            ClientTimestampUtc = clientTimestampUtc,
         };
 
     private static async Task<MarketAcquisitionLifecycleHttpException> CreateLifecycleExceptionAsync(

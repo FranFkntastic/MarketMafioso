@@ -278,7 +278,12 @@ public class MainWindow : Window, IDisposable
             new FileMarketAcquisitionReportOutbox(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
                 "market-acquisition-report-outbox.json")),
-            shardCheckpoints);
+            shardCheckpoints,
+            new FileMarketAcquisitionReportOutbox(Path.Combine(
+                Plugin.PluginInterface.GetPluginConfigDirectory(),
+                "market-acquisition-report-dead-letter.json")),
+            config.PluginInstanceId,
+            PluginBuildInfo.DisplayVersion);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -680,6 +685,9 @@ public class MainWindow : Window, IDisposable
                 ReportBacklogNextRetryAtUtc = snapshot.ReportBacklog.NextRetryAtUtc,
                 ReportBacklogLastFailureKind = snapshot.ReportBacklog.LastFailureKind,
                 ReportBacklogLastFailureAtUtc = snapshot.ReportBacklog.LastFailureAtUtc,
+                ReportQuarantinedEntryCount = snapshot.ReportBacklog.QuarantinedEntryCount,
+                ReportLastQuarantineStatus = snapshot.ReportBacklog.LastQuarantineStatus,
+                ReportLastQuarantineAtUtc = snapshot.ReportBacklog.LastQuarantineAtUtc,
             },
         };
     }

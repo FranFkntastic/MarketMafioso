@@ -66,6 +66,58 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
         Assert.Equal(53, outbox.DeserializeCount);
     }
 
+    [Fact]
+    public async Task TerminalRequest_QuarantinesWholeRequestWithoutDiscardingEvidence()
+    {
+        var outbox = new VolatileMarketAcquisitionReportOutbox();
+        var deadLetter = new VolatileMarketAcquisitionReportOutbox();
+        AddLineReports(outbox, "request-a", 5);
+        var reporter = new TerminalReporter(MarketAcquisitionStatuses.Failed);
+
+        using var dispatcher = CreateDispatcher(outbox, reporter, deadLetter: deadLetter);
+        await dispatcher.DrainAsync();
+
+        Assert.Empty(outbox.Snapshot());
+        Assert.Equal(5, deadLetter.Snapshot().Count);
+        var backlog = dispatcher.GetBacklogSnapshot();
+        Assert.Equal(0, backlog.PendingEntryCount);
+        Assert.Equal(5, backlog.QuarantinedEntryCount);
+        Assert.Equal(MarketAcquisitionStatuses.Failed, backlog.LastQuarantineStatus);
+    }
+
+    [Fact]
+    public async Task AcceptedRouteEvent_IdempotencyConflictAcknowledgesDurableReplay()
+    {
+        var outbox = new VolatileMarketAcquisitionReportOutbox();
+        var reporter = new AcceptedRouteConflictReporter();
+        using var dispatcher = CreateDispatcher(outbox, reporter);
+        dispatcher.BeginSession(new MarketAcquisitionClaimView
+        {
+            Id = "request-a",
+            ClaimToken = "claim-token",
+            Status = MarketAcquisitionStatuses.Running,
+        });
+        dispatcher.EnqueueRouteProgress(new MarketAcquisitionRouteProgressReport(
+            "request-a",
+            "claim-token",
+            "Running",
+            "attempt-1",
+            42,
+            "Aether:Faerie",
+            "Faerie",
+            "Running",
+            "Progress",
+            "plugin-instance",
+            "1.3.0-test",
+            new DateTimeOffset(2026, 7, 31, 1, 0, 0, TimeSpan.Zero)));
+
+        await dispatcher.DrainAsync();
+
+        Assert.Empty(outbox.Snapshot());
+        Assert.Equal(3, reporter.ReportAttempts);
+        Assert.Equal(1, reporter.TimelineReads);
+    }
+
     private static void AddLineReports(
         IMarketAcquisitionReportOutbox outbox,
         string requestId,
@@ -100,7 +152,8 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
     private static MarketAcquisitionRouteReportDispatcher CreateDispatcher(
         IMarketAcquisitionReportOutbox outbox,
         IMarketAcquisitionRouteReporter reporter,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        IMarketAcquisitionReportOutbox? deadLetter = null)
     {
         var lifecycle = new MarketAcquisitionClaimLifecycleController(
             new Configuration(),
@@ -117,7 +170,8 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
             lifecycle,
             new ImmediateCallbackDispatcher(),
             outbox,
-            utcNow);
+            utcNow,
+            deadLetter);
     }
 
     private sealed class ImmediateCallbackDispatcher : IMarketAcquisitionRouteCallbackDispatcher
@@ -163,6 +217,112 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
                 ? Task.FromException(new HttpRequestException("Receiver unavailable."))
                 : Task.CompletedTask;
         }
+
+        public Task ReportMarketObservationAsync(
+            MarketAcquisitionMarketObservationReport report,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class TerminalReporter(string remoteStatus) : IMarketAcquisitionRouteReporter
+    {
+        public bool CanReport => true;
+
+        public Task<MarketAcquisitionRequestView> GetRequestAsync(
+            string requestId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new MarketAcquisitionRequestView
+            {
+                Id = requestId,
+                Status = remoteStatus,
+            });
+
+        public Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(
+            MarketAcquisitionRouteProgressReport report,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task ReportPurchaseAuditAsync(
+            MarketAcquisitionPurchaseAuditReport report,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task ReportLineProgressAsync(
+            MarketAcquisitionLineProgressReport report,
+            CancellationToken cancellationToken) =>
+            Task.FromException(new MarketAcquisitionLifecycleHttpException(
+                System.Net.HttpStatusCode.Conflict,
+                "line progress",
+                $"Cannot move acquisition request from {remoteStatus} to Running.",
+                null));
+
+        public Task ReportMarketObservationAsync(
+            MarketAcquisitionMarketObservationReport report,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class AcceptedRouteConflictReporter : IMarketAcquisitionRouteReporter
+    {
+        public bool CanReport => true;
+        public int ReportAttempts { get; private set; }
+        public int TimelineReads { get; private set; }
+
+        public Task<MarketAcquisitionRequestView> GetRequestAsync(
+            string requestId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new MarketAcquisitionRequestView
+            {
+                Id = requestId,
+                Status = MarketAcquisitionStatuses.Running,
+            });
+
+        public Task<MarketAcquisitionRequestTimelineView> GetRequestTimelineAsync(
+            string requestId,
+            CancellationToken cancellationToken)
+        {
+            TimelineReads++;
+            return Task.FromResult(new MarketAcquisitionRequestTimelineView
+            {
+                Request = new MarketAcquisitionRequestView
+                {
+                    Id = requestId,
+                    Status = MarketAcquisitionStatuses.Running,
+                },
+                AttemptEvents =
+                [
+                    new MarketAcquisitionAttemptEventView
+                    {
+                        AttemptId = "attempt-1",
+                        Sequence = 42,
+                        EventType = "progress",
+                    },
+                ],
+            });
+        }
+
+        public Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(
+            MarketAcquisitionRouteProgressReport report,
+            CancellationToken cancellationToken)
+        {
+            ReportAttempts++;
+            return Task.FromException<MarketAcquisitionRouteProgressReportOutcome>(
+                new MarketAcquisitionLifecycleHttpException(
+                    System.Net.HttpStatusCode.Conflict,
+                    "progress",
+                    "Idempotency key was already used with a different request body.",
+                    null));
+        }
+
+        public Task ReportPurchaseAuditAsync(
+            MarketAcquisitionPurchaseAuditReport report,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task ReportLineProgressAsync(
+            MarketAcquisitionLineProgressReport report,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task ReportMarketObservationAsync(
             MarketAcquisitionMarketObservationReport report,
