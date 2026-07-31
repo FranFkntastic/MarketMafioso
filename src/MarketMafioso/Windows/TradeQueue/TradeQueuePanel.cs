@@ -66,6 +66,12 @@ internal sealed class TradeQueuePanel
         var selectedSummary = $"{selectedRows:N0} row(s); {selectedItemUnits:N0} items";
         if (selectedGil > 0)
             selectedSummary += $"; {selectedGil:N0} gil";
+        var displayedRecipient = snapshot.IsActive ||
+                                 snapshot.State is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped
+            ? snapshot.PartnerName
+            : hasPartner
+                ? partner.Name
+                : null;
         UtilityWorkspaceUi.DrawStatusStrip(
             "##tradeQueueStatus",
             [
@@ -75,11 +81,11 @@ internal sealed class TradeQueuePanel
                     selectedRows > 0 ? MainWindow.ColHeader : MainWindow.ColMuted),
                 new(
                     "Recipient",
-                    hasPartner ? partner.Name : "No selected player",
-                    hasPartner ? MainWindow.ColSuccess : MainWindow.ColWarning),
+                    displayedRecipient ?? "No selected player",
+                    displayedRecipient != null ? MainWindow.ColSuccess : MainWindow.ColWarning),
                 new(
-                    "Execution",
-                    snapshot.State.ToString(),
+                    "Progress",
+                    ProgressLabel(snapshot),
                     snapshot.State is TradeQueueExecutionState.Failed ? MainWindow.ColError :
                         snapshot.IsActive ? MainWindow.ColHeader : MainWindow.ColMuted),
             ]);
@@ -236,8 +242,13 @@ internal sealed class TradeQueuePanel
 
         var validation = TradeQueuePlanner.Validate(config.TradeQueueItems, inventory);
         var hasPartner = io.TryGetSelectedPartner(out var partner);
+        var canResume = runner.CanResume;
         if (ImGuiUi.Button(
-                hasPartner ? $"Start Trading with {partner.Name}" : "Start Trading",
+                hasPartner
+                    ? canResume
+                        ? $"Resume Trading with {partner.Name}"
+                        : $"Start Trading with {partner.Name}"
+                    : "Start Trading",
                 validation.Success && hasPartner))
         {
             runner.Start();
@@ -334,4 +345,14 @@ internal sealed class TradeQueuePanel
         TradeQueueExecutionState.Stopped => MainWindow.ColWarning,
         _ => MainWindow.ColMuted,
     };
+
+    private static string ProgressLabel(TradeQueueExecutionSnapshot snapshot)
+    {
+        if (snapshot.State == TradeQueueExecutionState.Idle || snapshot.InitialUnitCount <= 0)
+            return "Not started";
+        if (snapshot.State == TradeQueueExecutionState.Completed)
+            return $"{snapshot.CompletedUnitCount:N0} units · {snapshot.CompletedBatchCount:N0} batch(es)";
+
+        return $"{snapshot.CompletedUnitCount:N0} / {snapshot.InitialUnitCount:N0} units · batch {snapshot.BatchNumber:N0}";
+    }
 }
