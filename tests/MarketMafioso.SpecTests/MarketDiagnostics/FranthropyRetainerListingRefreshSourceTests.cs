@@ -99,6 +99,47 @@ public sealed class FranthropyRetainerListingRefreshSourceTests
         }
     }
 
+    [Fact]
+    public async Task First_success_after_missing_evidence_is_still_a_baseline()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "MMF.SharedObservation.Tests", Guid.NewGuid().ToString("N"));
+        var pluginConfig = Path.Combine(root, "XIVLauncher", "pluginConfigs", "MarketMafioso");
+        Directory.CreateDirectory(pluginConfig);
+        var paths = SharedObservationPaths.FromPluginConfigDirectory(pluginConfig);
+        var options = new ObservationStoreOptions
+        {
+            DatabasePath = paths.DatabasePath,
+            BackupDirectory = paths.BackupsDirectory,
+            MigrationLockPath = paths.MigrationLockPath,
+            ChangeSignalPath = paths.ChangeSignalPath,
+        };
+        var owner = new ObservationOwner(100, 74);
+        var otherOwner = new ObservationOwner(101, 74);
+        var open = await SqliteObservationStore.OpenAsync(options);
+        Assert.True(open.IsReady, open.Message);
+        try
+        {
+            await open.Store!.WriteAsync(Listings(otherOwner, 300, 1, [900]));
+            using var source = new FranthropyRetainerListingRefreshSource(pluginConfig, () => owner);
+            Assert.False(source.TryRead(out _, out _));
+
+            var changedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            source.Changed += () => changedSignal.TrySetResult();
+            await open.Store.WriteAsync(Listings(owner, 200, 1, [100]));
+            await changedSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(source.TryRead(out var baseline, out var error), error);
+            Assert.Equal([100u], baseline!.Items.Select(item => item.ItemId));
+            Assert.False(baseline.ComparisonAvailable);
+        }
+        finally
+        {
+            await open.Store!.DisposeAsync();
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static ObservationEnvelope Listings(
         ObservationOwner owner,
         ulong retainerId,

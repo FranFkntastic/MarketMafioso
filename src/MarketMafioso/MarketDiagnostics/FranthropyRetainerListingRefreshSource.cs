@@ -17,6 +17,7 @@ internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingR
     private readonly ObservationDatabaseChangeMonitor monitor;
     private IReadOnlySet<uint> previousItems = new HashSet<uint>();
     private ObservationOwner? previousOwner;
+    private bool hasSuccessfulBaseline;
     private int changeObserved;
     private bool disposed;
 
@@ -62,6 +63,7 @@ internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingR
         {
             previousOwner = owner;
             previousItems = new HashSet<uint>();
+            hasSuccessfulBaseline = false;
             Interlocked.Exchange(ref changeObserved, 0);
         }
         if (!string.IsNullOrWhiteSpace(monitor.LastNotificationError))
@@ -110,11 +112,13 @@ internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingR
                 .Order()
                 .Select(itemId => new RetainerListingRefreshCandidate(itemId, null))
                 .ToArray();
-            previousItems = currentItems;
+            var observedChange = Interlocked.Exchange(ref changeObserved, 0) != 0;
             snapshot = new RetainerListingRefreshSnapshot(
                 items,
                 $"franthropy:{revision}",
-                ComparisonAvailable: Interlocked.Exchange(ref changeObserved, 0) != 0);
+                ComparisonAvailable: hasSuccessfulBaseline && observedChange);
+            previousItems = currentItems;
+            hasSuccessfulBaseline = true;
             return true;
         }
         catch (Exception exception) when (exception is InvalidDataException or ObservationPayloadContractException)
