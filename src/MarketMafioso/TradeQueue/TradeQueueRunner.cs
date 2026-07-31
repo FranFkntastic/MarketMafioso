@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Plugin.Services;
+using Franthropy.Dalamud.Automation.Inventory;
 using MarketMafioso.Automation.Runtime;
 
 namespace MarketMafioso.TradeQueue;
@@ -9,6 +10,7 @@ namespace MarketMafioso.TradeQueue;
 public sealed class TradeQueueRunner : IDisposable
 {
     private static readonly TimeSpan OpenTradeTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan QualityLoweringTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan OfferItemsTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PartnerTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
@@ -18,6 +20,7 @@ public sealed class TradeQueueRunner : IDisposable
     private readonly IList<TradeQueueItem> queue;
     private readonly Action save;
     private readonly ITradeQueueIo io;
+    private readonly IItemQualityLoweringAutomation qualityLowering;
     private readonly ExternalAutomationCoordinator externalAutomation;
     private readonly IPluginLog log;
     private readonly Func<DateTimeOffset> clock;
@@ -39,9 +42,10 @@ public sealed class TradeQueueRunner : IDisposable
         IList<TradeQueueItem> queue,
         Action save,
         ITradeQueueIo io,
+        IItemQualityLoweringAutomation qualityLowering,
         ExternalAutomationCoordinator externalAutomation,
         IPluginLog log)
-        : this(queue, save, io, externalAutomation, log, () => DateTimeOffset.UtcNow)
+        : this(queue, save, io, qualityLowering, externalAutomation, log, () => DateTimeOffset.UtcNow)
     {
     }
 
@@ -49,6 +53,7 @@ public sealed class TradeQueueRunner : IDisposable
         IList<TradeQueueItem> queue,
         Action save,
         ITradeQueueIo io,
+        IItemQualityLoweringAutomation qualityLowering,
         ExternalAutomationCoordinator externalAutomation,
         IPluginLog log,
         Func<DateTimeOffset> clock)
@@ -56,6 +61,7 @@ public sealed class TradeQueueRunner : IDisposable
         this.queue = queue;
         this.save = save;
         this.io = io;
+        this.qualityLowering = qualityLowering;
         this.externalAutomation = externalAutomation;
         this.log = log;
         this.clock = clock;
@@ -81,8 +87,25 @@ public sealed class TradeQueueRunner : IDisposable
         partner = selectedPartner;
         batchNumber = 1;
         externalAutomation.SuppressTradeAutoConfirm();
-        if (!PrepareBatch(inventory, "Opening the first trade."))
-            return new(false, Snapshot.Message);
+        var qualitySnapshot = qualityLowering.Begin(
+            queue
+                .Where(item => item.ItemId != TradeQueuePlanner.GilItemId)
+                .GroupBy(item => item.ItemId)
+                .Select(group => new ItemQualityLoweringRequirement(
+                    group.Key,
+                    group.First().ItemName,
+                    checked(group.Sum(item => item.Quantity))))
+                .ToArray());
+        if (qualitySnapshot.State == ItemQualityLoweringAutomationState.Failed)
+        {
+            Finish(TradeQueueExecutionState.Failed, qualitySnapshot.Message);
+            return new(false, qualitySnapshot.Message);
+        }
+
+        SetActive(
+            TradeQueueExecutionState.NormalizingQuality,
+            qualitySnapshot.Message,
+            QualityLoweringTimeout);
 
         return new(true, $"Started Trade Queue for {partner.Name}.");
     }
@@ -103,6 +126,9 @@ public sealed class TradeQueueRunner : IDisposable
 
             switch (Snapshot.State)
             {
+                case TradeQueueExecutionState.NormalizingQuality:
+                    TickNormalizingQuality();
+                    break;
                 case TradeQueueExecutionState.OpeningTrade:
                     TickOpeningTrade(now);
                     break;
@@ -171,6 +197,33 @@ public sealed class TradeQueueRunner : IDisposable
 
         io.TryOpenTrade(partner);
         nextActionAt = now + OpenRetryDelay;
+    }
+
+    private void TickNormalizingQuality()
+    {
+        if (partner == null || !io.FocusPartnerMatches(partner))
+        {
+            Fail("The focused trade partner changed before inventory quality normalization completed.");
+            return;
+        }
+
+        var result = qualityLowering.Advance(
+            () => IsActive &&
+                  Snapshot.State == TradeQueueExecutionState.NormalizingQuality &&
+                  partner != null &&
+                  io.FocusPartnerMatches(partner));
+        if (result.State == ItemQualityLoweringAutomationState.Failed)
+        {
+            Fail(result.Message);
+            return;
+        }
+        if (result.State == ItemQualityLoweringAutomationState.Completed)
+        {
+            PrepareBatch(io.ScanTradeableInventory(), "Inventory quality is ready; opening the first trade.");
+            return;
+        }
+
+        Snapshot = Snapshot with { Message = result.Message };
     }
 
     private void TickOfferingItems(DateTimeOffset now)
@@ -399,6 +452,8 @@ public sealed class TradeQueueRunner : IDisposable
 
     private void Finish(TradeQueueExecutionState state, string message)
     {
+        if (qualityLowering.Snapshot.IsActive)
+            qualityLowering.Stop("Trade Queue released quality-lowering ownership.");
         externalAutomation.RestoreTradeAutoConfirm();
         deadline = default;
         nextActionAt = default;
@@ -416,6 +471,7 @@ public sealed class TradeQueueRunner : IDisposable
 
     private static string DescribeState(TradeQueueExecutionState state) => state switch
     {
+        TradeQueueExecutionState.NormalizingQuality => "normalizing HQ inventory",
         TradeQueueExecutionState.OpeningTrade => "opening the trade",
         TradeQueueExecutionState.OfferingItems => "offering items",
         TradeQueueExecutionState.WaitingForPartner => "waiting for the partner",

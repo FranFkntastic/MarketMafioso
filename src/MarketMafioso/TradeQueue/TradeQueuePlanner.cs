@@ -23,22 +23,20 @@ public static class TradeQueuePlanner
         var requested = new Dictionary<TradeQueueItemKey, int>();
         foreach (var item in queue)
         {
-            if (item.ItemId == 0 || item.Quantity <= 0 || (item.ItemId == GilItemId && item.IsHighQuality))
+            if (item.ItemId == 0 || item.Quantity <= 0)
                 return new(false, TradeQueueValidationCode.InvalidQuantity, $"{Display(item)} has an invalid quantity.");
 
-            var key = new TradeQueueItemKey(item.ItemId, item.IsHighQuality);
+            var key = new TradeQueueItemKey(item.ItemId);
             requested[key] = checked(requested.GetValueOrDefault(key) + item.Quantity);
         }
 
-        var available = CountInventory(inventory);
+        var available = CountCombinedInventory(inventory);
         foreach (var pair in requested)
         {
             var held = available.GetValueOrDefault(pair.Key);
             if (held < pair.Value)
             {
-                var item = queue.First(value =>
-                    value.ItemId == pair.Key.ItemId &&
-                    value.IsHighQuality == pair.Key.IsHighQuality);
+                var item = queue.First(value => value.ItemId == pair.Key.ItemId);
                 return new(
                     false,
                     TradeQueueValidationCode.InsufficientInventory,
@@ -64,14 +62,14 @@ public static class TradeQueuePlanner
             throw new InvalidOperationException(validation.Message);
 
         var remainingByKey = queue
-            .GroupBy(item => new TradeQueueItemKey(item.ItemId, item.IsHighQuality))
+            .GroupBy(item => new TradeQueueItemKey(item.ItemId))
             .ToDictionary(group => group.Key, group => group.Sum(item => item.Quantity));
         var orderedKeys = queue
-            .Select(item => new TradeQueueItemKey(item.ItemId, item.IsHighQuality))
+            .Select(item => new TradeQueueItemKey(item.ItemId))
             .Distinct()
             .ToArray();
         var lines = new List<TradeQueueBatchLine>(maximumSlots);
-        var gilKey = new TradeQueueItemKey(GilItemId, false);
+        var gilKey = new TradeQueueItemKey(GilItemId);
         var gilAmount = remainingByKey.TryGetValue(gilKey, out var requestedGil)
             ? Math.Min(requestedGil, MaximumGilPerTrade)
             : 0;
@@ -80,7 +78,7 @@ public static class TradeQueuePlanner
         {
             var remaining = remainingByKey[key];
             foreach (var stack in inventory
-                         .Where(value => value.ItemId == key.ItemId && value.IsHighQuality == key.IsHighQuality)
+                         .Where(value => value.ItemId == key.ItemId && !value.IsHighQuality)
                          .OrderBy(value => value.ContainerId)
                          .ThenBy(value => value.SlotIndex))
             {
@@ -104,12 +102,19 @@ public static class TradeQueuePlanner
 
             if (lines.Count == maximumSlots)
                 break;
+
+            if (remaining > 0)
+            {
+                throw new InvalidOperationException(
+                    $"{queue.First(item => item.ItemId == key.ItemId).ItemName} still needs " +
+                    $"{remaining:N0} normal-quality units after quality normalization.");
+            }
         }
 
         if (lines.Count == 0 && gilAmount == 0)
             throw new InvalidOperationException("No tradeable inventory stacks could be assigned to the next batch.");
 
-        return new(lines, gilAmount, CountInventory(inventory));
+        return new(lines, gilAmount, CountExactInventory(inventory));
     }
 
     public static bool HasExpectedInventoryDelta(
@@ -119,9 +124,9 @@ public static class TradeQueuePlanner
     {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(inventoryAfter);
-        var after = CountInventory(inventoryAfter);
+        var after = CountExactInventory(inventoryAfter);
         var expectedDelta = batch.Lines
-            .GroupBy(line => new TradeQueueItemKey(line.ItemId, line.IsHighQuality))
+            .GroupBy(line => new TradeQueueInventoryKey(line.ItemId, line.IsHighQuality))
             .ToDictionary(group => group.Key, group => group.Sum(line => line.Quantity));
         if (batch.GilAmount > 0)
             expectedDelta[new(GilItemId, false)] = batch.GilAmount;
@@ -154,10 +159,10 @@ public static class TradeQueuePlanner
         ArgumentNullException.ThrowIfNull(batch);
 
         var completed = batch.Lines
-            .GroupBy(line => new TradeQueueItemKey(line.ItemId, line.IsHighQuality))
+            .GroupBy(line => new TradeQueueItemKey(line.ItemId))
             .ToDictionary(group => group.Key, group => group.Sum(line => line.Quantity));
         if (batch.GilAmount > 0)
-            completed[new(GilItemId, false)] = batch.GilAmount;
+            completed[new(GilItemId)] = batch.GilAmount;
 
         foreach (var grouped in completed)
         {
@@ -165,7 +170,7 @@ public static class TradeQueuePlanner
             for (var index = 0; index < queue.Count && remaining > 0; index++)
             {
                 var item = queue[index];
-                if (item.ItemId != grouped.Key.ItemId || item.IsHighQuality != grouped.Key.IsHighQuality)
+                if (item.ItemId != grouped.Key.ItemId)
                     continue;
 
                 var consumed = Math.Min(item.Quantity, remaining);
@@ -183,14 +188,18 @@ public static class TradeQueuePlanner
         }
     }
 
-    public static IReadOnlyDictionary<TradeQueueItemKey, int> CountInventory(
+    public static IReadOnlyDictionary<TradeQueueInventoryKey, int> CountExactInventory(
         IReadOnlyList<TradeQueueInventoryStack> inventory) =>
         inventory
-            .GroupBy(stack => new TradeQueueItemKey(stack.ItemId, stack.IsHighQuality))
+            .GroupBy(stack => new TradeQueueInventoryKey(stack.ItemId, stack.IsHighQuality))
+            .ToDictionary(group => group.Key, group => group.Sum(stack => stack.Quantity));
+
+    public static IReadOnlyDictionary<TradeQueueItemKey, int> CountCombinedInventory(
+        IReadOnlyList<TradeQueueInventoryStack> inventory) =>
+        inventory
+            .GroupBy(stack => new TradeQueueItemKey(stack.ItemId))
             .ToDictionary(group => group.Key, group => group.Sum(stack => stack.Quantity));
 
     private static string Display(TradeQueueItem item) =>
-        item.ItemId == GilItemId
-            ? "Gil"
-            : $"{item.ItemName} {(item.IsHighQuality ? "HQ" : "NQ")}".Trim();
+        item.ItemId == GilItemId ? "Gil" : item.ItemName;
 }

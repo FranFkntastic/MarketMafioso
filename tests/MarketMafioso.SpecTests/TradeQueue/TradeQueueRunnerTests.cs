@@ -1,5 +1,6 @@
 using System.Reflection;
 using Dalamud.Plugin.Services;
+using Franthropy.Dalamud.Automation.Inventory;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.TradeQueue;
 
@@ -13,6 +14,7 @@ public sealed class TradeQueueRunnerTests
         RemovesBatchOnlyAfterExactInventoryDelta();
         CanceledTradeLeavesUnverifiedQuantityQueued();
         StopReleasesAutoConfirmAndPreservesQueue();
+        QualityLoweringStartupFailureReleasesAutoConfirm();
         GilUsesCurrencyInputAndExactBalanceEvidence();
     }
 
@@ -27,6 +29,7 @@ public sealed class TradeQueueRunnerTests
             queue,
             () => { },
             io,
+            new FakeQualityLowering(),
             coordinator,
             TestPluginLog.Create(),
             clock.Read);
@@ -64,6 +67,7 @@ public sealed class TradeQueueRunnerTests
             queue,
             () => { },
             io,
+            new FakeQualityLowering(),
             coordinator,
             TestPluginLog.Create(),
             clock.Read);
@@ -97,6 +101,7 @@ public sealed class TradeQueueRunnerTests
             queue,
             () => { },
             new FakeIo(Inventory(2)),
+            new FakeQualityLowering(),
             coordinator,
             TestPluginLog.Create());
 
@@ -105,6 +110,26 @@ public sealed class TradeQueueRunnerTests
 
         Assert.Equal(TradeQueueExecutionState.Stopped, runner.Snapshot.State);
         Assert.Equal(2, Assert.Single(queue).Quantity);
+        Assert.DoesNotContain("MarketMafioso", stopRequests);
+    }
+
+    private static void QualityLoweringStartupFailureReleasesAutoConfirm()
+    {
+        var queue = Queue(2);
+        var stopRequests = new HashSet<string>();
+        using var coordinator = Coordinator(stopRequests);
+        using var runner = new TradeQueueRunner(
+            queue,
+            () => { },
+            new FakeIo(Inventory(2)),
+            new FakeQualityLowering(failOnBegin: true),
+            coordinator,
+            TestPluginLog.Create());
+
+        var result = runner.Start();
+
+        Assert.False(result.Success);
+        Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
         Assert.DoesNotContain("MarketMafioso", stopRequests);
     }
 
@@ -124,6 +149,7 @@ public sealed class TradeQueueRunnerTests
             queue,
             () => { },
             io,
+            new FakeQualityLowering(),
             coordinator,
             TestPluginLog.Create(),
             clock.Read);
@@ -241,6 +267,48 @@ public sealed class TradeQueueRunnerTests
         public DateTimeOffset Read() => now;
 
         public void Advance(TimeSpan elapsed) => now += elapsed;
+    }
+
+    private sealed class FakeQualityLowering(bool failOnBegin = false) : IItemQualityLoweringAutomation
+    {
+        public ItemQualityLoweringAutomationSnapshot Snapshot { get; private set; } =
+            new(ItemQualityLoweringAutomationState.Idle, "Idle.", null, 0, false);
+
+        public ItemQualityLoweringAutomationSnapshot Begin(
+            IReadOnlyList<ItemQualityLoweringRequirement> requested)
+        {
+            if (failOnBegin)
+            {
+                Snapshot = new(
+                    ItemQualityLoweringAutomationState.Failed,
+                    "Quality lowering could not start.",
+                    null,
+                    0,
+                    false);
+                return Snapshot;
+            }
+
+            Snapshot = new(
+                ItemQualityLoweringAutomationState.Preparing,
+                "Checking quality.",
+                null,
+                0,
+                true);
+            return Snapshot;
+        }
+
+        public ItemQualityLoweringAutomationSnapshot Advance(Func<bool> mutationStillAuthorized)
+        {
+            Snapshot = mutationStillAuthorized()
+                ? new(ItemQualityLoweringAutomationState.Completed, "Quality ready.", null, 0, false)
+                : new(ItemQualityLoweringAutomationState.Failed, "Authorization lost.", null, 0, false);
+            return Snapshot;
+        }
+
+        public void Stop(string message = "Quality lowering stopped.")
+        {
+            Snapshot = new(ItemQualityLoweringAutomationState.Stopped, message, null, 0, false);
+        }
     }
 
     private sealed class FakePluginDataStore(HashSet<string> stopRequests) : IPluginDataStore

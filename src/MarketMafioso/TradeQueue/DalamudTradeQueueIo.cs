@@ -45,7 +45,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     private const string OfferItemTradeSignature =
         "48 89 6C 24 ?? 48 89 74 24 ?? 57 48 83 EC 30 83 B9 ?? ?? ?? ?? ?? 41 8B F0";
 
-    private static readonly InventoryType[] SupportedInventories =
+    internal static readonly InventoryType[] SupportedInventories =
     [
         InventoryType.Inventory1,
         InventoryType.Inventory2,
