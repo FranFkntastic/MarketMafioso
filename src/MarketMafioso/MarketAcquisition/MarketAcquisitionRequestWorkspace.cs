@@ -413,15 +413,17 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         return shelved;
     }
 
-    public void ForgetLocalClaim()
+    public void DetachLocalHostedState()
     {
         MarketAcquisitionClaimPersistence.Clear(config);
         saveConfig();
         ClaimedRequest = null;
         ClearClaimMetadata();
         ClearPreparedPlan();
-        Status = "Cleared the active work order. The Workbench draft remains available.";
+        Status = "Detached local hosted state. The server copy was not shelved or changed.";
     }
+
+    public void ForgetLocalClaim() => DetachLocalHostedState();
 
     public Task PreparePlanAsync(
         string currentWorld,

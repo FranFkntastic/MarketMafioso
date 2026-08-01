@@ -1404,7 +1404,7 @@ public class MainWindow : Window, IDisposable
             _ = StartBlankWorkbenchAsync(context);
         AgentReviewRegistry.Register(
             "acquisition.workbench.new-blank",
-            "Shelve the active work order and start a blank Workbench",
+            "Preserve the current draft and start a local blank Workbench",
             AgentBridgeUiControlKind.Button,
             ImGui.GetItemRectMin(),
             ImGui.GetItemRectMax(),
@@ -1434,11 +1434,15 @@ public class MainWindow : Window, IDisposable
             ImGui.OpenPopup("AcquisitionWorkbenchRecovery");
         var recoveryMinimum = ImGui.GetItemRectMin();
         var recoveryMaximum = ImGui.GetItemRectMax();
+        ImGui.SameLine();
+        ImGui.TextColored(
+            acquisitionRequestBuilder.IsHostedSyncEnabled ? ColHeader : ColMuted,
+            acquisitionRequestBuilder.IsHostedSyncEnabled ? "Hosted sync on" : "Local-only");
         var canClearWorkbench = acquisitionRequestBuilder.LineCount > 0 ||
                                 acquisitionRequestBuilder.HasExactAcquisitionAuthority;
         AgentReviewRegistry.Register(
             "acquisition.recovery.clear-workbench",
-            "Shelve the active work order and start a blank Market Acquisition Workbench",
+            "Preserve the current draft and start a local blank Market Acquisition Workbench",
             AgentBridgeUiControlKind.Button,
             recoveryMinimum,
             recoveryMaximum,
@@ -1448,14 +1452,14 @@ public class MainWindow : Window, IDisposable
             () => _ = StartBlankWorkbenchAsync(context));
         AgentReviewRegistry.Register(
             "acquisition.recovery.clear-active-work-order",
-            "Forget the stale local Market Acquisition work-order claim",
+            "Detach local hosted state without changing the server copy",
             AgentBridgeUiControlKind.Button,
             recoveryMinimum,
             recoveryMaximum,
-            canMutate && acquisitionWorkspace.ClaimedRequest is not null,
+            canMutate && HasMarketAcquisitionHostedState(),
             false,
             acquisitionWorkspace.ClaimedRequest?.Id,
-            acquisitionWorkspace.ForgetLocalClaim);
+            () => DetachMarketAcquisitionHostedStateLocally());
 
         if (!ImGui.BeginPopup("AcquisitionWorkbenchRecovery"))
             return;
@@ -1464,8 +1468,30 @@ public class MainWindow : Window, IDisposable
             _ = StartBlankWorkbenchAsync(context);
         if (ImGuiUi.MenuItem("Restore previous Workbench", canMutate && acquisitionRequestBuilder.HasPreviousWorkbench))
             acquisitionRequestBuilder.RestorePreviousWorkbench();
-        if (ImGuiUi.MenuItem("Clear active work order", canMutate && acquisitionWorkspace.ClaimedRequest is not null))
-            acquisitionWorkspace.ForgetLocalClaim();
+        if (ImGuiUi.MenuItem(
+                "Sync hosted copy",
+                canMutate && CanRequestMarketAcquisitionHostedSync(context)))
+        {
+            RequestMarketAcquisitionHostedSync(context);
+        }
+        if (ImGuiUi.MenuItem(
+                "Pause hosted sync",
+                canMutate && acquisitionRequestBuilder.IsHostedSyncEnabled))
+        {
+            acquisitionRequestBuilder.PauseHostedSync();
+        }
+        if (ImGuiUi.MenuItem(
+                "Shelf hosted copy remotely",
+                canMutate && CanShelfMarketAcquisitionHostedState()))
+        {
+            _ = ShelfMarketAcquisitionHostedStateRemotely();
+        }
+        if (ImGuiUi.MenuItem(
+                "Detach hosted copy locally",
+                canMutate && HasMarketAcquisitionHostedState()))
+        {
+            DetachMarketAcquisitionHostedStateLocally();
+        }
         if (ImGuiUi.MenuItem(
                 "Return active work order to sender",
                 canMutate && acquisitionWorkspace.ClaimedRequest is { Status: "Claimed" }))
@@ -1479,16 +1505,92 @@ public class MainWindow : Window, IDisposable
     private async Task StartBlankWorkbenchAsync(MarketAcquisitionRequestBuilderContext context)
     {
         await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
-        var current = acquisitionRequestBuilder.CurrentDocument;
-        if ((acquisitionWorkspace.ClaimedRequest is not null || !string.IsNullOrWhiteSpace(current.RemoteRequestId)) &&
-            !await acquisitionWorkspace.ShelfActiveWorkOrderAsync(
-                current.RemoteRequestId,
-                current.RemoteRevision).ConfigureAwait(false))
+        if (!PrepareMarketAcquisitionLocalReplacement())
+            return;
+
+        acquisitionRequestBuilder.StartBlankWorkbench(context);
+    }
+
+    private bool CanRequestMarketAcquisitionHostedSync(MarketAcquisitionRequestBuilderContext context)
+    {
+        if (!context.HasCharacterScope ||
+            context.IsBusy ||
+            context.IsRouteActive ||
+            acquisitionRequestBuilder.IsSynchronizing ||
+            !acquisitionRequestBuilder.DraftValidation.IsValid ||
+            string.IsNullOrWhiteSpace(config.ServerUrl) ||
+            string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config)))
         {
+            return false;
+        }
+
+        var remoteRequestId = acquisitionRequestBuilder.CurrentDocument.RemoteRequestId;
+        var claim = acquisitionWorkspace.ClaimedRequest;
+        return string.IsNullOrWhiteSpace(remoteRequestId)
+            ? claim is null
+            : claim is not null && string.Equals(claim.Id, remoteRequestId, StringComparison.Ordinal);
+    }
+
+    private void RequestMarketAcquisitionHostedSync(MarketAcquisitionRequestBuilderContext context)
+    {
+        if (!CanRequestMarketAcquisitionHostedSync(context))
+        {
+            acquisitionRequestBuilder.SetStatus(
+                "Hosted sync needs a matching local claim. Detach the local hosted state before publishing a new browser copy.");
             return;
         }
 
-        acquisitionRequestBuilder.StartBlankWorkbench(context);
+        acquisitionRequestBuilder.RequestHostedSync();
+    }
+
+    private bool HasMarketAcquisitionHostedState() =>
+        acquisitionRequestBuilder.IsHostedSyncEnabled ||
+        acquisitionRequestBuilder.HasHostedAssociation ||
+        acquisitionWorkspace.ClaimedRequest is not null ||
+        acquisitionRequestBuilder.SyncStatus.Equals("SyncFailed", StringComparison.OrdinalIgnoreCase) ||
+        acquisitionRequestBuilder.SyncStatus.Equals("RemoteChanged", StringComparison.OrdinalIgnoreCase);
+
+    private bool CanShelfMarketAcquisitionHostedState() =>
+        acquisitionRequestBuilder.HasHostedAssociation ||
+        acquisitionWorkspace.ClaimedRequest is not null;
+
+    private bool PrepareMarketAcquisitionLocalReplacement()
+    {
+        if (IsMarketAcquisitionRouteActive() || acquisitionWorkspace.IsBusy || acquisitionRequestBuilder.IsSynchronizing)
+        {
+            acquisitionRequestBuilder.SetStatus(
+                "Stop the active route and wait for the current Workbench operation before replacing the local plan.");
+            return false;
+        }
+
+        if (HasMarketAcquisitionHostedState() || acquisitionWorkspace.PreparedPlan is not null)
+            acquisitionWorkspace.DetachLocalHostedState();
+        return true;
+    }
+
+    private bool DetachMarketAcquisitionHostedStateLocally()
+    {
+        if (!PrepareMarketAcquisitionLocalReplacement())
+            return false;
+
+        acquisitionRequestBuilder.DetachHostedAssociation();
+        return true;
+    }
+
+    private async Task ShelfMarketAcquisitionHostedStateRemotely()
+    {
+        await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
+        var current = acquisitionRequestBuilder.CurrentDocument;
+        if (!await acquisitionWorkspace.ShelfActiveWorkOrderAsync(
+                current.RemoteRequestId,
+                current.RemoteRevision).ConfigureAwait(false))
+        {
+            acquisitionRequestBuilder.SetStatus(
+                "Remote shelving failed; the local Workbench and hosted association were retained.");
+            return;
+        }
+
+        acquisitionRequestBuilder.MarkHostedCopyShelved();
     }
 
     private async Task ReplaceWorkbenchFromCompositionAsync(
@@ -1497,14 +1599,8 @@ public class MainWindow : Window, IDisposable
         string world)
     {
         await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
-        var current = acquisitionRequestBuilder.CurrentDocument;
-        if ((acquisitionWorkspace.ClaimedRequest is not null || !string.IsNullOrWhiteSpace(current.RemoteRequestId)) &&
-            !await acquisitionWorkspace.ShelfActiveWorkOrderAsync(
-                current.RemoteRequestId,
-                current.RemoteRevision).ConfigureAwait(false))
-        {
+        if (!PrepareMarketAcquisitionLocalReplacement())
             return;
-        }
 
         acquisitionRequestBuilder.LoadComposition(composition, characterName, world);
     }

@@ -67,6 +67,20 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     public bool HasPreviousWorkbench => controller.HasPreviousWorkbench;
 
+    public bool IsHostedSyncEnabled => controller.IsHostedSyncEnabled;
+
+    public bool HasHostedAssociation => controller.HasHostedAssociation;
+
+    public void SetStatus(string status) => controller.SetStatus(status);
+
+    public void RequestHostedSync() => controller.RequestHostedSync();
+
+    public void PauseHostedSync() => controller.PauseHostedSync();
+
+    public bool DetachHostedAssociation() => controller.DetachHostedAssociation();
+
+    public void MarkHostedCopyShelved() => controller.MarkHostedCopyShelved();
+
     public void MarkPlanPrepared(string planHash) => controller.MarkPlanPrepared(planHash);
 
     public void AdoptRequest(MarketAcquisitionRequestView request) => controller.AdoptRequest(request);
