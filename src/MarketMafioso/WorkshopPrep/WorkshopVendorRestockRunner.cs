@@ -389,14 +389,8 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 Persist();
                 return;
             case WorkshopVendorReachState.Unavailable:
-                if (!TryReplanCurrentStop(run, out var replanMessage))
-                {
-                    Fail(
-                        WorkshopVendorRestockPhase.Failed,
-                        DescribeReachFailure(run, stop.NpcName, result.Message, replanMessage));
-                    return;
-                }
-                run.Phase = WorkshopVendorRestockPhase.ReachVendor;
+                ReplanOrSkipCurrentStop(run, out var replanMessage);
+                run.Phase = WorkshopVendorRestockPhase.RefreshInventory;
                 run.Message = replanMessage;
                 runtime.ResetVendorApproach();
                 Persist();
@@ -412,16 +406,12 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
     private static string DescribeReachFailure(
         PersistedWorkshopVendorRestockRun run,
         string npcName,
-        string reason,
-        string? alternative = null)
+        string reason)
     {
         var spend = run.Receipts.Count == 0
             ? "No gil was spent."
             : "Verified purchases from earlier stops were preserved.";
-        var next = string.IsNullOrWhiteSpace(alternative)
-            ? reason
-            : alternative;
-        return $"Couldn't reach {npcName}. {spend} {next}".Trim();
+        return $"Couldn't reach {npcName}. {spend} {reason}".Trim();
     }
 
     private void TickValidateShop(PersistedWorkshopVendorRestockRun run)
@@ -666,7 +656,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         }
     }
 
-    private static bool TryReplanCurrentStop(
+    private static void ReplanOrSkipCurrentStop(
         PersistedWorkshopVendorRestockRun run,
         out string message)
     {
@@ -676,7 +666,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             .Where(line => RemainingForLine(line) > 0)
             .ToList();
         var replacementStops = new List<PersistedWorkshopVendorStop>();
-        while (remainingLines.Count > 0)
+        while (remainingLines.Any(line => line.AlternativeOffers.Count != 0))
         {
             var best = remainingLines
                 .SelectMany(line => line.AlternativeOffers.Select(offer => new
@@ -690,10 +680,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 .ThenBy(group => group.Key.NpcId)
                 .FirstOrDefault();
             if (best is null)
-            {
-                message = $"No other reviewed accessible vendor can cover {string.Join(", ", remainingLines.Select(line => line.ItemName))}.";
-                return false;
-            }
+                break;
 
             var selectedByItem = best
                 .GroupBy(candidate => candidate.Line.ItemId)
@@ -715,11 +702,26 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             });
         }
 
+        var skipped = remainingLines.ToArray();
+        foreach (var line in skipped)
+        {
+            line.VendorUnavailable = true;
+            line.Status = "No accessible vendor";
+            line.AlternativeOffers.Clear();
+        }
+
         run.Stops.RemoveAt(run.StopIndex);
         run.Stops.InsertRange(run.StopIndex, replacementStops);
         run.LineIndex = 0;
-        message = $"The first vendor was unavailable; replanned {replacementStops.Count:N0} reviewed stop(s) without expanding any quantity or gil ceiling.";
-        return true;
+        message = replacementStops.Count switch
+        {
+            > 0 when skipped.Length > 0 =>
+                $"Replanned {replacementStops.Count:N0} reviewed vendor stop(s); skipped {string.Join(", ", skipped.Select(line => line.ItemName))} because no reviewed accessible vendor remains.",
+            > 0 =>
+                $"Replanned {replacementStops.Count:N0} reviewed vendor stop(s) without expanding any quantity or gil ceiling.",
+            _ =>
+                $"Skipped {string.Join(", ", skipped.Select(line => line.ItemName))} because no reviewed accessible vendor remains; continuing the restock plan.",
+        };
     }
 
     private static Dictionary<uint, int> RemainingPurchaseQuantities(
@@ -740,6 +742,8 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
 
     private static int RemainingForLine(PersistedWorkshopVendorRestockLine line)
     {
+        if (line.VendorUnavailable)
+            return 0;
         var liveNeed = Math.Max(0, line.RequiredQuantity - line.LivePlayerQuantity);
         var remainingApproval = Math.Max(0, line.ApprovedVendorQuantity - line.PurchasedQuantity);
         return Math.Min(liveNeed, remainingApproval);

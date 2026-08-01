@@ -340,6 +340,7 @@ public class MainWindow : Window, IDisposable
             new DalamudOrdinaryGilShop(Plugin.GameGui, dataManager),
             new DalamudVNavmeshTravel(Plugin.PluginInterface),
             new DalamudLifestreamAetheryteTravel(Plugin.PluginInterface),
+            new DalamudLifestreamAethernetTravel(Plugin.PluginInterface),
             new DalamudLifestreamObjectInteractor(Plugin.PluginInterface),
             new DalamudTravelReadiness(
                 Plugin.Condition,

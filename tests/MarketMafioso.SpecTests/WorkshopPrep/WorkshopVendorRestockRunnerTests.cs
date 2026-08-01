@@ -40,10 +40,23 @@ public sealed class WorkshopVendorRestockRunnerTests
             case RunnerScenario.ReloadReconciliation: Reload_reconciles_an_exact_armed_purchase_before_continuing(); break;
             case RunnerScenario.IdentityDrift: Owner_or_queue_drift_pauses_before_any_external_action(); break;
             case RunnerScenario.ArmedStopReconciliation: Purchase_is_persisted_as_verifying_before_the_callback_and_stop_reconciles_it(); break;
-            case RunnerScenario.UnreachableFailure: Unreachable_vendor_reports_safe_actionable_failure(); break;
+            case RunnerScenario.UnreachableFailure: Unreachable_vendor_is_skipped_without_blocking_later_stops(); break;
             case RunnerScenario.ApproachPolicy: Vendor_approach_requires_walking_before_interaction(); break;
             default: throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
         }
+    }
+
+    [Fact]
+    public void Persisted_offer_preserves_an_aetheryte_plus_aethernet_route()
+    {
+        var offer = Offer(1) with
+        {
+            TravelRoutes = [new GilVendorTravelRoute(9, 17)],
+        };
+
+        var restored = PersistedGilVendorOffer.From(offer).ToOffer();
+
+        Assert.Equal([new GilVendorTravelRoute(9, 17)], restored.EffectiveTravelRoutes);
     }
 
     private void Disabled_vendor_toggle_creates_no_vendor_authority()
@@ -201,22 +214,29 @@ public sealed class WorkshopVendorRestockRunnerTests
         Assert.Equal(0, runtime.SubmitCalls);
     }
 
-    private void Unreachable_vendor_reports_safe_actionable_failure()
+    private void Unreachable_vendor_is_skipped_without_blocking_later_stops()
     {
         var runtime = new FakeRuntime();
         runtime.ReachResults.Enqueue(new(
             WorkshopVendorReachState.Unavailable,
             "The route timed out."));
-        var material = Material(1, required: 1, player: 0, retainer: 0, vendor: 1);
-        var review = Review(material, [Stop(1)]);
+        runtime.ReachResults.Enqueue(new(
+            WorkshopVendorReachState.ShopOpen,
+            "Later shop opened."));
+        var first = Material(1, required: 1, player: 0, retainer: 0, vendor: 1);
+        var later = Material(2, required: 1, player: 0, retainer: 0, vendor: 1);
+        var review = Review([first, later], [Stop(1), Stop(2)]);
         var runner = new WorkshopVendorRestockRunner(new Configuration(), runtime, () => { });
 
         Assert.True(runner.TryStart(review, Owner, true, out var error), error);
         TickUntilTerminal(runner, review.QueueSignature, 10);
 
-        Assert.Equal(WorkshopVendorRestockPhase.Failed, runner.ActiveRun!.Phase);
-        Assert.StartsWith("Couldn't reach Shared Vendor. No gil was spent.", runner.ActiveRun.Message);
-        Assert.Equal(0, runtime.SubmitCalls);
+        Assert.Equal(WorkshopVendorRestockPhase.Completed, runner.ActiveRun!.Phase);
+        Assert.True(runner.ActiveRun.Lines.Single(line => line.ItemId == 1).VendorUnavailable);
+        Assert.Equal("No accessible vendor", runner.ActiveRun.Lines.Single(line => line.ItemId == 1).Status);
+        Assert.Equal([2u], runner.ActiveRun.Receipts.Select(receipt => receipt.ItemId));
+        Assert.Equal(2, runtime.ReachCalls);
+        Assert.Equal(1, runtime.SubmitCalls);
     }
 
     private static void Vendor_approach_requires_walking_before_interaction()

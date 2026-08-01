@@ -720,7 +720,8 @@ internal sealed class WorkshopMaterialPanel
         status.Equals("Ready", StringComparison.OrdinalIgnoreCase)
             ? MarketMafiosoUiTheme.Success
             : status.Contains("Remaining", StringComparison.OrdinalIgnoreCase) ||
-              status.Contains("Ceiling", StringComparison.OrdinalIgnoreCase)
+              status.Contains("Ceiling", StringComparison.OrdinalIgnoreCase) ||
+              status.Contains("No accessible vendor", StringComparison.OrdinalIgnoreCase)
                 ? MarketMafiosoUiTheme.Warning
                 : MarketMafiosoUiTheme.Muted;
 

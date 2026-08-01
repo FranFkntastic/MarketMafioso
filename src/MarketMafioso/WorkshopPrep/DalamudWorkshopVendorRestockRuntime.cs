@@ -25,6 +25,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
     private readonly DalamudOrdinaryGilShop shop;
     private readonly DalamudVNavmeshTravel vnavmesh;
     private readonly DalamudLifestreamAetheryteTravel aetheryteTravel;
+    private readonly DalamudLifestreamAethernetTravel aethernetTravel;
     private readonly DalamudLifestreamObjectInteractor objectInteractor;
     private readonly DalamudTravelReadiness travelReadiness;
     private readonly ExternalAutomationCoordinator externalAutomation;
@@ -35,6 +36,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
     private DateTimeOffset nextActionAt;
     private uint activeNpcId;
     private uint? requestedAetheryteId;
+    private uint? requestedAethernetId;
     private bool ownsNavigation;
 
     public DalamudWorkshopVendorRestockRuntime(
@@ -45,6 +47,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         DalamudOrdinaryGilShop shop,
         DalamudVNavmeshTravel vnavmesh,
         DalamudLifestreamAetheryteTravel aetheryteTravel,
+        DalamudLifestreamAethernetTravel aethernetTravel,
         DalamudLifestreamObjectInteractor objectInteractor,
         DalamudTravelReadiness travelReadiness,
         ExternalAutomationCoordinator externalAutomation,
@@ -59,6 +62,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         this.shop = shop ?? throw new ArgumentNullException(nameof(shop));
         this.vnavmesh = vnavmesh ?? throw new ArgumentNullException(nameof(vnavmesh));
         this.aetheryteTravel = aetheryteTravel ?? throw new ArgumentNullException(nameof(aetheryteTravel));
+        this.aethernetTravel = aethernetTravel ?? throw new ArgumentNullException(nameof(aethernetTravel));
         this.objectInteractor = objectInteractor ?? throw new ArgumentNullException(nameof(objectInteractor));
         this.travelReadiness = travelReadiness ?? throw new ArgumentNullException(nameof(travelReadiness));
         this.externalAutomation = externalAutomation ?? throw new ArgumentNullException(nameof(externalAutomation));
@@ -173,6 +177,9 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         if (readiness.State == TravelReadinessState.Blocked)
             return new(WorkshopVendorReachState.Failed, readiness.Message);
 
+        if (utcNow() - approachStartedAt > ApproachTimeout)
+            return new(WorkshopVendorReachState.Unavailable, $"Could not reach {offer.NpcName} within two minutes.");
+
         if (clientState.TerritoryType != offer.TerritoryId)
         {
             if (assessment.RouteAetheryteId is not { } route)
@@ -195,18 +202,40 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
                         return new(WorkshopVendorReachState.Failed, submission.Message);
                 }
             }
+
+            if (requestedAetheryteId == route &&
+                assessment.RouteAethernetId is { } aethernetId &&
+                requestedAethernetId != aethernetId &&
+                utcNow() >= nextActionAt)
+            {
+                var submission = aethernetTravel.TrySubmit(aethernetId);
+                switch (submission.State)
+                {
+                    case AetheryteTravelSubmissionState.Submitted:
+                        requestedAethernetId = aethernetId;
+                        nextActionAt = utcNow().Add(ActionThrottle);
+                        travelReadiness.Reset();
+                        break;
+                    case AetheryteTravelSubmissionState.Busy:
+                        return new(WorkshopVendorReachState.Waiting, submission.Message);
+                    case AetheryteTravelSubmissionState.Rejected:
+                        nextActionAt = utcNow().Add(ActionThrottle);
+                        return new(WorkshopVendorReachState.Waiting, "Waiting to enter the destination aethernet network.");
+                    case AetheryteTravelSubmissionState.Unavailable:
+                    case AetheryteTravelSubmissionState.InvalidRequest:
+                        return new(WorkshopVendorReachState.Failed, submission.Message);
+                }
+            }
             return new(WorkshopVendorReachState.Waiting, $"Traveling to {offer.NpcName}.");
         }
 
         if (requestedAetheryteId is not null)
         {
             requestedAetheryteId = null;
+            requestedAethernetId = null;
             approachStartedAt = utcNow();
             nextActionAt = DateTimeOffset.MinValue;
         }
-        if (utcNow() - approachStartedAt > ApproachTimeout)
-            return new(WorkshopVendorReachState.Unavailable, $"Could not reach {offer.NpcName} within two minutes.");
-
         var npc = access.FindLiveNpc(offer);
         var playerPosition = objectTable.LocalPlayer?.Position;
         if (playerPosition is null)
@@ -264,6 +293,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         nextActionAt = DateTimeOffset.MinValue;
         activeNpcId = 0;
         requestedAetheryteId = null;
+        requestedAethernetId = null;
         travelReadiness.Reset();
     }
 
