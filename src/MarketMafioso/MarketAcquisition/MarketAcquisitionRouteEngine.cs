@@ -419,14 +419,27 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (shardCheckpoints?.IsActive == true)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 $"Route resume is locked while purchased shards are being reconciled: {shardCheckpoints.Snapshot.Message}"));
-        if (travelInterruptedByCleanup)
+        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
         {
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
-                "World travel was interrupted while paused; restart the route only after reconciling the current world."));
+            var blocked = runner.RecordTravelRecoveryBlocked(reconciliationFailure);
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blocked.Message));
         }
 
-        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
+        if (travelInterruptedByCleanup)
+        {
+            if (!context.IsCurrentWorldAvailable)
+            {
+                const string message = "Route resume is waiting for the current world to become available after interrupted travel.";
+                var blocked = runner.RecordTravelRecoveryBlocked(message);
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blocked.Message));
+            }
+
+            var reconciled = runner.ReconcileInterruptedTravel(context.GetCurrentWorldName());
+            if (!reconciled.Success)
+                return UpdateStatus(reconciled);
+
+            travelInterruptedByCleanup = false;
+        }
 
         if (exactAcquisitionAuthority is not null && runner.ActivePlan is { } plan)
         {
@@ -480,7 +493,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 "Route recovery is waiting for the current world to become available."));
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
+        {
+            var blocked = runner.RecordTravelRecoveryBlocked(reconciliationFailure);
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blocked.Message));
+        }
 
         CleanupOwnedApproach("Recovery");
         CleanupOwnedTravel("Recovery");
@@ -502,7 +518,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         var result = runner.Recover(context.GetCurrentWorldName());
         if (result.Success)
+        {
             state.ManualRecoveryBlockedReason = null;
+            travelInterruptedByCleanup = false;
+        }
         return UpdateStatus(result);
     }
 
@@ -899,17 +918,20 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
             else
             {
-                var preflight = uiAutomation.CheckTravelPreflight();
+                var preflight = CheckLifestreamCommandPreflight($"travel to {activeStop.WorldName}");
                 if (!preflight.CanSendCommand)
                 {
-                    UpdateStatus(runner.RecordTravelBlockedByUi(preflight));
+                    UpdateStatus(runner.RecordTravelPreflightBlocked(preflight));
                     ObserveTravelPreparationOperation(
                         preparation,
                         MarketAcquisitionRouteOperationDisposition.Pending,
                         preflight.Message,
                         new Dictionary<string, string?>
                         {
-                            ["preparationState"] = "UiBlocked",
+                            ["preparationState"] = "PreflightBlocked",
+                            ["preflightState"] = preflight.State.ToString(),
+                            ["busyStateAvailable"] = preflight.BusyStateAvailable.ToString(),
+                            ["lifestreamBusy"] = preflight.LifestreamBusy.ToString(),
                             ["blockingAddons"] = string.Join(", ", preflight.BlockingAddons),
                         });
                     state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
@@ -919,7 +941,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ObserveTravelPreparationOperation(
                     preparation,
                     MarketAcquisitionRouteOperationDisposition.Succeeded,
-                    $"Travel UI preflight passed for {activeStop.WorldName}.",
+                    $"Travel preflight passed for {activeStop.WorldName}.",
                     new Dictionary<string, string?>
                     {
                         ["preparationState"] = "ReadyToTravel",
@@ -1113,14 +1135,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         return result.Snapshot;
     }
 
-    private bool EnsureRouteTravelUiIsClear()
+    private MarketAcquisitionTravelPreflightResult CheckLifestreamCommandPreflight(string operation)
     {
-        var preflight = uiAutomation.CheckTravelPreflight();
-        if (preflight.CanSendCommand)
-            return true;
-
-        UpdateStatus(runner.RecordTravelBlockedByUi(preflight));
-        return false;
+        var lifestreamStateAvailable = context.TryIsWorldTravelBusy(out var lifestreamBusy);
+        return MarketAcquisitionTravelPreflight.Evaluate(
+            uiAutomation.CheckTravelPreflight(),
+            lifestreamStateAvailable,
+            lifestreamBusy,
+            operation);
     }
 
     private void HandleWorldScopedStop(MarketAcquisitionGuidedRouteStop activeStop, string currentWorld)
@@ -1198,8 +1220,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             UpdateStatus(runner.RecordMarketBoardApproach(approachResult));
             if (approachResult.MarketBoardTravelNeeded)
             {
-                if (!EnsureRouteTravelUiIsClear())
+                var preflight = CheckLifestreamCommandPreflight("market-board travel");
+                if (!preflight.CanSendCommand)
                 {
+                    UpdateStatus(runner.RecordTravelPreflightBlocked(preflight));
                     state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
                     return;
                 }

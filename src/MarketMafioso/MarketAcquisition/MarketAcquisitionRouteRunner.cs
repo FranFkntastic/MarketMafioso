@@ -241,6 +241,41 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
+    public MarketAcquisitionRouteActionResult ReconcileInterruptedTravel(string currentWorld)
+    {
+        if (!IsPaused)
+            return Fail($"Interrupted travel cannot be reconciled while {State}.");
+
+        var recovery = session?.PrepareForRecovery(currentWorld) ??
+                       MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
+        if (!recovery.Success)
+            return Fail(recovery.Message);
+
+        StatusMessage = recovery.Message;
+        diagnostics.Record(
+            "travel-reconciled",
+            StatusMessage,
+            new Dictionary<string, string?>
+            {
+                ["currentWorld"] = currentWorld,
+                ["retainedWorld"] = session?.ActiveStop?.WorldName,
+                ["retainedStatus"] = session?.ActiveStop?.Status,
+            });
+        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
+    }
+
+    public MarketAcquisitionRouteActionResult RecordTravelRecoveryBlocked(string message)
+    {
+        if (State is not ("Paused" or "Stopped" or "Failed"))
+            return Fail($"Travel recovery is not waiting while {State}.");
+        if (string.IsNullOrWhiteSpace(message))
+            throw new ArgumentException("Travel recovery message is required.", nameof(message));
+
+        StatusMessage = message;
+        diagnostics.Record("travel-recovery-waiting", StatusMessage);
+        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
+    }
+
     public MarketAcquisitionRouteActionResult Recover(string currentWorld)
     {
         if (!CanRecover)
@@ -401,6 +436,29 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             preflight.Message,
             new Dictionary<string, string?>
             {
+                ["blockingAddons"] = string.Join(", ", preflight.BlockingAddons),
+            });
+        return MarketAcquisitionRouteActionResult.Ok(preflight.Message);
+    }
+
+    public MarketAcquisitionRouteActionResult RecordTravelPreflightBlocked(
+        MarketAcquisitionTravelPreflightResult preflight)
+    {
+        ArgumentNullException.ThrowIfNull(preflight);
+
+        if (!IsRunning)
+            return Fail($"Route is {State}; travel preflight was not recorded.");
+
+        StatusMessage = preflight.Message;
+        diagnostics.Record(
+            "travel-preflight-blocked",
+            preflight.Message,
+            new Dictionary<string, string?>
+            {
+                ["operation"] = preflight.Operation,
+                ["preflightState"] = preflight.State.ToString(),
+                ["busyStateAvailable"] = preflight.BusyStateAvailable.ToString(),
+                ["lifestreamBusy"] = preflight.LifestreamBusy.ToString(),
                 ["blockingAddons"] = string.Join(", ", preflight.BlockingAddons),
             });
         return MarketAcquisitionRouteActionResult.Ok(preflight.Message);

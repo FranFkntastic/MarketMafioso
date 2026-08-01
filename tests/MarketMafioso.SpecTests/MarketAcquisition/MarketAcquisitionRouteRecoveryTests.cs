@@ -214,6 +214,62 @@ public sealed class MarketAcquisitionRouteRecoveryTests
         Assert.Equal("Pending", session.ActiveStop?.Status);
     }
 
+    [Fact]
+    public void ReconcileInterruptedTravel_AfterPause_RequeuesRetainedStopBeforeResume()
+    {
+        using var runner = new MarketAcquisitionRouteRunner(Path.GetTempPath());
+
+        Assert.True(runner.Start(CreatePlan("Jenova")).Success);
+        Assert.True(runner.ExecutePendingTravelCommand(_ => true).Success);
+        Assert.True(runner.Pause().Success);
+
+        var reconcile = runner.ReconcileInterruptedTravel("Siren");
+
+        Assert.True(reconcile.Success);
+        Assert.Equal("Pending", runner.RetainedActiveStop?.Status);
+        Assert.Contains("travel will resume", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(runner.Resume().Success);
+        Assert.True(runner.IsRunning);
+        Assert.Equal("Pending", runner.ActiveStop?.Status);
+    }
+
+    [Fact]
+    public void ExecutePendingTravelCommand_SendsOneCommandAndMarksStop()
+    {
+        using var runner = new MarketAcquisitionRouteRunner(Path.GetTempPath());
+        var commands = new List<string>();
+
+        Assert.True(runner.Start(CreatePlan("Jenova")).Success);
+        Assert.True(runner.ExecutePendingTravelCommand(command =>
+        {
+            commands.Add(command);
+            return true;
+        }).Success);
+        Assert.True(runner.ExecutePendingTravelCommand(command =>
+        {
+            commands.Add(command);
+            return true;
+        }).Success);
+
+        Assert.Equal(["/li Jenova mb"], commands);
+        Assert.Equal("TravelCommandSent", runner.ActiveStop?.Status);
+    }
+
+    [Fact]
+    public void RecordTravelRecoveryBlocked_LeavesRecoveryActionVisible()
+    {
+        using var runner = new MarketAcquisitionRouteRunner(Path.GetTempPath());
+
+        Assert.True(runner.Start(CreatePlan("Jenova")).Success);
+        Assert.True(runner.Stop().Success);
+
+        var result = runner.RecordTravelRecoveryBlocked("Waiting for Lifestream travel state.");
+
+        Assert.True(result.Success);
+        Assert.True(runner.CanRecover);
+        Assert.Equal("Waiting for Lifestream travel state.", runner.StatusMessage);
+    }
+
     private static MarketBoardPurchaseSession ConfirmedSession(DateTimeOffset now)
     {
         var session = MarketBoardPurchaseSession.Start(
