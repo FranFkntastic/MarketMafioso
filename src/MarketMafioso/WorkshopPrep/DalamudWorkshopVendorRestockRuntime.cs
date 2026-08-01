@@ -175,7 +175,17 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         if (readiness.State is TravelReadinessState.Repairing or TravelReadinessState.Waiting)
             return new(WorkshopVendorReachState.Waiting, readiness.Message);
         if (readiness.State == TravelReadinessState.Blocked)
+        {
+            if (ShouldWaitForPendingTravelUi(
+                    readiness,
+                    requestedAetheryteId is not null || requestedAethernetId is not null))
+            {
+                return new(
+                    WorkshopVendorReachState.Waiting,
+                    "Waiting for the in-progress vendor travel to release the game UI.");
+            }
             return new(WorkshopVendorReachState.Failed, readiness.Message);
+        }
 
         if (utcNow() - approachStartedAt > ApproachTimeout)
             return new(WorkshopVendorReachState.Unavailable, $"Could not reach {offer.NpcName} within two minutes.");
@@ -448,6 +458,13 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
             ? WorkshopVendorTravelLeg.AwaitDestination
             : WorkshopVendorTravelLeg.SubmitAethernet;
     }
+
+    internal static bool ShouldWaitForPendingTravelUi(
+        TravelReadinessResult readiness,
+        bool travelRequestPending) =>
+        readiness.State == TravelReadinessState.Blocked &&
+        readiness.Code == "UnknownUiOwner" &&
+        travelRequestPending;
 }
 
 internal enum WorkshopVendorApproachDecision

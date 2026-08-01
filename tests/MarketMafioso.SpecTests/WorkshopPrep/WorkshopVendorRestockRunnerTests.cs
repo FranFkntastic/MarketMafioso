@@ -1,4 +1,5 @@
 using Franthropy.Dalamud.Automation.Vendors;
+using Franthropy.Dalamud.Travel;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.WorkshopPrep;
 using System.Numerics;
@@ -122,6 +123,21 @@ public sealed class WorkshopVendorRestockRunnerTests
                 routeAetheryteTerritoryId: null,
                 requestedAetheryteId: 9,
                 requestedAethernetId: null));
+    }
+
+    [Fact]
+    public void Pending_vendor_travel_waits_through_its_quest_ui_owner()
+    {
+        var readiness = new TravelReadinessResult(
+            TravelReadinessState.Blocked,
+            "UnknownUiOwner",
+            "A quest or NPC interaction still owns the game UI after owned surfaces were released.");
+
+        Assert.True(DalamudWorkshopVendorRestockRuntime.ShouldWaitForPendingTravelUi(readiness, true));
+        Assert.False(DalamudWorkshopVendorRestockRuntime.ShouldWaitForPendingTravelUi(readiness, false));
+        Assert.False(DalamudWorkshopVendorRestockRuntime.ShouldWaitForPendingTravelUi(
+            readiness with { Code = "InCombat" },
+            true));
     }
 
     private void Disabled_vendor_toggle_creates_no_vendor_authority()
