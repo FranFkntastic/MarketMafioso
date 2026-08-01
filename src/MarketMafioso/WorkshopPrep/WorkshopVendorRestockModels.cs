@@ -60,6 +60,7 @@ public sealed class PersistedWorkshopVendorRestockLine
     public uint UnitPriceGil { get; set; }
     public ulong ApprovedGilCeiling { get; set; }
     public int LivePlayerQuantity { get; set; }
+    public bool VendorUnavailable { get; set; }
     public string Status { get; set; } = "Waiting";
     public PersistedGilVendorOffer? Offer { get; set; }
     public List<PersistedGilVendorOffer> AlternativeOffers { get; set; } = [];
@@ -93,6 +94,7 @@ public sealed class PersistedGilVendorOffer
     public float PositionY { get; set; }
     public float PositionZ { get; set; }
     public List<uint> RouteAetheryteIds { get; set; } = [];
+    public List<PersistedGilVendorTravelRoute> TravelRoutes { get; set; } = [];
 
     public static PersistedGilVendorOffer From(GilVendorOffer offer) => new()
     {
@@ -109,20 +111,41 @@ public sealed class PersistedGilVendorOffer
         PositionY = offer.Position.Y,
         PositionZ = offer.Position.Z,
         RouteAetheryteIds = [.. offer.RouteAetheryteIds],
+        TravelRoutes = offer.EffectiveTravelRoutes
+            .Select(PersistedGilVendorTravelRoute.From)
+            .ToList(),
     };
 
     public GilVendorOffer ToOffer() => new(
-        ItemId,
-        ItemName,
-        IconId,
-        UnitPriceGil,
-        ShopId,
-        ShopRowIndex,
-        NpcId,
-        NpcName,
-        TerritoryId,
-        new Vector3(PositionX, PositionY, PositionZ),
-        RouteAetheryteIds);
+            ItemId,
+            ItemName,
+            IconId,
+            UnitPriceGil,
+            ShopId,
+            ShopRowIndex,
+            NpcId,
+            NpcName,
+            TerritoryId,
+            new Vector3(PositionX, PositionY, PositionZ),
+            RouteAetheryteIds)
+        {
+            TravelRoutes = TravelRoutes.Select(route => route.ToRoute()).ToArray(),
+        };
+}
+
+[Serializable]
+public sealed class PersistedGilVendorTravelRoute
+{
+    public uint AetheryteId { get; set; }
+    public uint? AethernetId { get; set; }
+
+    public static PersistedGilVendorTravelRoute From(GilVendorTravelRoute route) => new()
+    {
+        AetheryteId = route.AetheryteId,
+        AethernetId = route.AethernetId,
+    };
+
+    public GilVendorTravelRoute ToRoute() => new(AetheryteId, AethernetId);
 }
 
 [Serializable]
