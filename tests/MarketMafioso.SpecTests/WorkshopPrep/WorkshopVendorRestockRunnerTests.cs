@@ -51,12 +51,77 @@ public sealed class WorkshopVendorRestockRunnerTests
     {
         var offer = Offer(1) with
         {
-            TravelRoutes = [new GilVendorTravelRoute(9, 17)],
+            TravelRoutes = [new GilVendorTravelRoute(9, 17, 130)],
         };
 
         var restored = PersistedGilVendorOffer.From(offer).ToOffer();
 
-        Assert.Equal([new GilVendorTravelRoute(9, 17)], restored.EffectiveTravelRoutes);
+        Assert.Equal([new GilVendorTravelRoute(9, 17, 130)], restored.EffectiveTravelRoutes);
+    }
+
+    [Fact]
+    public void Aethernet_leg_waits_for_main_aetheryte_arrival()
+    {
+        Assert.Equal(
+            WorkshopVendorTravelLeg.AwaitAetheryteArrival,
+            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
+                currentTerritoryId: 129,
+                targetTerritoryId: 131,
+                routeAetheryteId: 9,
+                routeAethernetId: 3,
+                routeAetheryteTerritoryId: 130,
+                requestedAetheryteId: 9,
+                requestedAethernetId: null));
+        Assert.Equal(
+            WorkshopVendorTravelLeg.SubmitAethernet,
+            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
+                currentTerritoryId: 130,
+                targetTerritoryId: 131,
+                routeAetheryteId: 9,
+                routeAethernetId: 3,
+                routeAetheryteTerritoryId: 130,
+                requestedAetheryteId: 9,
+                requestedAethernetId: null));
+    }
+
+    [Fact]
+    public void Aethernet_route_without_arrival_territory_fails_closed()
+    {
+        Assert.Equal(
+            WorkshopVendorTravelLeg.InvalidRoute,
+            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
+                currentTerritoryId: 129,
+                targetTerritoryId: 131,
+                routeAetheryteId: 9,
+                routeAethernetId: 3,
+                routeAetheryteTerritoryId: null,
+                requestedAetheryteId: null,
+                requestedAethernetId: null));
+    }
+
+    [Fact]
+    public void Direct_aetheryte_route_waits_for_target_without_an_aethernet_gate()
+    {
+        Assert.Equal(
+            WorkshopVendorTravelLeg.SubmitAetheryte,
+            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
+                currentTerritoryId: 129,
+                targetTerritoryId: 131,
+                routeAetheryteId: 9,
+                routeAethernetId: null,
+                routeAetheryteTerritoryId: null,
+                requestedAetheryteId: null,
+                requestedAethernetId: null));
+        Assert.Equal(
+            WorkshopVendorTravelLeg.AwaitDestination,
+            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
+                currentTerritoryId: 129,
+                targetTerritoryId: 131,
+                routeAetheryteId: 9,
+                routeAethernetId: null,
+                routeAetheryteTerritoryId: null,
+                requestedAetheryteId: 9,
+                requestedAethernetId: null));
     }
 
     private void Disabled_vendor_toggle_creates_no_vendor_authority()

@@ -138,14 +138,16 @@ public sealed class PersistedGilVendorTravelRoute
 {
     public uint AetheryteId { get; set; }
     public uint? AethernetId { get; set; }
+    public uint? AetheryteTerritoryId { get; set; }
 
     public static PersistedGilVendorTravelRoute From(GilVendorTravelRoute route) => new()
     {
         AetheryteId = route.AetheryteId,
         AethernetId = route.AethernetId,
+        AetheryteTerritoryId = route.AetheryteTerritoryId,
     };
 
-    public GilVendorTravelRoute ToRoute() => new(AetheryteId, AethernetId);
+    public GilVendorTravelRoute ToRoute() => new(AetheryteId, AethernetId, AetheryteTerritoryId);
 }
 
 [Serializable]

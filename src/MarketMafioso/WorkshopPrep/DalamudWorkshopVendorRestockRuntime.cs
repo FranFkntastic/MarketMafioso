@@ -184,47 +184,80 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         {
             if (assessment.RouteAetheryteId is not { } route)
                 return new(WorkshopVendorReachState.Unavailable, "No live owner-accessible route reaches this vendor.");
-            if (requestedAetheryteId != route && utcNow() >= nextActionAt)
-            {
-                var submission = aetheryteTravel.TrySubmit(route);
-                switch (submission.State)
-                {
-                    case AetheryteTravelSubmissionState.Submitted:
-                        requestedAetheryteId = route;
-                        nextActionAt = utcNow().Add(ActionThrottle);
-                        travelReadiness.Reset();
-                        break;
-                    case AetheryteTravelSubmissionState.Busy:
-                        return new(WorkshopVendorReachState.Waiting, submission.Message);
-                    case AetheryteTravelSubmissionState.Rejected:
-                    case AetheryteTravelSubmissionState.Unavailable:
-                    case AetheryteTravelSubmissionState.InvalidRequest:
-                        return new(WorkshopVendorReachState.Failed, submission.Message);
-                }
-            }
 
-            if (requestedAetheryteId == route &&
-                assessment.RouteAethernetId is { } aethernetId &&
-                requestedAethernetId != aethernetId &&
-                utcNow() >= nextActionAt)
+            switch (DetermineTravelLeg(
+                clientState.TerritoryType,
+                offer.TerritoryId,
+                route,
+                assessment.RouteAethernetId,
+                assessment.RouteAetheryteTerritoryId,
+                requestedAetheryteId,
+                requestedAethernetId))
             {
-                var submission = aethernetTravel.TrySubmit(aethernetId);
-                switch (submission.State)
+                case WorkshopVendorTravelLeg.InvalidRoute:
+                    return new(
+                        WorkshopVendorReachState.Unavailable,
+                        "The vendor's aethernet route is missing the main aetheryte territory needed to confirm arrival.");
+
+                case WorkshopVendorTravelLeg.SubmitAetheryte:
                 {
-                    case AetheryteTravelSubmissionState.Submitted:
-                        requestedAethernetId = aethernetId;
-                        nextActionAt = utcNow().Add(ActionThrottle);
-                        travelReadiness.Reset();
-                        break;
-                    case AetheryteTravelSubmissionState.Busy:
-                        return new(WorkshopVendorReachState.Waiting, submission.Message);
-                    case AetheryteTravelSubmissionState.Rejected:
-                        nextActionAt = utcNow().Add(ActionThrottle);
-                        return new(WorkshopVendorReachState.Waiting, "Waiting to enter the destination aethernet network.");
-                    case AetheryteTravelSubmissionState.Unavailable:
-                    case AetheryteTravelSubmissionState.InvalidRequest:
-                        return new(WorkshopVendorReachState.Failed, submission.Message);
+                    if (utcNow() >= nextActionAt)
+                    {
+                        var submission = aetheryteTravel.TrySubmit(route);
+                        switch (submission.State)
+                        {
+                            case AetheryteTravelSubmissionState.Submitted:
+                                requestedAetheryteId = route;
+                                nextActionAt = utcNow().Add(ActionThrottle);
+                                travelReadiness.Reset();
+                                break;
+                            case AetheryteTravelSubmissionState.Busy:
+                                return new(WorkshopVendorReachState.Waiting, submission.Message);
+                            case AetheryteTravelSubmissionState.Rejected:
+                            case AetheryteTravelSubmissionState.Unavailable:
+                            case AetheryteTravelSubmissionState.InvalidRequest:
+                                return new(WorkshopVendorReachState.Failed, submission.Message);
+                        }
+                    }
+                    break;
                 }
+
+                case WorkshopVendorTravelLeg.AwaitAetheryteArrival:
+                    return new(
+                        WorkshopVendorReachState.Waiting,
+                        "Waiting to arrive at the main aetheryte before entering the destination network.");
+
+                case WorkshopVendorTravelLeg.SubmitAethernet:
+                {
+                    if (requestedAetheryteId != route)
+                        requestedAetheryteId = route;
+                    if (assessment.RouteAethernetId is not { } aethernetId || utcNow() < nextActionAt)
+                        break;
+
+                    var submission = aethernetTravel.TrySubmit(aethernetId);
+                    switch (submission.State)
+                    {
+                        case AetheryteTravelSubmissionState.Submitted:
+                            requestedAethernetId = aethernetId;
+                            nextActionAt = utcNow().Add(ActionThrottle);
+                            travelReadiness.Reset();
+                            break;
+                        case AetheryteTravelSubmissionState.Busy:
+                            return new(WorkshopVendorReachState.Waiting, submission.Message);
+                        case AetheryteTravelSubmissionState.Rejected:
+                            nextActionAt = utcNow().Add(ActionThrottle);
+                            return new(
+                                WorkshopVendorReachState.Waiting,
+                                "Waiting for the destination aethernet network to accept travel.");
+                        case AetheryteTravelSubmissionState.Unavailable:
+                        case AetheryteTravelSubmissionState.InvalidRequest:
+                            return new(WorkshopVendorReachState.Failed, submission.Message);
+                    }
+                    break;
+                }
+
+                case WorkshopVendorTravelLeg.AwaitDestination:
+                    break;
             }
             return new(WorkshopVendorReachState.Waiting, $"Traveling to {offer.NpcName}.");
         }
@@ -381,6 +414,40 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
             ? WorkshopVendorApproachDecision.StartNavigation
             : WorkshopVendorApproachDecision.NavigationUnavailable;
     }
+
+    internal static WorkshopVendorTravelLeg DetermineTravelLeg(
+        uint currentTerritoryId,
+        uint targetTerritoryId,
+        uint routeAetheryteId,
+        uint? routeAethernetId,
+        uint? routeAetheryteTerritoryId,
+        uint? requestedAetheryteId,
+        uint? requestedAethernetId)
+    {
+        if (currentTerritoryId == targetTerritoryId)
+            return WorkshopVendorTravelLeg.AwaitDestination;
+
+        if (routeAethernetId is null)
+        {
+            return requestedAetheryteId == routeAetheryteId
+                ? WorkshopVendorTravelLeg.AwaitDestination
+                : WorkshopVendorTravelLeg.SubmitAetheryte;
+        }
+
+        if (routeAetheryteTerritoryId is not { } aetheryteTerritoryId)
+            return WorkshopVendorTravelLeg.InvalidRoute;
+
+        if (currentTerritoryId != aetheryteTerritoryId)
+        {
+            return requestedAetheryteId == routeAetheryteId
+                ? WorkshopVendorTravelLeg.AwaitAetheryteArrival
+                : WorkshopVendorTravelLeg.SubmitAetheryte;
+        }
+
+        return requestedAethernetId == routeAethernetId
+            ? WorkshopVendorTravelLeg.AwaitDestination
+            : WorkshopVendorTravelLeg.SubmitAethernet;
+    }
 }
 
 internal enum WorkshopVendorApproachDecision
@@ -391,4 +458,13 @@ internal enum WorkshopVendorApproachDecision
     WaitForOwnedRoute,
     BlockedByAnotherRoute,
     NavigationUnavailable,
+}
+
+internal enum WorkshopVendorTravelLeg
+{
+    InvalidRoute,
+    SubmitAetheryte,
+    AwaitAetheryteArrival,
+    SubmitAethernet,
+    AwaitDestination,
 }
