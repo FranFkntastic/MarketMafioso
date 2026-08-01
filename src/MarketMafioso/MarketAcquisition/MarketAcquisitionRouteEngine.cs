@@ -48,6 +48,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool exactAcquisitionDryRunFaultEligible;
     private bool exactAcquisitionDryRunFaultInjected;
     private bool exactAcquisitionDryRunNoViableConsumed;
+    private bool purchaseEvidenceRouteBlocked;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -177,6 +178,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
 
@@ -281,6 +284,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         if (exactAcquisitionAuthority is null || !exactAcquisitionAuthority.State.NeedsRecovery)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("No exact-acquisition recovery is pending."));
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         try
         {
             exactAcquisitionAuthority.ValidateCurrentDocument(workbenchDocument);
@@ -375,6 +380,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
 
@@ -407,6 +414,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Resume()
     {
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (shardCheckpoints?.IsActive == true)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 $"Route resume is locked while purchased shards are being reconciled: {shardCheckpoints.Snapshot.Message}"));
@@ -454,6 +463,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public MarketAcquisitionRouteActionResult Recover(MarketAcquisitionClaimView claimed)
     {
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (!runner.CanRecover)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 $"Route cannot be recovered while {runner.State}."));
@@ -501,6 +512,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
         CleanupOwnedApproach("Replacement");
@@ -538,6 +551,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
         CleanupOwnedApproach("Replacement");
@@ -673,6 +688,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CompleteTerminalPurchaseReconciliation(string message)
     {
+        purchaseEvidenceRouteBlocked = false;
         state.ManualRecoveryBlockedReason = null;
         state.MarketBoardReadResult = null;
         state.MarketBoardReconciliation = null;
@@ -688,6 +704,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteEngineTickResult TickRoute(bool isRequestBusy)
     {
+        if (!TryAdvanceAndPreflightPurchaseEvidence(allowActivePurchaseSession: true))
+            return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
+
         if (shardCheckpoints?.IsActive == true)
         {
             var checkpoint = shardCheckpoints.Tick();
@@ -1650,6 +1669,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteEngineTickResult MonitorMarketBoardPurchase()
     {
+        if (!TryAdvanceAndPreflightPurchaseEvidence(allowActivePurchaseSession: true))
+            return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
+
         var previousSession = purchaseAutomation.PurchaseSession;
         if (previousSession?.IsActive != true)
             return MarketAcquisitionRouteEngineTickResult.Idle();
@@ -2196,6 +2218,84 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             reportDispatcher.ResetSession();
     }
 
+    private bool TryPreflightRouteAction(out string blockReason)
+    {
+        var preflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
+            purchase.PurchaseEvidenceState,
+            purchaseSessionActive: false,
+            nowUtc: clock.UtcNow);
+        if (preflight.CanExecute)
+        {
+            if (purchaseEvidenceRouteBlocked)
+            {
+                blockReason = state.ManualRecoveryBlockedReason ??
+                              "Purchase evidence preflight is still recovering; route execution is paused.";
+                return false;
+            }
+
+            blockReason = string.Empty;
+            return true;
+        }
+
+        blockReason = preflight.BlockReason!;
+        BlockRouteForPurchaseEvidence(blockReason);
+        return false;
+    }
+
+    private bool TryAdvanceAndPreflightPurchaseEvidence(bool allowActivePurchaseSession)
+    {
+        MarketPurchaseEvidenceAdvanceResult advance;
+        try
+        {
+            advance = purchase.AdvancePurchaseEvidence(clock.UtcNow);
+        }
+        catch (Exception exception)
+        {
+            BlockRouteForPurchaseEvidence($"Purchase evidence preflight failed: {exception.Message}");
+            return false;
+        }
+
+        if (advance.Status == MarketPurchaseEvidenceAdvanceStatus.PersistenceFailed)
+        {
+            BlockRouteForPurchaseEvidence(advance.Message);
+            return false;
+        }
+
+        var preflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
+            purchase.PurchaseEvidenceState ?? advance.State,
+            purchaseSessionActive: allowActivePurchaseSession && purchaseAutomation.PurchaseSession?.IsActive == true,
+            nowUtc: clock.UtcNow);
+        if (preflight.CanExecute)
+        {
+            if (purchaseEvidenceRouteBlocked && purchase.PurchaseEvidenceState is null && advance.State is null)
+            {
+                purchaseEvidenceRouteBlocked = false;
+                state.ManualRecoveryBlockedReason = null;
+            }
+            return true;
+        }
+
+        BlockRouteForPurchaseEvidence(preflight.BlockReason!);
+        return false;
+    }
+
+    private void BlockRouteForPurchaseEvidence(string message)
+    {
+        purchaseEvidenceRouteBlocked = true;
+        state.ManualRecoveryBlockedReason = message;
+        state.AcquisitionStatus = message;
+        exactAcquisitionAuthority?.Pause(message);
+        if (runner.IsRunning || runner.IsPaused)
+        {
+            var result = FailRoute(message);
+            state.AcquisitionStatus = result.Message;
+        }
+
+        ClearMarketBoardAutomationState();
+        state.ManualRecoveryBlockedReason = message;
+        state.AcquisitionStatus = message;
+    }
+
     private string GetActiveRouteLineId(MarketAcquisitionClaimView claimed)
     {
         var lineId = runner.ActiveStop?.ActiveItemSubtask?.LineId;
@@ -2327,11 +2427,18 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void ClearExecutionState(bool preserveExecutionMode = false)
     {
+        var purchaseEvidenceState = purchase.PurchaseEvidenceState;
         CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         travelInterruptedByCleanup = false;
         CancelActiveOperation("Route execution state reset.");
         state.ResetRouteExecutionState(preserveExecutionMode);
+        var preflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
+            purchaseEvidenceState,
+            purchaseSessionActive: false,
+            nowUtc: clock.UtcNow);
+        if (!preflight.CanExecute)
+            state.ManualRecoveryBlockedReason = preflight.BlockReason;
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
         reportDispatcher.ResetSession();
@@ -2394,6 +2501,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CaptureManualRecoverySafetyBlock()
     {
+        var evidencePreflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
+            purchase.PurchaseEvidenceState,
+            purchaseSessionActive: false,
+            nowUtc: clock.UtcNow);
+        if (!evidencePreflight.CanExecute)
+        {
+            state.ManualRecoveryBlockedReason = evidencePreflight.BlockReason;
+            return;
+        }
+
         var purchaseSession = purchaseAutomation.PurchaseSession;
         state.ManualRecoveryBlockedReason = purchaseSession?.ConfirmationWasSubmitted != true
             ? null
