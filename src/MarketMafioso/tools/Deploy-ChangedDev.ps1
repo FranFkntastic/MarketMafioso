@@ -1,6 +1,6 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$BaseRef = "origin/local-dev",
+    [string]$BaseRef = "origin/main",
 
     [switch]$IgnoreUntracked,
 
@@ -204,7 +204,7 @@ try {
     $hasPlugin = $pluginPaths.Count -gt 0
 
     if ($hasServer -and $hasPlugin) {
-        $arguments = @("-Ref", "local-dev")
+        $arguments = @("-Ref", "main")
         if ($SkipServerSmoke) {
             $arguments += "-SkipServerSmoke"
         }
@@ -218,7 +218,7 @@ try {
     }
 
     if ($hasServer) {
-        $arguments = @("-Ref", "local-dev")
+        $arguments = @("-Ref", "main")
         if ($SkipServerSmoke) {
             $arguments += "-SkipSmoke"
         }

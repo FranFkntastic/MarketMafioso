@@ -1,5 +1,5 @@
 param(
-    [string]$Ref = "local-dev",
+    [string]$Ref = "main",
 
     [switch]$SkipServer,
 

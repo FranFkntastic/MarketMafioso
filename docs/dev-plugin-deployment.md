@@ -44,7 +44,7 @@ For the least-decision workflow, use the changed-surface router:
 .\src\MarketMafioso\tools\Deploy-ChangedDev.ps1
 ```
 
-It looks at changed files since `origin/local-dev`, plus staged, unstaged, and untracked files, then routes to the server deploy, plugin deploy, combined deploy, or no deploy. Use PowerShell's built-in `-WhatIf` to preview the chosen action:
+It looks at changed files since `origin/main`, plus staged, unstaged, and untracked files, then routes to the server deploy, plugin deploy, combined deploy, or no deploy. Use PowerShell's built-in `-WhatIf` to preview the chosen action:
 
 ```powershell
 .\src\MarketMafioso\tools\Deploy-ChangedDev.ps1 -WhatIf
