@@ -475,6 +475,32 @@ public sealed class TradeQueueRunnerTests
     }
 
     [Fact]
+    public void OfferGil_WaitsForTheNumericInputThenSubmitsThePlannedAmount()
+    {
+        var io = new FakeIo(Inventory(1)) { GilNumericInputDelayChecks = 1 };
+        var offer = new TradeQueueOfferGilOperation(io, 600_000);
+
+        var opened = offer.Advance();
+        Assert.Equal(TradeQueueOfferGilState.WaitingForInput, opened.State);
+        Assert.True(opened.ActionIssued);
+        Assert.Equal(TradeQueueOfferGilState.WaitingForInput, offer.Advance().State);
+
+        Assert.True(offer.Advance().IsCompleted);
+        Assert.Equal(600_000, io.SubmittedGil);
+    }
+
+    [Fact]
+    public void OfferGil_FailsClosedWhenTheInputOrSubmissionIsRejected()
+    {
+        var unavailable = new TradeQueueOfferGilOperation(new FakeIo(Inventory(1)) { RejectGilInput = true }, 1);
+        var rejected = new TradeQueueOfferGilOperation(new FakeIo(Inventory(1)) { RejectQuantitySubmission = true }, 1);
+
+        Assert.True(unavailable.Advance().IsFailed);
+        rejected.Advance();
+        Assert.True(rejected.Advance().IsFailed);
+    }
+
+    [Fact]
     public void Runner_AcceptsInventoryEvidenceThatSettlesAfterTradeClosure()
     {
         var queue = Queue(2);
@@ -657,6 +683,8 @@ public sealed class TradeQueueRunnerTests
         public bool ExposeSlotBeforeQuantity { get; set; }
         public bool ExposeUnexpectedSlotProgression { get; set; }
         public bool RejectQuantitySubmission { get; set; }
+        public bool RejectGilInput { get; set; }
+        public int GilNumericInputDelayChecks { get; set; }
         public int NumericInputDelayChecks { get; set; }
         public int LastSubmittedQuantity { get; private set; }
         private bool gilInputRequested;
@@ -697,9 +725,16 @@ public sealed class TradeQueueRunnerTests
 
         public bool TryOpenGilInput(out string error)
         {
+            if (RejectGilInput)
+            {
+                error = "Trade gil input is unavailable.";
+                return false;
+            }
+
             error = string.Empty;
             gilInputRequested = true;
             IsNumericInputOpen = true;
+            numericInputDelayChecksRemaining = GilNumericInputDelayChecks;
             return true;
         }
 

@@ -31,8 +31,7 @@ public sealed class TradeQueueRunner : IDisposable
     private DateTimeOffset verificationStartedAt;
     private int offeredLineIndex;
     private TradeQueueOfferLineOperation? offerLineOperation;
-    private bool gilInputRequested;
-    private bool gilSubmitted;
+    private TradeQueueOfferGilOperation? offerGilOperation;
     private bool readyClicked;
     private bool confirmationSubmitted;
     private int batchNumber;
@@ -228,8 +227,7 @@ public sealed class TradeQueueRunner : IDisposable
         {
             offeredLineIndex = 0;
             offerLineOperation = null;
-            gilInputRequested = false;
-            gilSubmitted = false;
+            offerGilOperation = null;
             readyClicked = false;
             confirmationSubmitted = false;
             nextActionAt = now + timing.ActionDelay;
@@ -287,36 +285,21 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         }
 
-        if (batch.GilAmount > 0 && !gilSubmitted)
+        if (batch.GilAmount > 0 && !(offerGilOperation?.IsCompleted ?? false))
         {
             if (now < nextActionAt)
                 return;
 
-            if (!gilInputRequested)
+            offerGilOperation ??= new TradeQueueOfferGilOperation(io, batch.GilAmount);
+            var gilResult = offerGilOperation.Advance();
+            if (gilResult.IsFailed)
             {
-                if (!io.TryOpenGilInput(out var gilError))
-                {
-                    if (!string.IsNullOrWhiteSpace(gilError))
-                        Fail(gilError);
-                    return;
-                }
+                Fail(gilResult.Message);
+                return;
+            }
 
-                gilInputRequested = true;
+            if (gilResult.ActionIssued || gilResult.IsCompleted)
                 nextActionAt = now + timing.ActionDelay;
-                return;
-            }
-
-            if (!io.IsNumericInputOpen)
-                return;
-            if (!io.TrySubmitQuantity(batch.GilAmount, out var quantityError))
-            {
-                if (!string.IsNullOrWhiteSpace(quantityError))
-                    Fail(quantityError);
-                return;
-            }
-
-            gilSubmitted = true;
-            nextActionAt = now + timing.ActionDelay;
             return;
         }
 
@@ -474,8 +457,7 @@ public sealed class TradeQueueRunner : IDisposable
         batch = TradeQueuePlanner.BuildNextBatch(queue.ToList(), inventory);
         offeredLineIndex = 0;
         offerLineOperation = null;
-        gilInputRequested = false;
-        gilSubmitted = false;
+        offerGilOperation = null;
         readyClicked = false;
         confirmationSubmitted = false;
         verificationStartedAt = default;
