@@ -1,6 +1,6 @@
-namespace MarketMafioso.MarketAcquisition.RemoteMarket;
+namespace MarketMafioso.MarketAcquisition.MarketBoard;
 
-internal sealed class RemoteMarketOverlaySession
+internal sealed class MarketListingPresentationSession
 {
     public bool IsActive { get; private set; }
 

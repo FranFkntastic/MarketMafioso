@@ -8,15 +8,9 @@ namespace MarketMafioso.MarketAcquisition;
 
 public interface IMarketAcquisitionListingSource
 {
-    Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsAsync(
-        string region,
-        uint itemId,
-        int listingLimit,
-        CancellationToken cancellationToken);
-
-    Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsForWorldAsync(
-        string worldName,
-        uint itemId,
+    Task<IReadOnlyDictionary<uint, IReadOnlyList<MarketAcquisitionListing>>> FetchListingsAsync(
+        string worldDataCenterOrRegion,
+        IReadOnlyCollection<uint> itemIds,
         int listingLimit,
         CancellationToken cancellationToken);
 }
@@ -50,7 +44,7 @@ public sealed class MarketAcquisitionPlanPreparationService
         CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var claimed = request.Claim ?? throw new InvalidOperationException("No dashboard request is accepted.");
+        var claimed = request.Claim ?? throw new InvalidOperationException("No acquisition request is available.");
         var planLines = GetPlanLines(claimed);
         var listings = new List<MarketAcquisitionListing>();
         var sweepWorldExclusions = new List<MarketAcquisitionSweepWorldExclusion>();
@@ -58,13 +52,38 @@ public sealed class MarketAcquisitionPlanPreparationService
         var recentSkippedWorldCount = 0;
         var preparedAtUtc = request.PreparedAtUtc;
         var isAllWorldSweep = claimed.WorldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase);
-        foreach (var line in planLines)
+        IReadOnlyDictionary<uint, IReadOnlyList<MarketAcquisitionListing>> listingsByItem;
+        try
         {
-            var lineListings = await listingSource.FetchListingsAsync(
+            listingsByItem = await listingSource.FetchListingsAsync(
                 claimed.Region,
-                line.ItemId,
+                planLines.Select(line => line.ItemId).Distinct().ToArray(),
                 100,
                 token).ConfigureAwait(false);
+        }
+        catch (UniversalisMarketListingsUnavailableException ex)
+        {
+            var affectedNames = planLines
+                .Where(line => ex.MissingItemIds.Contains(line.ItemId))
+                .Select(line => line.ItemName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var subject = affectedNames.Length == 0
+                ? "one or more plan items"
+                : string.Join(", ", affectedNames);
+            throw new InvalidOperationException(
+                $"Market listings could not be refreshed for {subject} after retry. Select Finalize Plan to retry.",
+                ex);
+        }
+
+        foreach (var line in planLines)
+        {
+            if (!listingsByItem.TryGetValue(line.ItemId, out var lineListings))
+            {
+                throw new InvalidOperationException(
+                    $"Market listings were not returned for {line.ItemName}. Select Finalize Plan to retry.");
+            }
+
             if (isAllWorldSweep)
             {
                 var evidenceWorlds = await FindWorldsWithNewerUsefulUniversalisEvidenceAsync(
@@ -173,11 +192,13 @@ public sealed class MarketAcquisitionPlanPreparationService
         {
             try
             {
-                var worldListings = await listingSource.FetchListingsForWorldAsync(
+                var worldListingsByItem = await listingSource.FetchListingsAsync(
                     visit.WorldName,
-                    line.ItemId,
+                    [line.ItemId],
                     100,
                     token).ConfigureAwait(false);
+                if (!worldListingsByItem.TryGetValue(line.ItemId, out var worldListings))
+                    continue;
                 var checkedAtUtc = DateTime.SpecifyKind(visit.CheckedAtUtc, DateTimeKind.Utc);
                 if (worldListings.Any(listing => IsNewerUsefulUniversalisListing(line, hqPolicy, checkedAtUtc, listing)))
                     evidenceWorlds.Add(visit.WorldName);

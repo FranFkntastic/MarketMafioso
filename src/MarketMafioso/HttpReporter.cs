@@ -26,6 +26,7 @@ public class HttpReporter : IDisposable
     private readonly InventoryScanner scanner;
     private readonly DalamudServiceAccountIdentitySource serviceAccountIdentity;
     private readonly QuartermasterIpcClient quartermaster;
+    private int disposeStarted;
     private InventoryReport? lastAcknowledgedReport;
     private string? lastAcknowledgedSnapshotId;
     private bool lastCaptureHasRetainerEvidence;
@@ -63,9 +64,15 @@ public class HttpReporter : IDisposable
 
     public async Task SendReportAsync(bool quiet = false)
     {
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
         await sendGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (Volatile.Read(ref disposeStarted) != 0)
+                return;
+
             await SendReportCoreAsync(quiet).ConfigureAwait(false);
         }
         finally
@@ -76,9 +83,15 @@ public class HttpReporter : IDisposable
 
     public async Task SendDeltaReportAsync(bool quiet = false)
     {
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
         await sendGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (Volatile.Read(ref disposeStarted) != 0)
+                return;
+
             if (!TryValidateEndpoint(quiet, out var endpoint))
                 return;
 
@@ -362,6 +375,12 @@ public class HttpReporter : IDisposable
 
     private void HandleException(Exception ex, bool quiet)
     {
+        if (Volatile.Read(ref disposeStarted) != 0)
+        {
+            LastStatus = "Stopped";
+            return;
+        }
+
         LastStatus = $"Error: {ex.Message}";
         if (!quiet)
             chatGui.PrintError($"[MarketMafioso] Failed to send: {ex.Message}");
@@ -383,8 +402,15 @@ public class HttpReporter : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref disposeStarted, 1) != 0)
+            return;
+
         httpClient.Dispose();
-        sendGate.Dispose();
+        // SemaphoreSlim.Dispose is not thread-safe with concurrent members. An upload may
+        // still be unwinding after HttpClient.Dispose cancels it, so disposing the gate here
+        // would make its guaranteed Release throw on the continuation thread. The gate owns
+        // no unmanaged resources unless AvailableWaitHandle is requested (it never is), and
+        // becomes collectible with this reporter after admitted sends finish.
     }
 
     public static List<RetainerReport> BuildRetainerReports(

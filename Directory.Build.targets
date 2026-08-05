@@ -10,6 +10,8 @@
            Text="FranthropyFilteringProject resolves outside FranthropyRoot. Set only FranthropyRoot so every Franthropy dependency comes from one checkout." />
     <Error Condition="'$(FranthropyFfxivProjectFullPath)' != '$(ExpectedFranthropyFfxivProject)'"
            Text="FranthropyFfxivProject resolves outside FranthropyRoot. Set only FranthropyRoot so every Franthropy dependency comes from one checkout." />
+    <Error Condition="'$(FranthropyObservationsProjectFullPath)' != '$(ExpectedFranthropyObservationsProject)'"
+           Text="FranthropyObservationsProject resolves outside FranthropyRoot. Set only FranthropyRoot so every Franthropy dependency comes from one checkout." />
     <Error Condition="'$(FranthropyWebProjectFullPath)' != '$(ExpectedFranthropyWebProject)'"
            Text="FranthropyWebProject resolves outside FranthropyRoot. Set only FranthropyRoot so every Franthropy dependency comes from one checkout." />
     <Error Condition="!Exists('$(ExpectedFranthropyDalamudProject)')"
@@ -18,6 +20,8 @@
            Text="Franthropy.Filtering was not found beneath FranthropyRoot '$(FranthropyRootFullPath)'." />
     <Error Condition="!Exists('$(ExpectedFranthropyFfxivProject)')"
            Text="Franthropy.FFXIV was not found beneath FranthropyRoot '$(FranthropyRootFullPath)'." />
+    <Error Condition="!Exists('$(ExpectedFranthropyObservationsProject)')"
+           Text="Franthropy.Observations was not found beneath FranthropyRoot '$(FranthropyRootFullPath)'." />
     <Error Condition="!Exists('$(ExpectedFranthropyWebProject)')"
            Text="Franthropy.Web was not found beneath FranthropyRoot '$(FranthropyRootFullPath)'." />
   </Target>

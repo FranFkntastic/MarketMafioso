@@ -127,7 +127,179 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
 
         Assert.Equal(1, attempts);
         Assert.Equal("RemoteChanged", controller.Document.SyncStatus);
-        Assert.Contains("automatic sync is paused", controller.Status);
+        Assert.Contains("hosted sync is paused", controller.Status);
+    }
+
+    [Fact]
+    public async Task FailedHostedSync_PausesWithoutRetryingAndLeavesLocalDraftAvailable()
+    {
+        var attempts = 0;
+        var controller = new MarketAcquisitionRequestBuilderController(
+            MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh") with
+            {
+                Lines = [Line(36183, "Rose Gold Ingot")],
+                SyncStatus = "LocalEdits",
+            },
+            _ =>
+            {
+                attempts++;
+                throw new InvalidOperationException("offline");
+            },
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(value, null, "refreshed")),
+            (_, _) => { },
+            _ => { });
+
+        controller.RequestHostedSync();
+        await controller.SyncAsync("Wei Ning", "Gilgamesh");
+        controller.PumpAutomaticSynchronization(
+            "Wei Ning",
+            "Gilgamesh",
+            canSynchronize: true,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+
+        Assert.Equal(1, attempts);
+        Assert.False(controller.IsHostedSyncEnabled);
+        Assert.Equal("SyncFailed", controller.Document.SyncStatus);
+        Assert.Contains("retry it explicitly or continue locally", controller.Status);
+        Assert.Single(controller.Document.Lines);
+    }
+
+    [Fact]
+    public void PersistedSyncFailure_DoesNotRearmHostedSyncOnRestore()
+    {
+        var attempts = 0;
+        var controller = new MarketAcquisitionRequestBuilderController(
+            MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh") with
+            {
+                Lines = [Line(36183, "Rose Gold Ingot")],
+                RemoteRequestId = "request-1",
+                RemoteRevision = 4,
+                SyncStatus = "SyncFailed",
+            },
+            _ =>
+            {
+                attempts++;
+                return Task.FromResult(new MarketAcquisitionRequestBuilderSyncOutcome(
+                    MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh"),
+                    "synced"));
+            },
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(value, null, "refreshed")),
+            (_, _) => { },
+            _ => { });
+
+        controller.PumpAutomaticSynchronization(
+            "Wei Ning",
+            "Gilgamesh",
+            canSynchronize: true,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+
+        Assert.Equal(0, attempts);
+        Assert.False(controller.IsHostedSyncEnabled);
+        Assert.Equal("SyncFailed", controller.Document.SyncStatus);
+    }
+
+    [Fact]
+    public void FailedDraft_StartsBlankLocallyAndPreservesTheHostedDraftForRecovery()
+    {
+        var config = new Configuration();
+        var current = MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh") with
+        {
+            Lines = [Line(36183, "Rose Gold Ingot")],
+            RemoteRequestId = "request-1",
+            RemoteRevision = 4,
+            SyncStatus = "SyncFailed",
+        };
+        MarketAcquisitionRequestDocumentPersistence.Save(config, current);
+
+        var controller = new MarketAcquisitionRequestBuilderController(
+            current,
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderSyncOutcome(value, "synced")),
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(value, null, "refreshed")),
+            (_, _) => { },
+            value => MarketAcquisitionRequestDocumentPersistence.Save(config, value),
+            config);
+
+        controller.StartBlankWorkbench("Wei Ning", "Gilgamesh");
+
+        Assert.Empty(controller.Document.Lines);
+        Assert.Null(controller.Document.RemoteRequestId);
+        Assert.Equal("NewDraft", controller.Document.SyncStatus);
+        var recovery = Assert.IsType<MarketAcquisitionRequestDocument>(
+            MarketAcquisitionRequestDocumentPersistence.RestorePrevious(config));
+        Assert.Equal("request-1", recovery.RemoteRequestId);
+        Assert.Equal("SyncFailed", recovery.SyncStatus);
+        Assert.False(controller.IsHostedSyncEnabled);
+    }
+
+    [Fact]
+    public void DetachHostedAssociation_ClearsOnlyLocalMetadataAndTellsTheTruth()
+    {
+        MarketAcquisitionRequestDocument? persisted = null;
+        var controller = new MarketAcquisitionRequestBuilderController(
+            MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh") with
+            {
+                Lines = [Line(36183, "Rose Gold Ingot")],
+                RemoteRequestId = "request-1",
+                RemoteRevision = 4,
+                SyncStatus = "SyncFailed",
+            },
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderSyncOutcome(value, "synced")),
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(value, null, "refreshed")),
+            (_, _) => { },
+            value => persisted = value);
+
+        Assert.True(controller.DetachHostedAssociation());
+
+        Assert.Null(controller.Document.RemoteRequestId);
+        Assert.Equal(0, controller.Document.RemoteRevision);
+        Assert.Equal("NewDraft", controller.Document.SyncStatus);
+        Assert.Single(controller.Document.Lines);
+        Assert.Contains("server copy was not shelved or changed", controller.Status);
+        Assert.Equal(controller.Document, persisted);
+    }
+
+    [Fact]
+    public void LoadComposition_StaysLocalUntilHostedSyncIsRequested()
+    {
+        var config = new Configuration();
+        var current = MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh") with
+        {
+            Lines = [Line(36183, "Rose Gold Ingot")],
+            RemoteRequestId = "request-1",
+            RemoteRevision = 4,
+            SyncStatus = "SyncedClean",
+        };
+        MarketAcquisitionRequestDocumentPersistence.Save(config, current);
+        var attempts = 0;
+        var controller = new MarketAcquisitionRequestBuilderController(
+            current,
+            value =>
+            {
+                attempts++;
+                return Task.FromResult(new MarketAcquisitionRequestBuilderSyncOutcome(value, "synced"));
+            },
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(value, null, "refreshed")),
+            (_, _) => { },
+            value => MarketAcquisitionRequestDocumentPersistence.Save(config, value),
+            config);
+
+        controller.LoadComposition(
+            new MarketAcquisitionWorkbenchComposition
+            {
+                Name = "Local composition",
+                Lines = [Line(7017, "Varnish")],
+            },
+            "Wei Ning",
+            "Gilgamesh");
+        controller.PumpAutomaticSynchronization(
+            "Wei Ning",
+            "Gilgamesh",
+            canSynchronize: true,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+
+        Assert.Equal(7017u, Assert.Single(controller.Document.Lines).ItemId);
+        Assert.Equal(0, attempts);
+        Assert.False(controller.IsHostedSyncEnabled);
     }
 
     [Fact]

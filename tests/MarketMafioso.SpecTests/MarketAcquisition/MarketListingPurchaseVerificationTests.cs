@@ -1,18 +1,18 @@
-using MarketMafioso.MarketAcquisition.RemoteMarket;
+using MarketMafioso.MarketAcquisition.MarketBoard;
 
 namespace MarketMafioso.SpecTests.MarketAcquisition;
 
-public sealed class RemoteMarketPurchaseVerificationTests
+public sealed class MarketListingPurchaseVerificationTests
 {
     [Fact]
     public void ExactRefreshedListings_PreserveIntentOrderAndCurrentValues()
     {
         var first = Selection(11, unitPrice: 100);
         var second = Selection(22, unitPrice: 200);
-        var refreshedFirst = first with { SelectedIndex = 7, ItemName = "Current name" };
-        var refreshedSecond = second with { SelectedIndex = 3, ItemName = "Current name" };
+        var refreshedFirst = first with { ItemName = "Current name" };
+        var refreshedSecond = second with { ItemName = "Current name" };
 
-        var result = RemoteMarketPurchaseVerification.Reconcile(
+        var result = MarketListingPurchaseVerification.Reconcile(
             [first, second],
             [refreshedSecond, refreshedFirst]);
 
@@ -24,7 +24,7 @@ public sealed class RemoteMarketPurchaseVerificationTests
     [Fact]
     public void MissingListing_FailsWithoutSubstitutingAnotherListing()
     {
-        var result = RemoteMarketPurchaseVerification.Reconcile(
+        var result = MarketListingPurchaseVerification.Reconcile(
             [Selection(11, unitPrice: 100)],
             [Selection(22, unitPrice: 100)]);
 
@@ -42,20 +42,19 @@ public sealed class RemoteMarketPurchaseVerificationTests
         var original = Selection(11, unitPrice: 100, quantity: 1, tax: 5);
         var current = Selection(11, unitPrice, quantity, tax);
 
-        var result = RemoteMarketPurchaseVerification.Reconcile([original], [current]);
+        var result = MarketListingPurchaseVerification.Reconcile([original], [current]);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.RefreshedSelections);
         Assert.Contains("changed", result.FailureReason);
     }
 
-    private static RemoteMarketSelectionView Selection(
+    private static MarketListingSelection Selection(
         ulong listingId,
         uint unitPrice,
         uint quantity = 1,
         uint tax = 5) =>
         new(
-            (int)listingId,
             22528,
             "Example item",
             false,

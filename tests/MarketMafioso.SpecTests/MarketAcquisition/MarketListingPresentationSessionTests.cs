@@ -1,11 +1,11 @@
-using MarketMafioso.MarketAcquisition.RemoteMarket;
+using MarketMafioso.MarketAcquisition.MarketBoard;
 
 namespace MarketMafioso.SpecTests.MarketAcquisition;
 
-public sealed class RemoteMarketOverlaySessionTests
+public sealed class MarketListingPresentationSessionTests
 {
     [Fact]
-    public void AutomaticVerificationKeepsOverlayActiveWhileNativeResultIsHidden()
+    public void AutomaticVerificationKeepsPresentationActiveWhileNativeResultIsHidden()
     {
         var session = ActiveSession();
 
@@ -64,9 +64,9 @@ public sealed class RemoteMarketOverlaySessionTests
         Assert.False(session.IsActive);
     }
 
-    private static RemoteMarketOverlaySession ActiveSession()
+    private static MarketListingPresentationSession ActiveSession()
     {
-        var session = new RemoteMarketOverlaySession();
+        var session = new MarketListingPresentationSession();
         session.ObserveSnapshot();
         return session;
     }

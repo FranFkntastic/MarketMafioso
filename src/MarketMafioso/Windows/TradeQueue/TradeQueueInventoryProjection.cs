@@ -12,13 +12,13 @@ internal static class TradeQueueInventoryProjection
         IReadOnlyList<TradeQueueItem> queue)
     {
         var selected = queue
-            .GroupBy(item => new TradeQueueItemKey(item.ItemId, item.IsHighQuality))
+            .GroupBy(item => new TradeQueueItemKey(item.ItemId))
             .ToDictionary(
                 group => group.Key,
                 group => group.Sum(item => Math.Max(0, item.Quantity)));
         var rows = inventory
             .Where(stack => stack.ItemId > 0 && stack.Quantity > 0)
-            .GroupBy(stack => new TradeQueueItemKey(stack.ItemId, stack.IsHighQuality))
+            .GroupBy(stack => new TradeQueueItemKey(stack.ItemId))
             .Select(group => new TradeQueueInventoryRow(
                 group.Key,
                 group.First().ItemName,
@@ -28,8 +28,8 @@ internal static class TradeQueueInventoryProjection
         var observed = rows.Select(row => row.Key).ToHashSet();
         rows.AddRange(
             queue
-                .Where(item => item.Quantity > 0 && !observed.Contains(new(item.ItemId, item.IsHighQuality)))
-                .GroupBy(item => new TradeQueueItemKey(item.ItemId, item.IsHighQuality))
+                .Where(item => item.Quantity > 0 && !observed.Contains(new(item.ItemId)))
+                .GroupBy(item => new TradeQueueItemKey(item.ItemId))
                 .Select(group => new TradeQueueInventoryRow(
                     group.Key,
                     group.First().ItemName,
@@ -39,7 +39,6 @@ internal static class TradeQueueInventoryProjection
         return rows
             .OrderByDescending(row => row.SelectedQuantity > 0)
             .ThenBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(row => row.Key.IsHighQuality)
             .ThenBy(row => row.Key.ItemId)
             .ToList();
     }

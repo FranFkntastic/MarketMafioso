@@ -20,17 +20,23 @@ namespace MarketMafioso.TradeQueue;
 public interface ITradeQueueIo
 {
     IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory();
-    bool TryGetFocusPartner(out TradeQueuePartner partner);
-    bool FocusPartnerMatches(TradeQueuePartner partner);
+    IReadOnlyList<TradeQueuePartner> GetAvailablePartners();
+    bool TryGetSelectedPartner(out TradeQueuePartner partner);
+    bool TryGetPartner(string name, string homeWorld, out TradeQueuePartner partner);
+    bool PartnerIsAvailable(TradeQueuePartner partner);
     bool IsTradeOpen { get; }
     bool IsNumericInputOpen { get; }
     int OfferedSlotCount { get; }
+    bool CanClickReady { get; }
+    bool CanConfirmTrade { get; }
+    bool CanCancelTrade { get; }
     bool TryOpenTrade(TradeQueuePartner partner);
     bool TryOpenGilInput(out string error);
     bool TryOfferItem(TradeQueueBatchLine line, out string error);
     bool TrySubmitQuantity(int quantity, out string error);
     bool TryClickReady(out string error);
     bool TryConfirmTrade(out string error);
+    bool TryCancelTrade(out string error);
 }
 
 public sealed class DalamudTradeQueueIo : ITradeQueueIo
@@ -45,7 +51,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     private const string OfferItemTradeSignature =
         "48 89 6C 24 ?? 48 89 74 24 ?? 57 48 83 EC 30 83 B9 ?? ?? ?? ?? ?? 41 8B F0";
 
-    private static readonly InventoryType[] SupportedInventories =
+    internal static readonly InventoryType[] SupportedInventories =
     [
         InventoryType.Inventory1,
         InventoryType.Inventory2,
@@ -56,6 +62,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     private readonly IGameGui gameGui;
     private readonly ITargetManager targetManager;
+    private readonly IObjectTable objectTable;
     private readonly ICondition condition;
     private readonly ISigScanner sigScanner;
     private readonly IPluginLog log;
@@ -63,11 +70,13 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     private readonly IReadOnlyDictionary<uint, string> itemNames;
     private readonly string tradeConfirmationText;
     private OfferItemTradeDelegate? offerItemTrade;
+    private DateTimeOffset nextIncomingTradeAcceptAt;
     private bool patchBlockLogged;
 
     public DalamudTradeQueueIo(
         IGameGui gameGui,
         ITargetManager targetManager,
+        IObjectTable objectTable,
         ICondition condition,
         ISigScanner sigScanner,
         IDataManager dataManager,
@@ -75,6 +84,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     {
         this.gameGui = gameGui;
         this.targetManager = targetManager;
+        this.objectTable = objectTable;
         this.condition = condition;
         this.sigScanner = sigScanner;
         this.log = log;
@@ -89,6 +99,33 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     }
 
     public bool IsTradeOpen => condition[ConditionFlag.TradeOpen];
+
+    public unsafe bool CanClickReady => TryGetReadyButton(out _, out _);
+
+    public unsafe bool CanConfirmTrade => TryGetTradeConfirmation(out _);
+
+    public unsafe bool CanCancelTrade => TryGetCancelButton(out _, out _);
+
+    public unsafe void TickIncomingTradeAutoAccept(bool enabled)
+    {
+        if (!enabled || DateTimeOffset.UtcNow < nextIncomingTradeAcceptAt)
+            return;
+
+        if (!TryGetIncomingTradeRequest(out var addon))
+            return;
+
+        if (!TryAuthorizePatchContract(out var error))
+        {
+            nextIncomingTradeAcceptAt = DateTimeOffset.UtcNow.AddSeconds(1);
+            if (!string.IsNullOrWhiteSpace(error))
+                log.Warning("[MarketMafioso] Incoming trade auto-accept unavailable: {Reason}", error);
+            return;
+        }
+
+        addon->AtkUnitBase.FireCallbackInt(0);
+        nextIncomingTradeAcceptAt = DateTimeOffset.UtcNow.AddSeconds(1);
+        log.Debug("[MarketMafioso] Accepted an incoming trade request.");
+    }
 
     public unsafe bool IsNumericInputOpen
     {
@@ -178,29 +215,58 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
         return stacks;
     }
 
-    public bool TryGetFocusPartner(out TradeQueuePartner partner)
+    public bool TryGetSelectedPartner(out TradeQueuePartner partner)
     {
-        if (targetManager.FocusTarget is not IPlayerCharacter player || !player.IsTargetable)
+        var selected = targetManager.Target as IPlayerCharacter;
+        var focused = targetManager.FocusTarget as IPlayerCharacter;
+        var player = selected is { IsTargetable: true }
+            ? selected
+            : focused is { IsTargetable: true } ? focused : null;
+        if (player == null)
         {
             partner = new(0, string.Empty, 0);
             return false;
         }
 
-        partner = new(player.GameObjectId, player.Name.TextValue, player.HomeWorld.RowId);
+        partner = CreatePartner(player);
         return true;
     }
 
-    public bool FocusPartnerMatches(TradeQueuePartner partner) =>
-        TryGetFocusPartner(out var current) &&
-        current.GameObjectId == partner.GameObjectId &&
-        current.HomeWorldId == partner.HomeWorldId;
+    public IReadOnlyList<TradeQueuePartner> GetAvailablePartners() =>
+        EnumeratePartnerCandidates()
+            .Where(player => player.IsTargetable)
+            .GroupBy(player => player.GameObjectId)
+            .Select(group => CreatePartner(group.First()))
+            .OrderBy(candidate => candidate.Name, StringComparer.Ordinal)
+            .ThenBy(candidate => candidate.HomeWorldName, StringComparer.Ordinal)
+            .ToArray();
+
+    public bool TryGetPartner(string name, string homeWorld, out TradeQueuePartner partner)
+    {
+        var player = EnumeratePartnerCandidates()
+            .FirstOrDefault(candidate =>
+                candidate.IsTargetable &&
+                string.Equals(candidate.Name.TextValue, name, StringComparison.Ordinal) &&
+                string.Equals(ResolveHomeWorldName(candidate), homeWorld, StringComparison.Ordinal));
+        if (player == null)
+        {
+            partner = new(0, string.Empty, 0);
+            return false;
+        }
+
+        partner = CreatePartner(player);
+        return true;
+    }
+
+    public bool PartnerIsAvailable(TradeQueuePartner partner) =>
+        TryResolvePartner(partner, out _);
 
     public bool TryOpenTrade(TradeQueuePartner partner)
     {
         if (!TryAuthorizePatchContract(out _))
             return false;
 
-        if (!FocusPartnerMatches(partner) || targetManager.FocusTarget is not IPlayerCharacter player)
+        if (!TryResolvePartner(partner, out var player))
             return false;
 
         if (targetManager.Target?.GameObjectId != player.GameObjectId)
@@ -211,6 +277,38 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
         Chat.SendMessage("/trade");
         return true;
+    }
+
+    private bool TryResolvePartner(TradeQueuePartner partner, out IPlayerCharacter player)
+    {
+        player = EnumeratePartnerCandidates()
+            .FirstOrDefault(candidate =>
+                candidate.IsTargetable &&
+                candidate.GameObjectId == partner.GameObjectId &&
+                candidate.HomeWorld.RowId == partner.HomeWorldId)!;
+        return player != null;
+    }
+
+    private IEnumerable<IPlayerCharacter> EnumeratePartnerCandidates()
+    {
+        var selected = targetManager.Target as IPlayerCharacter;
+        if (selected != null)
+            yield return selected;
+        var focused = targetManager.FocusTarget as IPlayerCharacter;
+        if (focused != null &&
+            focused.GameObjectId != selected?.GameObjectId)
+        {
+            yield return focused;
+        }
+
+        foreach (var player in objectTable.OfType<IPlayerCharacter>())
+        {
+            if (player.GameObjectId != selected?.GameObjectId &&
+                player.GameObjectId != focused?.GameObjectId)
+            {
+                yield return player;
+            }
+        }
     }
 
     public unsafe bool TryOpenGilInput(out string error)
@@ -317,13 +415,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
         if (!TryAuthorizePatchContract(out error))
             return false;
 
-        var addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
-        if (!IsReady(addon) || addon->UldManager.NodeListCount <= 3)
-            return false;
-
-        var node = addon->UldManager.NodeList[3];
-        var button = node == null ? null : (AtkComponentButton*)node->GetComponent();
-        if (button == null || !button->IsEnabled)
+        if (!TryGetReadyButton(out var addon, out var button))
             return false;
 
         button->ClickAddonButton(addon);
@@ -349,6 +441,97 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
         addon->AtkUnitBase.FireCallbackInt(0);
         return true;
     }
+
+    public unsafe bool TryCancelTrade(out string error)
+    {
+        if (!TryAuthorizePatchContract(out error))
+            return false;
+
+        if (!TryGetCancelButton(out var addon, out var button))
+            return false;
+
+        button->ClickAddonButton(addon);
+        return true;
+    }
+
+    private unsafe bool TryGetReadyButton(
+        out AtkUnitBase* addon,
+        out AtkComponentButton* button)
+    {
+        addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
+        button = null;
+        if (!IsReady(addon) || addon->UldManager.NodeListCount <= 3)
+            return false;
+
+        var node = addon->UldManager.NodeList[3];
+        button = node == null ? null : (AtkComponentButton*)node->GetComponent();
+        return button != null && button->IsEnabled;
+    }
+
+    private unsafe bool TryGetTradeConfirmation(out AddonSelectYesno* addon)
+    {
+        addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
+        if (addon == null || !IsReady(&addon->AtkUnitBase))
+            return false;
+
+        var prompt = addon->PromptText->NodeText.ExtractText();
+        return string.Equals(prompt, tradeConfirmationText, StringComparison.Ordinal);
+    }
+
+    private unsafe bool TryGetIncomingTradeRequest(out AddonSelectYesno* addon)
+    {
+        addon = null;
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null ||
+            inventoryManager->TradeLocalState != TradeState.TradeRequestPending &&
+            inventoryManager->TradeRemoteState != TradeState.TradeRequestPending)
+        {
+            return false;
+        }
+
+        var candidate = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
+        if (candidate == null || !IsReady(&candidate->AtkUnitBase))
+            return false;
+
+        var prompt = candidate->PromptText->NodeText.ExtractText();
+        if (!prompt.Contains("trade", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        addon = candidate;
+        return true;
+    }
+
+    private unsafe bool TryGetCancelButton(
+        out AtkUnitBase* addon,
+        out AtkComponentButton* button)
+    {
+        addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
+        button = null;
+        if (!IsReady(addon) || addon->UldManager.NodeListCount <= 2)
+            return false;
+
+        var node = addon->UldManager.NodeList[2];
+        button = node == null ? null : (AtkComponentButton*)node->GetComponent();
+        return button != null &&
+               button->IsEnabled &&
+               button->ButtonTextNode != null &&
+               string.Equals(
+                   button->ButtonTextNode->NodeText.ExtractText(),
+                   "Cancel",
+                   StringComparison.Ordinal);
+    }
+
+    private static TradeQueuePartner CreatePartner(IPlayerCharacter player) =>
+        new(
+            player.GameObjectId,
+            player.Name.TextValue,
+            player.HomeWorld.RowId,
+            ResolveHomeWorldName(player));
+
+    private static string ResolveHomeWorldName(IPlayerCharacter player) =>
+        player.HomeWorld.IsValid
+            ? player.HomeWorld.Value.Name.ToString()
+            : string.Empty;
 
     private static unsafe bool IsReady(AtkUnitBase* addon) =>
         addon != null && addon->IsReady && addon->IsVisible;

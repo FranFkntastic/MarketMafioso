@@ -32,13 +32,13 @@ public sealed class MarketBoardAutomationController : IDisposable
     public MarketBoardPurchaseMonitorTick MonitorPurchase(
         DateTimeOffset nowUtc,
         TimeSpan monitorInterval,
-        TimeSpan listingRemovalWatchdog,
+        TimeSpan outcomeWatchdog,
         Func<MarketBoardPurchaseCandidate, MarketBoardPurchaseResult> confirmPurchase,
-        Func<MarketBoardReadResult> readFreshListings,
-        bool monitorListingRemoval = true)
+        Func<MarketBoardReadResult> verifyOutcome,
+        bool verifyOutcomeFromListings = true)
     {
         ArgumentNullException.ThrowIfNull(confirmPurchase);
-        ArgumentNullException.ThrowIfNull(readFreshListings);
+        ArgumentNullException.ThrowIfNull(verifyOutcome);
 
         var session = PurchaseSession;
         if (session?.IsActive != true)
@@ -56,15 +56,15 @@ public sealed class MarketBoardAutomationController : IDisposable
         if (session.Status.Equals("WaitingForConfirmation", StringComparison.OrdinalIgnoreCase))
         {
             confirmationResult = confirmPurchase(session.Candidate);
-            RecordConfirmationAttempt(confirmationResult, nowUtc, listingRemovalWatchdog);
+            RecordConfirmationAttempt(confirmationResult, nowUtc, outcomeWatchdog);
             session = PurchaseSession ?? session;
         }
 
-        if (monitorListingRemoval &&
-            session.Status.Equals("WaitingForListingRemoval", StringComparison.OrdinalIgnoreCase))
+        if (verifyOutcomeFromListings &&
+            session.Status.Equals("WaitingForOutcome", StringComparison.OrdinalIgnoreCase))
         {
             freshReadSession = session;
-            freshRead = readFreshListings();
+            freshRead = verifyOutcome();
             RecordFreshRead(freshRead, nowUtc);
             session = PurchaseSession ?? session;
         }
@@ -93,13 +93,13 @@ public sealed class MarketBoardAutomationController : IDisposable
     public void RecordConfirmationAttempt(
         MarketBoardPurchaseResult result,
         DateTimeOffset nowUtc,
-        TimeSpan listingRemovalWatchdog)
+        TimeSpan outcomeWatchdog)
     {
         ArgumentNullException.ThrowIfNull(result);
 
         LastPurchaseResult = result;
         if (PurchaseSession != null)
-            PurchaseSession = PurchaseSession.RecordConfirmationAttempt(result, nowUtc, listingRemovalWatchdog);
+            PurchaseSession = PurchaseSession.RecordConfirmationAttempt(result, nowUtc, outcomeWatchdog);
     }
 
     public void RecordFreshRead(MarketBoardReadResult readResult, DateTimeOffset nowUtc)

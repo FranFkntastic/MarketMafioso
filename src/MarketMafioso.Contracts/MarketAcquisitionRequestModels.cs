@@ -287,6 +287,7 @@ public static class MarketAcquisitionOrigins
 {
     public const string DashboardCreated = "DashboardCreated";
     public const string PluginBuilder = "PluginBuilder";
+    public const string LocalWorkbench = "LocalWorkbench";
     public const string ClientQuickShop = "ClientQuickShop";
     public const string CraftArchitect = "CraftArchitect";
 }

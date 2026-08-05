@@ -142,6 +142,16 @@ public interface IMarketAcquisitionPurchaseIo
 public interface IMarketAcquisitionRouteReporter
 {
     bool CanReport { get; }
+    Task<MarketAcquisitionRequestView> GetRequestAsync(
+        string requestId,
+        CancellationToken cancellationToken) =>
+        Task.FromException<MarketAcquisitionRequestView>(
+            new NotSupportedException("Request reconciliation is unavailable."));
+    Task<MarketAcquisitionRequestTimelineView> GetRequestTimelineAsync(
+        string requestId,
+        CancellationToken cancellationToken) =>
+        Task.FromException<MarketAcquisitionRequestTimelineView>(
+            new NotSupportedException("Request timeline reconciliation is unavailable."));
     Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(
         MarketAcquisitionRouteProgressReport report,
         CancellationToken cancellationToken);
@@ -186,7 +196,10 @@ public sealed record MarketAcquisitionRouteProgressReport(
     string? RouteStopId,
     string? ActiveWorld,
     string Phase,
-    string Message);
+    string Message,
+    string PluginInstanceId,
+    string? PluginVersion,
+    DateTimeOffset ClientTimestampUtc);
 
 public sealed record MarketAcquisitionRouteProgressReportOutcome(
     string Action,
@@ -228,4 +241,5 @@ public sealed record MarketAcquisitionMarketObservationReport(
     string DataCenter,
     string WorldName,
     DateTimeOffset ObservedAtUtc,
-    MarketBoardReadResult ReadResult);
+    MarketBoardReadResult ReadResult,
+    bool? HasIncompleteCoverage = null);

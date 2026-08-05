@@ -27,9 +27,53 @@ public sealed record AgentBridgeTruth
     public required string? PreparedPlanStatus { get; init; }
     public AgentBridgeCraftAppraisalTruth? CraftAppraisal { get; init; }
     public AgentBridgeWorkshopRestockTruth? WorkshopRestock { get; init; }
+    public required AgentBridgeTradeQueueTruth TradeQueue { get; init; }
     public required AgentBridgeRemoteMarketTruth RemoteMarket { get; init; }
     public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+}
+
+public sealed record AgentBridgeTradeQueueTruth
+{
+    public required string State { get; init; }
+    public required string Message { get; init; }
+    public string? RunId { get; init; }
+    public required bool IsActive { get; init; }
+    public required bool CanResume { get; init; }
+    public string? PartnerName { get; init; }
+    public required int BatchNumber { get; init; }
+    public required int CompletedBatchCount { get; init; }
+    public required int InitialUnitCount { get; init; }
+    public required int CompletedUnitCount { get; init; }
+    public required int RemainingLineCount { get; init; }
+    public required int RemainingUnitCount { get; init; }
+    public required bool QueueValid { get; init; }
+    public required string QueueValidationMessage { get; init; }
+    public required int ActionDelayMilliseconds { get; init; }
+    public required int TradeRetryMilliseconds { get; init; }
+    public required bool AutoAcceptIncomingTrades { get; init; }
+    public required bool IsTradeOpen { get; init; }
+    public required int OfferedSlotCount { get; init; }
+    public required bool CanReceiverReady { get; init; }
+    public required bool CanReceiverConfirm { get; init; }
+    public required bool CanReceiverCancel { get; init; }
+    public AgentBridgeTradePartnerTruth? SelectedPartner { get; init; }
+    public IReadOnlyList<AgentBridgeTradePartnerTruth> AvailablePartners { get; init; } = [];
+    public IReadOnlyList<AgentBridgeTradeQueueLineTruth> Queue { get; init; } = [];
+}
+
+public sealed record AgentBridgeTradePartnerTruth
+{
+    public required string Name { get; init; }
+    public required string HomeWorld { get; init; }
+    public required string GameObjectId { get; init; }
+}
+
+public sealed record AgentBridgeTradeQueueLineTruth
+{
+    public required uint ItemId { get; init; }
+    public required string ItemName { get; init; }
+    public required int Quantity { get; init; }
 }
 
 public sealed record AgentBridgeCraftAppraisalTruth
@@ -181,6 +225,16 @@ public sealed record AgentBridgeRouteTruth
     public ulong PersistedExactAcquisitionSunkGil { get; init; }
     public ulong ActiveExactAcquisitionRemainingQuantity { get; init; }
     public ulong ActiveExactAcquisitionRemainingGil { get; init; }
+    public int ReportBacklogEntryCount { get; init; }
+    public int ReportBacklogRequestCount { get; init; }
+    public int ReportBacklogInFlightRequestCount { get; init; }
+    public DateTimeOffset? ReportBacklogOldestEnqueuedAtUtc { get; init; }
+    public DateTimeOffset? ReportBacklogNextRetryAtUtc { get; init; }
+    public string? ReportBacklogLastFailureKind { get; init; }
+    public DateTimeOffset? ReportBacklogLastFailureAtUtc { get; init; }
+    public int ReportQuarantinedEntryCount { get; init; }
+    public string? ReportLastQuarantineStatus { get; init; }
+    public DateTimeOffset? ReportLastQuarantineAtUtc { get; init; }
 }
 
 public static class AgentBridgeRouteTruthProjection

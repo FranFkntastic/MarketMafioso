@@ -282,7 +282,31 @@ public sealed class MarketPurchaseEvidenceCoordinatorTests
     }
 
     [Fact]
-    public void FileStore_RoundTripsTerminalHistoryAndRecoversBackupWhenPrimaryIsCorrupt()
+    public void InjectedFrameworkAuthorityDoesNotAssumeTheConstructionThread()
+    {
+        var queue = Queue();
+        var frameworkThreadId = 0;
+        var coordinator = new MarketPurchaseEvidenceCoordinator(
+            new MemoryStore(),
+            queue,
+            () => Environment.CurrentManagedThreadId == Volatile.Read(ref frameworkThreadId));
+        MarketPurchaseIntentArmResult? result = null;
+        var frameworkThread = new Thread(() =>
+        {
+            Volatile.Write(ref frameworkThreadId, Environment.CurrentManagedThreadId);
+            result = coordinator.TryArm(Draft());
+        });
+
+        frameworkThread.Start();
+        frameworkThread.Join();
+
+        Assert.NotNull(result);
+        Assert.True(result.IsArmed);
+        Assert.IsType<PendingMarketPurchase>(coordinator.State);
+    }
+
+    [Fact]
+    public void FileStore_RoundTripsTerminalHistoryAndRecoversLatestStateWhenPrimaryIsCorrupt()
     {
         using var directory = new TemporaryDirectory();
         var path = Path.Combine(directory.Path, "purchase-evidence.json");
@@ -301,8 +325,80 @@ public sealed class MarketPurchaseEvidenceCoordinatorTests
         Assert.Null(roundTrip.State);
         Assert.Single(roundTrip.History);
         Assert.NotNull(recovered);
-        Assert.IsType<ConfirmedMarketPurchase>(recovered.State);
-        Assert.Empty(recovered.History);
+        Assert.Null(recovered.State);
+        Assert.Single(recovered.History);
+    }
+
+    [Fact]
+    public void FileStore_AppendsSmallDurableTransitionsUntilTheNextLoadCompactsThem()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "purchase-evidence.json");
+        var journalPath = path + ".journal";
+        var store = new MarketPurchaseEvidenceFileStore(path);
+        var queue = Queue();
+        var coordinator = CreateArmed(queue, store: store, markSubmitted: false);
+        var baseBytes = File.ReadAllBytes(path);
+        var intent = Assert.IsType<PendingMarketPurchase>(coordinator.State).Intent;
+
+        Assert.True(coordinator.MarkConfirmationSubmitted(intent.IntentId, Time(2)).IsRecorded);
+        queue.Enqueue(Time(2), 42, false, 3);
+        Assert.Equal(
+            MarketPurchaseEvidenceAdvanceStatus.Applied,
+            coordinator.AdvanceOnFrameworkThread(Time(3)).Status);
+        Assert.True(coordinator.ResolveTerminal(
+            intent.IntentId,
+            MarketPurchaseTerminalDisposition.AppliedExactlyOnce,
+            Time(4),
+            "Applied.").IsResolved);
+
+        Assert.Equal(baseBytes, File.ReadAllBytes(path));
+        Assert.True(File.Exists(journalPath));
+
+        var recovered = new MarketPurchaseEvidenceFileStore(path).Load();
+
+        Assert.NotNull(recovered);
+        Assert.Null(recovered.State);
+        Assert.Single(recovered.History);
+        Assert.False(File.Exists(journalPath));
+    }
+
+    [Fact]
+    public void FileStore_RepairsAnUncommittedTrailingFragmentBeforeTheNextTransition()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "purchase-evidence.json");
+        var journalPath = path + ".journal";
+        var store = new MarketPurchaseEvidenceFileStore(path);
+        var queue = Queue();
+        var coordinator = CreateArmed(queue, store: store, markSubmitted: false);
+        var intent = Assert.IsType<PendingMarketPurchase>(coordinator.State).Intent;
+        Assert.True(coordinator.MarkConfirmationSubmitted(intent.IntentId, Time(2)).IsRecorded);
+        File.AppendAllText(journalPath, "{\"version\":1");
+        var recoveredCoordinator = new MarketPurchaseEvidenceCoordinator(
+            new MarketPurchaseEvidenceFileStore(path),
+            queue);
+        queue.Enqueue(Time(2), 42, false, 3);
+
+        var result = recoveredCoordinator.AdvanceOnFrameworkThread(Time(3));
+        var recovered = new MarketPurchaseEvidenceFileStore(path).Load();
+
+        Assert.Equal(MarketPurchaseEvidenceAdvanceStatus.Applied, result.Status);
+        Assert.IsType<ConfirmedMarketPurchase>(recovered!.State);
+        Assert.False(File.Exists(journalPath));
+    }
+
+    [Fact]
+    public void FileStore_RefusesToDiscardAnOrphanedDurableJournal()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "purchase-evidence.json");
+        File.WriteAllText(path + ".journal", "{}\n");
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => new MarketPurchaseEvidenceFileStore(path).Load());
+
+        Assert.Contains("without a recoverable base checkpoint", exception.Message);
     }
 
     [Fact]

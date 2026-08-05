@@ -8,22 +8,22 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using MarketMafioso.Automation.Runtime;
 
-namespace MarketMafioso.MarketAcquisition.RemoteMarket;
+namespace MarketMafioso.MarketAcquisition.MarketBoard;
 
-internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
+internal sealed unsafe class MarketBoardPurchaseGuard : IDisposable
 {
     private const string ItemSearchResultAddon = "ItemSearchResult";
     private const string ApprovedGameVersion = "2026.07.16.0001.0000";
-    private const string PatchContractId = "mmf.remote-market-send-purchase";
+    private const string PatchContractId = "mmf.market-board-purchase-send";
 
     private readonly IAddonLifecycle addonLifecycle;
     private readonly IPluginLog log;
     private readonly Action onBlockedNativePurchase;
-    private readonly RemoteMarketPurchaseSessionOwnership ownership = new();
+    private readonly MarketBoardPurchaseSessionOwnership ownership = new();
     private Hook<InfoProxyItemSearch.Delegates.SendPurchaseRequestPacket>? hook;
     private long blockedNativePurchaseCount;
 
-    public RemoteMarketNativePurchaseGuard(
+    public MarketBoardPurchaseGuard(
         IGameInteropProvider interopProvider,
         IAddonLifecycle addonLifecycle,
         IPluginLog log,
@@ -61,16 +61,16 @@ internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
             hook = null;
             log.Error(
                 exception,
-                "[MarketMafioso] Remote market native-purchase guard is unavailable; remote purchases remain blocked.");
+                "[MarketMafioso] Market-board purchase guard is unavailable; listing purchases remain blocked.");
         }
     }
 
     public bool IsAvailable => hook?.IsEnabled == true;
-    public bool IsRemoteSessionActive => ownership.IsRemoteSessionActive;
+    public bool IsAcquisitionSessionActive => ownership.IsAcquisitionSessionActive;
     public long BlockedNativePurchaseCount => Interlocked.Read(ref blockedNativePurchaseCount);
 
-    public void ObserveRemoteOpen(bool agentWasActive, bool agentIsActive) =>
-        ownership.ObserveRemoteOpen(agentWasActive, agentIsActive);
+    public void ObserveAcquisitionOpen(bool agentWasActive, bool agentIsActive) =>
+        ownership.ObserveAcquisitionOpen(agentWasActive, agentIsActive);
 
     public void ObserveMarketAgentActive(bool active) => ownership.ObserveMarketAgentActive(active);
 
@@ -80,7 +80,7 @@ internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
             return false;
 
         // MMF owns this call explicitly. Calling the trampoline keeps it out of the
-        // detour that rejects unowned client/UI sends during a remote session.
+        // detour that rejects unowned client/UI sends during an acquisition session.
         return hook.Original(proxy);
     }
 
@@ -96,7 +96,7 @@ internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
         Interlocked.Increment(ref blockedNativePurchaseCount);
         NotifyBlockedNativePurchase();
         log.Information(
-            "[MarketMafioso] Blocked native remote market result activation before client confirmation setup. EventType={EventType} EventParam={EventParam}",
+            "[MarketMafioso] Blocked unowned market-listing activation before client confirmation setup. EventType={EventType} EventParam={EventParam}",
             receiveEvent.AtkEventType,
             receiveEvent.EventParam);
     }
@@ -109,7 +109,7 @@ internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
         Interlocked.Increment(ref blockedNativePurchaseCount);
         NotifyBlockedNativePurchase();
         log.Information(
-            "[MarketMafioso] Blocked an unowned native market-board purchase request during a remote market session.");
+            "[MarketMafioso] Blocked an unowned native market-board purchase request during an MMF listing session.");
         return false;
     }
 
@@ -121,7 +121,7 @@ internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
         }
         catch (Exception exception)
         {
-            log.Error(exception, "[MarketMafioso] Failed to schedule native remote-purchase recovery.");
+            log.Error(exception, "[MarketMafioso] Failed to schedule blocked listing-purchase recovery.");
         }
     }
 
@@ -136,28 +136,28 @@ internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
     }
 }
 
-internal sealed class RemoteMarketPurchaseSessionOwnership
+internal sealed class MarketBoardPurchaseSessionOwnership
 {
-    public bool IsRemoteSessionActive { get; private set; }
+    public bool IsAcquisitionSessionActive { get; private set; }
 
-    public bool ShouldBlockInterceptedSend => IsRemoteSessionActive;
+    public bool ShouldBlockInterceptedSend => IsAcquisitionSessionActive;
 
     public bool ShouldBlockNativeListingActivation(AddonEventType eventType) =>
-        IsRemoteSessionActive &&
+        IsAcquisitionSessionActive &&
         eventType is AddonEventType.ListButtonPress
             or AddonEventType.ListItemClick
             or AddonEventType.ListItemDoubleClick
             or AddonEventType.ListItemSelect;
 
-    public void ObserveRemoteOpen(bool agentWasActive, bool agentIsActive)
+    public void ObserveAcquisitionOpen(bool agentWasActive, bool agentIsActive)
     {
         if (!agentWasActive && agentIsActive)
-            IsRemoteSessionActive = true;
+            IsAcquisitionSessionActive = true;
     }
 
     public void ObserveMarketAgentActive(bool active)
     {
         if (!active)
-            IsRemoteSessionActive = false;
+            IsAcquisitionSessionActive = false;
     }
 }

@@ -6,7 +6,8 @@ namespace MarketMafioso.Automation.MarketBoard;
 public enum MarketBoardBrowseOwner
 {
     MarketAcquisition,
-    RemoteMarketController,
+    MarketListingAcquisition,
+    RetainerListingRefresh,
     RemoteAccessProbe,
 }
 
@@ -81,6 +82,14 @@ public interface IMarketBoardBrowseRuntime
         MarketBoardBrowseOwner owner,
         string operationId,
         string reason,
+        out MarketBoardBrowseSnapshot snapshot);
+}
+
+internal interface IHeadlessMarketBoardBrowseRuntime : IMarketBoardBrowseRuntime
+{
+    bool TryRequestExactItem(
+        MarketBoardBrowseOwner owner,
+        uint itemId,
         out MarketBoardBrowseSnapshot snapshot);
 }
 

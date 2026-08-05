@@ -13,6 +13,19 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
 {
+    private const int SummaryDetailMaximumLength = 512;
+
+    private static readonly HashSet<string> StatefulSummaryEvents =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "current-world",
+            "world-unavailable",
+            "travel-preflight-blocked",
+            "market-board-travel-wait",
+            "automation-snapshot",
+            "item-search",
+        };
+
     private static readonly MarketAcquisitionRouteDiagnostics DisabledInstance = new(
         AutomationDiagnosticsLog.Disabled,
         null,
@@ -41,6 +54,8 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
     private string captureStatus = "Active";
     private long nextSummaryEventSequence;
     private long nextFullTraceEventSequence;
+    private string? lastSummaryStateEvent;
+    private string? lastSummaryStateSignature;
     private bool disposed;
 
     private MarketAcquisitionRouteDiagnostics(
@@ -623,6 +638,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             }
         }
 
+        var summaryDetails = BuildSummaryDetails(filteredDetails);
+        var summaryMessage = CompactSummaryValue(message);
+
         var elapsedMilliseconds = (long)stopwatch.Elapsed.TotalMilliseconds;
         var recordedAtUtc = DateTimeOffset.UtcNow;
         if (fullTraceWriter != null)
@@ -640,7 +658,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             fullTraceWriter.Write(fullTraceEvent.Sequence, JsonSerializer.Serialize(fullTraceEvent, JsonOptions));
         }
 
-        if (!ShouldIncludeInSummary(eventName, message, filteredDetails))
+        if (!ShouldIncludeInSummary(eventName, message, summaryDetails))
             return;
 
         var summaryEvent = new MarketAcquisitionRouteDiagnosticEvent
@@ -650,12 +668,15 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             ElapsedMilliseconds = elapsedMilliseconds,
             RecordedAtUtc = recordedAtUtc,
             EventName = eventName,
-            Message = message,
-            Details = filteredDetails,
+            Message = summaryMessage,
+            Details = summaryDetails,
         };
         routeEventsWriter.WriteLine(JsonSerializer.Serialize(summaryEvent, JsonOptions));
         if (writeLog)
-            log.Record(eventName, message, details);
+            log.Record(
+                eventName,
+                summaryMessage,
+                summaryDetails.ToDictionary(pair => pair.Key, pair => (string?)pair.Value, StringComparer.Ordinal));
     }
 
     private void WriteManifest()
@@ -691,6 +712,8 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         {
             "route-events-jsonl-v1",
             "route-log",
+            "summary-projection-v1",
+            "summary-omission-markers-v1",
         };
 
         if (observedListingsCsv != null)
@@ -698,7 +721,10 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         if (purchaseRecordsCsv != null)
             capabilities.Add("purchase-records-csv");
         if (fullTraceWriter != null)
+        {
             capabilities.Add("segmented-full-trace-jsonl-v1");
+            capabilities.Add("full-trace-authoritative-v1");
+        }
 
         return capabilities;
     }
@@ -739,6 +765,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             message.Contains("fail", StringComparison.OrdinalIgnoreCase) ||
             message.Contains("timeout", StringComparison.OrdinalIgnoreCase))
         {
+            ResetSummaryState();
             return true;
         }
 
@@ -759,11 +786,88 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             (disposition.Equals("Pending", StringComparison.OrdinalIgnoreCase) ||
              disposition.Equals("Running", StringComparison.OrdinalIgnoreCase)))
         {
-            return details.TryGetValue("operationId", out var operationId) &&
-                   summarizedPendingOperations.Add(operationId);
+            var include = details.TryGetValue("operationId", out var operationId) &&
+                          summarizedPendingOperations.Add(operationId);
+            if (include)
+                ResetSummaryState();
+            return include;
         }
 
+        if (StatefulSummaryEvents.Contains(eventName))
+        {
+            var signature = BuildSummaryStateSignature(eventName, message, details);
+            if (string.Equals(lastSummaryStateEvent, eventName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(lastSummaryStateSignature, signature, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            lastSummaryStateEvent = eventName;
+            lastSummaryStateSignature = signature;
+            return true;
+        }
+
+        ResetSummaryState();
         return true;
+    }
+
+    private static SortedDictionary<string, string> BuildSummaryDetails(
+        IReadOnlyDictionary<string, string> details)
+    {
+        var projected = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var omittedKeys = new List<string>();
+
+        foreach (var detail in details)
+        {
+            if (IsSummaryOmittedDetail(detail.Key))
+            {
+                omittedKeys.Add(detail.Key);
+                continue;
+            }
+
+            projected[detail.Key] = CompactSummaryValue(detail.Value);
+        }
+
+        if (omittedKeys.Count > 0)
+        {
+            projected["summaryOmittedDetailCount"] = omittedKeys.Count.ToString(CultureInfo.InvariantCulture);
+            projected["summaryOmittedDetailKeys"] = CompactSummaryValue(string.Join(", ", omittedKeys));
+        }
+
+        return projected;
+    }
+
+    private static bool IsSummaryOmittedDetail(string key) =>
+        key.Contains("preview", StringComparison.OrdinalIgnoreCase);
+
+    private static string CompactSummaryValue(string value)
+    {
+        if (value.Length <= SummaryDetailMaximumLength)
+            return value;
+
+        return $"{value[..SummaryDetailMaximumLength]}... [truncated {value.Length.ToString(CultureInfo.InvariantCulture)} chars]";
+    }
+
+    private static string BuildSummaryStateSignature(
+        string eventName,
+        string message,
+        IReadOnlyDictionary<string, string> details)
+    {
+        var stateDetails = details
+            .Where(detail => !IsVolatileSummaryDetail(detail.Key))
+            .Select(detail => $"{detail.Key}={detail.Value}");
+        return string.Join('\u001f', new[] { eventName, message }.Concat(stateDetails));
+    }
+
+    private static bool IsVolatileSummaryDetail(string key) =>
+        key.Contains("elapsed", StringComparison.OrdinalIgnoreCase) ||
+        key.Contains("timestamp", StringComparison.OrdinalIgnoreCase) ||
+        key.EndsWith("Utc", StringComparison.OrdinalIgnoreCase);
+
+    private void ResetSummaryState()
+    {
+        lastSummaryStateEvent = null;
+        lastSummaryStateSignature = null;
     }
 
     private static string FormatCoverageStatus(MarketAcquisitionLiveCandidatePlan candidatePlan) =>

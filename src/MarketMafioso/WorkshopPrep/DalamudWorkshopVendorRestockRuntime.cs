@@ -25,6 +25,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
     private readonly DalamudOrdinaryGilShop shop;
     private readonly DalamudVNavmeshTravel vnavmesh;
     private readonly DalamudLifestreamAetheryteTravel aetheryteTravel;
+    private readonly DalamudLifestreamAethernetTravel aethernetTravel;
     private readonly DalamudLifestreamObjectInteractor objectInteractor;
     private readonly DalamudTravelReadiness travelReadiness;
     private readonly ExternalAutomationCoordinator externalAutomation;
@@ -35,6 +36,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
     private DateTimeOffset nextActionAt;
     private uint activeNpcId;
     private uint? requestedAetheryteId;
+    private uint? requestedAethernetId;
     private bool ownsNavigation;
 
     public DalamudWorkshopVendorRestockRuntime(
@@ -45,6 +47,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         DalamudOrdinaryGilShop shop,
         DalamudVNavmeshTravel vnavmesh,
         DalamudLifestreamAetheryteTravel aetheryteTravel,
+        DalamudLifestreamAethernetTravel aethernetTravel,
         DalamudLifestreamObjectInteractor objectInteractor,
         DalamudTravelReadiness travelReadiness,
         ExternalAutomationCoordinator externalAutomation,
@@ -59,6 +62,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         this.shop = shop ?? throw new ArgumentNullException(nameof(shop));
         this.vnavmesh = vnavmesh ?? throw new ArgumentNullException(nameof(vnavmesh));
         this.aetheryteTravel = aetheryteTravel ?? throw new ArgumentNullException(nameof(aetheryteTravel));
+        this.aethernetTravel = aethernetTravel ?? throw new ArgumentNullException(nameof(aethernetTravel));
         this.objectInteractor = objectInteractor ?? throw new ArgumentNullException(nameof(objectInteractor));
         this.travelReadiness = travelReadiness ?? throw new ArgumentNullException(nameof(travelReadiness));
         this.externalAutomation = externalAutomation ?? throw new ArgumentNullException(nameof(externalAutomation));
@@ -171,29 +175,99 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         if (readiness.State is TravelReadinessState.Repairing or TravelReadinessState.Waiting)
             return new(WorkshopVendorReachState.Waiting, readiness.Message);
         if (readiness.State == TravelReadinessState.Blocked)
+        {
+            if (ShouldWaitForPendingTravelUi(
+                    readiness,
+                    requestedAetheryteId is not null || requestedAethernetId is not null))
+            {
+                return new(
+                    WorkshopVendorReachState.Waiting,
+                    "Waiting for the in-progress vendor travel to release the game UI.");
+            }
             return new(WorkshopVendorReachState.Failed, readiness.Message);
+        }
+
+        if (utcNow() - approachStartedAt > ApproachTimeout)
+            return new(WorkshopVendorReachState.Unavailable, $"Could not reach {offer.NpcName} within two minutes.");
 
         if (clientState.TerritoryType != offer.TerritoryId)
         {
             if (assessment.RouteAetheryteId is not { } route)
                 return new(WorkshopVendorReachState.Unavailable, "No live owner-accessible route reaches this vendor.");
-            if (requestedAetheryteId != route && utcNow() >= nextActionAt)
+
+            switch (DetermineTravelLeg(
+                clientState.TerritoryType,
+                offer.TerritoryId,
+                route,
+                assessment.RouteAethernetId,
+                assessment.RouteAetheryteTerritoryId,
+                requestedAetheryteId,
+                requestedAethernetId))
             {
-                var submission = aetheryteTravel.TrySubmit(route);
-                switch (submission.State)
+                case WorkshopVendorTravelLeg.InvalidRoute:
+                    return new(
+                        WorkshopVendorReachState.Unavailable,
+                        "The vendor's aethernet route is missing the main aetheryte territory needed to confirm arrival.");
+
+                case WorkshopVendorTravelLeg.SubmitAetheryte:
                 {
-                    case AetheryteTravelSubmissionState.Submitted:
-                        requestedAetheryteId = route;
-                        nextActionAt = utcNow().Add(ActionThrottle);
-                        travelReadiness.Reset();
-                        break;
-                    case AetheryteTravelSubmissionState.Busy:
-                        return new(WorkshopVendorReachState.Waiting, submission.Message);
-                    case AetheryteTravelSubmissionState.Rejected:
-                    case AetheryteTravelSubmissionState.Unavailable:
-                    case AetheryteTravelSubmissionState.InvalidRequest:
-                        return new(WorkshopVendorReachState.Failed, submission.Message);
+                    if (utcNow() >= nextActionAt)
+                    {
+                        var submission = aetheryteTravel.TrySubmit(route);
+                        switch (submission.State)
+                        {
+                            case AetheryteTravelSubmissionState.Submitted:
+                                requestedAetheryteId = route;
+                                nextActionAt = utcNow().Add(ActionThrottle);
+                                travelReadiness.Reset();
+                                break;
+                            case AetheryteTravelSubmissionState.Busy:
+                                return new(WorkshopVendorReachState.Waiting, submission.Message);
+                            case AetheryteTravelSubmissionState.Rejected:
+                            case AetheryteTravelSubmissionState.Unavailable:
+                            case AetheryteTravelSubmissionState.InvalidRequest:
+                                return new(WorkshopVendorReachState.Failed, submission.Message);
+                        }
+                    }
+                    break;
                 }
+
+                case WorkshopVendorTravelLeg.AwaitAetheryteArrival:
+                    return new(
+                        WorkshopVendorReachState.Waiting,
+                        "Waiting to arrive at the main aetheryte before entering the destination network.");
+
+                case WorkshopVendorTravelLeg.SubmitAethernet:
+                {
+                    if (requestedAetheryteId != route)
+                        requestedAetheryteId = route;
+                    if (assessment.RouteAethernetId is not { } aethernetId || utcNow() < nextActionAt)
+                        break;
+
+                    var submission = aethernetTravel.TrySubmit(aethernetId);
+                    switch (submission.State)
+                    {
+                        case AetheryteTravelSubmissionState.Submitted:
+                            requestedAethernetId = aethernetId;
+                            nextActionAt = utcNow().Add(ActionThrottle);
+                            travelReadiness.Reset();
+                            break;
+                        case AetheryteTravelSubmissionState.Busy:
+                            return new(WorkshopVendorReachState.Waiting, submission.Message);
+                        case AetheryteTravelSubmissionState.Rejected:
+                            nextActionAt = utcNow().Add(ActionThrottle);
+                            return new(
+                                WorkshopVendorReachState.Waiting,
+                                "Waiting for the destination aethernet network to accept travel.");
+                        case AetheryteTravelSubmissionState.Unavailable:
+                        case AetheryteTravelSubmissionState.InvalidRequest:
+                            return new(WorkshopVendorReachState.Failed, submission.Message);
+                    }
+                    break;
+                }
+
+                case WorkshopVendorTravelLeg.AwaitDestination:
+                    break;
             }
             return new(WorkshopVendorReachState.Waiting, $"Traveling to {offer.NpcName}.");
         }
@@ -201,12 +275,10 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         if (requestedAetheryteId is not null)
         {
             requestedAetheryteId = null;
+            requestedAethernetId = null;
             approachStartedAt = utcNow();
             nextActionAt = DateTimeOffset.MinValue;
         }
-        if (utcNow() - approachStartedAt > ApproachTimeout)
-            return new(WorkshopVendorReachState.Unavailable, $"Could not reach {offer.NpcName} within two minutes.");
-
         var npc = access.FindLiveNpc(offer);
         var playerPosition = objectTable.LocalPlayer?.Position;
         if (playerPosition is null)
@@ -264,6 +336,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         nextActionAt = DateTimeOffset.MinValue;
         activeNpcId = 0;
         requestedAetheryteId = null;
+        requestedAethernetId = null;
         travelReadiness.Reset();
     }
 
@@ -351,6 +424,47 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
             ? WorkshopVendorApproachDecision.StartNavigation
             : WorkshopVendorApproachDecision.NavigationUnavailable;
     }
+
+    internal static WorkshopVendorTravelLeg DetermineTravelLeg(
+        uint currentTerritoryId,
+        uint targetTerritoryId,
+        uint routeAetheryteId,
+        uint? routeAethernetId,
+        uint? routeAetheryteTerritoryId,
+        uint? requestedAetheryteId,
+        uint? requestedAethernetId)
+    {
+        if (currentTerritoryId == targetTerritoryId)
+            return WorkshopVendorTravelLeg.AwaitDestination;
+
+        if (routeAethernetId is null)
+        {
+            return requestedAetheryteId == routeAetheryteId
+                ? WorkshopVendorTravelLeg.AwaitDestination
+                : WorkshopVendorTravelLeg.SubmitAetheryte;
+        }
+
+        if (routeAetheryteTerritoryId is not { } aetheryteTerritoryId)
+            return WorkshopVendorTravelLeg.InvalidRoute;
+
+        if (currentTerritoryId != aetheryteTerritoryId)
+        {
+            return requestedAetheryteId == routeAetheryteId
+                ? WorkshopVendorTravelLeg.AwaitAetheryteArrival
+                : WorkshopVendorTravelLeg.SubmitAetheryte;
+        }
+
+        return requestedAethernetId == routeAethernetId
+            ? WorkshopVendorTravelLeg.AwaitDestination
+            : WorkshopVendorTravelLeg.SubmitAethernet;
+    }
+
+    internal static bool ShouldWaitForPendingTravelUi(
+        TravelReadinessResult readiness,
+        bool travelRequestPending) =>
+        readiness.State == TravelReadinessState.Blocked &&
+        readiness.Code == "UnknownUiOwner" &&
+        travelRequestPending;
 }
 
 internal enum WorkshopVendorApproachDecision
@@ -361,4 +475,13 @@ internal enum WorkshopVendorApproachDecision
     WaitForOwnedRoute,
     BlockedByAnotherRoute,
     NavigationUnavailable,
+}
+
+internal enum WorkshopVendorTravelLeg
+{
+    InvalidRoute,
+    SubmitAetheryte,
+    AwaitAetheryteArrival,
+    SubmitAethernet,
+    AwaitDestination,
 }

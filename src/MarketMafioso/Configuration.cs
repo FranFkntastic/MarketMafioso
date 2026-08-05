@@ -12,6 +12,8 @@ namespace MarketMafioso;
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
+    private TradeQueueTimingOptions? tradeQueueTiming = new();
+
     public int Version { get; set; } = 1;
 
     public string ServerUrl { get; set; } = "http://localhost:8080/inventory";
@@ -36,9 +38,11 @@ public class Configuration : IPluginConfiguration
     public bool ShouldSerializeCreateMarketAcquisitionRouteDiagnosticPackages() => false;
     public bool EnableMarketAcquisitionDryRunTools { get; set; } = false;
 
-    public bool EnableRemoteMarketPurchase { get; set; } = false;
+    [JsonProperty("EnableRemoteMarketPurchase")]
+    public bool EnableMarketListingPurchases { get; set; } = false;
 
-    public List<uint> RemoteMarketRejectedTerritories { get; set; } = [];
+    [JsonProperty("RemoteMarketRejectedTerritories")]
+    public List<uint> MarketListingRejectedTerritories { get; set; } = [];
     public bool EnableAgentBridge { get; set; } = false;
     public bool EnableAgentBridgeScreenshots { get; set; } = false;
     public bool EnableAgentBridgeAudit { get; set; } = false;
@@ -64,6 +68,9 @@ public class Configuration : IPluginConfiguration
     public bool EnableAutoSendTimer { get; set; } = false;
     public int AutoSendIntervalMinutes { get; set; } = 5;
     public bool EnableMarketDiagnostics { get; set; } = false;
+    public bool EnableRetainerListingRefresh { get; set; } = false;
+    public bool UseSharedObservationListings { get; set; } = false;
+    public PersistedRetainerListingRefreshState RetainerListingRefresh { get; set; } = new();
 
     [JsonIgnore]
     public Dictionary<ulong, CachedRetainer> RetainerCache { get; set; } = new();
@@ -83,6 +90,12 @@ public class Configuration : IPluginConfiguration
 
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
     public List<TradeQueueItem> TradeQueueItems { get; set; } = new();
+    public bool AutoAcceptIncomingTrades { get; set; }
+    public TradeQueueTimingOptions TradeQueueTiming
+    {
+        get => tradeQueueTiming ??= new();
+        set => tradeQueueTiming = value ?? new();
+    }
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
     public bool SplitWorkshopQueueAndMaterials { get; set; }
     [JsonProperty("RetainerRestockPlanItems")]

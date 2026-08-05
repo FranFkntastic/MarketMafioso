@@ -17,8 +17,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan DataCenterTravelArrivalOperationTimeout = TimeSpan.FromMinutes(6);
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
-    private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan MarketBoardPurchaseMonitorInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan MarketBoardPurchaseOutcomeWatchdog = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan UniversalisFreshnessVerificationDelay = TimeSpan.FromSeconds(10);
     private readonly MarketAcquisitionRouteRunner runner;
     private readonly IMarketAcquisitionRouteContext context;
@@ -29,6 +28,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly IMarketAcquisitionRouteEvidenceRecorder evidence;
     private readonly MarketAcquisitionRouteReportDispatcher reportDispatcher;
     private readonly IMarketAcquisitionRouteClock clock;
+    private readonly string reportPluginInstanceId;
+    private readonly string? reportPluginVersion;
     private readonly MarketBoardListingReadAccumulator listingReadAccumulator = new();
     private readonly MarketBoardAutomationController purchaseAutomation = new();
     private readonly MarketAcquisitionRouteOperationExecutor operationExecutor = new();
@@ -47,6 +48,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool exactAcquisitionDryRunFaultEligible;
     private bool exactAcquisitionDryRunFaultInjected;
     private bool exactAcquisitionDryRunNoViableConsumed;
+    private bool purchaseEvidenceRouteBlocked;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -62,7 +64,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         IMarketAcquisitionRouteClock clock,
         IExactAcquisitionRouteExecutionStateStore exactAcquisitionStateStore,
         IMarketAcquisitionReportOutbox? reportOutbox = null,
-        IShardAcquisitionCheckpointCoordinator? shardCheckpoints = null)
+        IShardAcquisitionCheckpointCoordinator? shardCheckpoints = null,
+        IMarketAcquisitionReportOutbox? reportDeadLetter = null,
+        string? reportPluginInstanceId = null,
+        string? reportPluginVersion = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -75,8 +80,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             reporter ?? throw new ArgumentNullException(nameof(reporter)),
             claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle)),
             callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher)),
-            reportOutbox);
+            reportOutbox,
+            deadLetterOutbox: reportDeadLetter);
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        this.reportPluginInstanceId = reportPluginInstanceId ?? string.Empty;
+        this.reportPluginVersion = reportPluginVersion;
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
         this.shardCheckpoints = shardCheckpoints;
     }
@@ -155,6 +163,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         LastRunDiagnosticSummary = runner.LastRunDiagnosticSummary,
         ExactAcquisitionExecution = exactAcquisitionAuthority?.State,
         ShardCheckpoint = shardCheckpoints?.Snapshot,
+        ReportBacklog = reportDispatcher.GetBacklogSnapshot(),
     };
 
     public MarketAcquisitionRouteActionResult Start(
@@ -169,6 +178,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
 
@@ -232,7 +243,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         if (executionMode == MarketAcquisitionExecutionMode.Live)
-            reportDispatcher.BeginSession(claimed);
+            BeginHostedReportingSession(claimed);
         MarketAcquisitionRouteActionResult result;
         try
         {
@@ -273,6 +284,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         if (exactAcquisitionAuthority is null || !exactAcquisitionAuthority.State.NeedsRecovery)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("No exact-acquisition recovery is pending."));
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         try
         {
             exactAcquisitionAuthority.ValidateCurrentDocument(workbenchDocument);
@@ -280,7 +293,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             claimedRequest = remainingClaim;
             ClearExecutionState(preserveExecutionMode: true);
             if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
-                reportDispatcher.BeginSession(remainingClaim);
+                BeginHostedReportingSession(remainingClaim);
             var result = runner.Start(
                 plan,
                 enableDiagnostics: state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun,
@@ -367,13 +380,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
 
         claimedRequest = claimed;
         ClearExecutionState();
         state.EvidenceRefreshOnly = true;
-        reportDispatcher.BeginSession(claimed);
+        BeginHostedReportingSession(claimed);
         var result = runner.Start(
             plan,
             enableDiagnostics,
@@ -399,17 +414,32 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Resume()
     {
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (shardCheckpoints?.IsActive == true)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 $"Route resume is locked while purchased shards are being reconciled: {shardCheckpoints.Snapshot.Message}"));
-        if (travelInterruptedByCleanup)
+        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
         {
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
-                "World travel was interrupted while paused; restart the route only after reconciling the current world."));
+            var blocked = runner.RecordTravelRecoveryBlocked(reconciliationFailure);
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blocked.Message));
         }
 
-        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
+        if (travelInterruptedByCleanup)
+        {
+            if (!context.IsCurrentWorldAvailable)
+            {
+                const string message = "Route resume is waiting for the current world to become available after interrupted travel.";
+                var blocked = runner.RecordTravelRecoveryBlocked(message);
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blocked.Message));
+            }
+
+            var reconciled = runner.ReconcileInterruptedTravel(context.GetCurrentWorldName());
+            if (!reconciled.Success)
+                return UpdateStatus(reconciled);
+
+            travelInterruptedByCleanup = false;
+        }
 
         if (exactAcquisitionAuthority is not null && runner.ActivePlan is { } plan)
         {
@@ -446,6 +476,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public MarketAcquisitionRouteActionResult Recover(MarketAcquisitionClaimView claimed)
     {
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (!runner.CanRecover)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 $"Route cannot be recovered while {runner.State}."));
@@ -461,7 +493,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 "Route recovery is waiting for the current world to become available."));
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
+        {
+            var blocked = runner.RecordTravelRecoveryBlocked(reconciliationFailure);
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blocked.Message));
+        }
 
         CleanupOwnedApproach("Recovery");
         CleanupOwnedTravel("Recovery");
@@ -472,16 +507,21 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.MarketBoardReadResult = null;
         state.MarketBoardReconciliation = null;
         state.LiveCandidatePlan = null;
-        state.PostPurchasePreviousBrowseOperationId = null;
+        state.PurchaseRecoveryPreviousBrowseOperationId = null;
+        state.PurchaseRecoveryRefreshRequired = false;
+        state.UseProjectedMarketBoardSnapshot = false;
         state.NextRouteMonitorUtc = clock.UtcNow;
-        reportDispatcher.BeginSession(claimed);
+        BeginHostedReportingSession(claimed);
         freshnessCancellation.Cancel();
         freshnessCancellation.Dispose();
         freshnessCancellation = new CancellationTokenSource();
 
         var result = runner.Recover(context.GetCurrentWorldName());
         if (result.Success)
+        {
             state.ManualRecoveryBlockedReason = null;
+            travelInterruptedByCleanup = false;
+        }
         return UpdateStatus(result);
     }
 
@@ -491,6 +531,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
         CleanupOwnedApproach("Replacement");
@@ -511,7 +553,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
-            reportDispatcher.BeginSession(claimed);
+            BeginHostedReportingSession(claimed);
         var result = runner.Restart(plan);
         if (!result.Success && exactAcquisitionAuthority is not null)
         {
@@ -528,6 +570,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryPreflightRouteAction(out var evidenceBlockReason))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
         CleanupOwnedApproach("Replacement");
@@ -548,7 +592,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
-            reportDispatcher.BeginSession(claimed);
+            BeginHostedReportingSession(claimed);
         var result = runner.ReprepareAndRestart(plan, preparedAtUtc);
         if (!result.Success && exactAcquisitionAuthority is not null)
         {
@@ -588,42 +632,100 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         if (purchaseOccurred)
         {
-            if (exactAcquisitionAuthority is null || runner.ActivePlan is null)
-                return new(MarketPurchaseTerminalResolutionStatus.InvalidDisposition,
-                    "Applying a purchase requires the matching finalized exact-acquisition authority and plan to be loaded.");
+            var intent = terminal.Intent;
+            var candidate = new MarketBoardPurchaseCandidate
+            {
+                ItemId = intent.ItemId,
+                WorldName = intent.WorldName,
+                ListingId = intent.ListingId,
+                RetainerId = intent.RetainerId ?? string.Empty,
+                UnitPrice = intent.UnitPrice,
+                Quantity = intent.Quantity,
+                IsHq = intent.IsHighQuality,
+            };
+            uint nextWorldQuantity;
+            uint nextWorldGil;
+            uint nextLineQuantity;
+            uint nextLineGil;
             try
             {
-                var intent = terminal.Intent;
-                exactAcquisitionAuthority.RecordPurchase(intent.LineId, new MarketBoardPurchaseCandidate
+                nextWorldQuantity = checked(state.ActiveWorldPurchasedQuantity + candidate.Quantity);
+                nextWorldGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
+                nextLineQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
+                nextLineGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
+                if (exactAcquisitionAuthority is not null)
                 {
-                    ItemId = intent.ItemId,
-                    WorldName = intent.WorldName,
-                    ListingId = intent.ListingId,
-                    RetainerId = intent.RetainerId ?? string.Empty,
-                    UnitPrice = intent.UnitPrice,
-                    Quantity = intent.Quantity,
-                    IsHq = intent.IsHighQuality,
-                }, runner.ActivePlan);
+                    var activePlan = runner.ActivePlan ??
+                                     throw new InvalidOperationException("The retained exact-acquisition plan is unavailable.");
+                    exactAcquisitionAuthority.RecordPurchase(intent.LineId, candidate, activePlan);
+                }
             }
             catch (Exception exception)
             {
                 return new(MarketPurchaseTerminalResolutionStatus.InvalidDisposition,
-                    $"Purchase reconciliation could not persist exact sunk authority: {exception.Message}");
+                    $"Purchase reconciliation could not preserve the confirmed purchase: {exception.Message}");
             }
+
+            var applied = purchase.ResolvePurchaseEvidence(
+                intent.IntentId,
+                MarketPurchaseTerminalDisposition.AppliedExactlyOnce,
+                clock.UtcNow,
+                resolution.Trim());
+            if (!applied.IsResolved)
+                return applied;
+
+            state.ActiveWorldPurchasedQuantity = nextWorldQuantity;
+            state.ActiveWorldSpentGil = nextWorldGil;
+            state.ActiveLinePurchasedQuantity = nextLineQuantity;
+            state.ActiveLineSpentGil = nextLineGil;
+            CompleteTerminalPurchaseReconciliation(
+                $"Purchase outcome reconciled: listing {candidate.ListingId} was purchased. Recovering will refresh live listings before continuing.");
+            try
+            {
+                ReportConfirmedPurchase(candidate, nextLineQuantity, nextLineGil);
+            }
+            catch (Exception exception)
+            {
+                state.AcquisitionStatus =
+                    $"Purchase outcome was reconciled and route recovery is unlocked, but purchase reporting failed: {exception.Message}";
+            }
+            return applied;
         }
 
-        var disposition = terminal is ConfirmedMarketPurchase && purchaseOccurred
-            ? MarketPurchaseTerminalDisposition.AppliedExactlyOnce
-            : MarketPurchaseTerminalDisposition.ManuallyReconciled;
-        return purchase.ResolvePurchaseEvidence(
+        var reconciled = purchase.ResolvePurchaseEvidence(
             terminal.Intent.IntentId,
-            disposition,
+            MarketPurchaseTerminalDisposition.ManuallyReconciled,
             clock.UtcNow,
             resolution.Trim());
+        if (reconciled.IsResolved)
+        {
+            CompleteTerminalPurchaseReconciliation(
+                $"Purchase outcome reconciled: listing {terminal.Intent.ListingId} was not purchased. The retained route can continue.");
+        }
+        return reconciled;
+    }
+
+    private void CompleteTerminalPurchaseReconciliation(string message)
+    {
+        purchaseEvidenceRouteBlocked = false;
+        state.ManualRecoveryBlockedReason = null;
+        state.MarketBoardReadResult = null;
+        state.MarketBoardReconciliation = null;
+        state.LiveCandidatePlan = null;
+        state.UseProjectedMarketBoardSnapshot = false;
+        state.PurchaseRecoveryRefreshRequired = false;
+        state.PurchaseRecoveryPreviousBrowseOperationId = null;
+        ClearMarketBoardAutomationState();
+        state.AcquisitionStatus = message;
+        if (exactAcquisitionAuthority is not null)
+            exactAcquisitionAuthority.RequestRecovery(message);
     }
 
     public MarketAcquisitionRouteEngineTickResult TickRoute(bool isRequestBusy)
     {
+        if (!TryAdvanceAndPreflightPurchaseEvidence(allowActivePurchaseSession: true))
+            return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
+
         if (shardCheckpoints?.IsActive == true)
         {
             var checkpoint = shardCheckpoints.Tick();
@@ -816,17 +918,20 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
             else
             {
-                var preflight = uiAutomation.CheckTravelPreflight();
+                var preflight = CheckLifestreamCommandPreflight($"travel to {activeStop.WorldName}");
                 if (!preflight.CanSendCommand)
                 {
-                    UpdateStatus(runner.RecordTravelBlockedByUi(preflight));
+                    UpdateStatus(runner.RecordTravelPreflightBlocked(preflight));
                     ObserveTravelPreparationOperation(
                         preparation,
                         MarketAcquisitionRouteOperationDisposition.Pending,
                         preflight.Message,
                         new Dictionary<string, string?>
                         {
-                            ["preparationState"] = "UiBlocked",
+                            ["preparationState"] = "PreflightBlocked",
+                            ["preflightState"] = preflight.State.ToString(),
+                            ["busyStateAvailable"] = preflight.BusyStateAvailable.ToString(),
+                            ["lifestreamBusy"] = preflight.LifestreamBusy.ToString(),
                             ["blockingAddons"] = string.Join(", ", preflight.BlockingAddons),
                         });
                     state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
@@ -836,7 +941,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ObserveTravelPreparationOperation(
                     preparation,
                     MarketAcquisitionRouteOperationDisposition.Succeeded,
-                    $"Travel UI preflight passed for {activeStop.WorldName}.",
+                    $"Travel preflight passed for {activeStop.WorldName}.",
                     new Dictionary<string, string?>
                     {
                         ["preparationState"] = "ReadyToTravel",
@@ -1030,14 +1135,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         return result.Snapshot;
     }
 
-    private bool EnsureRouteTravelUiIsClear()
+    private MarketAcquisitionTravelPreflightResult CheckLifestreamCommandPreflight(string operation)
     {
-        var preflight = uiAutomation.CheckTravelPreflight();
-        if (preflight.CanSendCommand)
-            return true;
-
-        UpdateStatus(runner.RecordTravelBlockedByUi(preflight));
-        return false;
+        var lifestreamStateAvailable = context.TryIsWorldTravelBusy(out var lifestreamBusy);
+        return MarketAcquisitionTravelPreflight.Evaluate(
+            uiAutomation.CheckTravelPreflight(),
+            lifestreamStateAvailable,
+            lifestreamBusy,
+            operation);
     }
 
     private void HandleWorldScopedStop(MarketAcquisitionGuidedRouteStop activeStop, string currentWorld)
@@ -1115,8 +1220,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             UpdateStatus(runner.RecordMarketBoardApproach(approachResult));
             if (approachResult.MarketBoardTravelNeeded)
             {
-                if (!EnsureRouteTravelUiIsClear())
+                var preflight = CheckLifestreamCommandPreflight("market-board travel");
+                if (!preflight.CanSendCommand)
                 {
+                    UpdateStatus(runner.RecordTravelPreflightBlocked(preflight));
                     state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
                     return;
                 }
@@ -1408,9 +1515,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     $"Started purchasing {FormatItem(activeLine)} on {activeStop.WorldName}.");
         }
 
-        var freshRead = listingReadAccumulator.Merge(marketBoard.ReadCurrentListings(currentWorld));
+        var freshRead = ReadPurchaseListings(activeLine, currentWorld);
         state.MarketBoardReadResult = freshRead;
-        if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
+        if (freshRead.Status is not ("Ready" or "NoListings"))
         {
             if (!freshRead.IsFresh)
             {
@@ -1451,7 +1558,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var now = clock.UtcNow;
         purchaseAutomation.RecordPurchaseSelection(selection, now, MarketBoardPurchaseConfirmationWatchdog);
         if (selection.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase))
-            state.PostPurchasePreviousBrowseOperationId = state.MarketBoardReadResult?.BrowseOperationId;
+            state.PurchaseRecoveryPreviousBrowseOperationId = freshRead.BrowseOperationId;
         runner.RecordAutomationSnapshot(CreatePurchaseSelectionSnapshot(selection));
 
         if (selection.Status.Equals("NoCandidate", StringComparison.OrdinalIgnoreCase))
@@ -1469,6 +1576,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         if (ClassifyPurchaseSelectionOutcome(selection.Status) == MarketBoardAutomationOutcome.Recoverable)
         {
+            RequirePurchaseRecoveryRefresh(
+                $"Purchase selection will be replanned from refreshed listings: {selection.Message}");
             state.AcquisitionStatus = $"Purchase: {selection.Status}. {selection.Message}";
             state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
             return;
@@ -1483,6 +1592,81 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         purchaseAutomation.ScheduleNextMonitor(now, MarketBoardPurchaseInitialMonitorDelay);
         state.AcquisitionStatus = $"Purchase: {selection.Status}. {selection.Message}";
+    }
+
+    private MarketBoardReadResult ReadPurchaseListings(
+        MarketAcquisitionRequestView activeLine,
+        string currentWorld)
+    {
+        if (state.UseProjectedMarketBoardSnapshot &&
+            state.MarketBoardReadResult is { } projected &&
+            projected.ItemId == activeLine.ItemId &&
+            projected.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+        {
+            state.UseProjectedMarketBoardSnapshot = false;
+            return projected;
+        }
+
+        state.UseProjectedMarketBoardSnapshot = false;
+        if (!state.PurchaseRecoveryRefreshRequired)
+            return listingReadAccumulator.Merge(marketBoard.ReadCurrentListings(currentWorld));
+
+        var search = marketBoard.SearchItem(
+            activeLine.ItemId,
+            activeLine.ItemName,
+            MarketBoardItemSearchIntent.RequireFreshBrowse,
+            state.PurchaseRecoveryPreviousBrowseOperationId);
+        if (!search.ReadyForListings)
+            return CreatePurchaseRecoveryPendingRead(activeLine.ItemId, currentWorld, search);
+
+        state.PurchaseRecoveryRefreshRequired = false;
+        state.PurchaseRecoveryPreviousBrowseOperationId = null;
+        listingReadAccumulator.Clear();
+        return listingReadAccumulator.Merge(marketBoard.ReadCurrentListings(currentWorld));
+    }
+
+    private static MarketBoardReadResult CreatePurchaseRecoveryPendingRead(
+        uint itemId,
+        string currentWorld,
+        MarketBoardItemSearchResult search)
+    {
+        var browse = search.BrowseEvidence;
+        return new MarketBoardReadResult
+        {
+            Status = "PurchaseRecoveryRefreshPending",
+            Message = $"Refreshing listings after a recoverable purchase failure ({search.Status}). {search.Message}",
+            ReadState = MarketBoardListingReadState.Loading,
+            ItemId = itemId,
+            WorldName = currentWorld,
+            ReportedListingCount = browse?.ExpectedListingCount ?? 0,
+            CurrentRequestId = browse?.RequestId ?? 0,
+            BrowseOperationId = browse?.OperationId ?? string.Empty,
+            BrowseHeaderStatus = browse?.HeaderStatus ?? 0,
+            BrowseExpectedPageCount = browse?.ExpectedPageCount ?? 0,
+            BrowseObservedPageCount = browse?.PageCount ?? 0,
+            BrowseHistoryItemId = browse?.HistoryItemId,
+        };
+    }
+
+    private void RequirePurchaseRecoveryRefresh(string reason)
+    {
+        if (!state.PurchaseRecoveryRefreshRequired)
+            state.PurchaseRecoveryPreviousBrowseOperationId = state.MarketBoardReadResult?.BrowseOperationId;
+        state.PurchaseRecoveryRefreshRequired = true;
+        state.UseProjectedMarketBoardSnapshot = false;
+        listingReadAccumulator.Clear();
+        runner.RecordAutomationSnapshot(MarketBoardAutomationSnapshot.Create(
+            "BuyListing",
+            "Recover",
+            "RefreshListings",
+            "RefreshRequired",
+            MarketBoardAutomationOutcome.Recoverable,
+            "RefreshAndReplan",
+            new Dictionary<string, string?>
+            {
+                ["reason"] = reason,
+                ["previousBrowseOperationId"] = state.PurchaseRecoveryPreviousBrowseOperationId,
+            }));
     }
 
     private MarketBoardReadResult ExcludeSunkExactAcquisitionListings(MarketBoardReadResult readResult)
@@ -1509,6 +1693,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteEngineTickResult MonitorMarketBoardPurchase()
     {
+        if (!TryAdvanceAndPreflightPurchaseEvidence(allowActivePurchaseSession: true))
+            return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
+
         var previousSession = purchaseAutomation.PurchaseSession;
         if (previousSession?.IsActive != true)
             return MarketAcquisitionRouteEngineTickResult.Idle();
@@ -1517,20 +1704,25 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!purchaseAutomation.IsMonitorDue(now))
             return MarketAcquisitionRouteEngineTickResult.Idle("Waiting for purchase monitor tick.");
 
-        if (exactAcquisitionAuthority is not null && previousSession.Phase == MarketBoardPurchaseSessionPhase.WaitingForListingRemoval)
-            return MonitorExactAcquisitionServerPurchaseEvidence(previousSession, now);
+        if (previousSession.Phase == MarketBoardPurchaseSessionPhase.WaitingForOutcome &&
+            purchase.PurchaseEvidenceState != null)
+        {
+            return MonitorServerPurchaseEvidence(previousSession, now);
+        }
 
         try
         {
+            var canUseServerEvidence = purchase.HasServerPurchaseEvidence;
+            var requireServerEvidence = exactAcquisitionAuthority is not null;
             var tick = purchaseAutomation.MonitorPurchase(
                 now,
-                MarketBoardPurchaseMonitorInterval,
-                MarketBoardPurchaseListingRemovalWatchdog,
-                candidate => exactAcquisitionAuthority is null
-                    ? purchase.TryConfirmPendingPurchase(candidate)
-                    : purchase.TryConfirmPendingPurchase(candidate, CreatePurchaseIntentContext()),
-                () => ReadFreshPostPurchaseListings(previousSession),
-                monitorListingRemoval: exactAcquisitionAuthority is null);
+                MarketAcquisitionRoutePacing.PurchaseEvidencePollInterval,
+                MarketBoardPurchaseOutcomeWatchdog,
+                candidate => canUseServerEvidence || requireServerEvidence
+                    ? purchase.TryConfirmPendingPurchase(candidate, CreatePurchaseIntentContext())
+                    : purchase.TryConfirmPendingPurchase(candidate),
+                () => ReadFreshListingsForFallbackOutcomeVerification(previousSession),
+                verifyOutcomeFromListings: !canUseServerEvidence && !requireServerEvidence);
             if (!tick.DidWork)
                 return MarketAcquisitionRouteEngineTickResult.Idle("Purchase monitor had no due work.");
 
@@ -1547,7 +1739,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
     }
 
-    private MarketAcquisitionRouteEngineTickResult MonitorExactAcquisitionServerPurchaseEvidence(
+    private MarketAcquisitionRouteEngineTickResult MonitorServerPurchaseEvidence(
         MarketBoardPurchaseSession session,
         DateTimeOffset nowUtc)
     {
@@ -1564,11 +1756,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         switch (evidenceState)
         {
             case PendingMarketPurchase:
-                purchaseAutomation.ScheduleNextMonitor(nowUtc, MarketBoardPurchaseMonitorInterval);
+                purchaseAutomation.ScheduleNextMonitor(nowUtc, MarketAcquisitionRoutePacing.PurchaseEvidencePollInterval);
                 state.AcquisitionStatus = "Purchase: waiting for durable server confirmation evidence.";
                 return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
             case ConfirmedMarketPurchase confirmed:
-                return ApplyConfirmedExactAcquisitionPurchase(session, confirmed, nowUtc);
+                return ApplyConfirmedServerPurchase(session, confirmed, nowUtc);
             case TimedOutIndeterminateMarketPurchase timedOut:
                 return StopForTerminalPurchaseEvidence(
                     $"Purchase evidence timed out for intent {timedOut.Intent.IntentId}; reconcile outcome before any retry.");
@@ -1581,7 +1773,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
     }
 
-    private MarketAcquisitionRouteEngineTickResult ApplyConfirmedExactAcquisitionPurchase(
+    private MarketAcquisitionRouteEngineTickResult ApplyConfirmedServerPurchase(
         MarketBoardPurchaseSession session,
         ConfirmedMarketPurchase confirmed,
         DateTimeOffset nowUtc)
@@ -1603,23 +1795,40 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 "Confirmed server evidence does not match the active route, line, world, or exact listing intent.");
         }
 
+        var evidenceResolved = false;
         try
         {
-            var activePlan = runner.ActivePlan ?? throw new InvalidOperationException("Active purchase plan is unavailable.");
-            exactAcquisitionAuthority!.RecordPurchase(lineId, candidate, activePlan);
+            var projectedRead = MarketBoardPurchaseSnapshotProjector.ApplyConfirmedPurchase(
+                state.MarketBoardReadResult ??
+                throw new InvalidOperationException("The authoritative purchase snapshot is unavailable."),
+                candidate);
+            var nextWorldQuantity = checked(state.ActiveWorldPurchasedQuantity + candidate.Quantity);
+            var nextWorldGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
+            var nextLineQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
+            var nextLineGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
+            if (exactAcquisitionAuthority is not null)
+            {
+                var activePlan = runner.ActivePlan ?? throw new InvalidOperationException("Active purchase plan is unavailable.");
+                exactAcquisitionAuthority.RecordPurchase(lineId, candidate, activePlan);
+            }
             var resolved = purchase.ResolvePurchaseEvidence(
                 intent.IntentId,
                 MarketPurchaseTerminalDisposition.AppliedExactlyOnce,
                 nowUtc,
-                $"Applied exact External plan sunk receipt for listing {candidate.ListingId}.");
+                $"Applied confirmed market purchase for listing {candidate.ListingId} exactly once.");
             if (!resolved.IsResolved)
                 return StopForTerminalPurchaseEvidence(resolved.Message);
+            evidenceResolved = true;
 
-            state.ActiveWorldPurchasedQuantity = checked(state.ActiveWorldPurchasedQuantity + candidate.Quantity);
-            state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
-            state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
-            state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
-            state.AcquisitionStatus = "Purchase: confirmed by server packet and persisted exactly once.";
+            state.MarketBoardReadResult = projectedRead;
+            state.UseProjectedMarketBoardSnapshot = true;
+            state.PurchaseRecoveryRefreshRequired = false;
+            state.PurchaseRecoveryPreviousBrowseOperationId = null;
+            state.ActiveWorldPurchasedQuantity = nextWorldQuantity;
+            state.ActiveWorldSpentGil = nextWorldGil;
+            state.ActiveLinePurchasedQuantity = nextLineQuantity;
+            state.ActiveLineSpentGil = nextLineGil;
+            state.AcquisitionStatus = "Purchase: confirmed by server packet; continuing from the remembered listing snapshot.";
             var checkpointRequested = ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
             ClearMarketBoardAutomationState();
             if (checkpointRequested)
@@ -1630,17 +1839,40 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
         catch (Exception exception)
         {
+            if (evidenceResolved)
+            {
+                return StopAfterAppliedPurchaseFailure(
+                    $"The purchase was confirmed and recorded, but route continuation failed: {exception.Message}");
+            }
             return StopForTerminalPurchaseEvidence(
                 $"Confirmed purchase could not be applied safely: {exception.Message}");
         }
     }
 
-    private MarketAcquisitionRouteEngineTickResult StopForTerminalPurchaseEvidence(string message)
+    private MarketAcquisitionRouteEngineTickResult StopAfterAppliedPurchaseFailure(string message)
     {
         ClearMarketBoardAutomationState();
+        state.ManualRecoveryBlockedReason = null;
+        state.MarketBoardReadResult = null;
+        state.MarketBoardReconciliation = null;
+        state.LiveCandidatePlan = null;
+        state.UseProjectedMarketBoardSnapshot = false;
+        state.PurchaseRecoveryRefreshRequired = false;
+        state.PurchaseRecoveryPreviousBrowseOperationId = null;
+        exactAcquisitionAuthority?.RequestRecovery(message);
+        state.AcquisitionStatus = message;
+        UpdateStatus(FailRoute(message));
+        state.ManualRecoveryBlockedReason = null;
+        ReportRouteProgress();
+        return MarketAcquisitionRouteEngineTickResult.Worked(message, state.NextRouteMonitorUtc);
+    }
+
+    private MarketAcquisitionRouteEngineTickResult StopForTerminalPurchaseEvidence(string message)
+    {
         exactAcquisitionAuthority?.Pause(message);
         state.AcquisitionStatus = message;
         UpdateStatus(FailRoute(message));
+        ClearMarketBoardAutomationState();
         ReportRouteProgress();
         return MarketAcquisitionRouteEngineTickResult.Worked(message, state.NextRouteMonitorUtc);
     }
@@ -1654,7 +1886,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             RouteRunId = state.ProgressNonce,
             AttemptId = state.ProgressNonce,
             LineId = GetActiveRouteLineId(claimed),
-            EvidenceTimeout = MarketBoardPurchaseListingRemovalWatchdog,
+            EvidenceTimeout = MarketBoardPurchaseOutcomeWatchdog,
         };
     }
 
@@ -1684,6 +1916,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
             exactAcquisitionAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate, runner.ActivePlan);
             var checkpointRequested = ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
+            state.UseProjectedMarketBoardSnapshot =
+                state.MarketBoardReadResult is { IsFresh: true, Status: "Ready" or "NoListings" };
             ClearMarketBoardAutomationState();
             if (checkpointRequested)
                 PauseForShardCheckpoint();
@@ -1694,6 +1928,17 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
         else if (!session.IsActive)
         {
+            if (!session.ConfirmationWasSubmitted &&
+                session.Status.Equals("ConfirmationTimeout", StringComparison.OrdinalIgnoreCase))
+            {
+                RequirePurchaseRecoveryRefresh(session.Message);
+                ClearMarketBoardAutomationState();
+                state.AcquisitionStatus =
+                    $"Purchase confirmation did not complete; refreshing the snapshot and retrying safely. {session.Message}";
+                state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+                return;
+            }
+
             var message = $"World purchase batch stopped: {session.Message}";
             exactAcquisitionAuthority?.Pause(message);
             UpdateStatus(FailRoute(message));
@@ -1726,9 +1971,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ClearMarketBoardAutomationState();
 
         var nextStop = runner.ActiveStop;
-        if (nextStop == null || !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+        var shouldCloseMarketBoard =
+            MarketAcquisitionRoutePacing.ShouldCloseMarketBoardForNextStop(currentWorld, nextStop);
+        if (shouldCloseMarketBoard)
             uiAutomation.TryCloseMarketBoardWindows();
-        if (nextStop == null || !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+        if (shouldCloseMarketBoard)
         {
             state.ActiveWorldPurchasedQuantity = 0;
             state.ActiveWorldSpentGil = 0;
@@ -1737,7 +1984,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveLinePurchasedQuantity = 0;
             state.ActiveLineSpentGil = 0;
         }
-        else if (activeSubtask != null && nextStop.ActiveItemSubtask != null &&
+        else if (activeSubtask != null && nextStop is not null && nextStop.ActiveItemSubtask != null &&
                  !activeSubtask.LineId.Equals(nextStop.ActiveItemSubtask.LineId, StringComparison.Ordinal))
         {
             ResetMarketBoardStateForNextRouteItem();
@@ -1779,7 +2026,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.LiveCandidatePlan = null;
         ClearMarketBoardAutomationState();
         runner.ClearSearchSubmission("Advancing to next route item.");
-        uiAutomation.TryCloseMarketBoardWindows();
         state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
     }
 
@@ -1787,10 +2033,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
-        state.PostPurchasePreviousBrowseOperationId = null;
+        if (!state.PurchaseRecoveryRefreshRequired)
+            state.PurchaseRecoveryPreviousBrowseOperationId = null;
     }
 
-    private MarketBoardReadResult ReadFreshPostPurchaseListings(MarketBoardPurchaseSession session)
+    private MarketBoardReadResult ReadFreshListingsForFallbackOutcomeVerification(MarketBoardPurchaseSession session)
     {
         var candidate = session.Candidate;
         var itemName = runner.RetainedActiveStop?.ActiveItemSubtask?.ItemName ??
@@ -1799,15 +2046,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             candidate.ItemId,
             itemName,
             MarketBoardItemSearchIntent.RequireFreshBrowse,
-            state.PostPurchasePreviousBrowseOperationId);
+            state.PurchaseRecoveryPreviousBrowseOperationId);
         if (search.ReadyForListings)
             return marketBoard.ReadCurrentListings(context.GetCurrentWorldName());
 
         var browse = search.BrowseEvidence;
         return new MarketBoardReadResult
         {
-            Status = "PostPurchaseRefreshPending",
-            Message = $"Refreshing listings after purchase confirmation ({search.Status}). {search.Message}",
+            Status = "FallbackOutcomeRefreshPending",
+            Message = $"Server purchase evidence is unavailable; refreshing listings to reconcile the outcome ({search.Status}). {search.Message}",
             ReadState = MarketBoardListingReadState.Loading,
             ItemId = candidate.ItemId,
             WorldName = context.GetCurrentWorldName(),
@@ -1879,7 +2126,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool ReportConfirmedPurchase(MarketBoardPurchaseCandidate candidate, uint linePurchasedQuantity, uint lineSpentGil)
     {
         var claimed = claimedRequest;
-        var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
+        var activeSubtask = runner.ActiveStop?.ActiveItemSubtask ??
+                            runner.RetainedActiveStop?.ActiveItemSubtask;
         if (claimed == null || activeSubtask == null || string.IsNullOrWhiteSpace(claimed.ClaimToken))
             return shardCheckpoints?.RecordConfirmedPurchase(candidate) == true;
 
@@ -1986,6 +2234,92 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             readResult));
     }
 
+    private void BeginHostedReportingSession(MarketAcquisitionClaimView request)
+    {
+        if (reportDispatcher.CanReport && !string.IsNullOrWhiteSpace(request.ClaimToken))
+            reportDispatcher.BeginSession(request);
+        else
+            reportDispatcher.ResetSession();
+    }
+
+    private bool TryPreflightRouteAction(out string blockReason)
+    {
+        var preflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
+            purchase.PurchaseEvidenceState,
+            purchaseSessionActive: false,
+            nowUtc: clock.UtcNow);
+        if (preflight.CanExecute)
+        {
+            if (purchaseEvidenceRouteBlocked)
+            {
+                blockReason = state.ManualRecoveryBlockedReason ??
+                              "Purchase evidence preflight is still recovering; route execution is paused.";
+                return false;
+            }
+
+            blockReason = string.Empty;
+            return true;
+        }
+
+        blockReason = preflight.BlockReason!;
+        BlockRouteForPurchaseEvidence(blockReason);
+        return false;
+    }
+
+    private bool TryAdvanceAndPreflightPurchaseEvidence(bool allowActivePurchaseSession)
+    {
+        MarketPurchaseEvidenceAdvanceResult advance;
+        try
+        {
+            advance = purchase.AdvancePurchaseEvidence(clock.UtcNow);
+        }
+        catch (Exception exception)
+        {
+            BlockRouteForPurchaseEvidence($"Purchase evidence preflight failed: {exception.Message}");
+            return false;
+        }
+
+        if (advance.Status == MarketPurchaseEvidenceAdvanceStatus.PersistenceFailed)
+        {
+            BlockRouteForPurchaseEvidence(advance.Message);
+            return false;
+        }
+
+        var preflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
+            purchase.PurchaseEvidenceState ?? advance.State,
+            purchaseSessionActive: allowActivePurchaseSession && purchaseAutomation.PurchaseSession?.IsActive == true,
+            nowUtc: clock.UtcNow);
+        if (preflight.CanExecute)
+        {
+            if (purchaseEvidenceRouteBlocked && purchase.PurchaseEvidenceState is null && advance.State is null)
+            {
+                purchaseEvidenceRouteBlocked = false;
+                state.ManualRecoveryBlockedReason = null;
+            }
+            return true;
+        }
+
+        BlockRouteForPurchaseEvidence(preflight.BlockReason!);
+        return false;
+    }
+
+    private void BlockRouteForPurchaseEvidence(string message)
+    {
+        purchaseEvidenceRouteBlocked = true;
+        state.ManualRecoveryBlockedReason = message;
+        state.AcquisitionStatus = message;
+        exactAcquisitionAuthority?.Pause(message);
+        if (runner.IsRunning || runner.IsPaused)
+        {
+            var result = FailRoute(message);
+            state.AcquisitionStatus = result.Message;
+        }
+
+        ClearMarketBoardAutomationState();
+        state.ManualRecoveryBlockedReason = message;
+        state.AcquisitionStatus = message;
+    }
+
     private string GetActiveRouteLineId(MarketAcquisitionClaimView claimed)
     {
         var lineId = runner.ActiveStop?.ActiveItemSubtask?.LineId;
@@ -2038,7 +2372,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             result.Status is "ConfirmationSubmitted" or "ConfirmationPending" ? MarketBoardAutomationOutcome.InProgress : MarketBoardAutomationOutcome.Fatal,
             result.Status switch
             {
-                "ConfirmationSubmitted" => "VerifyListingRemoval",
+                "ConfirmationSubmitted" => "AwaitPurchaseOutcome",
                 "ConfirmationPending" => "ContinueMonitoring",
                 _ => "StopRoute",
             },
@@ -2060,7 +2394,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         "PurchaseSelectionSent" => MarketBoardAutomationOutcome.InProgress,
         "NoCandidate" => MarketBoardAutomationOutcome.ExpectedAlternate,
-        "MarketBoardNotOpen" or "InfoProxyUnavailable" or "ListingListUnavailable" or "ListingListNotReady" => MarketBoardAutomationOutcome.Recoverable,
+        "MarketBoardNotOpen" or
+        "InfoProxyUnavailable" or
+        "ListingMissing" or
+        "ListingListUnavailable" or
+        "ListingListNotReady" or
+        "SetLastPurchasedFailed" => MarketBoardAutomationOutcome.Recoverable,
         _ => MarketBoardAutomationOutcome.Fatal,
     };
 
@@ -2069,6 +2408,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         "PurchaseSelectionSent" => "WaitForConfirmation",
         "NoCandidate" => "CompleteWorldBatch",
         "MarketBoardNotOpen" => "ReopenMarketBoard",
+        "InfoProxyUnavailable" or
+        "ListingMissing" or
+        "ListingListUnavailable" or
+        "ListingListNotReady" or
+        "SetLastPurchasedFailed" => "RefreshAndReplan",
         _ => "StopRoute",
     };
 
@@ -2098,17 +2442,27 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             activeStop == null ? null : $"{activeStop.DataCenter}:{activeStop.WorldName}",
             activeStop?.WorldName,
             activeStop?.Status ?? routeState,
-            message);
+            message,
+            reportPluginInstanceId,
+            reportPluginVersion,
+            clock.UtcNow);
         reportDispatcher.EnqueueRouteProgress(report);
     }
 
     private void ClearExecutionState(bool preserveExecutionMode = false)
     {
+        var purchaseEvidenceState = purchase.PurchaseEvidenceState;
         CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         travelInterruptedByCleanup = false;
         CancelActiveOperation("Route execution state reset.");
         state.ResetRouteExecutionState(preserveExecutionMode);
+        var preflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
+            purchaseEvidenceState,
+            purchaseSessionActive: false,
+            nowUtc: clock.UtcNow);
+        if (!preflight.CanExecute)
+            state.ManualRecoveryBlockedReason = preflight.BlockReason;
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
         reportDispatcher.ResetSession();
@@ -2171,6 +2525,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CaptureManualRecoverySafetyBlock()
     {
+        var evidencePreflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
+            purchase.PurchaseEvidenceState,
+            purchaseSessionActive: false,
+            nowUtc: clock.UtcNow);
+        if (!evidencePreflight.CanExecute)
+        {
+            state.ManualRecoveryBlockedReason = evidencePreflight.BlockReason;
+            return;
+        }
+
         var purchaseSession = purchaseAutomation.PurchaseSession;
         state.ManualRecoveryBlockedReason = purchaseSession?.ConfirmationWasSubmitted != true
             ? null

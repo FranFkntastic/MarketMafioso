@@ -3,11 +3,14 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Command;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using ECommons;
+using FFXIVClientStructs.FFXIV.Component.GUI;
+using Franthropy.Dalamud.Observations;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Runtime;
@@ -60,6 +63,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly RetainerSaleChatObserver retainerSaleChatObserver;
     private readonly RetainerHistoryObserver retainerHistoryObserver;
     private readonly DalamudMarketBoardBrowseObserver marketBoardBrowseObserver;
+    private readonly RetainerListingRefreshCoordinator retainerListingRefresh;
+    private readonly FranthropyRetainerListingRefreshSource? sharedObservationListings;
+    private readonly DalamudSharedObservationHost? sharedObservationHost;
     private readonly RemoteMarketAccessProbe remoteMarketAccessProbe;
     private readonly RemoteMarketProbeWindow remoteMarketProbeWindow;
     private readonly QuartermasterIpcClient quartermaster;
@@ -116,7 +122,29 @@ public sealed class Plugin : IDalamudPlugin
         marketBoardBrowseObserver = new DalamudMarketBoardBrowseObserver(
             GameInteropProvider,
             Framework,
+            GameGui,
             Log);
+        IRetainerListingRefreshSource listingRefreshSource;
+        if (Configuration.UseSharedObservationListings)
+        {
+            sharedObservationListings = new FranthropyRetainerListingRefreshSource(
+                PluginInterface.GetPluginConfigDirectory(),
+                PlayerState);
+            listingRefreshSource = sharedObservationListings;
+        }
+        else
+        {
+            listingRefreshSource = new QuartermasterRetainerListingRefreshSource(quartermaster, PlayerState);
+        }
+        retainerListingRefresh = new RetainerListingRefreshCoordinator(
+            Configuration,
+            listingRefreshSource,
+            marketBoardBrowseObserver,
+            Configuration.Save,
+            message => ChatGui.PrintError($"[MMF] {message}"),
+            message => Log.Information("[MarketMafioso] {Message}", message));
+        if (sharedObservationListings is not null)
+            sharedObservationListings.Changed += retainerListingRefresh.NotifyListingCaptureChanged;
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         remoteMarketAccessProbe = new RemoteMarketAccessProbe(
             Configuration,
@@ -161,14 +189,19 @@ public sealed class Plugin : IDalamudPlugin
         tradeQueueIo = new DalamudTradeQueueIo(
             GameGui,
             TargetManager,
+            ObjectTable,
             Condition,
             SigScanner,
             DataManager,
             Log);
         tradeQueueRunner = new TradeQueueRunner(
             Configuration.TradeQueueItems,
+            Configuration.TradeQueueTiming,
             Configuration.Save,
             tradeQueueIo,
+            new Franthropy.Dalamud.Automation.Inventory.DalamudItemQualityLoweringAutomation(
+                GameGui,
+                DalamudTradeQueueIo.SupportedInventories),
             tradeAutomationCoordinator,
             Log);
         mainWindow = new MainWindow(
@@ -244,7 +277,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow.AcquisitionCompositionWindow);
         windowSystem.AddWindow(agentBridgeProofWindow);
         windowSystem.AddWindow(remoteMarketProbeWindow);
-        windowSystem.AddWindow(mainWindow.RemoteMarketOverlay);
+        windowSystem.AddWindow(mainWindow.MarketListingOverlay);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
@@ -270,8 +303,35 @@ public sealed class Plugin : IDalamudPlugin
         quartermaster.Changed += OnQuartermasterChanged;
 
         StartTimer();
-
         Log.Information("[MarketMafioso] Plugin loaded. Use /mmf to open settings.");
+
+        try
+        {
+            sharedObservationHost = new DalamudSharedObservationHost(new DalamudSharedObservationHostOptions
+            {
+                PluginConfigDirectory = PluginInterface.GetPluginConfigDirectory(),
+                PluginName = "MarketMafioso",
+                PluginInstanceId = Guid.NewGuid().ToString("N"),
+                GameBuild = Franthropy.Dalamud.Diagnostics.GamePatchCompatibilityGate.ReadCurrentGameVersion(),
+                GameInventory = GameInventory,
+                PlayerState = PlayerState,
+                AddonLifecycle = AddonLifecycle,
+                Diagnostic = (message, exception) =>
+                {
+                    if (exception is null)
+                        Log.Warning("[MarketMafioso] {Message}", message);
+                    else
+                        Log.Error(exception, "[MarketMafioso] {Message}", message);
+                },
+            });
+            sharedObservationHost.Start();
+        }
+        catch (Exception exception)
+        {
+            sharedObservationHost?.Dispose();
+            sharedObservationHost = null;
+            Log.Error(exception, "[MarketMafioso] Shared observation hosting is unavailable.");
+        }
     }
 
     private void OnCommand(string command, string args)
@@ -306,11 +366,11 @@ public sealed class Plugin : IDalamudPlugin
                         break;
                     }
 
-                    ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketItem(matches[0].RowId)}");
+                    ChatGui.Print($"[MMF] Market listings: {mainWindow.OpenMarketListing(matches[0].RowId)}");
                     break;
                 }
 #endif
-                ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketBoard()}");
+                ChatGui.Print($"[MMF] Market listings: {mainWindow.OpenMarketListings()}");
                 break;
 
             case "probe-market":
@@ -601,10 +661,50 @@ public sealed class Plugin : IDalamudPlugin
     {
         retainerSaleChatObserver.Tick();
         retainerHistoryObserver.Tick();
-        mainWindow.RemoteMarketOverlay.IsOpen = true;
+        var retainerSessionActive = IsRetainerSessionActive();
+        var (refreshReady, refreshDeferredReason) = GetRetainerListingRefreshReadiness(retainerSessionActive);
+        retainerListingRefresh.Tick(
+            DateTimeOffset.UtcNow,
+            refreshReady,
+            refreshDeferredReason);
+        mainWindow.MarketListingOverlay.IsOpen = true;
+        tradeQueueIo.TickIncomingTradeAutoAccept(Configuration.AutoAcceptIncomingTrades);
         tradeQueueRunner.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
+    }
+
+    private static (bool Ready, string? Reason) GetRetainerListingRefreshReadiness(bool retainerSessionActive)
+    {
+        if (!ClientState.IsLoggedIn || PlayerState.ContentId == 0)
+            return (false, "Waiting for a logged-in character before refreshing retainer listings.");
+        if (retainerSessionActive)
+            return (false, "Waiting for the retainer session to close completely.");
+        if (Condition[ConditionFlag.InCombat] ||
+            Condition[ConditionFlag.Crafting] ||
+            Condition[ConditionFlag.Gathering] ||
+            Condition[ConditionFlag.WatchingCutscene] ||
+            Condition[ConditionFlag.WatchingCutscene78] ||
+            Condition[ConditionFlag.OccupiedInCutSceneEvent] ||
+            Condition[ConditionFlag.OccupiedInEvent] ||
+            Condition[ConditionFlag.OccupiedInQuestEvent])
+        {
+            return (false, "Waiting for ordinary character activity to become idle before refreshing retainer listings.");
+        }
+
+        return (true, null);
+    }
+
+    private static unsafe bool IsRetainerSessionActive() =>
+        Condition[ConditionFlag.OccupiedSummoningBell] ||
+        IsAddonVisible("RetainerList") ||
+        IsAddonVisible("RetainerSellList") ||
+        IsAddonVisible("RetainerSell");
+
+    private static unsafe bool IsAddonVisible(string name)
+    {
+        var addon = GameGui.GetAddonByName<AtkUnitBase>(name, 1);
+        return addon != null && addon->IsReady && addon->IsVisible;
     }
 
     private void DrawUI()
@@ -652,6 +752,12 @@ public sealed class Plugin : IDalamudPlugin
         marketBoardBrowseObserver.Dispose();
         retainerHistoryObserver.Dispose();
         retainerSaleChatObserver.Dispose();
+        if (sharedObservationListings is not null)
+        {
+            sharedObservationListings.Changed -= retainerListingRefresh.NotifyListingCaptureChanged;
+            sharedObservationListings.Dispose();
+        }
+        sharedObservationHost?.Dispose();
         quartermaster.Dispose();
         ECommonsMain.Dispose();
     }
@@ -660,6 +766,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnQuartermasterChanged(QuartermasterChanged changed)
     {
+        if (sharedObservationListings is null &&
+            string.Equals(changed.Kind, "retainer_listings", StringComparison.Ordinal))
+            retainerListingRefresh.NotifyListingCaptureChanged();
+
         if (!Configuration.EnableMarketDiagnostics)
             return;
 

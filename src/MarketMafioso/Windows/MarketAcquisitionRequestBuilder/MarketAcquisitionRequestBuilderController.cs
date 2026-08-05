@@ -12,16 +12,16 @@ namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 public sealed class MarketAcquisitionRequestBuilderController
 {
     private static readonly TimeSpan AutomaticSyncDelay = TimeSpan.FromMilliseconds(350);
-    private static readonly TimeSpan AutomaticRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RemotePollInterval = TimeSpan.FromSeconds(2);
     private readonly Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderSyncOutcome>> syncRequest;
     private readonly Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderRefreshOutcome>> refreshRequest;
     private readonly Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted;
     private readonly Action<MarketAcquisitionRequestDocument> persistDocument;
     private Configuration? recoveryConfig;
+    private bool hostedSyncEnabled;
     private bool syncRequested;
     private DateTimeOffset syncDueAtUtc = DateTimeOffset.MaxValue;
-    private DateTimeOffset nextRemotePollAtUtc = DateTimeOffset.UtcNow;
+    private DateTimeOffset nextRemotePollAtUtc = DateTimeOffset.MaxValue;
     private Task refreshTask = Task.CompletedTask;
     private MarketAcquisitionRequestDocument? cachedIntentHashDocument;
     private string? cachedIntentHash;
@@ -48,18 +48,15 @@ public sealed class MarketAcquisitionRequestBuilderController
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderSyncOutcome>> syncRequest,
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderRefreshOutcome>> refreshRequest,
         Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted,
-        Action<MarketAcquisitionRequestDocument> persistDocument)
+        Action<MarketAcquisitionRequestDocument> persistDocument,
+        Configuration? recoveryConfig = null)
     {
         Document = document ?? throw new ArgumentNullException(nameof(document));
         this.syncRequest = syncRequest ?? throw new ArgumentNullException(nameof(syncRequest));
         this.refreshRequest = refreshRequest ?? throw new ArgumentNullException(nameof(refreshRequest));
         this.documentAdopted = documentAdopted ?? throw new ArgumentNullException(nameof(documentAdopted));
         this.persistDocument = persistDocument ?? throw new ArgumentNullException(nameof(persistDocument));
-        if (Document.Lines.Count > 0 &&
-            !Document.SyncStatus.Equals("SyncedClean", StringComparison.OrdinalIgnoreCase))
-        {
-            RequestAutomaticSync();
-        }
+        this.recoveryConfig = recoveryConfig;
     }
 
     public MarketAcquisitionRequestDocument Document { get; private set; }
@@ -71,6 +68,10 @@ public sealed class MarketAcquisitionRequestBuilderController
     public bool IsSyncing { get; private set; }
 
     public bool IsRefreshing { get; private set; }
+
+    public bool IsHostedSyncEnabled => hostedSyncEnabled;
+
+    public bool HasHostedAssociation => !string.IsNullOrWhiteSpace(Document.RemoteRequestId);
 
     public bool HasPreviousWorkbench =>
         recoveryConfig?.PreviousMarketAcquisitionRequestDocument is not null;
@@ -122,6 +123,8 @@ public sealed class MarketAcquisitionRequestBuilderController
         ArgumentNullException.ThrowIfNull(request);
         Document = AdoptRemoteDocument(Document, request);
         ResetSelection();
+        hostedSyncEnabled = true;
+        nextRemotePollAtUtc = DateTimeOffset.UtcNow;
         Status = "Loaded request into builder.";
         SaveDocument();
         documentAdopted(Document, request);
@@ -135,9 +138,69 @@ public sealed class MarketAcquisitionRequestBuilderController
 
         Document = AdoptRemoteDocument(Document, request);
         ResetSelection();
+        hostedSyncEnabled = true;
+        nextRemotePollAtUtc = DateTimeOffset.UtcNow;
         Status = "Loaded restored request into builder.";
         SaveDocument();
         return true;
+    }
+
+    public void RequestHostedSync()
+    {
+        hostedSyncEnabled = true;
+        Status = "Hosted sync requested. The local Workbench remains usable while the browser copy is updated.";
+        RequestAutomaticSync(TimeSpan.Zero);
+    }
+
+    public void PauseHostedSync()
+    {
+        hostedSyncEnabled = false;
+        syncRequested = false;
+        syncDueAtUtc = DateTimeOffset.MaxValue;
+        nextRemotePollAtUtc = DateTimeOffset.MaxValue;
+        Status = "Hosted sync paused. The local Workbench remains executable.";
+    }
+
+    public bool DetachHostedAssociation()
+    {
+        var hadHostedState = hostedSyncEnabled ||
+                             HasHostedAssociation ||
+                             Document.SyncStatus.Equals("SyncFailed", StringComparison.OrdinalIgnoreCase) ||
+                             Document.SyncStatus.Equals("RemoteChanged", StringComparison.OrdinalIgnoreCase);
+        PauseHostedSync();
+        if (!hadHostedState)
+            return false;
+
+        Document = Document with
+        {
+            RemoteRequestId = null,
+            RemoteRevision = 0,
+            RemoteOrigin = null,
+            LastSyncedHash = null,
+            RemoteHash = null,
+            SyncStatus = "NewDraft",
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        };
+        Status = "Detached local hosted state. The server copy was not shelved or changed.";
+        SaveDocument();
+        return true;
+    }
+
+    public void MarkHostedCopyShelved()
+    {
+        PauseHostedSync();
+        Document = Document with
+        {
+            RemoteRequestId = null,
+            RemoteRevision = 0,
+            RemoteOrigin = null,
+            LastSyncedHash = null,
+            RemoteHash = null,
+            SyncStatus = "NewDraft",
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        };
+        Status = "Hosted copy shelved remotely. The local Workbench remains executable.";
+        SaveDocument();
     }
 
     public void EnsureCharacterScope(string characterName, string world)
@@ -175,7 +238,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         bool canSynchronize,
         DateTimeOffset? nowUtc = null)
     {
-        if (!canSynchronize || IsSyncing || IsRefreshing || Document.Lines.Count == 0)
+        if (!hostedSyncEnabled || !canSynchronize || IsSyncing || IsRefreshing || Document.Lines.Count == 0)
             return;
 
         var now = nowUtc ?? DateTimeOffset.UtcNow;
@@ -355,11 +418,11 @@ public sealed class MarketAcquisitionRequestBuilderController
     {
         ArgumentNullException.ThrowIfNull(composition);
         PreserveCurrentWorkbenchForRecovery();
+        PauseHostedSync();
         Document = composition.CreateDocument(characterName, world);
         ResetSelection();
         Status = $"Loaded {composition.Name} as a new Workbench draft.";
         SaveDocument();
-        RequestAutomaticSync();
     }
 
     private int AddLinesCore(IEnumerable<MarketAcquisitionRequestLineDocument> lines, string sourceLabel)
@@ -436,6 +499,7 @@ public sealed class MarketAcquisitionRequestBuilderController
             return;
         }
 
+        hostedSyncEnabled = true;
         IsSyncing = true;
         try
         {
@@ -469,8 +533,8 @@ public sealed class MarketAcquisitionRequestBuilderController
         catch (Exception ex)
         {
             Document = Document with { SyncStatus = "SyncFailed", UpdatedAtUtc = DateTimeOffset.UtcNow };
-            Status = $"Synchronization failed; retrying automatically. {ex.Message}";
-            RequestAutomaticSync(AutomaticRetryDelay);
+            PauseHostedSync();
+            Status = $"Hosted synchronization failed; the local Workbench remains executable. Hosted sync is paused; retry it explicitly or continue locally. {ex.Message}";
             SaveDocument();
         }
         finally
@@ -482,6 +546,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     public void StartBlankWorkbench(string characterName, string world)
     {
         PreserveCurrentWorkbenchForRecovery();
+        PauseHostedSync();
         Document = MarketAcquisitionRequestDocument.CreateDefault(characterName, world);
         ResetSelection();
         syncRequested = false;
@@ -505,9 +570,9 @@ public sealed class MarketAcquisitionRequestBuilderController
             HasMeaningfulContent(current) ? current : null);
         Document = previous.WithNewIdentity();
         ResetSelection();
+        PauseHostedSync();
         Status = "Restored the previous Workbench as a new draft.";
         SaveDocument();
-        RequestAutomaticSync();
         return true;
     }
 
@@ -522,10 +587,9 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     private void HandleTerminalSynchronizationConflict(MarketAcquisitionLifecycleHttpException ex)
     {
-        syncRequested = false;
-        syncDueAtUtc = DateTimeOffset.MaxValue;
+        PauseHostedSync();
         Document = Document with { SyncStatus = "RemoteChanged", UpdatedAtUtc = DateTimeOffset.UtcNow };
-        Status = $"The server work order changed, so automatic sync is paused. Refresh it or start a blank Workbench. {ex.Message}";
+        Status = $"The server work order changed, so hosted sync is paused. Refresh it explicitly or continue locally. {ex.Message}";
         SaveDocument();
     }
 
@@ -558,13 +622,13 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
-            Status = "The server copy is missing; republishing the current work-order draft automatically.";
-            RequestAutomaticSync(TimeSpan.Zero);
+            PauseHostedSync();
+            Status = "The server copy is missing; hosted sync is paused. Sync the hosted copy explicitly if the browser copy should be republished.";
         }
         catch (Exception ex)
         {
-            Status = $"Server refresh failed; the local draft remains available. {ex.Message}";
-            RequestAutomaticSync(AutomaticRetryDelay);
+            PauseHostedSync();
+            Status = $"Server refresh failed; the local draft remains available. Hosted sync is paused; retry it explicitly if browser state is needed. {ex.Message}";
         }
         finally
         {
@@ -574,6 +638,7 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     public void ClearDraft(string characterName, string world)
     {
+        PauseHostedSync();
         Document = MarketAcquisitionRequestDocument.CreateDefault(characterName, world);
         ResetSelection();
         Status = "Work-order draft cleared.";
@@ -596,7 +661,7 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     private void RequestAutomaticSync(TimeSpan? delay = null)
     {
-        if (!DraftValidation.IsValid)
+        if (!hostedSyncEnabled || !DraftValidation.IsValid)
         {
             syncRequested = false;
             syncDueAtUtc = DateTimeOffset.MaxValue;

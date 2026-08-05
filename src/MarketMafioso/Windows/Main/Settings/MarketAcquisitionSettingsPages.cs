@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.UI.Settings;
 using MarketMafioso.MarketAcquisition;
@@ -16,7 +17,7 @@ internal sealed class MarketAcquisitionSettingsPages
         Descriptors =
         [
             new("market.operation", "Market Acquisition / Operation", DrawOperation, 30, IsUnlocked,
-                ["opportunistic world checks", "recent world TTL", "full resweep", "remote market purchases"]),
+                ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases", "retainer listing refresh", "Universalis"]),
             new("market.diagnostics", "Market Acquisition / Diagnostics", DrawDiagnostics, 31, IsUnlocked,
                 ["route diagnostic packages", "route log", "observed listings", "purchase records"]),
         ];
@@ -26,9 +27,31 @@ internal sealed class MarketAcquisitionSettingsPages
 
     private void DrawOperation(SettingsPageContext context)
     {
-        DrawCheckbox(context, "Enable remote market purchases",
-            "Allows explicit remote-market commands and integrations to open the market board and purchase confirmed listings.",
-            () => config.EnableRemoteMarketPurchase, value => config.EnableRemoteMarketPurchase = value);
+        DrawCheckbox(context, "Enable listing purchases",
+            "Allows acquisition commands and integrations to open the market board and purchase confirmed listings.",
+            () => config.EnableMarketListingPurchases, value => config.EnableMarketListingPurchases = value);
+        DrawCheckbox(
+            context,
+            "Refresh listed items when observed",
+            "When retainer listings are captured, quietly refresh every distinct item currently listed by this character. Healthy refreshes stay in the background; deferred or blocked work remains visible in Status.",
+            () => config.EnableRetainerListingRefresh,
+            value => config.EnableRetainerListingRefresh = value);
+        if (config.EnableRetainerListingRefresh &&
+            context.Matches("retainer listing refresh", "Universalis", "background", "deferred", "blocked", "Status"))
+        {
+            var refresh = config.RetainerListingRefresh;
+            ImGui.TextColored(
+                refresh.NeedsAttention ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted,
+                refresh.StatusMessage);
+            if (refresh.Items.Count > 0)
+            {
+                var blocked = refresh.Items.Count(item => item.State == RetainerListingRefreshItemState.Blocked);
+                ImGui.TextColored(
+                    blocked > 0 ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted,
+                    $"{refresh.Items.Count} item(s) retained for refresh; {blocked} blocked.");
+            }
+            ImGui.Spacing();
+        }
         DrawCheckbox(context, "Check every batch item on each visited world",
             "Default on. While already on a world, MarketMafioso checks other unfinished items from the same claimed batch.",
             () => config.EnableOpportunisticWorldChecks, value => config.EnableOpportunisticWorldChecks = value);
