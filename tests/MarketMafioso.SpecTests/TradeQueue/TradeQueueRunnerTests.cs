@@ -385,39 +385,119 @@ public sealed class TradeQueueRunnerTests
     }
 
     [Fact]
-    public void Runner_SubmitsStackQuantityBeforeAdvancingPastAnEarlyVisibleTradeSlot()
+    public void OfferLine_RequiresQuantitySubmissionBeforeEarlyVisibleSlotCompletes()
     {
-        var queue = Queue(2);
-        var io = new FakeIo(Inventory(2)) { ExposeSlotBeforeQuantity = true };
-        var clock = new TestClock();
-        using var coordinator = Coordinator(new());
-        using var runner = new TradeQueueRunner(
-            queue,
-            new TradeQueueTimingOptions(),
-            () => { },
-            io,
-            new FakeQualityLowering(),
-            coordinator,
-            TestPluginLog.Create(),
-            clock.Read);
+        var io = new FakeIo(Inventory(4)) { ExposeSlotBeforeQuantity = true };
+        var offer = Offer(io, quantity: 2, sourceStackQuantity: 4);
 
-        Assert.True(runner.Start().Success);
-        runner.Tick();
-        io.IsTradeOpenValue = true;
-        runner.Tick();
-        clock.Advance(TimeSpan.FromMilliseconds(300));
-        runner.Tick();
-
-        Assert.True(io.IsNumericInputOpen);
+        Assert.Equal(TradeQueueOfferLineState.WaitingForQuantityInput, offer.Advance(OfferNow).State);
         Assert.Equal(1, io.OfferedSlotCount);
+        Assert.Equal(0, io.LastSubmittedQuantity);
 
-        runner.Tick();
+        var completed = offer.Advance(OfferNow);
+
+        Assert.True(completed.IsCompleted);
         Assert.False(io.IsNumericInputOpen);
         Assert.Equal(2, io.LastSubmittedQuantity);
+    }
 
-        runner.Tick();
-        runner.Tick();
-        Assert.Equal(TradeQueueExecutionState.WaitingForPartner, runner.Snapshot.State);
+    [Fact]
+    public void OfferLine_WaitsForADelayedStackQuantityDialog()
+    {
+        var io = new FakeIo(Inventory(4)) { NumericInputDelayChecks = 1 };
+        var offer = Offer(io, quantity: 2, sourceStackQuantity: 4);
+
+        Assert.Equal(TradeQueueOfferLineState.WaitingForQuantityInput, offer.Advance(OfferNow).State);
+        Assert.Equal(TradeQueueOfferLineState.WaitingForQuantityInput, offer.Advance(OfferNow).State);
+        Assert.Equal(0, io.LastSubmittedQuantity);
+        Assert.True(offer.Advance(OfferNow).IsCompleted);
+        Assert.Equal(2, io.LastSubmittedQuantity);
+    }
+
+    [Fact]
+    public void OfferLine_CompletesASingleUnitStackWithoutANumericDialog()
+    {
+        var io = new FakeIo(Inventory(1));
+        var offer = Offer(io, quantity: 1, sourceStackQuantity: 1);
+
+        Assert.Equal(TradeQueueOfferLineState.WaitingForSlot, offer.Advance(OfferNow).State);
+        Assert.True(offer.Advance(OfferNow).IsCompleted);
+        Assert.Equal(0, io.LastSubmittedQuantity);
+    }
+
+    [Fact]
+    public void OfferLine_SubmitsTheFullMultiUnitStackQuantity()
+    {
+        var io = new FakeIo(Inventory(4));
+        var offer = Offer(io, quantity: 4, sourceStackQuantity: 4);
+
+        Assert.Equal(TradeQueueOfferLineState.WaitingForQuantityInput, offer.Advance(OfferNow).State);
+        Assert.True(offer.Advance(OfferNow).IsCompleted);
+        Assert.Equal(4, io.LastSubmittedQuantity);
+    }
+
+    [Fact]
+    public void OfferLine_FailsClosedWhenQuantitySubmissionFails()
+    {
+        var io = new FakeIo(Inventory(2)) { RejectQuantitySubmission = true };
+        var offer = Offer(io, quantity: 2, sourceStackQuantity: 2);
+
+        offer.Advance(OfferNow);
+        var failed = offer.Advance(OfferNow);
+
+        Assert.True(failed.IsFailed);
+        Assert.Contains("rejected", failed.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void OfferLine_FailsClosedWhenSlotProgressionIsContradictory()
+    {
+        var io = new FakeIo(Inventory(2)) { ExposeUnexpectedSlotProgression = true };
+        var offer = Offer(io, quantity: 2, sourceStackQuantity: 2);
+
+        offer.Advance(OfferNow);
+        var failed = offer.Advance(OfferNow);
+
+        Assert.True(failed.IsFailed);
+        Assert.Contains("advanced unexpectedly", failed.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OfferLine_FailsClosedAtItsDeadline()
+    {
+        var io = new FakeIo(Inventory(1));
+        var offer = new TradeQueueOfferLineOperation(io, Line(1, 1), 0, OfferNow.AddMilliseconds(1));
+
+        var failed = offer.Advance(OfferNow.AddMilliseconds(2));
+
+        Assert.True(failed.IsFailed);
+        Assert.Contains("Timed out", failed.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OfferGil_WaitsForTheNumericInputThenSubmitsThePlannedAmount()
+    {
+        var io = new FakeIo(Inventory(1)) { GilNumericInputDelayChecks = 1 };
+        var offer = new TradeQueueOfferGilOperation(io, 600_000);
+
+        var opened = offer.Advance();
+        Assert.Equal(TradeQueueOfferGilState.WaitingForInput, opened.State);
+        Assert.True(opened.ActionIssued);
+        Assert.Equal(TradeQueueOfferGilState.WaitingForInput, offer.Advance().State);
+
+        Assert.True(offer.Advance().IsCompleted);
+        Assert.Equal(600_000, io.SubmittedGil);
+    }
+
+    [Fact]
+    public void OfferGil_FailsClosedWhenTheInputOrSubmissionIsRejected()
+    {
+        var unavailable = new TradeQueueOfferGilOperation(new FakeIo(Inventory(1)) { RejectGilInput = true }, 1);
+        var rejected = new TradeQueueOfferGilOperation(new FakeIo(Inventory(1)) { RejectQuantitySubmission = true }, 1);
+
+        Assert.True(unavailable.Advance().IsFailed);
+        rejected.Advance();
+        Assert.True(rejected.Advance().IsFailed);
     }
 
     [Fact]
@@ -553,6 +633,14 @@ public sealed class TradeQueueRunnerTests
         new(0, 0, 100, "Cobalt Ingot", false, quantity),
     ];
 
+    private static TradeQueueBatchLine Line(int quantity, int sourceStackQuantity) =>
+        new(0, 0, 100, "Cobalt Ingot", false, quantity, sourceStackQuantity);
+
+    private static readonly DateTimeOffset OfferNow = new(2026, 7, 31, 12, 0, 0, TimeSpan.Zero);
+
+    private static TradeQueueOfferLineOperation Offer(FakeIo io, int quantity, int sourceStackQuantity) =>
+        new(io, Line(quantity, sourceStackQuantity), 0, OfferNow.AddSeconds(30));
+
     private static ExternalAutomationCoordinator Coordinator(HashSet<string> stopRequests) =>
         new(new FakePluginDataStore(stopRequests), TestPluginLog.Create());
 
@@ -575,13 +663,29 @@ public sealed class TradeQueueRunnerTests
             }
         }
         public bool IsTradeOpen => IsTradeOpenValue;
-        public bool IsNumericInputOpen { get; private set; }
+        private bool isNumericInputOpen;
+        private int numericInputDelayChecksRemaining;
+        public bool IsNumericInputOpen
+        {
+            get
+            {
+                if (numericInputDelayChecksRemaining-- > 0)
+                    return false;
+                return isNumericInputOpen;
+            }
+            private set => isNumericInputOpen = value;
+        }
         public int OfferedSlotCount { get; private set; }
         public int SubmittedGil { get; private set; }
         public int OpenTradeAttempts { get; private set; }
         public int OfferItemAttempts { get; private set; }
         public bool HasSelectedPartner { get; set; } = true;
         public bool ExposeSlotBeforeQuantity { get; set; }
+        public bool ExposeUnexpectedSlotProgression { get; set; }
+        public bool RejectQuantitySubmission { get; set; }
+        public bool RejectGilInput { get; set; }
+        public int GilNumericInputDelayChecks { get; set; }
+        public int NumericInputDelayChecks { get; set; }
         public int LastSubmittedQuantity { get; private set; }
         private bool gilInputRequested;
 
@@ -621,9 +725,16 @@ public sealed class TradeQueueRunnerTests
 
         public bool TryOpenGilInput(out string error)
         {
+            if (RejectGilInput)
+            {
+                error = "Trade gil input is unavailable.";
+                return false;
+            }
+
             error = string.Empty;
             gilInputRequested = true;
             IsNumericInputOpen = true;
+            numericInputDelayChecksRemaining = GilNumericInputDelayChecks;
             return true;
         }
 
@@ -634,8 +745,11 @@ public sealed class TradeQueueRunnerTests
             if (line.SourceStackQuantity > 1)
             {
                 IsNumericInputOpen = true;
+                numericInputDelayChecksRemaining = NumericInputDelayChecks;
                 if (ExposeSlotBeforeQuantity)
                     OfferedSlotCount++;
+                if (ExposeUnexpectedSlotProgression)
+                    OfferedSlotCount += 2;
             }
             else
                 OfferedSlotCount++;
@@ -644,6 +758,12 @@ public sealed class TradeQueueRunnerTests
 
         public bool TrySubmitQuantity(int quantity, out string error)
         {
+            if (RejectQuantitySubmission)
+            {
+                error = "Quantity submission was rejected.";
+                return false;
+            }
+
             error = string.Empty;
             LastSubmittedQuantity = quantity;
             IsNumericInputOpen = false;

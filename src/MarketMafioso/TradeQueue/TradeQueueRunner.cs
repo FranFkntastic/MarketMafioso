@@ -30,10 +30,8 @@ public sealed class TradeQueueRunner : IDisposable
     private DateTimeOffset nextActionAt;
     private DateTimeOffset verificationStartedAt;
     private int offeredLineIndex;
-    private bool waitingForOfferedSlot;
-    private bool quantitySubmitted;
-    private bool gilInputRequested;
-    private bool gilSubmitted;
+    private TradeQueueOfferLineOperation? offerLineOperation;
+    private TradeQueueOfferGilOperation? offerGilOperation;
     private bool readyClicked;
     private bool confirmationSubmitted;
     private int batchNumber;
@@ -228,10 +226,8 @@ public sealed class TradeQueueRunner : IDisposable
         if (io.IsTradeOpen)
         {
             offeredLineIndex = 0;
-            waitingForOfferedSlot = false;
-            quantitySubmitted = false;
-            gilInputRequested = false;
-            gilSubmitted = false;
+            offerLineOperation = null;
+            offerGilOperation = null;
             readyClicked = false;
             confirmationSubmitted = false;
             nextActionAt = now + timing.ActionDelay;
@@ -289,36 +285,21 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         }
 
-        if (batch.GilAmount > 0 && !gilSubmitted)
+        if (batch.GilAmount > 0 && !(offerGilOperation?.IsCompleted ?? false))
         {
             if (now < nextActionAt)
                 return;
 
-            if (!gilInputRequested)
+            offerGilOperation ??= new TradeQueueOfferGilOperation(io, batch.GilAmount);
+            var gilResult = offerGilOperation.Advance();
+            if (gilResult.IsFailed)
             {
-                if (!io.TryOpenGilInput(out var gilError))
-                {
-                    if (!string.IsNullOrWhiteSpace(gilError))
-                        Fail(gilError);
-                    return;
-                }
+                Fail(gilResult.Message);
+                return;
+            }
 
-                gilInputRequested = true;
+            if (gilResult.ActionIssued || gilResult.IsCompleted)
                 nextActionAt = now + timing.ActionDelay;
-                return;
-            }
-
-            if (!io.IsNumericInputOpen)
-                return;
-            if (!io.TrySubmitQuantity(batch.GilAmount, out var quantityError))
-            {
-                if (!string.IsNullOrWhiteSpace(quantityError))
-                    Fail(quantityError);
-                return;
-            }
-
-            gilSubmitted = true;
-            nextActionAt = now + timing.ActionDelay;
             return;
         }
 
@@ -334,45 +315,25 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         }
 
-        var offeredSlots = io.OfferedSlotCount;
-        if (waitingForOfferedSlot)
-        {
-            var pendingLine = batch.Lines[offeredLineIndex];
-            if (!quantitySubmitted && pendingLine.SourceStackQuantity > 1 && io.IsNumericInputOpen)
-            {
-                if (!io.TrySubmitQuantity(pendingLine.Quantity, out var quantityError))
-                {
-                    if (!string.IsNullOrWhiteSpace(quantityError))
-                        Fail(quantityError);
-                    return;
-                }
-                quantitySubmitted = true;
-                nextActionAt = now + timing.ActionDelay;
-                return;
-            }
+        if (offerLineOperation == null && now < nextActionAt)
+            return;
 
-            if (quantitySubmitted && offeredSlots > offeredLineIndex)
-            {
-                offeredLineIndex++;
-                waitingForOfferedSlot = false;
-                quantitySubmitted = false;
-            }
+        offerLineOperation ??= new TradeQueueOfferLineOperation(
+            io,
+            batch.Lines[offeredLineIndex],
+            offeredLineIndex,
+            deadline);
+        var offerResult = offerLineOperation.Advance(now);
+        if (offerResult.IsFailed)
+        {
+            Fail(offerResult.Message);
             return;
         }
-
-        if (offeredSlots != offeredLineIndex || now < nextActionAt)
+        if (!offerResult.IsCompleted)
             return;
 
-        var line = batch.Lines[offeredLineIndex];
-        if (!io.TryOfferItem(line, out var offerError))
-        {
-            if (!string.IsNullOrWhiteSpace(offerError))
-                Fail(offerError);
-            return;
-        }
-
-        waitingForOfferedSlot = true;
-        quantitySubmitted = line.SourceStackQuantity <= 1;
+        offeredLineIndex++;
+        offerLineOperation = null;
         nextActionAt = now + timing.ActionDelay;
     }
 
@@ -495,10 +456,8 @@ public sealed class TradeQueueRunner : IDisposable
 
         batch = TradeQueuePlanner.BuildNextBatch(queue.ToList(), inventory);
         offeredLineIndex = 0;
-        waitingForOfferedSlot = false;
-        quantitySubmitted = false;
-        gilInputRequested = false;
-        gilSubmitted = false;
+        offerLineOperation = null;
+        offerGilOperation = null;
         readyClicked = false;
         confirmationSubmitted = false;
         verificationStartedAt = default;
