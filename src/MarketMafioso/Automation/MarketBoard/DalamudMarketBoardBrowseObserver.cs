@@ -13,7 +13,7 @@ namespace MarketMafioso.Automation.MarketBoard;
 
 internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketBoardBrowseRuntime, IDisposable
 {
-    internal const string ApprovedGameVersion = "2026.07.16.0001.0000";
+    internal const string ApprovedGameVersion = "2026.08.05.0000.0000";
     internal const string PatchContractId = "mmf.market-board-browse";
 
     private const int HeaderLength = 8;

@@ -46,7 +46,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     private const string SelectYesNoAddon = "SelectYesno";
     private const uint TradeInventoryContainerId = 2005;
     private const uint TradeConfirmationAddonRowId = 102223;
-    private const string ApprovedGameVersion = "2026.07.16.0001.0000";
+    private const string ApprovedGameVersion = "2026.08.05.0000.0000";
     private const string PatchContractId = "mmf.trade-ui-and-offer-command";
     private const string OfferItemTradeSignature =
         "48 89 6C 24 ?? 48 89 74 24 ?? 57 48 83 EC 30 83 B9 ?? ?? ?? ?? ?? 41 8B F0";

@@ -11,7 +11,7 @@ namespace MarketMafioso.MarketDiagnostics;
 
 internal sealed partial class RemoteSummoningBellProbe
 {
-    private const string RetainerRpcExpectedClientVersion = "2026.07.16.0001.0000";
+    private const string RetainerRpcExpectedClientVersion = "2026.08.05.0000.0000";
     private const long ServerRequestCallbackInterfaceFinalizeRva = 0x00843A30;
     private const long ServerRequestCallbackManagerAvailableRva = 0x00843B10;
     private const long ServerRequestCallbackManagerGetRva = 0x00843B30;

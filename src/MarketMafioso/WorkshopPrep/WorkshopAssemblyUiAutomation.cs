@@ -10,7 +10,7 @@ namespace MarketMafioso.WorkshopPrep;
 
 public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 {
-    private const string ApprovedGameVersion = "2026.07.16.0001.0000";
+    private const string ApprovedGameVersion = "2026.08.05.0000.0000";
     private const string PatchContractId = "mmf.workshop-ui-callbacks";
     internal static readonly IReadOnlyList<string> MaterialDeliveryAddonNames =
         WorkshopAssemblyUiDriver.MaterialDeliveryAddonNames;
