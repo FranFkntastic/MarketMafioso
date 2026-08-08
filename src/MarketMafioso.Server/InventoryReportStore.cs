@@ -6,6 +6,7 @@ namespace MarketMafioso.Server;
 
 public sealed class InventoryReportStore
 {
+    private readonly SemaphoreSlim writeGate = new(1, 1);
     private readonly SqliteConnectionFactory connectionFactory;
     private readonly IConfiguration configuration;
     private readonly ILogger<InventoryReportStore> log;
@@ -79,27 +80,35 @@ public sealed class InventoryReportStore
     {
         ArgumentNullException.ThrowIfNull(report);
 
-        var metadata = report.Metadata ?? new InventoryReportMetadata();
+        await writeGate.WaitAsync(cancellationToken);
+        try
+        {
+            var metadata = report.Metadata ?? new InventoryReportMetadata();
 
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        await writePersistence.WriteSnapshotAsync(
-            connection,
-            transaction,
-            accountId,
-            id,
-            receivedAt,
-            report,
-            metadata,
-            apiKeyLabel,
-            rawReportJson,
-            cancellationToken);
-        await rawJsonRetention.PruneAsync(connection, transaction, accountId, cancellationToken);
-        await writePersistence.PruneSnapshotsAsync(connection, transaction, accountId, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+            await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await writePersistence.WriteSnapshotAsync(
+                connection,
+                transaction,
+                accountId,
+                id,
+                receivedAt,
+                report,
+                metadata,
+                apiKeyLabel,
+                rawReportJson,
+                cancellationToken);
+            await rawJsonRetention.PruneAsync(connection, transaction, accountId, cancellationToken);
+            await writePersistence.PruneSnapshotsAsync(connection, transaction, accountId, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
 
-        return (await GetAsync(accountId, id, cancellationToken))
-            ?? throw new InvalidOperationException($"Saved snapshot {id} could not be reloaded.");
+            return (await GetAsync(accountId, id, cancellationToken))
+                ?? throw new InvalidOperationException($"Saved snapshot {id} could not be reloaded.");
+        }
+        finally
+        {
+            writeGate.Release();
+        }
     }
 
     public Task<IReadOnlyList<ReportSummary>> ListSummariesAsync(CancellationToken cancellationToken) =>

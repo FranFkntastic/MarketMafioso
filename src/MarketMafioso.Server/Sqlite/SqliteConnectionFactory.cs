@@ -5,6 +5,7 @@ namespace MarketMafioso.Server.Sqlite;
 public sealed class SqliteConnectionFactory
 {
     private readonly string databasePath;
+    private readonly int busyTimeoutSeconds;
 
     public string DatabasePath => databasePath;
 
@@ -14,6 +15,10 @@ public sealed class SqliteConnectionFactory
         databasePath = string.IsNullOrWhiteSpace(configuredPath)
             ? Path.Combine(environment.ContentRootPath, "data", "marketmafioso.db")
             : configuredPath;
+        busyTimeoutSeconds = Math.Clamp(
+            configuration.GetValue<int?>("MarketMafioso:SqliteBusyTimeoutSeconds") ?? 5,
+            1,
+            60);
     }
 
     public async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
@@ -25,6 +30,7 @@ public sealed class SqliteConnectionFactory
         var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
+            DefaultTimeout = busyTimeoutSeconds,
         }.ToString();
         var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync(cancellationToken);

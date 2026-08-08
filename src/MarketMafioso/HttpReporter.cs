@@ -95,16 +95,15 @@ public class HttpReporter : IDisposable
             if (!TryValidateEndpoint(quiet, out var endpoint))
                 return;
 
-            var report = BuildReport();
-            if (!lastCaptureHasRetainerEvidence && lastAcknowledgedReport is not null)
+            var capture = BuildReport();
+            if (!HasUploadEvidence(capture))
             {
-                report = report with
-                {
-                    Retainers = lastAcknowledgedReport.Retainers,
-                    RetainerManagement = lastAcknowledgedReport.RetainerManagement,
-                };
-                log.Debug("[MarketMafioso] Quartermaster evidence is unavailable; preserving the last acknowledged retainer state in the delta baseline.");
+                DeferEvidenceEmptyCapture();
+                return;
             }
+
+            var report = PreserveUnavailableEvidence(capture);
+
             var result = InventoryReportDeltaBuilder.Build(
                 lastAcknowledgedSnapshotId,
                 lastAcknowledgedReport,
@@ -129,8 +128,7 @@ public class HttpReporter : IDisposable
             var deltaUrl = ReceiverEndpointClassifier.BuildInventoryDeltaUrl(config.ServerUrl)
                 ?? throw new InvalidOperationException("Could not derive the inventory delta endpoint.");
             LastPayload = JsonSerializer.Serialize(delta, PrettySerialiserOptions);
-            using var request = CreateRequest(deltaUrl, delta);
-            using var response = await httpClient.SendAsync(request).ConfigureAwait(false);
+            using var response = await SendWithBusyRetryAsync(deltaUrl, delta).ConfigureAwait(false);
             var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             LastSentAt = DateTime.Now;
             LastStatus = $"{(int)response.StatusCode} {response.ReasonPhrase}";
@@ -185,7 +183,14 @@ public class HttpReporter : IDisposable
             return;
         try
         {
-            await SendFullReportCoreAsync(BuildReport(), endpoint, quiet).ConfigureAwait(false);
+            var capture = BuildReport();
+            if (!HasUploadEvidence(capture))
+            {
+                DeferEvidenceEmptyCapture();
+                return;
+            }
+
+            await SendFullReportCoreAsync(PreserveUnavailableEvidence(capture), endpoint, quiet).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -198,9 +203,14 @@ public class HttpReporter : IDisposable
         ReceiverEndpointInfo endpoint,
         bool quiet)
     {
+        if (!HasUploadEvidence(report))
+        {
+            DeferEvidenceEmptyCapture();
+            return;
+        }
+
         LastPayload = JsonSerializer.Serialize(report, PrettySerialiserOptions);
-        using var request = CreateRequest(config.ServerUrl, report);
-        using var response = await httpClient.SendAsync(request).ConfigureAwait(false);
+        using var response = await SendWithBusyRetryAsync(config.ServerUrl, report).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
         LastSentAt = DateTime.Now;
         LastStatus = $"{(int)response.StatusCode} {response.ReasonPhrase}";
@@ -230,6 +240,78 @@ public class HttpReporter : IDisposable
                 $"Status: {LastStatus}. {LastRetainerSourceStatus}{dashboardSuffix}");
         }
         log.Information($"[MarketMafioso] Reconciliation report sent - {LastStatus}.{dashboardSuffix}");
+    }
+
+    internal static bool HasUploadEvidence(InventoryReport report) =>
+        InventoryReportEvidence.HasSnapshotEvidence(report);
+
+    internal static InventoryReport PreserveUnavailableEvidence(
+        InventoryReport capture,
+        InventoryReport? acknowledged,
+        bool captureHasRetainerEvidence)
+    {
+        ArgumentNullException.ThrowIfNull(capture);
+        if (acknowledged is null)
+            return capture;
+
+        if (!InventoryReportEvidence.HasPlayerStorageEvidence(capture))
+        {
+            capture = capture with
+            {
+                PlayerGil = acknowledged.PlayerGil,
+                PlayerInventory = acknowledged.PlayerInventory,
+                PlayerStorage = acknowledged.PlayerStorage,
+            };
+        }
+        else if (capture.PlayerGil is null && acknowledged.PlayerGil is not null)
+        {
+            capture = capture with { PlayerGil = acknowledged.PlayerGil };
+        }
+
+        if (!captureHasRetainerEvidence)
+        {
+            capture = capture with
+            {
+                Retainers = acknowledged.Retainers,
+                RetainerManagement = acknowledged.RetainerManagement,
+            };
+        }
+
+        return capture;
+    }
+
+    private InventoryReport PreserveUnavailableEvidence(InventoryReport capture)
+    {
+        var playerEvidenceUnavailable = !InventoryReportEvidence.HasPlayerStorageEvidence(capture);
+        var retainerEvidenceUnavailable = !lastCaptureHasRetainerEvidence;
+        var report = PreserveUnavailableEvidence(
+            capture,
+            lastAcknowledgedReport,
+            lastCaptureHasRetainerEvidence);
+        if (lastAcknowledgedReport is not null && playerEvidenceUnavailable)
+        {
+            log.Debug(
+                "[MarketMafioso] Player inventory evidence is unavailable; preserving the last acknowledged player state in the upload baseline.");
+        }
+        if (lastAcknowledgedReport is not null && retainerEvidenceUnavailable)
+        {
+            log.Debug(
+                "[MarketMafioso] Quartermaster evidence is unavailable; preserving the last acknowledged retainer state in the upload baseline.");
+        }
+
+        return report;
+    }
+
+    private void DeferEvidenceEmptyCapture()
+    {
+        const string status = "Waiting for inventory evidence";
+        if (!string.Equals(LastStatus, status, StringComparison.Ordinal))
+        {
+            log.Debug(
+                "[MarketMafioso] Inventory capture has no observed player or retainer sources; upload deferred until evidence is available.");
+        }
+
+        LastStatus = status;
     }
 
     private InventoryReport BuildReport()
@@ -346,6 +428,26 @@ public class HttpReporter : IDisposable
         return request;
     }
 
+    private async Task<HttpResponseMessage> SendWithBusyRetryAsync<T>(string url, T payload)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            using var request = CreateRequest(url, payload);
+            var response = await httpClient.SendAsync(request).ConfigureAwait(false);
+            if (!IsTransientReceiverStatus(response.StatusCode) || attempt >= 1)
+                return response;
+
+            var retryDelay = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(1);
+            retryDelay = TimeSpan.FromMilliseconds(Math.Clamp(retryDelay.TotalMilliseconds, 100, 5_000));
+            response.Dispose();
+            LastStatus = "Receiver busy; retrying inventory upload";
+            log.Debug(
+                "[MarketMafioso] Receiver requested a retry; resending the same inventory payload after {RetryDelayMs} ms.",
+                retryDelay.TotalMilliseconds);
+            await Task.Delay(retryDelay).ConfigureAwait(false);
+        }
+    }
+
     private void AcceptSnapshot(InventoryReport report, HttpReportResponse response)
     {
         lastAcknowledgedReport = report;
@@ -360,6 +462,13 @@ public class HttpReporter : IDisposable
         string body,
         bool quiet)
     {
+        if (IsTransientReceiverStatus(statusCode))
+        {
+            LastStatus = "Receiver busy; upload deferred";
+            log.Warning("[MarketMafioso] Receiver remained busy after one retry; the next inventory change will continue from the current acknowledged baseline.");
+            return;
+        }
+
         if (endpoint.RequiresApiKey && statusCode == System.Net.HttpStatusCode.Unauthorized)
         {
             if (!quiet)
@@ -372,6 +481,9 @@ public class HttpReporter : IDisposable
             chatGui.PrintError($"[MarketMafioso] Server error {LastStatus}: {body[..Math.Min(body.Length, 200)]}");
         log.Warning($"[MarketMafioso] Server returned {LastStatus}: {body}");
     }
+
+    internal static bool IsTransientReceiverStatus(System.Net.HttpStatusCode statusCode) =>
+        statusCode == System.Net.HttpStatusCode.ServiceUnavailable;
 
     private void HandleException(Exception ex, bool quiet)
     {

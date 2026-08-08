@@ -48,6 +48,19 @@ public sealed record StorageSourceEvidence
     public List<string> ObservedSources { get; init; } = [];
 }
 
+public static class InventoryReportEvidence
+{
+    public static bool HasSnapshotEvidence(InventoryReport report) =>
+        HasPlayerStorageEvidence(report) || report.Retainers?.Count > 0;
+
+    public static bool HasPlayerStorageEvidence(InventoryReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        return report.PlayerInventory?.Count > 0 ||
+               report.PlayerStorage?.ObservedSources?.Count > 0;
+    }
+}
+
 public sealed record InventoryReportMetadata
 {
     [JsonPropertyName("schemaVersion")]

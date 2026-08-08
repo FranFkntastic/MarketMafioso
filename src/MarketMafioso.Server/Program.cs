@@ -6,6 +6,7 @@ using MarketMafioso.Server.Migration;
 using MarketMafioso.Server.MarketDiagnostics;
 using MarketMafioso.Server.Sqlite;
 using MarketMafioso.Server.WorkshopHost;
+using Microsoft.Data.Sqlite;
 
 var builder = WebApplication.CreateBuilder(args);
 const string workshopHostBrowserCorsPolicy = "WorkshopHostBrowserClients";
@@ -67,6 +68,29 @@ app.UseDashboardStaticAssets();
 app.UseStaticFiles();
 app.UseRouting();
 app.UseCors(workshopHostBrowserCorsPolicy);
+
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next(context);
+    }
+    catch (SqliteException exception) when (
+        !context.Response.HasStarted &&
+        exception.SqliteErrorCode is 5 or 6)
+    {
+        app.Logger.LogWarning(
+            exception,
+            "SQLite was busy while handling {Method} {Path}; returning a retryable response.",
+            context.Request.Method,
+            context.Request.Path);
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        context.Response.Headers["Retry-After"] = "1";
+        await context.Response.WriteAsJsonAsync(
+            new { error = "receiver_busy" },
+            CancellationToken.None);
+    }
+});
 
 app.Use(async (context, next) =>
 {

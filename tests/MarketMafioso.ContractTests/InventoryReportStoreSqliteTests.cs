@@ -211,6 +211,60 @@ public sealed class InventoryReportStoreSqliteTests
     }
 
     [Fact]
+    public async Task SaveAsync_SerializesConcurrentInventoryWrites()
+    {
+        var fixture = await StoreFixture.CreateAsync(
+            new KeyValuePair<string, string?>("MarketMafioso:SnapshotRetentionCount", "8"));
+
+        var writes = Enumerable.Range(0, 16)
+            .Select(index => fixture.Store.SaveAsync(
+                fixture.AccountId,
+                CreateReport("Burst Character", "Siren", checked((uint)(1000 + index))),
+                null,
+                "{}",
+                CancellationToken.None))
+            .ToArray();
+
+        var stored = await Task.WhenAll(writes);
+
+        Assert.Equal(16, stored.Select(snapshot => snapshot.Id).Distinct().Count());
+        Assert.Equal(8, await fixture.CountAsync("snapshots"));
+    }
+
+    [Fact]
+    public async Task SaveAsync_CompletesWhileAReaderTransactionRemainsOpen()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Reader Character", "Siren", 1000),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        Task<StoredInventoryReport> write;
+        bool completedWithReaderOpen;
+        await using (var connection = await fixture.OpenConnectionAsync())
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT id FROM snapshots LIMIT 1";
+            await using var reader = await command.ExecuteReaderAsync(CancellationToken.None);
+            Assert.True(await reader.ReadAsync(CancellationToken.None));
+
+            write = fixture.Store.SaveAsync(
+                fixture.AccountId,
+                CreateReport("Writer Character", "Siren", 1001),
+                null,
+                "{}",
+                CancellationToken.None);
+            completedWithReaderOpen = await Task.WhenAny(write, Task.Delay(TimeSpan.FromSeconds(2))) == write;
+        }
+
+        await write;
+        Assert.True(completedWithReaderOpen);
+    }
+
+    [Fact]
     public async Task SaveAsync_RoundTripsRetainerGilMarketListingsAndItemType()
     {
         var fixture = await StoreFixture.CreateAsync();
@@ -478,6 +532,9 @@ public sealed class InventoryReportStoreSqliteTests
             command.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
             return (long)(await command.ExecuteScalarAsync(CancellationToken.None))!;
         }
+
+        public Task<Microsoft.Data.Sqlite.SqliteConnection> OpenConnectionAsync() =>
+            connectionFactory.OpenConnectionAsync(CancellationToken.None);
 
         public async Task<int> CountAsync(string tableName)
         {
