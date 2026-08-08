@@ -68,7 +68,7 @@ Use the server-specific helper when you want to force a backend deployment and w
 .\src\MarketMafioso\tools\Deploy-ServerDev.ps1
 ```
 
-The helper triggers the GitHub Actions workflow for `local-dev`, waits for it to complete, then checks the public health/dashboard routes. If local secret files exist under `%USERPROFILE%\.ssh`, it also smoke-tests authenticated dashboard access and inventory ingestion without printing the secrets. To deploy a non-default ref deliberately, pass `-Ref`:
+The helper triggers the GitHub Actions workflow for `main`, waits for it to complete, then checks the public health/dashboard routes. If local secret files exist under `%USERPROFILE%\.ssh`, it also smoke-tests authenticated dashboard access and inventory ingestion without printing the secrets. To deploy a non-default ref deliberately, pass `-Ref`:
 
 ```powershell
 .\src\MarketMafioso\tools\Deploy-ServerDev.ps1 -Ref test/inventory-browser-vps

@@ -2,7 +2,7 @@ name: Deploy MarketMafioso Dev Receiver to VPS
 
 on:
   push:
-    branches: [ local-dev ]
+    branches: [ main ]
     paths:
       - 'src/MarketMafioso.Dashboard/**'
       - 'src/MarketMafioso.Server/**'
