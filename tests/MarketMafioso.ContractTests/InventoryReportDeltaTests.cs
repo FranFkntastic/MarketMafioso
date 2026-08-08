@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using MarketMafioso.Server.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MarketMafioso.Server.ContractTests;
 
@@ -61,6 +63,23 @@ public sealed class InventoryReportDeltaTests
     }
 
     [Fact]
+    public void EvidencePredicate_DistinguishesUnavailableFromObservedEmptyStorage()
+    {
+        var unavailable = new InventoryReport();
+        var observedEmpty = unavailable with
+        {
+            PlayerStorage = new StorageSourceEvidence
+            {
+                RequestedSources = ["Inventory1"],
+                ObservedSources = ["Inventory1"],
+            },
+        };
+
+        Assert.False(InventoryReportEvidence.HasSnapshotEvidence(unavailable));
+        Assert.True(InventoryReportEvidence.HasSnapshotEvidence(observedEmpty));
+    }
+
+    [Fact]
     public async Task DeltaEndpoint_ReconstructsAndStoresFullSnapshot()
     {
         await using var application = ServerTestHost.Create();
@@ -105,6 +124,61 @@ public sealed class InventoryReportDeltaTests
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Contains("inventory_delta_base_missing", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task FullEndpoint_AcceptsObservedEmptyStorageAndRejectsUnavailableCapture()
+    {
+        await using var application = ServerTestHost.Create();
+        using var client = application.CreateClient();
+        var unavailable = new InventoryReport
+        {
+            CharacterName = "Empty Tester",
+            HomeWorld = "Siren",
+        };
+        var observedEmpty = unavailable with
+        {
+            PlayerStorage = new StorageSourceEvidence
+            {
+                RequestedSources = ["Inventory1"],
+                ObservedSources = ["Inventory1"],
+            },
+        };
+
+        var unavailableResponse = await client.PostAsJsonAsync("/inventory", unavailable, JsonOptions);
+        var observedResponse = await client.PostAsJsonAsync("/inventory", observedEmpty, JsonOptions);
+
+        Assert.Equal(HttpStatusCode.BadRequest, unavailableResponse.StatusCode);
+        observedResponse.EnsureSuccessStatusCode();
+        var snapshotId = await ReadIdAsync(observedResponse);
+        var storedJson = await client.GetStringAsync($"/reports/{snapshotId}/json");
+        var stored = JsonSerializer.Deserialize<InventoryReport>(storedJson, JsonOptions)!;
+        Assert.Empty(stored.PlayerInventory);
+        Assert.Equal(["Inventory1"], stored.PlayerStorage.ObservedSources);
+    }
+
+    [Fact]
+    public async Task FullEndpoint_ReturnsRetryableServiceUnavailableWhenAnotherWriterOwnsSqlite()
+    {
+        var host = ServerTestHost.CreateConfiguration();
+        host.Configuration["MarketMafioso:SqliteBusyTimeoutSeconds"] = "1";
+        await using var application = ServerTestHost.Create(host);
+        using var client = application.CreateClient();
+        var connectionFactory = application.Services.GetRequiredService<SqliteConnectionFactory>();
+        await using var connection = await connectionFactory.OpenConnectionAsync(CancellationToken.None);
+        await using var transaction = await connection.BeginTransactionAsync(CancellationToken.None);
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = (Microsoft.Data.Sqlite.SqliteTransaction)transaction;
+            command.CommandText = "UPDATE accounts SET display_name = display_name WHERE id = 1";
+            await command.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+
+        var response = await client.PostAsJsonAsync("/inventory", CreateReport(), JsonOptions);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(TimeSpan.FromSeconds(1), response.Headers.RetryAfter?.Delta);
+        Assert.Contains("receiver_busy", await response.Content.ReadAsStringAsync());
     }
 
     private static async Task<string> ReadIdAsync(HttpResponseMessage response)

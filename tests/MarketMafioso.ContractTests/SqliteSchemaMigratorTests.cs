@@ -79,6 +79,22 @@ public sealed class SqliteSchemaMigratorTests
     }
 
     [Fact]
+    public async Task MigrateAsync_EnablesWriteAheadLogging()
+    {
+        var databasePath = CreateDatabasePath();
+        var factory = CreateFactory(databasePath);
+        var migrator = new SqliteSchemaMigrator(factory, NullLogger<SqliteSchemaMigrator>.Instance);
+
+        await migrator.MigrateAsync(CancellationToken.None);
+
+        await using var connection = await factory.OpenConnectionAsync(CancellationToken.None);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode;";
+        var journalMode = (string?)await command.ExecuteScalarAsync(CancellationToken.None);
+        Assert.Equal("wal", journalMode, ignoreCase: true);
+    }
+
+    [Fact]
     public async Task BootstrapAsync_CreatesDefaultAccountAdminUserAndIngestKey()
     {
         var databasePath = CreateDatabasePath();

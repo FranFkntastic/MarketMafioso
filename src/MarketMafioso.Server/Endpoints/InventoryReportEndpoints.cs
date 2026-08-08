@@ -258,8 +258,8 @@ internal static class InventoryReportEndpoints
         if (report == null)
             return Results.BadRequest(new { error = "invalid_json" });
 
-        if (report.PlayerInventory.Count == 0 && report.Retainers.Count == 0)
-            return Results.BadRequest(new { error = "Report must include at least one player inventory bag or retainer." });
+        if (!InventoryReportEvidence.HasSnapshotEvidence(report))
+            return Results.BadRequest(new { error = "Report must include player inventory or retainer observation evidence." });
 
         var accountId = await accountResolver.ResolveAccountIdAsync(suppliedApiKey, token) ?? 1;
         var stored = await store.SaveAsync(accountId, report, suppliedApiKey ?? string.Empty, rawJson, token);
@@ -354,8 +354,8 @@ internal static class InventoryReportEndpoints
             });
         }
 
-        if (reconstructed.PlayerInventory.Count == 0 && reconstructed.Retainers.Count == 0)
-            return Results.BadRequest(new { error = "Report must include at least one player inventory bag or retainer." });
+        if (!InventoryReportEvidence.HasSnapshotEvidence(reconstructed))
+            return Results.BadRequest(new { error = "Report must include player inventory or retainer observation evidence." });
 
         var rawJson = JsonSerializer.Serialize(
             reconstructed,

@@ -18,6 +18,17 @@ public sealed class SqliteSchemaMigrator
     public async Task MigrateAsync(CancellationToken cancellationToken)
     {
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using (var journalCommand = connection.CreateCommand())
+        {
+            journalCommand.CommandText = "PRAGMA journal_mode = WAL;";
+            var journalMode = (string?)await journalCommand.ExecuteScalarAsync(cancellationToken);
+            if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"SQLite refused write-ahead logging for {connectionFactory.DatabasePath}; reported mode was '{journalMode ?? "unknown"}'.");
+            }
+        }
+
         await using var transaction = (Microsoft.Data.Sqlite.SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
