@@ -204,6 +204,37 @@ public sealed class WorkshopVendorRestockRunnerTests
     }
 
     [Fact]
+    public void Partial_quartermaster_stock_uses_live_need_for_post_retrieval_gil_and_capacity_preflight()
+    {
+        var runtime = new FakeRuntime();
+        runtime.Counts[1] = 1;
+        runtime.CaptureGils.Enqueue(60);
+        runtime.CaptureGils.Enqueue(30);
+        runtime.CaptureGils.Enqueue(30);
+        var quartermaster = new FakeQuartermaster
+        {
+            Progress = new(WorkshopQuartermasterProgressState.PartiallySucceeded, "Quartermaster finished partially."),
+        };
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, quartermaster, () => { });
+        var material = Material(1, required: 10, player: 1, retainer: 3, vendor: 6);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        runner.Tick(review.QueueSignature, Owner);
+        runtime.Counts[1] = 7;
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.True(runner.IsRunning);
+        Assert.Equal(GilVendorBuyPhase.RefreshPreconditions, config.ActiveWorkshopVendorBuyRun!.Phase);
+        Assert.Equal([6, 3, 3], runtime.CapacityRequests.Select(request => request[1]));
+        Assert.Equal(60UL, config.ActiveWorkshopVendorBuyRun.MaximumApprovedGil);
+        Assert.Equal(60UL, Assert.Single(config.ActiveWorkshopVendorBuyRun.Lines).ApprovedGilCeiling);
+    }
+
+    [Fact]
     public void Disabled_vendor_toggle_creates_no_vendor_engine_authority()
     {
         var runtime = new FakeRuntime();
@@ -486,6 +517,7 @@ public sealed class WorkshopVendorRestockRunnerTests
         public List<int> SubmittedQuantities { get; } = [];
         public Queue<ulong> CaptureGils { get; } = [];
         public Queue<GilVendorReachResult> ReachResults { get; } = [];
+        public List<IReadOnlyDictionary<uint, int>> CapacityRequests { get; } = [];
 
         public GilVendorInventorySnapshot CaptureInventory(IReadOnlyCollection<uint> itemIds) =>
             new(
@@ -495,6 +527,7 @@ public sealed class WorkshopVendorRestockRunnerTests
                 "Inventory ready.");
         public bool HasCapacity(IReadOnlyDictionary<uint, int> quantities, out string message)
         {
+            CapacityRequests.Add(new Dictionary<uint, int>(quantities));
             message = "Capacity ready.";
             return true;
         }

@@ -331,6 +331,16 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             .Where(line => line.ApprovedQuantity > 0)
             .ToList();
         var vendorIds = vendorLines.Select(line => line.ItemId).ToHashSet();
+        var liveQuantities = vendorLines
+            .Select(line => new
+            {
+                line.ItemId,
+                Quantity = Math.Min(
+                    line.ApprovedQuantity,
+                    Math.Max(0, line.TargetTotalQuantity!.Value - inventory.ItemCounts.GetValueOrDefault(line.ItemId))),
+            })
+            .Where(line => line.Quantity > 0)
+            .ToDictionary(line => line.ItemId, line => line.Quantity);
         var stops = state.Stops.Select(stop => new GilVendorBuyStopSnapshot
             {
                 NpcId = stop.NpcId,
@@ -341,7 +351,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             })
             .Where(stop => stop.ItemIds.Count > 0)
             .ToList();
-        if (vendorLines.Count == 0 || stops.Count == 0)
+        if (vendorLines.Count == 0 || liveQuantities.Count == 0 || stops.Count == 0)
         {
             foreach (var line in state.Lines)
                 line.LivePlayerQuantity = inventory.ItemCounts.GetValueOrDefault(line.ItemId);
@@ -363,7 +373,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             Stops = stops,
         };
         if (waitForInventory && !runtime.HasCapacity(
-                vendorLines.ToDictionary(line => line.ItemId, line => line.ApprovedQuantity),
+                liveQuantities,
                 out var capacityError))
         {
             state.ResumePhase = WorkshopVendorRestockPhase.RefreshInventory;
