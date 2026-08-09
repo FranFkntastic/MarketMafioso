@@ -322,6 +322,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 ItemId = line.ItemId,
                 ItemName = line.ItemName,
                 ApprovedQuantity = line.ApprovedVendorQuantity,
+                TargetTotalQuantity = line.RequiredQuantity,
                 UnitPriceGil = line.UnitPriceGil,
                 ApprovedGilCeiling = line.ApprovedGilCeiling,
                 Offer = line.Offer,
@@ -378,6 +379,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 ComposeContextSignature(new(state.LocalContentId, state.HomeWorldId, state.CharacterName, null), state.QueueSignature),
                 out error))
         {
+            error = NormalizeMessage(error);
             state.Message = error;
             if (waitForInventory)
                 FinishPolicy(WorkshopVendorRestockPhase.Failed, error);
@@ -483,6 +485,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                         ItemId = line.ItemId,
                         ItemName = line.ItemName,
                         ApprovedQuantity = line.ApprovedVendorQuantity,
+                        TargetTotalQuantity = line.RequiredQuantity,
                         PurchasedQuantity = line.PurchasedQuantity,
                         PurchaseRetryCount = line.PurchaseRetryCount,
                         UnitPriceGil = line.UnitPriceGil,
@@ -612,9 +615,11 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             .Replace("Vendor buy completed.", "Workshop vendor restock completed.", StringComparison.Ordinal)
             .Replace("vendor buy will resume", "restock will resume", StringComparison.Ordinal)
             .Replace("vendor buy is now stopped", "workshop restock is now stopped", StringComparison.Ordinal)
+            .Replace("The vendor plan requires", "The reviewed vendor plan requires", StringComparison.Ordinal)
             .Replace("Remaining purchases require", "Remaining reviewed purchases require", StringComparison.Ordinal)
             .Replace("for the approved ", "for the reviewed ", StringComparison.Ordinal)
             .Replace(" item line(s) at ", " material line(s) at ", StringComparison.Ordinal)
+            .Replace("continuing the vendor plan", "continuing the restock plan", StringComparison.Ordinal)
             .Replace("no accessible vendor remains", "no reviewed accessible vendor remains", StringComparison.Ordinal);
         if (!normalized.Contains("reviewed vendor stop(s)", StringComparison.Ordinal))
             normalized = normalized.Replace("vendor stop(s)", "reviewed vendor stop(s)", StringComparison.Ordinal);

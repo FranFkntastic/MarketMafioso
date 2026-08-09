@@ -34,6 +34,7 @@ public sealed class WorkshopVendorRestockRunnerTests
         var run = runner.ActiveRun!;
         var engineLine = Assert.Single(runtime.Config!.ActiveWorkshopVendorBuyRun!.Lines);
         Assert.Equal(4, engineLine.ApprovedQuantity);
+        Assert.Equal(8, engineLine.TargetTotalQuantity);
         Assert.Equal(40UL, engineLine.ApprovedGilCeiling);
         Assert.Equal(10u, engineLine.UnitPriceGil);
         Assert.Equal(100u, engineLine.Offer!.NpcId);
@@ -96,6 +97,86 @@ public sealed class WorkshopVendorRestockRunnerTests
         Assert.Equal(
             "Remaining reviewed purchases require up to 20 gil, but only 0 gil is available.",
             runner.ActiveRun!.Message);
+    }
+
+    [Fact]
+    public void Coordinator_start_failure_uses_reviewed_vendor_plan_wording()
+    {
+        var runtime = new FakeRuntime();
+        runtime.CaptureGils.Enqueue(100);
+        runtime.CaptureGils.Enqueue(100);
+        runtime.CaptureGils.Enqueue(0);
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 2, player: 0, retainer: 0, vendor: 2);
+
+        Assert.False(runner.TryStart(Review(material, [Stop(material)]), Owner, true, out var error));
+        Assert.Equal("The reviewed vendor plan requires up to 20 gil, but only 0 gil is available.", error);
+    }
+
+    [Fact]
+    public void Coordinator_fallback_message_continues_the_restock_plan()
+    {
+        var runtime = new FakeRuntime();
+        runtime.ReachResults.Enqueue(new(GilVendorReachState.Unavailable, "Vendor unavailable."));
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 2, player: 0, retainer: 0, vendor: 2);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal(
+            "Skipped Item 1 because no reviewed accessible vendor remains; continuing the restock plan.",
+            runner.ActiveRun!.Message);
+    }
+
+    [Fact]
+    public void Workshop_target_buys_full_approved_delta_against_existing_stock()
+    {
+        var runtime = new FakeRuntime();
+        runtime.Counts[1] = 4;
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 10, player: 4, retainer: 0, vendor: 6);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        Assert.Equal(10, Assert.Single(config.ActiveWorkshopVendorBuyRun!.Lines).TargetTotalQuantity);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal([6], runtime.SubmittedQuantities);
+    }
+
+    [Fact]
+    public void Mid_run_stock_gain_reduces_later_workshop_batch()
+    {
+        var runtime = new FakeRuntime { MaximumBatch = 3 };
+        runtime.Counts[1] = 4;
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 10, player: 4, retainer: 0, vendor: 6);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner); // buy 3: observed 4 -> 7
+        runner.Tick(review.QueueSignature, Owner); // verify first receipt
+        runtime.Counts[1] += 2; // unrelated stock gain: observed 7 -> 9
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal([3, 1], runtime.SubmittedQuantities);
     }
 
     [Fact]
@@ -206,6 +287,7 @@ public sealed class WorkshopVendorRestockRunnerTests
             Assert.Null(config.LegacyActiveWorkshopVendorRestock);
             Assert.Equal(1, config.WorkshopVendorRestockLegacyConversions);
             Assert.NotNull(config.ActiveWorkshopVendorBuyRun!.ArmedPurchase);
+            Assert.Equal(2, Assert.Single(config.ActiveWorkshopVendorBuyRun.Lines).TargetTotalQuantity);
         }
 
         var roundTripped = JsonConvert.DeserializeObject<Configuration>(JsonConvert.SerializeObject(config))!;
@@ -253,6 +335,31 @@ public sealed class WorkshopVendorRestockRunnerTests
         Assert.NotNull(config.ActiveWorkshopVendorBuyRun);
         Assert.Equal(1, config.WorkshopVendorRestockLegacyConversions);
         Assert.Equal(2, saveAttempts);
+    }
+
+    [Fact]
+    public void Throwing_conversion_diagnostic_cannot_leave_legacy_authority_for_double_conversion()
+    {
+        var config = LegacyArmedConfiguration();
+        var runtime = new FakeRuntime { Config = config };
+        var saveAttempts = 0;
+
+        Assert.Throws<InvalidOperationException>(() => new WorkshopVendorRestockRunner(
+            config,
+            runtime,
+            new FakeQuartermaster(),
+            () => saveAttempts++,
+            _ => throw new InvalidOperationException("Synthetic diagnostic failure.")));
+
+        Assert.Null(config.LegacyActiveWorkshopVendorRestock);
+        Assert.Equal(1, config.WorkshopVendorRestockLegacyConversions);
+        using var retried = new WorkshopVendorRestockRunner(
+            config,
+            runtime,
+            new FakeQuartermaster(),
+            () => saveAttempts++);
+        Assert.Equal(1, config.WorkshopVendorRestockLegacyConversions);
+        Assert.Equal(1, saveAttempts);
     }
 
     private static Configuration LegacyArmedConfiguration() => new()
@@ -375,28 +482,39 @@ public sealed class WorkshopVendorRestockRunnerTests
         public Dictionary<uint, int> Counts { get; } = [];
         public ulong Gil { get; set; } = 1_000_000;
         public int SubmitCalls { get; private set; }
+        public int MaximumBatch { get; set; } = 99;
+        public List<int> SubmittedQuantities { get; } = [];
+        public Queue<ulong> CaptureGils { get; } = [];
+        public Queue<GilVendorReachResult> ReachResults { get; } = [];
 
         public GilVendorInventorySnapshot CaptureInventory(IReadOnlyCollection<uint> itemIds) =>
-            new(true, Gil, itemIds.ToDictionary(id => id, id => Counts.GetValueOrDefault(id)), "Inventory ready.");
+            new(
+                true,
+                CaptureGils.Count > 0 ? CaptureGils.Dequeue() : Gil,
+                itemIds.ToDictionary(id => id, id => Counts.GetValueOrDefault(id)),
+                "Inventory ready.");
         public bool HasCapacity(IReadOnlyDictionary<uint, int> quantities, out string message)
         {
             message = "Capacity ready.";
             return true;
         }
         public GilVendorReachResult AdvanceToOpenShop(GilVendorOffer offer) =>
-            new(GilVendorReachState.ShopOpen, "Shop open.");
+            ReachResults.Count > 0
+                ? ReachResults.Dequeue()
+                : new(GilVendorReachState.ShopOpen, "Shop open.");
         public void ResetVendorApproach() { }
         public GilVendorShopReadResult ReadShopRows() => GilVendorShopReadResult.Success([new(0, 1, 10)]);
         public bool TrySubmitPurchase(GilVendorShopRow row, uint quantity, out string error)
         {
             SubmitCalls++;
+            SubmittedQuantities.Add(checked((int)quantity));
             Counts[row.ItemId] = checked(Counts.GetValueOrDefault(row.ItemId) + (int)quantity);
             Gil -= row.UnitPriceGil * quantity;
             error = string.Empty;
             return true;
         }
         public bool TryConfirmPurchasePrompt() => false;
-        public int ResolveMaximumBatch(uint itemId) => 99;
+        public int ResolveMaximumBatch(uint itemId) => MaximumBatch;
         public void CloseShop() { }
         public void BeginAutomation() { }
         public void EndAutomation() { }
