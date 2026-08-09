@@ -3,6 +3,7 @@ using MarketMafioso.MarketAcquisition;
 using MarketMafioso.RetainerRestock;
 using MarketMafioso.TradeQueue;
 using MarketMafioso.WorkshopPrep;
+using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -106,7 +107,12 @@ public class Configuration : IPluginConfiguration
     public Dictionary<uint, int> WorkshopVendorApprovedQuantities { get; set; } = new();
     public List<uint> WorkshopVendorIncludedItems { get; set; } = new();
     public List<uint> WorkshopVendorExcludedItems { get; set; } = new();
-    public PersistedWorkshopVendorRestockRun? ActiveWorkshopVendorRestock { get; set; }
+    public GilVendorBuyRunSnapshot? ActiveWorkshopVendorBuyRun { get; set; }
+    public WorkshopVendorRestockState? ActiveWorkshopVendorRestockState { get; set; }
+    public int WorkshopVendorRestockLegacyConversions { get; set; }
+    [JsonProperty("ActiveWorkshopVendorRestock")]
+    public PersistedWorkshopVendorRestockRun? LegacyActiveWorkshopVendorRestock { get; set; }
+    public bool ShouldSerializeLegacyActiveWorkshopVendorRestock() => false;
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
     [JsonProperty("Squire")]

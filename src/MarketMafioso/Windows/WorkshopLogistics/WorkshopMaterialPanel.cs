@@ -233,7 +233,7 @@ internal sealed class WorkshopMaterialPanel
 
     internal static int ResolveDisplayedPlayerQuantity(
         WorkshopMaterialProcurement line,
-        PersistedWorkshopVendorRestockLine? activeLine)
+        WorkshopVendorRestockLineView? activeLine)
     {
         _ = activeLine;
         return line.Availability.PlayerInventory;
@@ -241,7 +241,7 @@ internal sealed class WorkshopMaterialPanel
 
     internal static string BuildAcquisitionFilterText(
         WorkshopMaterialProcurement line,
-        PersistedWorkshopVendorRestockLine? activeLine)
+        WorkshopVendorRestockLineView? activeLine)
     {
         if (ResolveStockState(line) == WorkshopMaterialStockState.Ready)
             return string.Empty;
@@ -690,8 +690,8 @@ internal sealed class WorkshopMaterialPanel
             : quartermaster.LastStatus;
 
     private static string RunStatusForLine(
-        PersistedWorkshopVendorRestockLine line,
-        PersistedWorkshopVendorRestockRun? run) =>
+        WorkshopVendorRestockLineView line,
+        WorkshopVendorRestockRunView? run) =>
         run?.Phase == WorkshopVendorRestockPhase.Failed &&
         line.Status.Equals("Waiting", StringComparison.OrdinalIgnoreCase)
             ? "Not bought"
@@ -705,7 +705,7 @@ internal sealed class WorkshopMaterialPanel
             ? MarketMafiosoUiTheme.Error
             : MarketMafiosoUiTheme.Muted;
 
-    private static System.Numerics.Vector4 RunStatusColor(PersistedWorkshopVendorRestockRun? run) =>
+    private static System.Numerics.Vector4 RunStatusColor(WorkshopVendorRestockRunView? run) =>
         run?.Phase switch
         {
             WorkshopVendorRestockPhase.Completed => MarketMafiosoUiTheme.Success,
@@ -727,7 +727,7 @@ internal sealed class WorkshopMaterialPanel
 
     private sealed record MaterialTableRow(
         WorkshopMaterialProcurement Line,
-        PersistedWorkshopVendorRestockLine? ActiveLine);
+        WorkshopVendorRestockLineView? ActiveLine);
 }
 
 internal enum WorkshopMaterialStockState

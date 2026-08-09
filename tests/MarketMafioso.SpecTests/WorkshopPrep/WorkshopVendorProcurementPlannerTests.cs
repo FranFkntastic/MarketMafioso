@@ -39,7 +39,7 @@ public sealed class WorkshopVendorProcurementPlannerTests
     public void Ready_row_keeps_acquisition_quiet_even_when_a_completed_run_line_remains()
     {
         var ready = Procurement(1, required: 10, player: 10, retainer: 0);
-        var completed = new PersistedWorkshopVendorRestockLine
+        var completed = new WorkshopVendorRestockLineView
         {
             ItemId = 1,
             ItemName = ready.Availability.ItemName,
@@ -125,7 +125,7 @@ public sealed class WorkshopVendorProcurementPlannerTests
             IsCraftable: false,
             Selected: false,
             ApprovedVendorQuantity: 0);
-        var frozenRunLine = new PersistedWorkshopVendorRestockLine
+        var frozenRunLine = new WorkshopVendorRestockLineView
         {
             ItemId = 1,
             LivePlayerQuantity = 0,

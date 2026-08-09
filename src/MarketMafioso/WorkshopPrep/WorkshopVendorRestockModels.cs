@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Numerics;
-using Franthropy.Dalamud.Automation.Vendors;
+using Franthropy.Dalamud.Automation.Vendors.Coordination;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -22,6 +21,8 @@ public enum WorkshopVendorRestockPhase
     Indeterminate,
 }
 
+// C1 compatibility schema. New runs serialize WorkshopVendorRestockState plus
+// Franthropy's GilVendorBuyRunSnapshot; these types exist only to read pre-extraction data.
 [Serializable]
 public sealed class PersistedWorkshopVendorRestockRun
 {
@@ -96,41 +97,28 @@ public sealed class PersistedGilVendorOffer
     public List<uint> RouteAetheryteIds { get; set; } = [];
     public List<PersistedGilVendorTravelRoute> TravelRoutes { get; set; } = [];
 
-    public static PersistedGilVendorOffer From(GilVendorOffer offer) => new()
+    public GilVendorBuyOfferSnapshot ToSnapshot() => new()
     {
-        ItemId = offer.ItemId,
-        ItemName = offer.ItemName,
-        IconId = offer.IconId,
-        UnitPriceGil = offer.UnitPriceGil,
-        ShopId = offer.ShopId,
-        ShopRowIndex = offer.ShopRowIndex,
-        NpcId = offer.NpcId,
-        NpcName = offer.NpcName,
-        TerritoryId = offer.TerritoryId,
-        PositionX = offer.Position.X,
-        PositionY = offer.Position.Y,
-        PositionZ = offer.Position.Z,
-        RouteAetheryteIds = [.. offer.RouteAetheryteIds],
-        TravelRoutes = offer.EffectiveTravelRoutes
-            .Select(PersistedGilVendorTravelRoute.From)
-            .ToList(),
-    };
-
-    public GilVendorOffer ToOffer() => new(
-            ItemId,
-            ItemName,
-            IconId,
-            UnitPriceGil,
-            ShopId,
-            ShopRowIndex,
-            NpcId,
-            NpcName,
-            TerritoryId,
-            new Vector3(PositionX, PositionY, PositionZ),
-            RouteAetheryteIds)
+        ItemId = ItemId,
+        ItemName = ItemName,
+        IconId = IconId,
+        UnitPriceGil = UnitPriceGil,
+        ShopId = ShopId,
+        ShopRowIndex = ShopRowIndex,
+        NpcId = NpcId,
+        NpcName = NpcName,
+        TerritoryId = TerritoryId,
+        PositionX = PositionX,
+        PositionY = PositionY,
+        PositionZ = PositionZ,
+        RouteAetheryteIds = [.. RouteAetheryteIds],
+        TravelRoutes = TravelRoutes.Select(route => new GilVendorBuyRouteSnapshot
         {
-            TravelRoutes = TravelRoutes.Select(route => route.ToRoute()).ToArray(),
-        };
+            AetheryteId = route.AetheryteId,
+            AethernetId = route.AethernetId,
+            AetheryteTerritoryId = route.AetheryteTerritoryId,
+        }).ToList(),
+    };
 }
 
 [Serializable]
@@ -139,15 +127,6 @@ public sealed class PersistedGilVendorTravelRoute
     public uint AetheryteId { get; set; }
     public uint? AethernetId { get; set; }
     public uint? AetheryteTerritoryId { get; set; }
-
-    public static PersistedGilVendorTravelRoute From(GilVendorTravelRoute route) => new()
-    {
-        AetheryteId = route.AetheryteId,
-        AethernetId = route.AethernetId,
-        AetheryteTerritoryId = route.AetheryteTerritoryId,
-    };
-
-    public GilVendorTravelRoute ToRoute() => new(AetheryteId, AethernetId, AetheryteTerritoryId);
 }
 
 [Serializable]
@@ -176,23 +155,65 @@ public sealed class PersistedWorkshopVendorPurchaseReceipt
     public DateTime VerifiedAtUtc { get; set; }
 }
 
-public sealed record WorkshopVendorInventorySnapshot(
-    bool IsComplete,
-    ulong? Gil,
-    IReadOnlyDictionary<uint, int> ItemCounts,
-    string Message);
-
-public enum WorkshopVendorReachState
+[Serializable]
+public sealed class WorkshopVendorRestockState
 {
-    Waiting,
-    ShopOpen,
-    Unavailable,
-    Failed,
+    public ulong LocalContentId { get; set; }
+    public uint HomeWorldId { get; set; }
+    public string CharacterName { get; set; } = string.Empty;
+    public string QueueSignature { get; set; } = string.Empty;
+    public bool AutomaticallyBuyVendorMaterials { get; set; }
+    public bool QuartermasterSubmitted { get; set; }
+    public WorkshopVendorRestockPhase Phase { get; set; }
+    public WorkshopVendorRestockPhase ResumePhase { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public DateTime StartedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
+    public List<WorkshopVendorRestockPolicyLine> Lines { get; set; } = [];
+    public List<GilVendorBuyStopSnapshot> Stops { get; set; } = [];
 }
 
-public sealed record WorkshopVendorReachResult(
-    WorkshopVendorReachState State,
-    string Message);
+[Serializable]
+public sealed class WorkshopVendorRestockPolicyLine
+{
+    public uint ItemId { get; set; }
+    public string ItemName { get; set; } = string.Empty;
+    public int RequiredQuantity { get; set; }
+    public int ReviewedRetainerQuantity { get; set; }
+    public int ApprovedVendorQuantity { get; set; }
+    public int LivePlayerQuantity { get; set; }
+    public uint UnitPriceGil { get; set; }
+    public ulong ApprovedGilCeiling { get; set; }
+    public GilVendorBuyOfferSnapshot? Offer { get; set; }
+    public List<GilVendorBuyOfferSnapshot> AlternativeOffers { get; set; } = [];
+}
+
+public sealed class WorkshopVendorRestockRunView
+{
+    public string RunId { get; init; } = string.Empty;
+    public string QueueSignature { get; init; } = string.Empty;
+    public bool AutomaticallyBuyVendorMaterials { get; init; }
+    public WorkshopVendorRestockPhase Phase { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public IReadOnlyList<WorkshopVendorRestockLineView> Lines { get; init; } = [];
+    public IReadOnlyList<GilVendorBuyStopSnapshot> Stops { get; init; } = [];
+    public IReadOnlyList<GilVendorBuyReceiptSnapshot> Receipts { get; init; } = [];
+    public GilVendorBuyArmedIntentSnapshot? ArmedPurchase { get; init; }
+    public bool StopRequested { get; init; }
+}
+
+public sealed class WorkshopVendorRestockLineView
+{
+    public uint ItemId { get; init; }
+    public string ItemName { get; init; } = string.Empty;
+    public int RequiredQuantity { get; init; }
+    public int ApprovedVendorQuantity { get; init; }
+    public int PurchasedQuantity { get; init; }
+    public int LivePlayerQuantity { get; init; }
+    public bool VendorUnavailable { get; init; }
+    public string Status { get; init; } = "Waiting";
+    public GilVendorBuyOfferSnapshot? Offer { get; init; }
+}
 
 public enum WorkshopQuartermasterProgressState
 {
@@ -204,15 +225,20 @@ public enum WorkshopQuartermasterProgressState
     Indeterminate,
 }
 
-public sealed record WorkshopQuartermasterProgress(
-    WorkshopQuartermasterProgressState State,
-    string Message);
+public sealed record WorkshopQuartermasterProgress(WorkshopQuartermasterProgressState State, string Message);
+
+public interface IWorkshopQuartermasterRestockService
+{
+    bool Submit(
+        MarketMafioso.Quartermaster.QuartermasterOwnerScope owner,
+        IReadOnlyList<WorkshopMaterialAvailability> availability);
+    string LastStatus { get; }
+    WorkshopQuartermasterProgress GetProgress(MarketMafioso.Quartermaster.QuartermasterOwnerScope owner);
+}
 
 public static class WorkshopVendorRestockPresentation
 {
-    public static string Describe(
-        PersistedWorkshopVendorRestockRun run,
-        WorkshopVendorRestockReview review)
+    public static string Describe(WorkshopVendorRestockRunView run, WorkshopVendorRestockReview review)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(review);
@@ -223,36 +249,6 @@ public static class WorkshopVendorRestockPresentation
                 ? "Workshop materials are ready."
                 : $"Vendor purchases complete. {remainingLines:N0} material line(s) still need another source.";
         }
-        if (run.Phase != WorkshopVendorRestockPhase.Failed ||
-            !run.Message.Contains("expected shop did not become available", StringComparison.OrdinalIgnoreCase))
-        {
-            return run.Message;
-        }
-
-        var vendor = run.Stops.FirstOrDefault()?.NpcName ?? "the vendor";
-        return run.Receipts.Count == 0
-            ? $"Couldn't reach {vendor}. No gil was spent. Start again to rebuild the route."
-            : $"Couldn't reach {vendor}. Earlier verified purchases were preserved. Start again to rebuild the route.";
+        return run.Message;
     }
-}
-
-public interface IWorkshopVendorRestockRuntime
-{
-    WorkshopVendorInventorySnapshot CaptureInventory(IReadOnlyCollection<uint> itemIds);
-    bool HasCapacity(IReadOnlyDictionary<uint, int> quantities, out string message);
-    bool TryStartQuartermaster(
-        MarketMafioso.Quartermaster.QuartermasterOwnerScope owner,
-        IReadOnlyList<WorkshopMaterialAvailability> availability,
-        out string error);
-    WorkshopQuartermasterProgress GetQuartermasterProgress(
-        MarketMafioso.Quartermaster.QuartermasterOwnerScope owner);
-    WorkshopVendorReachResult AdvanceToOpenShop(GilVendorOffer offer);
-    void ResetVendorApproach();
-    GilVendorShopReadResult ReadShopRows();
-    bool TrySubmitPurchase(GilVendorShopRow row, uint quantity, out string error);
-    bool TryConfirmPurchasePrompt();
-    int ResolveMaximumBatch(uint itemId);
-    void CloseShop();
-    void BeginAutomation();
-    void EndAutomation();
 }

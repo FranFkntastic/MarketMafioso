@@ -9,7 +9,7 @@ using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.WorkshopPrep;
 
-public sealed class WorkshopQuartermasterRequestService : IDisposable
+public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermasterRestockService, IDisposable
 {
     private readonly Configuration config;
     private readonly QuartermasterIpcClient client;
@@ -206,6 +206,27 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
                 : $"Quartermaster did not accept shortages for review: {acknowledgement.Message ?? acknowledgement.Status}";
         nextOperationPollAtUtc = DateTimeOffset.MinValue;
         return acknowledgement.Accepted;
+    }
+
+    public WorkshopQuartermasterProgress GetProgress(QuartermasterOwnerScope owner)
+    {
+        var key = ScopeKey(owner);
+        if (!config.QuartermasterWorkshopRequests.TryGetValue(key, out var state))
+            return new(WorkshopQuartermasterProgressState.NotStarted, "Waiting for Quartermaster operation identity.");
+        var status = state.Status?.Trim() ?? string.Empty;
+        if (status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("succeeded", StringComparison.OrdinalIgnoreCase))
+            return new(WorkshopQuartermasterProgressState.Completed, state.Message ?? "Quartermaster retrieval completed.");
+        if (status.Equals("partially_succeeded", StringComparison.OrdinalIgnoreCase))
+            return new(WorkshopQuartermasterProgressState.PartiallySucceeded, state.Message ?? "Quartermaster retrieval partially succeeded.");
+        if (status.Equals("indeterminate", StringComparison.OrdinalIgnoreCase))
+            return new(WorkshopQuartermasterProgressState.Indeterminate, state.Message ?? "Quartermaster retrieval outcome is indeterminate.");
+        if (status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("cancelled", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("rejected", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("not_found", StringComparison.OrdinalIgnoreCase))
+            return new(WorkshopQuartermasterProgressState.Failed, state.Message ?? $"Quartermaster retrieval {status}.");
+        return new(WorkshopQuartermasterProgressState.Running, state.Message ?? $"Quartermaster retrieval {status}.");
     }
 
     public void PollOperationIfDue(QuartermasterOwnerScope ownerScope)
