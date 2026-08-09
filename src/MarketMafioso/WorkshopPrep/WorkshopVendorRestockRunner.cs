@@ -321,9 +321,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             {
                 ItemId = line.ItemId,
                 ItemName = line.ItemName,
-                ApprovedQuantity = Math.Min(
-                    line.ApprovedVendorQuantity,
-                    Math.Max(0, line.RequiredQuantity - line.LivePlayerQuantity)),
+                ApprovedQuantity = line.ApprovedVendorQuantity,
                 UnitPriceGil = line.UnitPriceGil,
                 ApprovedGilCeiling = line.ApprovedGilCeiling,
                 Offer = line.Offer,
@@ -359,9 +357,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         {
             MaximumApprovedGil = vendorLines.Aggregate(
                 0UL,
-                (sum, line) => checked(sum + Math.Min(
-                    line.ApprovedGilCeiling,
-                    checked((ulong)line.ApprovedQuantity * line.UnitPriceGil)))),
+                (sum, line) => checked(sum + line.ApprovedGilCeiling)),
             Lines = vendorLines,
             Stops = stops,
         };
@@ -461,14 +457,13 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             }).ToList(),
             Stops = legacy.Stops.Select(ToEngineStop).ToList(),
         };
-        config.ActiveWorkshopVendorRestockState = state;
-
+        GilVendorBuyRunSnapshot? engineRun = null;
         var resumeNeedsQuartermaster = legacy.Phase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster ||
                                       (legacy.Phase == WorkshopVendorRestockPhase.Paused &&
                                        legacy.ResumePhase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster);
         if (!resumeNeedsQuartermaster && legacy.AutomaticallyBuyVendorMaterials && legacy.Stops.Count > 0)
         {
-            config.ActiveWorkshopVendorBuyRun = new GilVendorBuyRunSnapshot
+            engineRun = new GilVendorBuyRunSnapshot
             {
                 RunId = legacy.RunId,
                 ContextSignature = ComposeContextSignature(
@@ -487,9 +482,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                     {
                         ItemId = line.ItemId,
                         ItemName = line.ItemName,
-                        ApprovedQuantity = checked(line.PurchasedQuantity + Math.Min(
-                            Math.Max(0, line.RequiredQuantity - line.LivePlayerQuantity),
-                            Math.Max(0, line.ApprovedVendorQuantity - line.PurchasedQuantity))),
+                        ApprovedQuantity = line.ApprovedVendorQuantity,
                         PurchasedQuantity = line.PurchasedQuantity,
                         PurchaseRetryCount = line.PurchaseRetryCount,
                         UnitPriceGil = line.UnitPriceGil,
@@ -524,10 +517,26 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 }).ToList(),
             };
         }
+        var previousState = config.ActiveWorkshopVendorRestockState;
+        var previousEngineRun = config.ActiveWorkshopVendorBuyRun;
+        var previousConversionCount = config.WorkshopVendorRestockLegacyConversions;
+        config.ActiveWorkshopVendorRestockState = state;
+        config.ActiveWorkshopVendorBuyRun = engineRun;
+        config.WorkshopVendorRestockLegacyConversions = checked(previousConversionCount + 1);
+        try
+        {
+            save();
+        }
+        catch
+        {
+            config.ActiveWorkshopVendorRestockState = previousState;
+            config.ActiveWorkshopVendorBuyRun = previousEngineRun;
+            config.WorkshopVendorRestockLegacyConversions = previousConversionCount;
+            throw;
+        }
+
         config.LegacyActiveWorkshopVendorRestock = null;
-        config.WorkshopVendorRestockLegacyConversions++;
         diagnosticLog?.Invoke($"[MarketMafioso] Converted legacy workshop vendor restock run (conversion #{config.WorkshopVendorRestockLegacyConversions:N0}).");
-        save();
     }
 
     private static GilVendorBuyStopSnapshot ToEngineStop(PersistedWorkshopVendorStop stop) => new()
@@ -594,10 +603,26 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         _ => GilVendorBuyPhase.RefreshPreconditions,
     };
 
-    private static string NormalizeMessage(string message) => message
-        .Replace("Vendor buy resumed.", "Workshop restock resumed.", StringComparison.Ordinal)
-        .Replace("Vendor buy completed.", "Workshop vendor restock completed.", StringComparison.Ordinal)
-        .Replace("vendor buy is now stopped", "workshop restock is now stopped", StringComparison.Ordinal);
+    private static string NormalizeMessage(string message)
+    {
+        var normalized = message
+            .Replace("Vendor buy started.", "Workshop restock started.", StringComparison.Ordinal)
+            .Replace("Vendor buy paused.", "Workshop restock paused.", StringComparison.Ordinal)
+            .Replace("Vendor buy resumed.", "Workshop restock resumed.", StringComparison.Ordinal)
+            .Replace("Vendor buy completed.", "Workshop vendor restock completed.", StringComparison.Ordinal)
+            .Replace("vendor buy will resume", "restock will resume", StringComparison.Ordinal)
+            .Replace("vendor buy is now stopped", "workshop restock is now stopped", StringComparison.Ordinal)
+            .Replace("Remaining purchases require", "Remaining reviewed purchases require", StringComparison.Ordinal)
+            .Replace("for the approved ", "for the reviewed ", StringComparison.Ordinal)
+            .Replace(" item line(s) at ", " material line(s) at ", StringComparison.Ordinal)
+            .Replace("no accessible vendor remains", "no reviewed accessible vendor remains", StringComparison.Ordinal);
+        if (!normalized.Contains("reviewed vendor stop(s)", StringComparison.Ordinal))
+            normalized = normalized.Replace("vendor stop(s)", "reviewed vendor stop(s)", StringComparison.Ordinal);
+        if (normalized.StartsWith("Choosing ", StringComparison.Ordinal) &&
+            normalized.EndsWith("'s shop.", StringComparison.Ordinal))
+            normalized = normalized[..^"'s shop.".Length] + "'s reviewed shop.";
+        return normalized;
+    }
 
     public void Dispose()
     {

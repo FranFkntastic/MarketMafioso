@@ -61,6 +61,44 @@ public sealed class WorkshopVendorRestockRunnerTests
     }
 
     [Fact]
+    public void Coordinator_messages_are_projected_in_workshop_wording()
+    {
+        var runtime = new FakeRuntime();
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 2, player: 0, retainer: 0, vendor: 2);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        Assert.Equal("Workshop restock started.", runner.ActiveRun!.Message);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal("Validated 1 material line(s) at Vendor 100.", runner.ActiveRun!.Message);
+    }
+
+    [Fact]
+    public void Coordinator_precondition_failure_uses_reviewed_workshop_wording()
+    {
+        var runtime = new FakeRuntime();
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 2, player: 0, retainer: 0, vendor: 2);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        runtime.Gil = 0;
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal(
+            "Remaining reviewed purchases require up to 20 gil, but only 0 gil is available.",
+            runner.ActiveRun!.Message);
+    }
+
+    [Fact]
     public void Partial_quartermaster_result_never_expands_reviewed_vendor_ceiling()
     {
         var runtime = new FakeRuntime();
@@ -181,6 +219,40 @@ public sealed class WorkshopVendorRestockRunnerTests
         Assert.Null(roundTripped.ActiveWorkshopVendorBuyRun.ArmedPurchase);
         Assert.Equal(GilVendorBuyPhase.PurchaseLine, roundTripped.ActiveWorkshopVendorBuyRun.Phase);
         Assert.Equal(0, runtime.SubmitCalls);
+    }
+
+    [Fact]
+    public void Legacy_conversion_save_failure_retains_old_authority_and_later_retry_converts_once()
+    {
+        var config = LegacyArmedConfiguration();
+        var runtime = new FakeRuntime { Config = config };
+        var saveAttempts = 0;
+
+        Assert.Throws<InvalidOperationException>(() => new WorkshopVendorRestockRunner(
+            config,
+            runtime,
+            new FakeQuartermaster(),
+            () =>
+            {
+                saveAttempts++;
+                throw new InvalidOperationException("Synthetic save failure.");
+            }));
+
+        Assert.NotNull(config.LegacyActiveWorkshopVendorRestock);
+        Assert.Null(config.ActiveWorkshopVendorRestockState);
+        Assert.Null(config.ActiveWorkshopVendorBuyRun);
+        Assert.Equal(0, config.WorkshopVendorRestockLegacyConversions);
+
+        using var retried = new WorkshopVendorRestockRunner(
+            config,
+            runtime,
+            new FakeQuartermaster(),
+            () => saveAttempts++);
+
+        Assert.Null(config.LegacyActiveWorkshopVendorRestock);
+        Assert.NotNull(config.ActiveWorkshopVendorBuyRun);
+        Assert.Equal(1, config.WorkshopVendorRestockLegacyConversions);
+        Assert.Equal(2, saveAttempts);
     }
 
     private static Configuration LegacyArmedConfiguration() => new()
