@@ -29,6 +29,7 @@ using MarketMafioso.MarketDiagnostics;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Retainers;
 using Franthropy.Dalamud.Automation.Vendors;
+using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using Franthropy.Dalamud.Travel;
 using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.Automation.Runtime;
@@ -332,10 +333,7 @@ public class MainWindow : Window, IDisposable
             DalamudGilVendorCatalogBuilder.Build(dataManager),
             workshopVendorAccess.Assess,
             itemId => workshopCraftRecipeResolver.TryResolveCraftRecipe(itemId, out _));
-        var vendorRuntime = new DalamudWorkshopVendorRestockRuntime(
-            config,
-            scanner,
-            workshopQuartermasterRequest,
+        var vendorRuntime = new DalamudGilVendorBuyRuntime(
             workshopVendorAccess,
             new DalamudOrdinaryGilShop(Plugin.GameGui, dataManager),
             new DalamudVNavmeshTravel(Plugin.PluginInterface),
@@ -354,13 +352,25 @@ public class MainWindow : Window, IDisposable
                     "InventoryRetainerLarge",
                     "InventoryRetainerSmall",
                 ]),
-            workshopVendorAutomationCoordinator,
+            dataManager,
             Plugin.ClientState,
-            Plugin.ObjectTable);
+            Plugin.ObjectTable,
+            beginAutomation: () =>
+            {
+                workshopVendorAutomationCoordinator.SuppressTextAdvance();
+                workshopVendorAutomationCoordinator.SuppressTradeAutoConfirm();
+            },
+            endAutomation: () =>
+            {
+                workshopVendorAutomationCoordinator.RestoreTextAdvance();
+                workshopVendorAutomationCoordinator.RestoreTradeAutoConfirm();
+            });
         workshopVendorRestockRunner = new WorkshopVendorRestockRunner(
             config,
             vendorRuntime,
-            config.Save);
+            workshopQuartermasterRequest,
+            config.Save,
+            message => log.Information(message));
         tradeQueuePanel = new TradeQueuePanel(
             config,
             tradeQueueRunner,

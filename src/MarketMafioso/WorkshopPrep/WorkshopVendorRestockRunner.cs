@@ -1,42 +1,49 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
-using Franthropy.Dalamud.Automation.Vendors;
+using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.WorkshopPrep;
 
 public sealed class WorkshopVendorRestockRunner : IDisposable
 {
-    private static readonly TimeSpan ReceiptTimeout = TimeSpan.FromSeconds(4);
     private readonly Configuration config;
-    private readonly IWorkshopVendorRestockRuntime runtime;
+    private readonly IGilVendorBuyRuntime runtime;
+    private readonly IWorkshopQuartermasterRestockService quartermaster;
     private readonly Action save;
     private readonly Func<DateTimeOffset> utcNow;
+    private readonly GilVendorBuyCoordinator coordinator;
     private bool disposed;
 
     public WorkshopVendorRestockRunner(
         Configuration config,
-        IWorkshopVendorRestockRuntime runtime,
+        IGilVendorBuyRuntime runtime,
+        IWorkshopQuartermasterRestockService quartermaster,
         Action save,
+        Action<string>? diagnosticLog = null,
         Func<DateTimeOffset>? utcNow = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
         this.save = save ?? throw new ArgumentNullException(nameof(save));
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
-        if (IsRunning)
+        ConvertLegacyRunIfPresent(diagnosticLog);
+        coordinator = new GilVendorBuyCoordinator(
+            new ConfigurationGilVendorBuyRunStore(config, save),
+            runtime,
+            this.utcNow);
+        if (config.ActiveWorkshopVendorBuyRun is null && IsPolicyRunning(config.ActiveWorkshopVendorRestockState))
             runtime.BeginAutomation();
     }
 
-    public PersistedWorkshopVendorRestockRun? ActiveRun => config.ActiveWorkshopVendorRestock;
-    public bool IsRunning => ActiveRun?.Phase is
-        WorkshopVendorRestockPhase.RetrieveFromQuartermaster or
-        WorkshopVendorRestockPhase.RefreshInventory or
-        WorkshopVendorRestockPhase.ReachVendor or
-        WorkshopVendorRestockPhase.ValidateShop or
-        WorkshopVendorRestockPhase.PurchaseLine or
-        WorkshopVendorRestockPhase.VerifyReceipt;
+    public WorkshopVendorRestockRunView? ActiveRun => BuildView();
+
+    public bool IsRunning => coordinator.IsRunning ||
+                             (config.ActiveWorkshopVendorBuyRun is null &&
+                              IsPolicyRunning(config.ActiveWorkshopVendorRestockState));
 
     public bool TryStart(
         WorkshopVendorRestockReview review,
@@ -57,25 +64,22 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             return false;
         }
 
-        var selected = review.Materials
-            .Where(line => line.RetainerPlannedQuantity > 0 ||
-                           (automaticallyBuyVendorMaterials &&
-                            line.Selected &&
-                            line.ApprovedVendorQuantity > 0))
+        var selected = review.Materials.Where(line =>
+                line.RetainerPlannedQuantity > 0 ||
+                (automaticallyBuyVendorMaterials && line.Selected && line.ApprovedVendorQuantity > 0))
             .ToArray();
         if (selected.Length == 0)
         {
             error = "No reviewed workshop materials need restocking.";
             return false;
         }
-
         if (automaticallyBuyVendorMaterials && review.VendorUnits > 0)
         {
-            var vendorItemIds = selected
+            var vendorLines = selected
                 .Where(line => line.Selected && line.ApprovedVendorQuantity > 0)
-                .Select(line => line.Availability.ItemId)
                 .ToArray();
-            var preflight = runtime.CaptureInventory(vendorItemIds);
+            var preflight = runtime.CaptureInventory(
+                vendorLines.Select(line => line.Availability.ItemId).ToArray());
             if (!preflight.IsComplete || preflight.Gil is null)
             {
                 error = preflight.Message;
@@ -86,31 +90,28 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 error = $"The reviewed vendor plan requires up to {review.MaximumGil:N0} gil, but only {preflight.Gil.Value:N0} gil is available.";
                 return false;
             }
-            var quantities = selected
-                .Where(line => line.Selected && line.ApprovedVendorQuantity > 0)
-                .ToDictionary(line => line.Availability.ItemId, line => line.ApprovedVendorQuantity);
-            if (!runtime.HasCapacity(quantities, out error))
+            if (!runtime.HasCapacity(
+                    vendorLines.ToDictionary(line => line.Availability.ItemId, line => line.ApprovedVendorQuantity),
+                    out error))
                 return false;
         }
 
         var now = utcNow().UtcDateTime;
-        var run = new PersistedWorkshopVendorRestockRun
+        config.ActiveWorkshopVendorBuyRun = null;
+        config.ActiveWorkshopVendorRestockState = new WorkshopVendorRestockState
         {
-            RunId = Guid.NewGuid().ToString("N"),
             LocalContentId = owner.LocalContentId!.Value,
             HomeWorldId = owner.HomeWorldId!.Value,
             CharacterName = owner.CharacterName!,
             QueueSignature = review.QueueSignature,
             AutomaticallyBuyVendorMaterials = automaticallyBuyVendorMaterials,
-            MaximumApprovedGil = automaticallyBuyVendorMaterials ? review.MaximumGil : 0,
             Phase = selected.Any(line => line.RetainerPlannedQuantity > 0)
                 ? WorkshopVendorRestockPhase.RetrieveFromQuartermaster
                 : WorkshopVendorRestockPhase.RefreshInventory,
-            ResumePhase = WorkshopVendorRestockPhase.Idle,
             Message = "Workshop restock started.",
             StartedAtUtc = now,
             UpdatedAtUtc = now,
-            Lines = selected.Select(line => new PersistedWorkshopVendorRestockLine
+            Lines = selected.Select(line => new WorkshopVendorRestockPolicyLine
             {
                 ItemId = line.Availability.ItemId,
                 ItemName = line.Availability.ItemName,
@@ -119,28 +120,28 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 ApprovedVendorQuantity = automaticallyBuyVendorMaterials && line.Selected
                     ? line.ApprovedVendorQuantity
                     : 0,
-                UnitPriceGil = line.SelectedCandidate?.Offer.UnitPriceGil ?? 0,
-                ApprovedGilCeiling = automaticallyBuyVendorMaterials
-                    ? line.ApprovedGil
-                    : 0,
                 LivePlayerQuantity = line.Availability.PlayerInventory,
+                UnitPriceGil = line.SelectedCandidate?.Offer.UnitPriceGil ?? 0,
+                ApprovedGilCeiling = automaticallyBuyVendorMaterials ? line.ApprovedGil : 0,
                 Offer = automaticallyBuyVendorMaterials && line.SelectedCandidate is not null
-                    ? PersistedGilVendorOffer.From(line.SelectedCandidate.Offer)
+                    ? GilVendorBuyOfferSnapshot.From(line.SelectedCandidate.Offer)
                     : null,
                 AlternativeOffers = automaticallyBuyVendorMaterials
                     ? line.Candidates
-                        .Where(candidate =>
-                            candidate.Access.IsEligible &&
-                            line.SelectedCandidate is not null &&
-                            !SameVendor(candidate.Offer, line.SelectedCandidate.Offer))
-                        .Select(candidate => PersistedGilVendorOffer.From(candidate.Offer))
+                        .Where(candidate => candidate.Access.IsEligible &&
+                                            line.SelectedCandidate is not null &&
+                                            !SameVendor(candidate.Offer.NpcId, candidate.Offer.ShopId,
+                                                candidate.Offer.TerritoryId, line.SelectedCandidate.Offer.NpcId,
+                                                line.SelectedCandidate.Offer.ShopId,
+                                                line.SelectedCandidate.Offer.TerritoryId))
+                        .Select(candidate => GilVendorBuyOfferSnapshot.From(candidate.Offer))
                         .ToList()
                     : [],
             }).ToList(),
             Stops = automaticallyBuyVendorMaterials
                 ? review.Stops
                     .Where(stop => stop.Lines.Any(line => line.Selected && line.ApprovedVendorQuantity > 0))
-                    .Select(stop => new PersistedWorkshopVendorStop
+                    .Select(stop => new GilVendorBuyStopSnapshot
                     {
                         NpcId = stop.NpcId,
                         ShopId = stop.ShopId,
@@ -153,665 +154,515 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                     }).ToList()
                 : [],
         };
-
-        config.ActiveWorkshopVendorRestock = run;
         runtime.BeginAutomation();
-        Persist();
-        error = string.Empty;
-        return true;
+        PersistPolicy();
+
+        if (config.ActiveWorkshopVendorRestockState.Phase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster)
+        {
+            error = string.Empty;
+            return true;
+        }
+        if (TryStartVendorEngine(waitForInventory: false, out error))
+            return true;
+
+        config.ActiveWorkshopVendorRestockState = null;
+        runtime.EndAutomation();
+        save();
+        return false;
     }
 
-    public void Tick(
-        string currentQueueSignature,
-        QuartermasterOwnerScope currentOwner)
+    public void Tick(string currentQueueSignature, QuartermasterOwnerScope currentOwner)
     {
-        if (disposed || ActiveRun is not { } run || !IsRunning)
+        if (disposed || !IsRunning || config.ActiveWorkshopVendorRestockState is not { } state)
             return;
-        if (!OwnerMatches(run, currentOwner))
+        if (!OwnerMatches(state, currentOwner))
         {
             Pause("The active character changed. Return to the reviewed owner to resume.");
             return;
         }
-        if (!string.Equals(run.QueueSignature, currentQueueSignature, StringComparison.Ordinal))
+        if (!string.Equals(state.QueueSignature, currentQueueSignature, StringComparison.Ordinal))
         {
             Pause("The workshop queue changed. Restore the reviewed queue or stop this run.");
             return;
         }
 
-        switch (run.Phase)
+        if (config.ActiveWorkshopVendorBuyRun is not null)
         {
-            case WorkshopVendorRestockPhase.RetrieveFromQuartermaster:
-                TickQuartermaster(run, currentOwner);
-                break;
-            case WorkshopVendorRestockPhase.RefreshInventory:
-                TickRefreshInventory(run);
-                break;
-            case WorkshopVendorRestockPhase.ReachVendor:
-                TickReachVendor(run);
-                break;
-            case WorkshopVendorRestockPhase.ValidateShop:
-                TickValidateShop(run);
-                break;
-            case WorkshopVendorRestockPhase.PurchaseLine:
-                TickPurchaseLine(run);
-                break;
-            case WorkshopVendorRestockPhase.VerifyReceipt:
-                TickVerifyReceipt(run);
-                break;
+            coordinator.Tick(ComposeContextSignature(currentOwner, currentQueueSignature));
+            return;
         }
+        if (state.Phase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster)
+            TickQuartermaster(state, currentOwner);
+        else if (state.Phase == WorkshopVendorRestockPhase.RefreshInventory)
+            TryStartVendorEngine(waitForInventory: true, out _);
     }
 
     public bool Pause(string message = "Workshop restock paused.")
     {
-        if (ActiveRun is not { } run || !IsRunning)
+        if (config.ActiveWorkshopVendorRestockState is not { } state || !IsRunning)
             return false;
-        run.ResumePhase = run.Phase;
-        run.Phase = WorkshopVendorRestockPhase.Paused;
-        run.Message = message;
+        if (config.ActiveWorkshopVendorBuyRun is not null)
+            return coordinator.Pause(message);
+        state.ResumePhase = state.Phase;
+        state.Phase = WorkshopVendorRestockPhase.Paused;
+        state.Message = message;
         runtime.EndAutomation();
-        Persist();
+        PersistPolicy();
         return true;
     }
 
     public bool Resume(QuartermasterOwnerScope owner, string queueSignature, out string error)
     {
-        if (ActiveRun is not { Phase: WorkshopVendorRestockPhase.Paused } run)
+        if (config.ActiveWorkshopVendorRestockState is not { } state ||
+            ActiveRun?.Phase != WorkshopVendorRestockPhase.Paused)
         {
             error = "No paused workshop restock run is available.";
             return false;
         }
-        if (!OwnerMatches(run, owner) ||
-            !string.Equals(run.QueueSignature, queueSignature, StringComparison.Ordinal))
+        if (!OwnerMatches(state, owner) || !string.Equals(state.QueueSignature, queueSignature, StringComparison.Ordinal))
         {
             error = "The active owner or workshop queue does not match the frozen restock review.";
             return false;
         }
-        run.Phase = run.ResumePhase is WorkshopVendorRestockPhase.Idle or WorkshopVendorRestockPhase.Paused
+        if (config.ActiveWorkshopVendorBuyRun is not null)
+        {
+            var resumed = coordinator.Resume(ComposeContextSignature(owner, queueSignature), out error);
+            if (!resumed) return false;
+            error = string.Empty;
+            return true;
+        }
+        state.Phase = state.ResumePhase is WorkshopVendorRestockPhase.Idle or WorkshopVendorRestockPhase.Paused
             ? WorkshopVendorRestockPhase.RefreshInventory
-            : run.ResumePhase;
-        run.Message = "Workshop restock resumed.";
+            : state.ResumePhase;
+        state.Message = "Workshop restock resumed.";
         runtime.BeginAutomation();
-        Persist();
+        PersistPolicy();
         error = string.Empty;
         return true;
     }
 
     public bool Stop(string message = "Workshop restock stopped.")
     {
-        if (ActiveRun is not { } run || run.Phase is
-            WorkshopVendorRestockPhase.Completed or
-            WorkshopVendorRestockPhase.Stopped or
-            WorkshopVendorRestockPhase.Failed or
-            WorkshopVendorRestockPhase.Indeterminate)
-        {
+        if (config.ActiveWorkshopVendorRestockState is not { } state || ActiveRun?.Phase is
+            WorkshopVendorRestockPhase.Completed or WorkshopVendorRestockPhase.Stopped or
+            WorkshopVendorRestockPhase.Failed or WorkshopVendorRestockPhase.Indeterminate)
             return false;
-        }
-        if (run.ArmedPurchase is not null)
-        {
-            run.StopRequested = true;
-            run.Phase = WorkshopVendorRestockPhase.VerifyReceipt;
-            run.Message = "Stop requested; reconciling the already-submitted purchase before stopping.";
-            Persist();
-            return true;
-        }
-        run.Phase = WorkshopVendorRestockPhase.Stopped;
-        run.Message = message;
-        runtime.CloseShop();
+        if (config.ActiveWorkshopVendorBuyRun is not null)
+            return coordinator.Stop(message);
+        state.Phase = WorkshopVendorRestockPhase.Stopped;
+        state.Message = message;
         runtime.EndAutomation();
-        Persist();
+        PersistPolicy();
         return true;
     }
 
-    private void TickQuartermaster(
-        PersistedWorkshopVendorRestockRun run,
-        QuartermasterOwnerScope owner)
+    public static string ComposeContextSignature(QuartermasterOwnerScope owner, string queueSignature) =>
+        $"{owner.LocalContentId!.Value.ToString(CultureInfo.InvariantCulture)}|{owner.HomeWorldId!.Value.ToString(CultureInfo.InvariantCulture)}|{queueSignature}";
+
+    private void TickQuartermaster(WorkshopVendorRestockState state, QuartermasterOwnerScope owner)
     {
-        if (!run.QuartermasterSubmitted)
+        if (!state.QuartermasterSubmitted)
         {
-            var availability = run.Lines
-                .Where(line => line.ReviewedRetainerQuantity > 0)
+            var availability = state.Lines.Where(line => line.ReviewedRetainerQuantity > 0)
                 .Select(line => new WorkshopMaterialAvailability(
-                    line.ItemId,
-                    line.ItemName,
-                    0,
-                    line.RequiredQuantity,
-                    line.LivePlayerQuantity,
-                    line.ReviewedRetainerQuantity,
-                    line.ReviewedRetainerQuantity,
-                    0,
-                    []))
+                    line.ItemId, line.ItemName, 0, line.RequiredQuantity, line.LivePlayerQuantity,
+                    line.ReviewedRetainerQuantity, line.ReviewedRetainerQuantity, 0, []))
                 .ToArray();
-            if (!runtime.TryStartQuartermaster(owner, availability, out var error))
+            if (!quartermaster.Submit(owner, availability))
             {
-                Fail(WorkshopVendorRestockPhase.Failed, error);
+                FinishPolicy(WorkshopVendorRestockPhase.Failed, quartermaster.LastStatus);
                 return;
             }
-            run.QuartermasterSubmitted = true;
-            run.Message = "Retrieving reviewed workshop materials from retainers.";
-            Persist();
+            state.QuartermasterSubmitted = true;
+            state.Message = "Retrieving reviewed workshop materials from retainers.";
+            PersistPolicy();
             return;
         }
 
-        var progress = runtime.GetQuartermasterProgress(owner);
+        var progress = quartermaster.GetProgress(owner);
         switch (progress.State)
         {
             case WorkshopQuartermasterProgressState.NotStarted:
             case WorkshopQuartermasterProgressState.Running:
-                run.Message = progress.Message;
+                state.Message = progress.Message;
                 return;
             case WorkshopQuartermasterProgressState.Completed:
             case WorkshopQuartermasterProgressState.PartiallySucceeded:
-                run.Phase = WorkshopVendorRestockPhase.RefreshInventory;
-                run.Message = progress.Message;
-                Persist();
+                state.Phase = WorkshopVendorRestockPhase.RefreshInventory;
+                state.Message = progress.Message;
+                PersistPolicy();
                 return;
             case WorkshopQuartermasterProgressState.Indeterminate:
-                Fail(WorkshopVendorRestockPhase.Indeterminate, progress.Message);
+                FinishPolicy(WorkshopVendorRestockPhase.Indeterminate, progress.Message);
                 return;
             default:
-                Fail(WorkshopVendorRestockPhase.Failed, progress.Message);
+                FinishPolicy(WorkshopVendorRestockPhase.Failed, progress.Message);
                 return;
         }
     }
 
-    private void TickRefreshInventory(PersistedWorkshopVendorRestockRun run)
+    private bool TryStartVendorEngine(bool waitForInventory, out string error)
     {
-        var itemIds = run.Lines.Select(line => line.ItemId).ToArray();
-        var snapshot = runtime.CaptureInventory(itemIds);
-        if (!snapshot.IsComplete)
+        var state = config.ActiveWorkshopVendorRestockState!;
+        var inventory = runtime.CaptureInventory(state.Lines.Select(line => line.ItemId).ToArray());
+        if (!inventory.IsComplete)
         {
-            run.Message = snapshot.Message;
-            return;
+            state.Message = inventory.Message;
+            error = inventory.Message;
+            if (waitForInventory) return false;
+            return false;
         }
-        foreach (var line in run.Lines)
-        {
-            line.LivePlayerQuantity = snapshot.ItemCounts.GetValueOrDefault(line.ItemId);
-            if (line.ApprovedVendorQuantity == 0)
-                line.Status = line.LivePlayerQuantity >= line.RequiredQuantity ? "Ready" : "Remaining";
-        }
+        foreach (var line in state.Lines)
+            line.LivePlayerQuantity = inventory.ItemCounts.GetValueOrDefault(line.ItemId);
 
-        if (!run.AutomaticallyBuyVendorMaterials || run.Stops.Count == 0)
-        {
-            Complete("Quartermaster restock finished. Any remaining materials still need another source.");
-            return;
-        }
-        var quantities = RemainingPurchaseQuantities(run);
-        if (quantities.Count == 0)
-        {
-            Complete("Reviewed restock complete.");
-            return;
-        }
-        if (snapshot.Gil is null)
-        {
-            Pause("Player gil is temporarily unavailable; restock will resume after it can be observed.");
-            return;
-        }
-        var remainingGil = RemainingApprovedGil(run);
-        if (snapshot.Gil.Value < remainingGil)
-        {
-            Fail(
-                WorkshopVendorRestockPhase.Failed,
-                $"Remaining reviewed purchases require up to {remainingGil:N0} gil, but only {snapshot.Gil.Value:N0} gil is available.");
-            return;
-        }
-        if (!runtime.HasCapacity(quantities, out var capacityError))
-        {
-            Pause(capacityError);
-            return;
-        }
-
-        NormalizeCurrentStop(run);
-        if (run.StopIndex >= run.Stops.Count)
-        {
-            Complete("Workshop vendor restock completed.");
-            return;
-        }
-        run.Phase = WorkshopVendorRestockPhase.ReachVendor;
-        run.Message = $"Traveling to {run.Stops[run.StopIndex].NpcName}.";
-        runtime.ResetVendorApproach();
-        Persist();
-    }
-
-    private void TickReachVendor(PersistedWorkshopVendorRestockRun run)
-    {
-        var stop = CurrentStop(run);
-        var offer = run.Lines
-            .First(line => stop.ItemIds.Contains(line.ItemId) && RemainingForLine(line) > 0)
-            .Offer!.ToOffer();
-        var result = runtime.AdvanceToOpenShop(offer);
-        run.Message = result.Message;
-        switch (result.State)
-        {
-            case WorkshopVendorReachState.Waiting:
-                return;
-            case WorkshopVendorReachState.ShopOpen:
-                run.Phase = WorkshopVendorRestockPhase.ValidateShop;
-                Persist();
-                return;
-            case WorkshopVendorReachState.Unavailable:
-                ReplanOrSkipCurrentStop(run, out var replanMessage);
-                run.Phase = WorkshopVendorRestockPhase.RefreshInventory;
-                run.Message = replanMessage;
-                runtime.ResetVendorApproach();
-                Persist();
-                return;
-            default:
-                Fail(
-                    WorkshopVendorRestockPhase.Failed,
-                    DescribeReachFailure(run, stop.NpcName, result.Message));
-                return;
-        }
-    }
-
-    private static string DescribeReachFailure(
-        PersistedWorkshopVendorRestockRun run,
-        string npcName,
-        string reason)
-    {
-        var spend = run.Receipts.Count == 0
-            ? "No gil was spent."
-            : "Verified purchases from earlier stops were preserved.";
-        return $"Couldn't reach {npcName}. {spend} {reason}".Trim();
-    }
-
-    private void TickValidateShop(PersistedWorkshopVendorRestockRun run)
-    {
-        var stop = CurrentStop(run);
-        var read = runtime.ReadShopRows();
-        if (!read.IsSuccess)
-        {
-            Fail(WorkshopVendorRestockPhase.Failed, read.Message);
-            return;
-        }
-
-        var matches = new Dictionary<uint, int>();
-        foreach (var itemId in stop.ItemIds)
-        {
-            var line = run.Lines.First(candidate => candidate.ItemId == itemId);
-            if (RemainingForLine(line) <= 0)
-                continue;
-            var requestResult = GilVendorBuyRequest.Create(line.Offer!.ToOffer(), 1);
-            if (!requestResult.IsSuccess)
-            {
-                Fail(WorkshopVendorRestockPhase.Failed, requestResult.Message);
-                return;
-            }
-            var match = GilVendorShopMatcher.FindMatchingRow(requestResult.Request!, read.Rows);
-            if (!match.IsSuccess)
-            {
-                Fail(WorkshopVendorRestockPhase.Failed, $"{line.ItemName}: {match.Message}");
-                return;
-            }
-            matches[itemId] = match.Row!.RowIndex;
-        }
-
-        stop.MatchedShopRows = matches;
-        stop.ShopValidated = true;
-        run.LineIndex = 0;
-        run.Phase = WorkshopVendorRestockPhase.PurchaseLine;
-        run.Message = $"Validated {matches.Count:N0} material line(s) at {stop.NpcName}.";
-        Persist();
-    }
-
-    private void TickPurchaseLine(PersistedWorkshopVendorRestockRun run)
-    {
-        var stop = CurrentStop(run);
-        while (run.LineIndex < stop.ItemIds.Count)
-        {
-            var line = run.Lines.First(candidate => candidate.ItemId == stop.ItemIds[run.LineIndex]);
-            var snapshot = runtime.CaptureInventory([line.ItemId]);
-            if (!snapshot.IsComplete || snapshot.Gil is null)
-            {
-                Pause(snapshot.Message);
-                return;
-            }
-            line.LivePlayerQuantity = snapshot.ItemCounts.GetValueOrDefault(line.ItemId);
-            var remaining = RemainingForLine(line);
-            if (remaining <= 0)
-            {
-                line.Status = line.LivePlayerQuantity >= line.RequiredQuantity ? "Ready" : "Ceiling reached";
-                run.LineIndex++;
-                continue;
-            }
-
-            var batch = Math.Min(
-                remaining,
-                Math.Clamp(runtime.ResolveMaximumBatch(line.ItemId), 1, 99));
-            var lineSpent = run.Receipts
-                .Where(receipt => receipt.ItemId == line.ItemId)
-                .Aggregate(0UL, (sum, receipt) => checked(sum + receipt.SpentGil));
-            var totalSpent = run.Receipts.Aggregate(
-                0UL,
-                (sum, receipt) => checked(sum + receipt.SpentGil));
-            var lineGilRemaining = line.ApprovedGilCeiling >= lineSpent
-                ? line.ApprovedGilCeiling - lineSpent
-                : 0;
-            var totalGilRemaining = run.MaximumApprovedGil >= totalSpent
-                ? run.MaximumApprovedGil - totalSpent
-                : 0;
-            var affordableWithinCeilings = line.UnitPriceGil == 0
-                ? 0
-                : checked((int)Math.Min(
-                    int.MaxValue,
-                    Math.Min(lineGilRemaining, totalGilRemaining) / line.UnitPriceGil));
-            batch = Math.Min(batch, affordableWithinCeilings);
-            if (batch <= 0)
-            {
-                line.Status = "Gil ceiling reached";
-                run.LineIndex++;
-                continue;
-            }
-            if (!runtime.HasCapacity(
-                    new Dictionary<uint, int> { [line.ItemId] = batch },
-                    out var capacityError))
-            {
-                Pause(capacityError);
-                return;
-            }
-            var request = GilVendorBuyRequest.Create(line.Offer!.ToOffer(), checked((uint)batch));
-            if (!request.IsSuccess)
-            {
-                Fail(WorkshopVendorRestockPhase.Failed, request.Message);
-                return;
-            }
-            if (snapshot.Gil.Value < request.Request!.MaxTotalGil)
-            {
-                Fail(WorkshopVendorRestockPhase.Failed, $"Not enough gil remains for the reviewed {line.ItemName} batch.");
-                return;
-            }
-
-            run.ArmedPurchase = new PersistedWorkshopVendorPurchaseIntent
+        var vendorLines = state.Lines.Where(line =>
+                state.AutomaticallyBuyVendorMaterials && line.ApprovedVendorQuantity > 0 && line.Offer is not null)
+            .Select(line => new GilVendorBuyLineSnapshot
             {
                 ItemId = line.ItemId,
-                Quantity = batch,
-                ExpectedGil = request.Request.MaxTotalGil,
-                ShopRowIndex = stop.MatchedShopRows[line.ItemId],
-                BeforeItemCount = line.LivePlayerQuantity,
-                BeforeGil = snapshot.Gil.Value,
-                RetryCount = line.PurchaseRetryCount,
-                ArmedAtUtc = utcNow().UtcDateTime,
-            };
-            line.Status = $"Buying {batch:N0}";
-            run.Phase = WorkshopVendorRestockPhase.VerifyReceipt;
-            run.Message = $"Buying {batch:N0} {line.ItemName}.";
-            Persist();
-
-            try
-            {
-                if (!runtime.TrySubmitPurchase(
-                        new GilVendorShopRow(
-                            run.ArmedPurchase.ShopRowIndex,
-                            line.ItemId,
-                            line.UnitPriceGil),
-                        checked((uint)batch),
-                        out var submitError))
-                {
-                    run.ArmedPurchase = null;
-                    Fail(WorkshopVendorRestockPhase.Failed, submitError);
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                run.ArmedPurchase = null;
-                Fail(WorkshopVendorRestockPhase.Failed, $"Vendor purchase submission failed before a receipt could be observed: {ex.Message}");
-            }
-            return;
-        }
-
-        runtime.CloseShop();
-        stop.ShopValidated = false;
-        stop.MatchedShopRows.Clear();
-        run.StopIndex++;
-        run.LineIndex = 0;
-        run.Phase = WorkshopVendorRestockPhase.RefreshInventory;
-        Persist();
-    }
-
-    private void TickVerifyReceipt(PersistedWorkshopVendorRestockRun run)
-    {
-        if (run.ArmedPurchase is not { } intent)
-        {
-            Fail(WorkshopVendorRestockPhase.Indeterminate, "Purchase verification lost its persisted armed intent.");
-            return;
-        }
-        runtime.TryConfirmPurchasePrompt();
-        var line = run.Lines.First(candidate => candidate.ItemId == intent.ItemId);
-        var snapshot = runtime.CaptureInventory([line.ItemId]);
-        if (!snapshot.IsComplete || snapshot.Gil is null)
-        {
-            run.Message = snapshot.Message;
-            return;
-        }
-
-        var request = GilVendorBuyRequest.Create(line.Offer!.ToOffer(), checked((uint)intent.Quantity)).Request!;
-        var evidence = GilVendorPurchaseEvidenceClassifier.Classify(
-            request,
-            new(intent.BeforeItemCount, intent.BeforeGil),
-            new(snapshot.ItemCounts.GetValueOrDefault(line.ItemId), snapshot.Gil.Value));
-        if (evidence.Evidence == GilVendorPurchaseEvidence.Verified)
-        {
-            var receipt = evidence.Receipt!;
-            run.Receipts.Add(new PersistedWorkshopVendorPurchaseReceipt
-            {
-                ItemId = receipt.ItemId,
-                Quantity = checked((int)receipt.Quantity),
-                SpentGil = receipt.SpentGil,
-                BeforeItemCount = receipt.BeforeItemCount,
-                AfterItemCount = receipt.AfterItemCount,
-                BeforeGil = receipt.BeforeGil,
-                AfterGil = receipt.AfterGil,
-                VerifiedAtUtc = utcNow().UtcDateTime,
-            });
-            line.PurchasedQuantity = checked(line.PurchasedQuantity + (int)receipt.Quantity);
-            line.PurchaseRetryCount = 0;
-            line.LivePlayerQuantity = receipt.AfterItemCount;
-            line.Status = $"Verified {line.PurchasedQuantity:N0} bought";
-            run.ArmedPurchase = null;
-            if (run.StopRequested)
-            {
-                FinishStopped(run, "The already-submitted purchase was verified; workshop restock is now stopped.");
-                return;
-            }
-            run.Phase = WorkshopVendorRestockPhase.PurchaseLine;
-            run.Message = $"Verified {receipt.Quantity:N0} {line.ItemName} for {receipt.SpentGil:N0} gil.";
-            Persist();
-            return;
-        }
-        if (evidence.Evidence == GilVendorPurchaseEvidence.Indeterminate)
-        {
-            Fail(WorkshopVendorRestockPhase.Indeterminate, $"{line.ItemName}: {evidence.Message}");
-            return;
-        }
-        if (utcNow().UtcDateTime - intent.ArmedAtUtc < ReceiptTimeout)
-            return;
-
-        if (run.StopRequested)
-        {
-            run.ArmedPurchase = null;
-            FinishStopped(run, "No mutation was observed from the submitted purchase; workshop restock is now stopped.");
-            return;
-        }
-        if (intent.RetryCount == 0)
-        {
-            line.PurchaseRetryCount = 1;
-            run.ArmedPurchase = null;
-            run.Phase = WorkshopVendorRestockPhase.PurchaseLine;
-            run.Message = $"No {line.ItemName} mutation was observed; retrying the unchanged batch once.";
-            Persist();
-            return;
-        }
-        Fail(
-            WorkshopVendorRestockPhase.Failed,
-            $"No {line.ItemName} mutation was observed after the single safe retry.");
-    }
-
-    private void NormalizeCurrentStop(PersistedWorkshopVendorRestockRun run)
-    {
-        while (run.StopIndex < run.Stops.Count &&
-               run.Stops[run.StopIndex].ItemIds.All(itemId =>
-                   RemainingForLine(run.Lines.First(line => line.ItemId == itemId)) <= 0))
-        {
-            run.StopIndex++;
-        }
-    }
-
-    private static void ReplanOrSkipCurrentStop(
-        PersistedWorkshopVendorRestockRun run,
-        out string message)
-    {
-        var failed = CurrentStop(run);
-        var remainingLines = failed.ItemIds
-            .Select(itemId => run.Lines.First(line => line.ItemId == itemId))
-            .Where(line => RemainingForLine(line) > 0)
+                ItemName = line.ItemName,
+                ApprovedQuantity = line.ApprovedVendorQuantity,
+                TargetTotalQuantity = line.RequiredQuantity,
+                UnitPriceGil = line.UnitPriceGil,
+                ApprovedGilCeiling = line.ApprovedGilCeiling,
+                Offer = line.Offer,
+                AlternativeOffers = [.. line.AlternativeOffers],
+            })
+            .Where(line => line.ApprovedQuantity > 0)
             .ToList();
-        var replacementStops = new List<PersistedWorkshopVendorStop>();
-        while (remainingLines.Any(line => line.AlternativeOffers.Count != 0))
+        var vendorIds = vendorLines.Select(line => line.ItemId).ToHashSet();
+        var liveQuantities = vendorLines
+            .Select(line => new
+            {
+                line.ItemId,
+                Quantity = Math.Min(
+                    line.ApprovedQuantity,
+                    Math.Max(0, line.TargetTotalQuantity!.Value - inventory.ItemCounts.GetValueOrDefault(line.ItemId))),
+            })
+            .Where(line => line.Quantity > 0)
+            .ToDictionary(line => line.ItemId, line => line.Quantity);
+        var stops = state.Stops.Select(stop => new GilVendorBuyStopSnapshot
+            {
+                NpcId = stop.NpcId,
+                ShopId = stop.ShopId,
+                TerritoryId = stop.TerritoryId,
+                NpcName = stop.NpcName,
+                ItemIds = stop.ItemIds.Where(vendorIds.Contains).ToList(),
+            })
+            .Where(stop => stop.ItemIds.Count > 0)
+            .ToList();
+        if (vendorLines.Count == 0 || liveQuantities.Count == 0 || stops.Count == 0)
         {
-            var best = remainingLines
-                .SelectMany(line => line.AlternativeOffers.Select(offer => new
+            foreach (var line in state.Lines)
+                line.LivePlayerQuantity = inventory.ItemCounts.GetValueOrDefault(line.ItemId);
+            FinishPolicy(
+                WorkshopVendorRestockPhase.Completed,
+                state.AutomaticallyBuyVendorMaterials
+                    ? "Reviewed restock complete."
+                    : "Quartermaster restock finished. Any remaining materials still need another source.");
+            error = string.Empty;
+            return true;
+        }
+
+        var plan = new GilVendorBuyPlan
+        {
+            MaximumApprovedGil = vendorLines.Aggregate(
+                0UL,
+                (sum, line) => checked(sum + line.ApprovedGilCeiling)),
+            Lines = vendorLines,
+            Stops = stops,
+        };
+        if (waitForInventory && !runtime.HasCapacity(
+                liveQuantities,
+                out var capacityError))
+        {
+            state.ResumePhase = WorkshopVendorRestockPhase.RefreshInventory;
+            state.Phase = WorkshopVendorRestockPhase.Paused;
+            state.Message = capacityError;
+            runtime.EndAutomation();
+            PersistPolicy();
+            error = capacityError;
+            return false;
+        }
+        if (!coordinator.TryStart(
+                plan,
+                ComposeContextSignature(new(state.LocalContentId, state.HomeWorldId, state.CharacterName, null), state.QueueSignature),
+                out error))
+        {
+            error = NormalizeMessage(error);
+            state.Message = error;
+            if (waitForInventory)
+                FinishPolicy(WorkshopVendorRestockPhase.Failed, error);
+            return false;
+        }
+        return true;
+    }
+
+    private WorkshopVendorRestockRunView? BuildView()
+    {
+        if (config.ActiveWorkshopVendorRestockState is not { } state)
+            return null;
+        var engine = coordinator.ActiveRun;
+        var receipts = engine?.Receipts ?? [];
+        var engineLines = engine?.Lines.ToDictionary(line => line.ItemId) ?? [];
+        return new WorkshopVendorRestockRunView
+        {
+            RunId = engine?.RunId ?? $"workshop-{state.StartedAtUtc.Ticks.ToString(CultureInfo.InvariantCulture)}",
+            QueueSignature = state.QueueSignature,
+            AutomaticallyBuyVendorMaterials = state.AutomaticallyBuyVendorMaterials,
+            Phase = engine is null ? state.Phase : ToWorkshopPhase(engine.Phase),
+            Message = NormalizeMessage(engine?.Message ?? state.Message),
+            Stops = engine?.Stops ?? state.Stops,
+            Receipts = receipts,
+            ArmedPurchase = engine?.ArmedPurchase,
+            StopRequested = engine?.StopRequested ?? false,
+            Lines = state.Lines.Select(policy =>
+            {
+                engineLines.TryGetValue(policy.ItemId, out var line);
+                var lastReceipt = receipts.LastOrDefault(receipt => receipt.ItemId == policy.ItemId);
+                return new WorkshopVendorRestockLineView
                 {
-                    Line = line,
-                    Offer = offer,
-                    Key = (offer.NpcId, offer.ShopId, offer.TerritoryId, offer.NpcName),
-                }))
-                .GroupBy(candidate => candidate.Key)
-                .OrderByDescending(group => group.Select(candidate => candidate.Line.ItemId).Distinct().Count())
-                .ThenBy(group => group.Key.NpcId)
-                .FirstOrDefault();
-            if (best is null)
-                break;
-
-            var selectedByItem = best
-                .GroupBy(candidate => candidate.Line.ItemId)
-                .ToDictionary(group => group.Key, group => group.First());
-            foreach (var selected in selectedByItem.Values)
-            {
-                selected.Line.Offer = selected.Offer;
-                selected.Line.UnitPriceGil = selected.Offer.UnitPriceGil;
-                selected.Line.AlternativeOffers.RemoveAll(offer => SameVendor(offer, selected.Offer));
-                remainingLines.Remove(selected.Line);
-            }
-            replacementStops.Add(new PersistedWorkshopVendorStop
-            {
-                NpcId = best.Key.NpcId,
-                ShopId = best.Key.ShopId,
-                TerritoryId = best.Key.TerritoryId,
-                NpcName = best.Key.NpcName,
-                ItemIds = selectedByItem.Keys.Order().ToList(),
-            });
-        }
-
-        var skipped = remainingLines.ToArray();
-        foreach (var line in skipped)
-        {
-            line.VendorUnavailable = true;
-            line.Status = "No accessible vendor";
-            line.AlternativeOffers.Clear();
-        }
-
-        run.Stops.RemoveAt(run.StopIndex);
-        run.Stops.InsertRange(run.StopIndex, replacementStops);
-        run.LineIndex = 0;
-        message = replacementStops.Count switch
-        {
-            > 0 when skipped.Length > 0 =>
-                $"Replanned {replacementStops.Count:N0} reviewed vendor stop(s); skipped {string.Join(", ", skipped.Select(line => line.ItemName))} because no reviewed accessible vendor remains.",
-            > 0 =>
-                $"Replanned {replacementStops.Count:N0} reviewed vendor stop(s) without expanding any quantity or gil ceiling.",
-            _ =>
-                $"Skipped {string.Join(", ", skipped.Select(line => line.ItemName))} because no reviewed accessible vendor remains; continuing the restock plan.",
+                    ItemId = policy.ItemId,
+                    ItemName = policy.ItemName,
+                    RequiredQuantity = policy.RequiredQuantity,
+                    ApprovedVendorQuantity = policy.ApprovedVendorQuantity,
+                    PurchasedQuantity = line?.PurchasedQuantity ?? 0,
+                    LivePlayerQuantity = lastReceipt?.AfterItemCount ?? policy.LivePlayerQuantity,
+                    VendorUnavailable = line?.VendorUnavailable ?? false,
+                    Status = line?.Status ??
+                             (policy.LivePlayerQuantity >= policy.RequiredQuantity ? "Ready" : "Remaining"),
+                    Offer = line?.Offer ?? policy.Offer,
+                };
+            }).ToArray(),
         };
     }
 
-    private static Dictionary<uint, int> RemainingPurchaseQuantities(
-        PersistedWorkshopVendorRestockRun run) =>
-        run.Lines
-            .Select(line => new { line.ItemId, Remaining = RemainingForLine(line) })
-            .Where(line => line.Remaining > 0)
-            .ToDictionary(line => line.ItemId, line => line.Remaining);
-
-    private static ulong RemainingApprovedGil(PersistedWorkshopVendorRestockRun run) =>
-        Math.Min(
-            run.MaximumApprovedGil - Math.Min(
-                run.MaximumApprovedGil,
-                run.Receipts.Aggregate(0UL, (sum, receipt) => checked(sum + receipt.SpentGil))),
-            run.Lines.Aggregate(
-            0UL,
-            (sum, line) => checked(sum + ((ulong)RemainingForLine(line) * line.UnitPriceGil))));
-
-    private static int RemainingForLine(PersistedWorkshopVendorRestockLine line)
+    private void ConvertLegacyRunIfPresent(Action<string>? diagnosticLog)
     {
-        if (line.VendorUnavailable)
-            return 0;
-        var liveNeed = Math.Max(0, line.RequiredQuantity - line.LivePlayerQuantity);
-        var remainingApproval = Math.Max(0, line.ApprovedVendorQuantity - line.PurchasedQuantity);
-        return Math.Min(liveNeed, remainingApproval);
-    }
-
-    private static bool OwnerMatches(
-        PersistedWorkshopVendorRestockRun run,
-        QuartermasterOwnerScope owner) =>
-        owner.LocalContentId == run.LocalContentId &&
-        owner.HomeWorldId == run.HomeWorldId;
-
-    private static bool SameVendor(GilVendorOffer left, GilVendorOffer right) =>
-        left.NpcId == right.NpcId &&
-        left.ShopId == right.ShopId &&
-        left.TerritoryId == right.TerritoryId;
-
-    private static bool SameVendor(PersistedGilVendorOffer left, PersistedGilVendorOffer right) =>
-        left.NpcId == right.NpcId &&
-        left.ShopId == right.ShopId &&
-        left.TerritoryId == right.TerritoryId;
-
-    private static PersistedWorkshopVendorStop CurrentStop(PersistedWorkshopVendorRestockRun run) =>
-        run.Stops[run.StopIndex];
-
-    private void Complete(string message)
-    {
-        if (ActiveRun is not { } run)
+        if (config.LegacyActiveWorkshopVendorRestock is not { } legacy)
             return;
-        run.Phase = WorkshopVendorRestockPhase.Completed;
-        run.Message = message;
-        runtime.CloseShop();
-        runtime.EndAutomation();
-        Persist();
+        var state = new WorkshopVendorRestockState
+        {
+            LocalContentId = legacy.LocalContentId,
+            HomeWorldId = legacy.HomeWorldId,
+            CharacterName = legacy.CharacterName,
+            QueueSignature = legacy.QueueSignature,
+            AutomaticallyBuyVendorMaterials = legacy.AutomaticallyBuyVendorMaterials,
+            QuartermasterSubmitted = legacy.QuartermasterSubmitted,
+            Phase = legacy.Phase,
+            ResumePhase = legacy.ResumePhase,
+            Message = legacy.Message,
+            StartedAtUtc = legacy.StartedAtUtc,
+            UpdatedAtUtc = legacy.UpdatedAtUtc,
+            Lines = legacy.Lines.Select(line => new WorkshopVendorRestockPolicyLine
+            {
+                ItemId = line.ItemId,
+                ItemName = line.ItemName,
+                RequiredQuantity = line.RequiredQuantity,
+                ReviewedRetainerQuantity = line.ReviewedRetainerQuantity,
+                ApprovedVendorQuantity = line.ApprovedVendorQuantity,
+                LivePlayerQuantity = line.LivePlayerQuantity,
+                UnitPriceGil = line.UnitPriceGil,
+                ApprovedGilCeiling = line.ApprovedGilCeiling,
+                Offer = line.Offer?.ToSnapshot(),
+                AlternativeOffers = line.AlternativeOffers.Select(offer => offer.ToSnapshot()).ToList(),
+            }).ToList(),
+            Stops = legacy.Stops.Select(ToEngineStop).ToList(),
+        };
+        GilVendorBuyRunSnapshot? engineRun = null;
+        var resumeNeedsQuartermaster = legacy.Phase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster ||
+                                      (legacy.Phase == WorkshopVendorRestockPhase.Paused &&
+                                       legacy.ResumePhase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster);
+        if (!resumeNeedsQuartermaster && legacy.AutomaticallyBuyVendorMaterials && legacy.Stops.Count > 0)
+        {
+            engineRun = new GilVendorBuyRunSnapshot
+            {
+                RunId = legacy.RunId,
+                ContextSignature = ComposeContextSignature(
+                    new(legacy.LocalContentId, legacy.HomeWorldId, legacy.CharacterName, null), legacy.QueueSignature),
+                MaximumApprovedGil = legacy.MaximumApprovedGil,
+                Phase = ToEnginePhase(legacy.Phase),
+                ResumePhase = ToEnginePhase(legacy.ResumePhase),
+                StopRequested = legacy.StopRequested,
+                StopIndex = legacy.StopIndex,
+                LineIndex = legacy.LineIndex,
+                Message = legacy.Message,
+                StartedAtUtc = legacy.StartedAtUtc,
+                UpdatedAtUtc = legacy.UpdatedAtUtc,
+                Lines = legacy.Lines.Where(line => line.ApprovedVendorQuantity > 0 && line.Offer is not null)
+                    .Select(line => new GilVendorBuyLineSnapshot
+                    {
+                        ItemId = line.ItemId,
+                        ItemName = line.ItemName,
+                        ApprovedQuantity = line.ApprovedVendorQuantity,
+                        TargetTotalQuantity = line.RequiredQuantity,
+                        PurchasedQuantity = line.PurchasedQuantity,
+                        PurchaseRetryCount = line.PurchaseRetryCount,
+                        UnitPriceGil = line.UnitPriceGil,
+                        ApprovedGilCeiling = line.ApprovedGilCeiling,
+                        VendorUnavailable = line.VendorUnavailable,
+                        Status = line.Status,
+                        Offer = line.Offer!.ToSnapshot(),
+                        AlternativeOffers = line.AlternativeOffers.Select(offer => offer.ToSnapshot()).ToList(),
+                    }).ToList(),
+                Stops = legacy.Stops.Select(ToEngineStop).ToList(),
+                ArmedPurchase = legacy.ArmedPurchase is { } intent ? new GilVendorBuyArmedIntentSnapshot
+                {
+                    ItemId = intent.ItemId,
+                    Quantity = intent.Quantity,
+                    ExpectedGil = intent.ExpectedGil,
+                    ShopRowIndex = intent.ShopRowIndex,
+                    BeforeItemCount = intent.BeforeItemCount,
+                    BeforeGil = intent.BeforeGil,
+                    RetryCount = intent.RetryCount,
+                    ArmedAtUtc = intent.ArmedAtUtc,
+                } : null,
+                Receipts = legacy.Receipts.Select(receipt => new GilVendorBuyReceiptSnapshot
+                {
+                    ItemId = receipt.ItemId,
+                    Quantity = receipt.Quantity,
+                    SpentGil = receipt.SpentGil,
+                    BeforeItemCount = receipt.BeforeItemCount,
+                    AfterItemCount = receipt.AfterItemCount,
+                    BeforeGil = receipt.BeforeGil,
+                    AfterGil = receipt.AfterGil,
+                    VerifiedAtUtc = receipt.VerifiedAtUtc,
+                }).ToList(),
+            };
+        }
+        var previousState = config.ActiveWorkshopVendorRestockState;
+        var previousEngineRun = config.ActiveWorkshopVendorBuyRun;
+        var previousConversionCount = config.WorkshopVendorRestockLegacyConversions;
+        config.ActiveWorkshopVendorRestockState = state;
+        config.ActiveWorkshopVendorBuyRun = engineRun;
+        config.WorkshopVendorRestockLegacyConversions = checked(previousConversionCount + 1);
+        try
+        {
+            save();
+        }
+        catch
+        {
+            config.ActiveWorkshopVendorRestockState = previousState;
+            config.ActiveWorkshopVendorBuyRun = previousEngineRun;
+            config.WorkshopVendorRestockLegacyConversions = previousConversionCount;
+            throw;
+        }
+
+        config.LegacyActiveWorkshopVendorRestock = null;
+        diagnosticLog?.Invoke($"[MarketMafioso] Converted legacy workshop vendor restock run (conversion #{config.WorkshopVendorRestockLegacyConversions:N0}).");
     }
 
-    private void FinishStopped(PersistedWorkshopVendorRestockRun run, string message)
+    private static GilVendorBuyStopSnapshot ToEngineStop(PersistedWorkshopVendorStop stop) => new()
     {
-        run.StopRequested = false;
-        run.Phase = WorkshopVendorRestockPhase.Stopped;
-        run.Message = message;
-        runtime.CloseShop();
+        NpcId = stop.NpcId,
+        ShopId = stop.ShopId,
+        TerritoryId = stop.TerritoryId,
+        NpcName = stop.NpcName,
+        ItemIds = [.. stop.ItemIds],
+        MatchedShopRows = new(stop.MatchedShopRows),
+        ShopValidated = stop.ShopValidated,
+    };
+
+    private static bool IsPolicyRunning(WorkshopVendorRestockState? state) => state?.Phase is
+        WorkshopVendorRestockPhase.RetrieveFromQuartermaster or WorkshopVendorRestockPhase.RefreshInventory;
+
+    private static bool OwnerMatches(WorkshopVendorRestockState state, QuartermasterOwnerScope owner) =>
+        owner.LocalContentId == state.LocalContentId && owner.HomeWorldId == state.HomeWorldId;
+
+    private static bool SameVendor(uint leftNpc, uint leftShop, uint leftTerritory, uint rightNpc, uint rightShop, uint rightTerritory) =>
+        leftNpc == rightNpc && leftShop == rightShop && leftTerritory == rightTerritory;
+
+    private void FinishPolicy(WorkshopVendorRestockPhase phase, string message)
+    {
+        var state = config.ActiveWorkshopVendorRestockState!;
+        state.Phase = phase;
+        state.Message = message;
         runtime.EndAutomation();
-        Persist();
+        PersistPolicy();
     }
 
-    private void Fail(WorkshopVendorRestockPhase phase, string message)
+    private void PersistPolicy()
     {
-        if (ActiveRun is not { } run)
-            return;
-        run.Phase = phase;
-        run.Message = message;
-        runtime.CloseShop();
-        runtime.EndAutomation();
-        Persist();
-    }
-
-    private void Persist()
-    {
-        if (ActiveRun is { } run)
-            run.UpdatedAtUtc = utcNow().UtcDateTime;
+        if (config.ActiveWorkshopVendorRestockState is { } state)
+            state.UpdatedAtUtc = utcNow().UtcDateTime;
         save();
+    }
+
+    private static WorkshopVendorRestockPhase ToWorkshopPhase(GilVendorBuyPhase phase) => phase switch
+    {
+        GilVendorBuyPhase.RefreshPreconditions => WorkshopVendorRestockPhase.RefreshInventory,
+        GilVendorBuyPhase.ReachVendor => WorkshopVendorRestockPhase.ReachVendor,
+        GilVendorBuyPhase.ValidateShop => WorkshopVendorRestockPhase.ValidateShop,
+        GilVendorBuyPhase.PurchaseLine => WorkshopVendorRestockPhase.PurchaseLine,
+        GilVendorBuyPhase.VerifyReceipt => WorkshopVendorRestockPhase.VerifyReceipt,
+        GilVendorBuyPhase.Paused => WorkshopVendorRestockPhase.Paused,
+        GilVendorBuyPhase.Completed => WorkshopVendorRestockPhase.Completed,
+        GilVendorBuyPhase.Stopped => WorkshopVendorRestockPhase.Stopped,
+        GilVendorBuyPhase.Failed => WorkshopVendorRestockPhase.Failed,
+        _ => WorkshopVendorRestockPhase.Indeterminate,
+    };
+
+    private static GilVendorBuyPhase ToEnginePhase(WorkshopVendorRestockPhase phase) => phase switch
+    {
+        WorkshopVendorRestockPhase.ReachVendor => GilVendorBuyPhase.ReachVendor,
+        WorkshopVendorRestockPhase.ValidateShop => GilVendorBuyPhase.ValidateShop,
+        WorkshopVendorRestockPhase.PurchaseLine => GilVendorBuyPhase.PurchaseLine,
+        WorkshopVendorRestockPhase.VerifyReceipt => GilVendorBuyPhase.VerifyReceipt,
+        WorkshopVendorRestockPhase.Paused => GilVendorBuyPhase.Paused,
+        WorkshopVendorRestockPhase.Completed => GilVendorBuyPhase.Completed,
+        WorkshopVendorRestockPhase.Stopped => GilVendorBuyPhase.Stopped,
+        WorkshopVendorRestockPhase.Failed => GilVendorBuyPhase.Failed,
+        WorkshopVendorRestockPhase.Indeterminate => GilVendorBuyPhase.Indeterminate,
+        _ => GilVendorBuyPhase.RefreshPreconditions,
+    };
+
+    private static string NormalizeMessage(string message)
+    {
+        var normalized = message
+            .Replace("Vendor buy started.", "Workshop restock started.", StringComparison.Ordinal)
+            .Replace("Vendor buy paused.", "Workshop restock paused.", StringComparison.Ordinal)
+            .Replace("Vendor buy resumed.", "Workshop restock resumed.", StringComparison.Ordinal)
+            .Replace("Vendor buy completed.", "Workshop vendor restock completed.", StringComparison.Ordinal)
+            .Replace("vendor buy will resume", "restock will resume", StringComparison.Ordinal)
+            .Replace("vendor buy is now stopped", "workshop restock is now stopped", StringComparison.Ordinal)
+            .Replace("The vendor plan requires", "The reviewed vendor plan requires", StringComparison.Ordinal)
+            .Replace("Remaining purchases require", "Remaining reviewed purchases require", StringComparison.Ordinal)
+            .Replace("for the approved ", "for the reviewed ", StringComparison.Ordinal)
+            .Replace(" item line(s) at ", " material line(s) at ", StringComparison.Ordinal)
+            .Replace("continuing the vendor plan", "continuing the restock plan", StringComparison.Ordinal)
+            .Replace("no accessible vendor remains", "no reviewed accessible vendor remains", StringComparison.Ordinal);
+        if (!normalized.Contains("reviewed vendor stop(s)", StringComparison.Ordinal))
+            normalized = normalized.Replace("vendor stop(s)", "reviewed vendor stop(s)", StringComparison.Ordinal);
+        if (normalized.StartsWith("Choosing ", StringComparison.Ordinal) &&
+            normalized.EndsWith("'s shop.", StringComparison.Ordinal))
+            normalized = normalized[..^"'s shop.".Length] + "'s reviewed shop.";
+        return normalized;
     }
 
     public void Dispose()
     {
-        if (disposed)
-            return;
+        if (disposed) return;
         disposed = true;
-        runtime.EndAutomation();
+        coordinator.Dispose();
+    }
+}
+
+internal sealed class ConfigurationGilVendorBuyRunStore : IGilVendorBuyRunStore
+{
+    private readonly Configuration config;
+    private readonly Action save;
+
+    public ConfigurationGilVendorBuyRunStore(Configuration config, Action save)
+    {
+        this.config = config;
+        this.save = save;
+    }
+
+    public GilVendorBuyRunSnapshot? LoadCurrent() => config.ActiveWorkshopVendorBuyRun;
+
+    public void Save(GilVendorBuyRunSnapshot snapshot)
+    {
+        config.ActiveWorkshopVendorBuyRun = snapshot;
+        save();
     }
 }

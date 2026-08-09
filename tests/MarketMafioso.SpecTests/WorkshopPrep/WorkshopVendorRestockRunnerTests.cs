@@ -1,8 +1,9 @@
+using System.Numerics;
 using Franthropy.Dalamud.Automation.Vendors;
-using Franthropy.Dalamud.Travel;
+using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.WorkshopPrep;
-using System.Numerics;
+using Newtonsoft.Json;
 
 namespace MarketMafioso.SpecTests.WorkshopPrep;
 
@@ -10,519 +11,470 @@ public sealed class WorkshopVendorRestockRunnerTests
 {
     private static readonly QuartermasterOwnerScope Owner = new(10, 20, "Tester", "World");
 
-    [Theory]
-    [InlineData(RunnerScenario.DisabledToggle)]
-    [InlineData(RunnerScenario.SameVendorBatch)]
-    [InlineData(RunnerScenario.PartialQuartermaster)]
-    [InlineData(RunnerScenario.AmbiguousEvidence)]
-    [InlineData(RunnerScenario.StableQueueSignature)]
-    [InlineData(RunnerScenario.AlternativeVendor)]
-    [InlineData(RunnerScenario.AtomicShopValidation)]
-    [InlineData(RunnerScenario.SplitLargeQuantity)]
-    [InlineData(RunnerScenario.CapacityLoss)]
-    [InlineData(RunnerScenario.ReloadReconciliation)]
-    [InlineData(RunnerScenario.IdentityDrift)]
-    [InlineData(RunnerScenario.ArmedStopReconciliation)]
-    [InlineData(RunnerScenario.UnreachableFailure)]
-    [InlineData(RunnerScenario.ApproachPolicy)]
-    public void Runner_contract(RunnerScenario scenario)
-    {
-        switch (scenario)
-        {
-            case RunnerScenario.DisabledToggle: Disabled_vendor_toggle_creates_no_vendor_authority(); break;
-            case RunnerScenario.SameVendorBatch: Same_vendor_lines_open_and_read_shop_once_and_commit_exact_receipts(); break;
-            case RunnerScenario.PartialQuartermaster: Partial_quartermaster_result_never_expands_reviewed_vendor_ceiling(); break;
-            case RunnerScenario.AmbiguousEvidence: Ambiguous_inventory_and_gil_evidence_stops_without_retry(); break;
-            case RunnerScenario.StableQueueSignature: Queue_signature_ignores_inventory_refresh_but_changes_with_requirements(); break;
-            case RunnerScenario.AlternativeVendor: Unavailable_stop_replans_to_a_reviewed_alternative_without_expanding_quantity(); break;
-            case RunnerScenario.AtomicShopValidation: Every_stop_line_is_validated_before_the_first_callback(); break;
-            case RunnerScenario.SplitLargeQuantity: Quantity_above_shop_limit_splits_without_reopening_or_rereading(); break;
-            case RunnerScenario.CapacityLoss: Capacity_loss_after_start_pauses_before_vendor_mutation(); break;
-            case RunnerScenario.ReloadReconciliation: Reload_reconciles_an_exact_armed_purchase_before_continuing(); break;
-            case RunnerScenario.IdentityDrift: Owner_or_queue_drift_pauses_before_any_external_action(); break;
-            case RunnerScenario.ArmedStopReconciliation: Purchase_is_persisted_as_verifying_before_the_callback_and_stop_reconciles_it(); break;
-            case RunnerScenario.UnreachableFailure: Unreachable_vendor_is_skipped_without_blocking_later_stops(); break;
-            case RunnerScenario.ApproachPolicy: Vendor_approach_requires_walking_before_interaction(); break;
-            default: throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
-        }
-    }
-
     [Fact]
-    public void Persisted_offer_preserves_an_aetheryte_plus_aethernet_route()
-    {
-        var offer = Offer(1) with
-        {
-            TravelRoutes = [new GilVendorTravelRoute(9, 17, 130)],
-        };
-
-        var restored = PersistedGilVendorOffer.From(offer).ToOffer();
-
-        Assert.Equal([new GilVendorTravelRoute(9, 17, 130)], restored.EffectiveTravelRoutes);
-    }
-
-    [Fact]
-    public void Aethernet_leg_waits_for_main_aetheryte_arrival()
-    {
-        Assert.Equal(
-            WorkshopVendorTravelLeg.AwaitAetheryteArrival,
-            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
-                currentTerritoryId: 129,
-                targetTerritoryId: 131,
-                routeAetheryteId: 9,
-                routeAethernetId: 3,
-                routeAetheryteTerritoryId: 130,
-                requestedAetheryteId: 9,
-                requestedAethernetId: null));
-        Assert.Equal(
-            WorkshopVendorTravelLeg.SubmitAethernet,
-            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
-                currentTerritoryId: 130,
-                targetTerritoryId: 131,
-                routeAetheryteId: 9,
-                routeAethernetId: 3,
-                routeAetheryteTerritoryId: 130,
-                requestedAetheryteId: 9,
-                requestedAethernetId: null));
-    }
-
-    [Fact]
-    public void Aethernet_route_without_arrival_territory_fails_closed()
-    {
-        Assert.Equal(
-            WorkshopVendorTravelLeg.InvalidRoute,
-            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
-                currentTerritoryId: 129,
-                targetTerritoryId: 131,
-                routeAetheryteId: 9,
-                routeAethernetId: 3,
-                routeAetheryteTerritoryId: null,
-                requestedAetheryteId: null,
-                requestedAethernetId: null));
-    }
-
-    [Fact]
-    public void Direct_aetheryte_route_waits_for_target_without_an_aethernet_gate()
-    {
-        Assert.Equal(
-            WorkshopVendorTravelLeg.SubmitAetheryte,
-            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
-                currentTerritoryId: 129,
-                targetTerritoryId: 131,
-                routeAetheryteId: 9,
-                routeAethernetId: null,
-                routeAetheryteTerritoryId: null,
-                requestedAetheryteId: null,
-                requestedAethernetId: null));
-        Assert.Equal(
-            WorkshopVendorTravelLeg.AwaitDestination,
-            DalamudWorkshopVendorRestockRuntime.DetermineTravelLeg(
-                currentTerritoryId: 129,
-                targetTerritoryId: 131,
-                routeAetheryteId: 9,
-                routeAethernetId: null,
-                routeAetheryteTerritoryId: null,
-                requestedAetheryteId: 9,
-                requestedAethernetId: null));
-    }
-
-    [Fact]
-    public void Pending_vendor_travel_waits_through_its_quest_ui_owner()
-    {
-        var readiness = new TravelReadinessResult(
-            TravelReadinessState.Blocked,
-            "UnknownUiOwner",
-            "A quest or NPC interaction still owns the game UI after owned surfaces were released.");
-
-        Assert.True(DalamudWorkshopVendorRestockRuntime.ShouldWaitForPendingTravelUi(readiness, true));
-        Assert.False(DalamudWorkshopVendorRestockRuntime.ShouldWaitForPendingTravelUi(readiness, false));
-        Assert.False(DalamudWorkshopVendorRestockRuntime.ShouldWaitForPendingTravelUi(
-            readiness with { Code = "InCombat" },
-            true));
-    }
-
-    private void Disabled_vendor_toggle_creates_no_vendor_authority()
+    public void Review_maps_workshop_quantity_gil_and_offer_ceilings_into_engine_plan()
     {
         var runtime = new FakeRuntime();
         var config = new Configuration();
-        var runner = new WorkshopVendorRestockRunner(config, runtime, () => { });
-        var review = Review(
-            Material(1, required: 10, player: 0, retainer: 4, vendor: 6),
-            [Stop(1)]);
-
-        Assert.True(runner.TryStart(review, Owner, false, out var error), error);
-        TickUntilTerminal(runner, review.QueueSignature, 10);
-
-        Assert.Equal(WorkshopVendorRestockPhase.Completed, runner.ActiveRun!.Phase);
-        Assert.Equal(0, runtime.ReachCalls);
-        Assert.Equal(0, runtime.ShopReadCalls);
-        Assert.Equal(0, runtime.SubmitCalls);
-    }
-
-    private void Same_vendor_lines_open_and_read_shop_once_and_commit_exact_receipts()
-    {
-        var runtime = new FakeRuntime();
-        runtime.Counts[1] = 0;
-        runtime.Counts[2] = 0;
-        var config = new Configuration();
-        var runner = new WorkshopVendorRestockRunner(config, runtime, () => { });
-        var review = Review(
-            [
-                Material(1, required: 3, player: 0, retainer: 0, vendor: 3),
-                Material(2, required: 2, player: 0, retainer: 0, vendor: 2),
-            ],
-            [Stop(1, 2)]);
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var primary = new WorkshopVendorCandidate(
+            Offer(1, 100),
+            new(GilVendorAccessState.Verified, "test", "Verified."));
+        var alternative = new WorkshopVendorCandidate(
+            Offer(1, 200),
+            new(GilVendorAccessState.Probeable, "test", "Probeable."));
+        var selected = new WorkshopMaterialProcurement(
+            Availability(1, required: 8, player: 2, retainer: 0),
+            0, 6, [primary, alternative], primary, false, true, 4);
+        var review = Review(selected, [Stop(selected)]);
 
         Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-        TickUntilTerminal(runner, review.QueueSignature, 30);
 
-        Assert.Equal(WorkshopVendorRestockPhase.Completed, runner.ActiveRun!.Phase);
-        Assert.Equal(1, runtime.ReachCalls);
-        Assert.Equal(1, runtime.ShopReadCalls);
-        Assert.Equal(2, runtime.SubmitCalls);
-        Assert.Equal(2, runner.ActiveRun.Receipts.Count);
-        Assert.Equal(5, runner.ActiveRun.Receipts.Sum(receipt => receipt.Quantity));
+        var run = runner.ActiveRun!;
+        var engineLine = Assert.Single(runtime.Config!.ActiveWorkshopVendorBuyRun!.Lines);
+        Assert.Equal(4, engineLine.ApprovedQuantity);
+        Assert.Equal(8, engineLine.TargetTotalQuantity);
+        Assert.Equal(40UL, engineLine.ApprovedGilCeiling);
+        Assert.Equal(10u, engineLine.UnitPriceGil);
+        Assert.Equal(100u, engineLine.Offer!.NpcId);
+        Assert.Equal(200u, Assert.Single(engineLine.AlternativeOffers).NpcId);
+        Assert.Equal(40UL, runtime.Config.ActiveWorkshopVendorBuyRun.MaximumApprovedGil);
+        Assert.Equal(4, Assert.Single(run.Lines).ApprovedVendorQuantity);
     }
 
-    private void Partial_quartermaster_result_never_expands_reviewed_vendor_ceiling()
+    [Fact]
+    public void Queue_signature_ignores_inventory_refresh_but_changes_with_requirements()
     {
-        var runtime = new FakeRuntime();
-        runtime.Counts[1] = 2;
-        runtime.QuartermasterInventoryDelta = 0;
-        var config = new Configuration();
-        var runner = new WorkshopVendorRestockRunner(config, runtime, () => { });
-        var material = Material(1, required: 20, player: 2, retainer: 3, vendor: 15);
-        var review = Review(material, [Stop(1)]);
-
-        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-        TickUntilTerminal(runner, review.QueueSignature, 30);
-
-        Assert.Equal(15, runner.ActiveRun!.Receipts.Sum(receipt => receipt.Quantity));
-        Assert.Equal(17, runtime.Counts[1]);
-        Assert.Equal("Ceiling reached", runner.ActiveRun.Lines[0].Status);
-    }
-
-    private void Ambiguous_inventory_and_gil_evidence_stops_without_retry()
-    {
-        var runtime = new FakeRuntime { MutateGilOnSubmit = false };
-        runtime.Counts[1] = 0;
-        var config = new Configuration();
-        var runner = new WorkshopVendorRestockRunner(config, runtime, () => { });
-        var review = Review(Material(1, required: 2, player: 0, retainer: 0, vendor: 2), [Stop(1)]);
-
-        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-        TickUntilTerminal(runner, review.QueueSignature, 15);
-
-        Assert.Equal(WorkshopVendorRestockPhase.Indeterminate, runner.ActiveRun!.Phase);
-        Assert.Equal(1, runtime.SubmitCalls);
-        Assert.Empty(runner.ActiveRun.Receipts);
-    }
-
-    private void Queue_signature_ignores_inventory_refresh_but_changes_with_requirements()
-    {
-        var planner = Planner();
-        var first = planner.Build(
-            [Availability(1, 10, 0, 2)],
-            new Dictionary<uint, int>(),
-            new HashSet<uint>(),
-            new HashSet<uint>());
-        var refreshed = planner.Build(
-            [Availability(1, 10, 7, 1)],
-            new Dictionary<uint, int>(),
-            new HashSet<uint>(),
-            new HashSet<uint>());
-        var changed = planner.Build(
-            [Availability(1, 11, 7, 1)],
-            new Dictionary<uint, int>(),
-            new HashSet<uint>(),
-            new HashSet<uint>());
+        var planner = new WorkshopVendorProcurementPlanner(
+            GilVendorCatalog.Create([Offer(1)]),
+            _ => new(GilVendorAccessState.Verified, "test", "Verified."),
+            _ => false);
+        var quantities = new Dictionary<uint, int>();
+        var included = new HashSet<uint>();
+        var excluded = new HashSet<uint>();
+        var first = planner.Build([Availability(1, 10, 0, 2)], quantities, included, excluded);
+        var refreshed = planner.Build([Availability(1, 10, 7, 1)], quantities, included, excluded);
+        var changed = planner.Build([Availability(1, 11, 7, 1)], quantities, included, excluded);
 
         Assert.Equal(first.QueueSignature, refreshed.QueueSignature);
         Assert.NotEqual(first.QueueSignature, changed.QueueSignature);
     }
 
-    private void Unavailable_stop_replans_to_a_reviewed_alternative_without_expanding_quantity()
-    {
-        var runtime = new FakeRuntime();
-        runtime.Counts[1] = 0;
-        runtime.ReachResults.Enqueue(new(WorkshopVendorReachState.Unavailable, "First vendor unavailable."));
-        runtime.ReachResults.Enqueue(new(WorkshopVendorReachState.ShopOpen, "Alternative shop open."));
-        var first = new WorkshopVendorCandidate(
-            Offer(1, 100),
-            new(GilVendorAccessState.Probeable, "test", "Probeable."));
-        var alternative = new WorkshopVendorCandidate(
-            Offer(1, 200),
-            new(GilVendorAccessState.Verified, "test", "Verified."));
-        var material = new WorkshopMaterialProcurement(
-            Availability(1, 4, 0, 0),
-            0,
-            4,
-            [first, alternative],
-            first,
-            false,
-            true,
-            4);
-        var review = Review(material, [new(100, 50, 129, "First Vendor", [material])]);
-        var runner = new WorkshopVendorRestockRunner(new Configuration(), runtime, () => { });
-
-        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-        TickUntilTerminal(runner, review.QueueSignature, 30);
-
-        Assert.Equal(WorkshopVendorRestockPhase.Completed, runner.ActiveRun!.Phase);
-        Assert.Equal(4, runner.ActiveRun.Receipts.Sum(receipt => receipt.Quantity));
-        Assert.Equal(200u, runner.ActiveRun.Lines[0].Offer!.NpcId);
-        Assert.Equal(2, runtime.ReachCalls);
-    }
-
-    private void Every_stop_line_is_validated_before_the_first_callback()
-    {
-        var runtime = new FakeRuntime
-        {
-            ShopRows = [new(0, 1, 10)],
-        };
-        var review = Review(
-            [
-                Material(1, required: 1, player: 0, retainer: 0, vendor: 1),
-                Material(2, required: 1, player: 0, retainer: 0, vendor: 1),
-            ],
-            [Stop(1, 2)]);
-        var runner = new WorkshopVendorRestockRunner(new Configuration(), runtime, () => { });
-
-        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-        TickUntilTerminal(runner, review.QueueSignature, 10);
-
-        Assert.Equal(WorkshopVendorRestockPhase.Failed, runner.ActiveRun!.Phase);
-        Assert.Equal(1, runtime.ShopReadCalls);
-        Assert.Equal(0, runtime.SubmitCalls);
-    }
-
-    private void Unreachable_vendor_is_skipped_without_blocking_later_stops()
-    {
-        var runtime = new FakeRuntime();
-        runtime.ReachResults.Enqueue(new(
-            WorkshopVendorReachState.Unavailable,
-            "The route timed out."));
-        runtime.ReachResults.Enqueue(new(
-            WorkshopVendorReachState.ShopOpen,
-            "Later shop opened."));
-        var first = Material(1, required: 1, player: 0, retainer: 0, vendor: 1);
-        var later = Material(2, required: 1, player: 0, retainer: 0, vendor: 1);
-        var review = Review([first, later], [Stop(1), Stop(2)]);
-        var runner = new WorkshopVendorRestockRunner(new Configuration(), runtime, () => { });
-
-        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-        TickUntilTerminal(runner, review.QueueSignature, 10);
-
-        Assert.Equal(WorkshopVendorRestockPhase.Completed, runner.ActiveRun!.Phase);
-        Assert.True(runner.ActiveRun.Lines.Single(line => line.ItemId == 1).VendorUnavailable);
-        Assert.Equal("No accessible vendor", runner.ActiveRun.Lines.Single(line => line.ItemId == 1).Status);
-        Assert.Equal([2u], runner.ActiveRun.Receipts.Select(receipt => receipt.ItemId));
-        Assert.Equal(2, runtime.ReachCalls);
-        Assert.Equal(1, runtime.SubmitCalls);
-    }
-
-    private static void Vendor_approach_requires_walking_before_interaction()
-    {
-        Assert.Equal(
-            WorkshopVendorApproachDecision.Interact,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(3.5f, true, true, false, false));
-        Assert.Equal(
-            WorkshopVendorApproachDecision.WaitForNpc,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(3.5f, false, true, false, false));
-        Assert.Equal(
-            WorkshopVendorApproachDecision.StartNavigation,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, true, false, false));
-        Assert.Equal(
-            WorkshopVendorApproachDecision.WaitForOwnedRoute,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, true, true, true));
-        Assert.Equal(
-            WorkshopVendorApproachDecision.BlockedByAnotherRoute,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, true, true, false));
-        Assert.Equal(
-            WorkshopVendorApproachDecision.NavigationUnavailable,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, false, false, false));
-    }
-
-    private void Quantity_above_shop_limit_splits_without_reopening_or_rereading()
-    {
-        var runtime = new FakeRuntime();
-        var review = Review(
-            Material(1, required: 120, player: 0, retainer: 0, vendor: 120),
-            [Stop(1)]);
-        var runner = new WorkshopVendorRestockRunner(new Configuration(), runtime, () => { });
-
-        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-        TickUntilTerminal(runner, review.QueueSignature, 20);
-
-        Assert.Equal([99, 21], runner.ActiveRun!.Receipts.Select(receipt => receipt.Quantity));
-        Assert.Equal(2, runtime.SubmitCalls);
-        Assert.Equal(1, runtime.ShopReadCalls);
-        Assert.Equal(1, runtime.ReachCalls);
-    }
-
-    private void Capacity_loss_after_start_pauses_before_vendor_mutation()
-    {
-        var runtime = new FakeRuntime();
-        runtime.CapacityResults.Enqueue(true);
-        runtime.CapacityResults.Enqueue(false);
-        var review = Review(
-            Material(1, required: 2, player: 0, retainer: 0, vendor: 2),
-            [Stop(1)]);
-        var runner = new WorkshopVendorRestockRunner(new Configuration(), runtime, () => { });
-
-        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-        runner.Tick(review.QueueSignature, Owner);
-
-        Assert.Equal(WorkshopVendorRestockPhase.Paused, runner.ActiveRun!.Phase);
-        Assert.Equal(0, runtime.SubmitCalls);
-    }
-
-    private void Reload_reconciles_an_exact_armed_purchase_before_continuing()
-    {
-        var offer = Offer(1);
-        var config = new Configuration
-        {
-            ActiveWorkshopVendorRestock = new PersistedWorkshopVendorRestockRun
-            {
-                RunId = "run",
-                LocalContentId = 10,
-                HomeWorldId = 20,
-                CharacterName = "Tester",
-                QueueSignature = "QUEUE",
-                AutomaticallyBuyVendorMaterials = true,
-                MaximumApprovedGil = 20,
-                Phase = WorkshopVendorRestockPhase.VerifyReceipt,
-                Lines =
-                [
-                    new()
-                    {
-                        ItemId = 1,
-                        ItemName = "Item 1",
-                        RequiredQuantity = 2,
-                        ApprovedVendorQuantity = 2,
-                        UnitPriceGil = 10,
-                        ApprovedGilCeiling = 20,
-                        Offer = PersistedGilVendorOffer.From(offer),
-                    },
-                ],
-                Stops =
-                [
-                    new()
-                    {
-                        NpcId = 100,
-                        ShopId = 50,
-                        TerritoryId = 129,
-                        NpcName = "Vendor",
-                        ItemIds = [1],
-                        ShopValidated = true,
-                        MatchedShopRows = new() { [1] = 0 },
-                    },
-                ],
-                ArmedPurchase = new()
-                {
-                    ItemId = 1,
-                    Quantity = 2,
-                    ExpectedGil = 20,
-                    ShopRowIndex = 0,
-                    BeforeItemCount = 0,
-                    BeforeGil = 1_000,
-                    ArmedAtUtc = DateTime.UtcNow,
-                },
-            },
-        };
-        var runtime = new FakeRuntime { Gil = 980 };
-        runtime.Counts[1] = 2;
-        var runner = new WorkshopVendorRestockRunner(config, runtime, () => { });
-
-        runner.Tick("QUEUE", Owner);
-
-        Assert.Single(runner.ActiveRun!.Receipts);
-        Assert.Null(runner.ActiveRun.ArmedPurchase);
-        Assert.Equal(WorkshopVendorRestockPhase.PurchaseLine, runner.ActiveRun.Phase);
-        Assert.Equal(0, runtime.SubmitCalls);
-    }
-
-    private void Owner_or_queue_drift_pauses_before_any_external_action()
-    {
-        var runtime = new FakeRuntime();
-        var review = Review(
-            Material(1, required: 2, player: 0, retainer: 0, vendor: 2),
-            [Stop(1)]);
-        var runner = new WorkshopVendorRestockRunner(new Configuration(), runtime, () => { });
-        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-
-        runner.Tick("DIFFERENT", Owner);
-
-        Assert.Equal(WorkshopVendorRestockPhase.Paused, runner.ActiveRun!.Phase);
-        Assert.Equal(0, runtime.ReachCalls);
-        Assert.Equal(0, runtime.SubmitCalls);
-    }
-
-    private void Purchase_is_persisted_as_verifying_before_the_callback_and_stop_reconciles_it()
+    [Fact]
+    public void Coordinator_messages_are_projected_in_workshop_wording()
     {
         var runtime = new FakeRuntime();
         var config = new Configuration();
-        runtime.OnSubmit = () =>
-        {
-            Assert.Equal(
-                WorkshopVendorRestockPhase.VerifyReceipt,
-                config.ActiveWorkshopVendorRestock!.Phase);
-            Assert.NotNull(config.ActiveWorkshopVendorRestock.ArmedPurchase);
-        };
-        var review = Review(
-            Material(1, required: 2, player: 0, retainer: 0, vendor: 2),
-            [Stop(1)]);
-        var runner = new WorkshopVendorRestockRunner(config, runtime, () => { });
-        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
-        while (runner.ActiveRun!.Phase != WorkshopVendorRestockPhase.VerifyReceipt)
-            runner.Tick(review.QueueSignature, Owner);
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 2, player: 0, retainer: 0, vendor: 2);
+        var review = Review(material, [Stop(material)]);
 
-        Assert.True(runner.Stop());
-        Assert.True(runner.ActiveRun.StopRequested);
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        Assert.Equal("Workshop restock started.", runner.ActiveRun!.Message);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
         runner.Tick(review.QueueSignature, Owner);
 
-        Assert.Equal(WorkshopVendorRestockPhase.Stopped, runner.ActiveRun.Phase);
-        Assert.Single(runner.ActiveRun.Receipts);
-        Assert.Null(runner.ActiveRun.ArmedPurchase);
+        Assert.Equal("Validated 1 material line(s) at Vendor 100.", runner.ActiveRun!.Message);
     }
 
-    private static void TickUntilTerminal(
-        WorkshopVendorRestockRunner runner,
-        string signature,
-        int maximumTicks)
+    [Fact]
+    public void Coordinator_precondition_failure_uses_reviewed_workshop_wording()
     {
-        for (var index = 0; index < maximumTicks && runner.IsRunning; index++)
-            runner.Tick(signature, Owner);
-        Assert.False(runner.IsRunning);
+        var runtime = new FakeRuntime();
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 2, player: 0, retainer: 0, vendor: 2);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        runtime.Gil = 0;
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal(
+            "Remaining reviewed purchases require up to 20 gil, but only 0 gil is available.",
+            runner.ActiveRun!.Message);
     }
 
-    private static WorkshopVendorProcurementPlanner Planner() => new(
-        GilVendorCatalog.Create([Offer(1), Offer(2)]),
-        _ => new(GilVendorAccessState.Verified, "test", "Verified for test."),
-        _ => false);
+    [Fact]
+    public void Coordinator_start_failure_uses_reviewed_vendor_plan_wording()
+    {
+        var runtime = new FakeRuntime();
+        runtime.CaptureGils.Enqueue(100);
+        runtime.CaptureGils.Enqueue(100);
+        runtime.CaptureGils.Enqueue(0);
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 2, player: 0, retainer: 0, vendor: 2);
+
+        Assert.False(runner.TryStart(Review(material, [Stop(material)]), Owner, true, out var error));
+        Assert.Equal("The reviewed vendor plan requires up to 20 gil, but only 0 gil is available.", error);
+    }
+
+    [Fact]
+    public void Coordinator_fallback_message_continues_the_restock_plan()
+    {
+        var runtime = new FakeRuntime();
+        runtime.ReachResults.Enqueue(new(GilVendorReachState.Unavailable, "Vendor unavailable."));
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 2, player: 0, retainer: 0, vendor: 2);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal(
+            "Skipped Item 1 because no reviewed accessible vendor remains; continuing the restock plan.",
+            runner.ActiveRun!.Message);
+    }
+
+    [Fact]
+    public void Workshop_target_buys_full_approved_delta_against_existing_stock()
+    {
+        var runtime = new FakeRuntime();
+        runtime.Counts[1] = 4;
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 10, player: 4, retainer: 0, vendor: 6);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        Assert.Equal(10, Assert.Single(config.ActiveWorkshopVendorBuyRun!.Lines).TargetTotalQuantity);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal([6], runtime.SubmittedQuantities);
+    }
+
+    [Fact]
+    public void Mid_run_stock_gain_reduces_later_workshop_batch()
+    {
+        var runtime = new FakeRuntime { MaximumBatch = 3 };
+        runtime.Counts[1] = 4;
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 10, player: 4, retainer: 0, vendor: 6);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner); // buy 3: observed 4 -> 7
+        runner.Tick(review.QueueSignature, Owner); // verify first receipt
+        runtime.Counts[1] += 2; // unrelated stock gain: observed 7 -> 9
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal([3, 1], runtime.SubmittedQuantities);
+    }
+
+    [Fact]
+    public void Partial_quartermaster_result_never_expands_reviewed_vendor_ceiling()
+    {
+        var runtime = new FakeRuntime();
+        runtime.Counts[1] = 2;
+        var quartermaster = new FakeQuartermaster
+        {
+            Progress = new(WorkshopQuartermasterProgressState.PartiallySucceeded, "Quartermaster finished partially."),
+        };
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, quartermaster, () => { });
+        var material = Material(1, required: 20, player: 2, retainer: 3, vendor: 15);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        runner.Tick(review.QueueSignature, Owner); // submit Quartermaster request
+        runner.Tick(review.QueueSignature, Owner); // observe partial terminal result
+        runner.Tick(review.QueueSignature, Owner); // refresh inventory and start engine
+
+        Assert.Equal(15, Assert.Single(config.ActiveWorkshopVendorBuyRun!.Lines).ApprovedQuantity);
+        Assert.Equal(150UL, Assert.Single(config.ActiveWorkshopVendorBuyRun.Lines).ApprovedGilCeiling);
+    }
+
+    [Fact]
+    public void Partial_quartermaster_stock_uses_live_need_for_post_retrieval_gil_and_capacity_preflight()
+    {
+        var runtime = new FakeRuntime();
+        runtime.Counts[1] = 1;
+        runtime.CaptureGils.Enqueue(60);
+        runtime.CaptureGils.Enqueue(30);
+        runtime.CaptureGils.Enqueue(30);
+        var quartermaster = new FakeQuartermaster
+        {
+            Progress = new(WorkshopQuartermasterProgressState.PartiallySucceeded, "Quartermaster finished partially."),
+        };
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, quartermaster, () => { });
+        var material = Material(1, required: 10, player: 1, retainer: 3, vendor: 6);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        runner.Tick(review.QueueSignature, Owner);
+        runtime.Counts[1] = 7;
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.True(runner.IsRunning);
+        Assert.Equal(GilVendorBuyPhase.RefreshPreconditions, config.ActiveWorkshopVendorBuyRun!.Phase);
+        Assert.Equal([6, 3, 3], runtime.CapacityRequests.Select(request => request[1]));
+        Assert.Equal(60UL, config.ActiveWorkshopVendorBuyRun.MaximumApprovedGil);
+        Assert.Equal(60UL, Assert.Single(config.ActiveWorkshopVendorBuyRun.Lines).ApprovedGilCeiling);
+    }
+
+    [Fact]
+    public void Disabled_vendor_toggle_creates_no_vendor_engine_authority()
+    {
+        var runtime = new FakeRuntime();
+        var quartermaster = new FakeQuartermaster
+        {
+            Progress = new(WorkshopQuartermasterProgressState.Completed, "Quartermaster complete."),
+        };
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, quartermaster, () => { });
+        var material = Material(1, required: 10, player: 0, retainer: 4, vendor: 6);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, false, out var error), error);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal(WorkshopVendorRestockPhase.Completed, runner.ActiveRun!.Phase);
+        Assert.Null(config.ActiveWorkshopVendorBuyRun);
+        Assert.Equal(0, runtime.SubmitCalls);
+    }
+
+    [Theory]
+    [InlineData(WorkshopQuartermasterProgressState.Failed, WorkshopVendorRestockPhase.Failed)]
+    [InlineData(WorkshopQuartermasterProgressState.Indeterminate, WorkshopVendorRestockPhase.Indeterminate)]
+    public void Quartermaster_terminal_failures_remain_workshop_terminal_states(
+        WorkshopQuartermasterProgressState progress,
+        WorkshopVendorRestockPhase expected)
+    {
+        var runtime = new FakeRuntime();
+        var quartermaster = new FakeQuartermaster { Progress = new(progress, "Quartermaster terminal result.") };
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, quartermaster, () => { });
+        var material = Material(1, required: 10, player: 0, retainer: 4, vendor: 0);
+        var review = Review(material, []);
+
+        Assert.True(runner.TryStart(review, Owner, false, out var error), error);
+        runner.Tick(review.QueueSignature, Owner);
+        runner.Tick(review.QueueSignature, Owner);
+
+        Assert.Equal(expected, runner.ActiveRun!.Phase);
+    }
+
+    [Fact]
+    public void Owner_and_queue_context_signature_pauses_and_refuses_mismatched_resume()
+    {
+        var runtime = new FakeRuntime();
+        var config = new Configuration();
+        runtime.Config = config;
+        var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+        var material = Material(1, required: 2, player: 0, retainer: 0, vendor: 2);
+        var review = Review(material, [Stop(material)]);
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        Assert.Equal("10|20|QUEUE", config.ActiveWorkshopVendorBuyRun!.ContextSignature);
+        runner.Tick("DIFFERENT", Owner);
+
+        Assert.Equal(WorkshopVendorRestockPhase.Paused, runner.ActiveRun!.Phase);
+        Assert.False(runner.Resume(new(11, 20, "Other", "World"), review.QueueSignature, out _));
+        Assert.False(runner.Resume(Owner, "DIFFERENT", out _));
+        Assert.True(runner.Resume(Owner, review.QueueSignature, out error), error);
+    }
+
+    [Fact]
+    public void Legacy_armed_purchase_converts_once_and_reconciles_through_coordinator_evidence_drain()
+    {
+        var legacyJson = JsonConvert.SerializeObject(new
+        {
+            ActiveWorkshopVendorRestock = LegacyArmedConfiguration().LegacyActiveWorkshopVendorRestock,
+        });
+        var config = JsonConvert.DeserializeObject<Configuration>(legacyJson)!;
+        var runtime = new FakeRuntime { Config = config, Gil = 980 };
+        runtime.Counts[1] = 2;
+        var logs = new List<string>();
+
+        using (var convertingRunner = new WorkshopVendorRestockRunner(
+                   config, runtime, new FakeQuartermaster(), () => { }, logs.Add))
+        {
+            Assert.Null(config.LegacyActiveWorkshopVendorRestock);
+            Assert.Equal(1, config.WorkshopVendorRestockLegacyConversions);
+            Assert.NotNull(config.ActiveWorkshopVendorBuyRun!.ArmedPurchase);
+            Assert.Equal(2, Assert.Single(config.ActiveWorkshopVendorBuyRun.Lines).TargetTotalQuantity);
+        }
+
+        var roundTripped = JsonConvert.DeserializeObject<Configuration>(JsonConvert.SerializeObject(config))!;
+        runtime.Config = roundTripped;
+        using var reloaded = new WorkshopVendorRestockRunner(roundTripped, runtime, new FakeQuartermaster(), () => { }, logs.Add);
+        reloaded.Tick("QUEUE", Owner);
+
+        Assert.Equal(1, roundTripped.WorkshopVendorRestockLegacyConversions);
+        Assert.Single(logs);
+        Assert.Single(roundTripped.ActiveWorkshopVendorBuyRun!.Receipts);
+        Assert.Null(roundTripped.ActiveWorkshopVendorBuyRun.ArmedPurchase);
+        Assert.Equal(GilVendorBuyPhase.PurchaseLine, roundTripped.ActiveWorkshopVendorBuyRun.Phase);
+        Assert.Equal(0, runtime.SubmitCalls);
+    }
+
+    [Fact]
+    public void Legacy_conversion_save_failure_retains_old_authority_and_later_retry_converts_once()
+    {
+        var config = LegacyArmedConfiguration();
+        var runtime = new FakeRuntime { Config = config };
+        var saveAttempts = 0;
+
+        Assert.Throws<InvalidOperationException>(() => new WorkshopVendorRestockRunner(
+            config,
+            runtime,
+            new FakeQuartermaster(),
+            () =>
+            {
+                saveAttempts++;
+                throw new InvalidOperationException("Synthetic save failure.");
+            }));
+
+        Assert.NotNull(config.LegacyActiveWorkshopVendorRestock);
+        Assert.Null(config.ActiveWorkshopVendorRestockState);
+        Assert.Null(config.ActiveWorkshopVendorBuyRun);
+        Assert.Equal(0, config.WorkshopVendorRestockLegacyConversions);
+
+        using var retried = new WorkshopVendorRestockRunner(
+            config,
+            runtime,
+            new FakeQuartermaster(),
+            () => saveAttempts++);
+
+        Assert.Null(config.LegacyActiveWorkshopVendorRestock);
+        Assert.NotNull(config.ActiveWorkshopVendorBuyRun);
+        Assert.Equal(1, config.WorkshopVendorRestockLegacyConversions);
+        Assert.Equal(2, saveAttempts);
+    }
+
+    [Fact]
+    public void Throwing_conversion_diagnostic_cannot_leave_legacy_authority_for_double_conversion()
+    {
+        var config = LegacyArmedConfiguration();
+        var runtime = new FakeRuntime { Config = config };
+        var saveAttempts = 0;
+
+        Assert.Throws<InvalidOperationException>(() => new WorkshopVendorRestockRunner(
+            config,
+            runtime,
+            new FakeQuartermaster(),
+            () => saveAttempts++,
+            _ => throw new InvalidOperationException("Synthetic diagnostic failure.")));
+
+        Assert.Null(config.LegacyActiveWorkshopVendorRestock);
+        Assert.Equal(1, config.WorkshopVendorRestockLegacyConversions);
+        using var retried = new WorkshopVendorRestockRunner(
+            config,
+            runtime,
+            new FakeQuartermaster(),
+            () => saveAttempts++);
+        Assert.Equal(1, config.WorkshopVendorRestockLegacyConversions);
+        Assert.Equal(1, saveAttempts);
+    }
+
+    private static Configuration LegacyArmedConfiguration() => new()
+    {
+        LegacyActiveWorkshopVendorRestock = new PersistedWorkshopVendorRestockRun
+        {
+            RunId = "legacy-run",
+            LocalContentId = 10,
+            HomeWorldId = 20,
+            CharacterName = "Tester",
+            QueueSignature = "QUEUE",
+            AutomaticallyBuyVendorMaterials = true,
+            MaximumApprovedGil = 20,
+            Phase = WorkshopVendorRestockPhase.VerifyReceipt,
+            ResumePhase = WorkshopVendorRestockPhase.PurchaseLine,
+            StartedAtUtc = DateTime.UtcNow.AddMinutes(-1),
+            UpdatedAtUtc = DateTime.UtcNow,
+            Lines =
+            [
+                new()
+                {
+                    ItemId = 1,
+                    ItemName = "Item 1",
+                    RequiredQuantity = 2,
+                    ApprovedVendorQuantity = 2,
+                    UnitPriceGil = 10,
+                    ApprovedGilCeiling = 20,
+                    Offer = LegacyOffer(Offer(1)),
+                },
+            ],
+            Stops =
+            [
+                new()
+                {
+                    NpcId = 100,
+                    ShopId = 50,
+                    TerritoryId = 129,
+                    NpcName = "Vendor 100",
+                    ItemIds = [1],
+                    ShopValidated = true,
+                    MatchedShopRows = new() { [1] = 0 },
+                },
+            ],
+            ArmedPurchase = new()
+            {
+                ItemId = 1,
+                Quantity = 2,
+                ExpectedGil = 20,
+                ShopRowIndex = 0,
+                BeforeItemCount = 0,
+                BeforeGil = 1_000,
+                ArmedAtUtc = DateTime.UtcNow,
+            },
+        },
+    };
+
+    private static PersistedGilVendorOffer LegacyOffer(GilVendorOffer offer) => new()
+    {
+        ItemId = offer.ItemId,
+        ItemName = offer.ItemName,
+        IconId = offer.IconId,
+        UnitPriceGil = offer.UnitPriceGil,
+        ShopId = offer.ShopId,
+        ShopRowIndex = offer.ShopRowIndex,
+        NpcId = offer.NpcId,
+        NpcName = offer.NpcName,
+        TerritoryId = offer.TerritoryId,
+        PositionX = offer.Position.X,
+        PositionY = offer.Position.Y,
+        PositionZ = offer.Position.Z,
+        RouteAetheryteIds = [.. offer.RouteAetheryteIds],
+    };
 
     private static WorkshopVendorRestockReview Review(
         WorkshopMaterialProcurement material,
-        IReadOnlyList<WorkshopVendorStopReview> stops) =>
-        Review([material], stops);
+        IReadOnlyList<WorkshopVendorStopReview> stops) => new("QUEUE", [material], stops);
 
-    private static WorkshopVendorRestockReview Review(
-        IReadOnlyList<WorkshopMaterialProcurement> materials,
-        IReadOnlyList<WorkshopVendorStopReview> stops) =>
-        new("QUEUE", materials, stops);
-
-    private static WorkshopMaterialProcurement Material(
-        uint itemId,
-        int required,
-        int player,
-        int retainer,
-        int vendor)
+    private static WorkshopMaterialProcurement Material(uint itemId, int required, int player, int retainer, int vendor)
     {
-        var availability = Availability(itemId, required, player, retainer);
         var candidate = new WorkshopVendorCandidate(
             Offer(itemId),
-            new(GilVendorAccessState.Verified, "test", "Verified for test."));
+            new(GilVendorAccessState.Verified, "test", "Verified."));
         return new(
-            availability,
+            Availability(itemId, required, player, retainer),
             retainer,
             vendor,
             [candidate],
@@ -532,150 +484,72 @@ public sealed class WorkshopVendorRestockRunnerTests
             vendor);
     }
 
-    private static WorkshopVendorStopReview Stop(params uint[] itemIds) =>
-        new(
-            100,
-            50,
-            129,
-            "Shared Vendor",
-            itemIds.Select(itemId => Material(itemId, 10, 0, 0, 10)).ToArray());
+    private static WorkshopVendorStopReview Stop(WorkshopMaterialProcurement material) =>
+        new(100, 50, 129, "Vendor 100", [material]);
 
-    private static WorkshopMaterialAvailability Availability(
-        uint itemId,
-        int required,
-        int player,
-        int retainer)
+    private static WorkshopMaterialAvailability Availability(uint itemId, int required, int player, int retainer)
     {
         var shortage = Math.Max(0, required - player);
-        return new(
-            itemId,
-            $"Item {itemId}",
-            1,
-            required,
-            player,
-            retainer,
-            shortage,
-            Math.Max(0, shortage - retainer),
-            []);
+        return new(itemId, $"Item {itemId}", 1, required, player, retainer, shortage,
+            Math.Max(0, shortage - retainer), []);
     }
 
-    private static GilVendorOffer Offer(uint itemId, uint npcId = 100) =>
-        new(
-            itemId,
-            $"Item {itemId}",
-            1,
-            itemId == 1 ? 10u : 20u,
-            50,
-            itemId - 1,
-            npcId,
-            $"Vendor {npcId}",
-            129,
-            new Vector3(1, 2, 3),
-            [2]);
+    private static GilVendorOffer Offer(uint itemId, uint npcId = 100) => new(
+        itemId, $"Item {itemId}", 1, 10, 50, 0, npcId, $"Vendor {npcId}", 129,
+        new Vector3(1, 2, 3), [2]);
 
-    private sealed class FakeRuntime : IWorkshopVendorRestockRuntime
+    private sealed class FakeQuartermaster : IWorkshopQuartermasterRestockService
     {
+        public string LastStatus { get; private set; } = "Quartermaster ready.";
+        public WorkshopQuartermasterProgress Progress { get; set; } =
+            new(WorkshopQuartermasterProgressState.Running, "Quartermaster running.");
+        public bool Submit(QuartermasterOwnerScope owner, IReadOnlyList<WorkshopMaterialAvailability> availability) => true;
+        public WorkshopQuartermasterProgress GetProgress(QuartermasterOwnerScope owner) => Progress;
+    }
+
+    private sealed class FakeRuntime : IGilVendorBuyRuntime
+    {
+        public Configuration? Config { get; set; }
         public Dictionary<uint, int> Counts { get; } = [];
         public ulong Gil { get; set; } = 1_000_000;
-        public int ReachCalls { get; private set; }
-        public int ShopReadCalls { get; private set; }
         public int SubmitCalls { get; private set; }
-        public int QuartermasterInventoryDelta { get; set; }
-        public bool MutateGilOnSubmit { get; set; } = true;
-        public Queue<WorkshopVendorReachResult> ReachResults { get; } = [];
-        public Queue<bool> CapacityResults { get; } = [];
-        public IReadOnlyList<GilVendorShopRow> ShopRows { get; set; } =
-        [
-            new(0, 1, 10),
-            new(1, 2, 20),
-        ];
-        public Action? OnSubmit { get; set; }
+        public int MaximumBatch { get; set; } = 99;
+        public List<int> SubmittedQuantities { get; } = [];
+        public Queue<ulong> CaptureGils { get; } = [];
+        public Queue<GilVendorReachResult> ReachResults { get; } = [];
+        public List<IReadOnlyDictionary<uint, int>> CapacityRequests { get; } = [];
 
-        public WorkshopVendorInventorySnapshot CaptureInventory(IReadOnlyCollection<uint> itemIds) =>
+        public GilVendorInventorySnapshot CaptureInventory(IReadOnlyCollection<uint> itemIds) =>
             new(
                 true,
-                Gil,
-                itemIds.ToDictionary(itemId => itemId, itemId => Counts.GetValueOrDefault(itemId)),
+                CaptureGils.Count > 0 ? CaptureGils.Dequeue() : Gil,
+                itemIds.ToDictionary(id => id, id => Counts.GetValueOrDefault(id)),
                 "Inventory ready.");
-
         public bool HasCapacity(IReadOnlyDictionary<uint, int> quantities, out string message)
         {
-            var result = CapacityResults.Count == 0 || CapacityResults.Dequeue();
-            message = result ? "Capacity ready." : "Player inventory has no safe capacity.";
-            return result;
-        }
-
-        public bool TryStartQuartermaster(
-            QuartermasterOwnerScope owner,
-            IReadOnlyList<WorkshopMaterialAvailability> availability,
-            out string error)
-        {
-            foreach (var line in availability)
-                Counts[line.ItemId] = Counts.GetValueOrDefault(line.ItemId) + QuartermasterInventoryDelta;
-            error = string.Empty;
+            CapacityRequests.Add(new Dictionary<uint, int>(quantities));
+            message = "Capacity ready.";
             return true;
         }
-
-        public WorkshopQuartermasterProgress GetQuartermasterProgress(QuartermasterOwnerScope owner) =>
-            new(WorkshopQuartermasterProgressState.PartiallySucceeded, "Quartermaster finished.");
-
-        public WorkshopVendorReachResult AdvanceToOpenShop(GilVendorOffer offer)
-        {
-            ReachCalls++;
-            return ReachResults.Count > 0
+        public GilVendorReachResult AdvanceToOpenShop(GilVendorOffer offer) =>
+            ReachResults.Count > 0
                 ? ReachResults.Dequeue()
-                : new(WorkshopVendorReachState.ShopOpen, "Shop open.");
-        }
-
-        public void ResetVendorApproach()
-        {
-        }
-
-        public GilVendorShopReadResult ReadShopRows()
-        {
-            ShopReadCalls++;
-            return GilVendorShopReadResult.Success(ShopRows);
-        }
-
+                : new(GilVendorReachState.ShopOpen, "Shop open.");
+        public void ResetVendorApproach() { }
+        public GilVendorShopReadResult ReadShopRows() => GilVendorShopReadResult.Success([new(0, 1, 10)]);
         public bool TrySubmitPurchase(GilVendorShopRow row, uint quantity, out string error)
         {
             SubmitCalls++;
-            OnSubmit?.Invoke();
+            SubmittedQuantities.Add(checked((int)quantity));
             Counts[row.ItemId] = checked(Counts.GetValueOrDefault(row.ItemId) + (int)quantity);
-            if (MutateGilOnSubmit)
-                Gil -= row.UnitPriceGil * quantity;
+            Gil -= row.UnitPriceGil * quantity;
             error = string.Empty;
             return true;
         }
-
         public bool TryConfirmPurchasePrompt() => false;
-        public int ResolveMaximumBatch(uint itemId) => 99;
-        public void CloseShop()
-        {
-        }
-        public void BeginAutomation()
-        {
-        }
-        public void EndAutomation()
-        {
-        }
-    }
-
-    public enum RunnerScenario
-    {
-        DisabledToggle,
-        SameVendorBatch,
-        PartialQuartermaster,
-        AmbiguousEvidence,
-        StableQueueSignature,
-        AlternativeVendor,
-        AtomicShopValidation,
-        SplitLargeQuantity,
-        CapacityLoss,
-        ReloadReconciliation,
-        IdentityDrift,
-        ArmedStopReconciliation,
-        UnreachableFailure,
-        ApproachPolicy,
+        public int ResolveMaximumBatch(uint itemId) => MaximumBatch;
+        public void CloseShop() { }
+        public void BeginAutomation() { }
+        public void EndAutomation() { }
     }
 }
