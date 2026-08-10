@@ -95,6 +95,7 @@ internal interface IHeadlessMarketBoardBrowseRuntime : IMarketBoardBrowseRuntime
 
 internal sealed class MarketBoardBrowseOperationGate
 {
+    private const uint RateLimitStatus = 0x70000002;
     private const int ListingsPerPage = 10;
     private const int MaximumListings = 100;
 
@@ -294,8 +295,10 @@ internal sealed class MarketBoardBrowseOperationGate
                     HeaderStatus = status,
                 };
                 Fail(
-                    "ServerStatusRejected",
-                    $"The market-board server rejected the browse with status 0x{status:X8}.");
+                    status == RateLimitStatus ? "MarketBoardRateLimited" : "ServerStatusRejected",
+                    status == RateLimitStatus
+                        ? "The market-board server asked MMF to wait before searching again (status 0x70000002)."
+                        : $"The market-board server rejected the browse with status 0x{status:X8}.");
                 return;
             }
 

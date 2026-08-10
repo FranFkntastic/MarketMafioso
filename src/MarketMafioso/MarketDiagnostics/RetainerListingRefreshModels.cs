@@ -47,6 +47,7 @@ public sealed class PersistedRetainerListingRefreshItem
     public string? ItemName { get; set; }
     public RetainerListingRefreshItemState State { get; set; } = RetainerListingRefreshItemState.Deferred;
     public int Attempts { get; set; }
+    public int RateLimitFailures { get; set; }
     public DateTime? NextAttemptAtUtc { get; set; }
     public DateTime? LastAttemptAtUtc { get; set; }
     public string? OperationId { get; set; }

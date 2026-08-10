@@ -154,6 +154,86 @@ public sealed class RetainerListingRefreshCoordinatorTests
     }
 
     [Fact]
+    public void Rate_limit_retries_same_item_with_shared_cmb_backoff()
+    {
+        var source = new FakeSource(new RetainerListingRefreshCandidate[]
+        {
+            new(100, "Iron Ore"),
+            new(200, "Cobalt Ore"),
+        });
+        var runtime = new FakeRuntime();
+        var config = CreateConfig();
+        var coordinator = CreateCoordinator(config, source, runtime);
+
+        coordinator.Tick(Start, true);
+        runtime.Fail("MarketBoardRateLimited", "The market board asked MMF to wait.");
+        coordinator.Tick(Start.AddSeconds(1), true);
+
+        var limited = Assert.Single(config.RetainerListingRefresh.Items, item => item.ItemId == 100);
+        Assert.Equal(RetainerListingRefreshItemState.Deferred, limited.State);
+        Assert.Equal(1, limited.RateLimitFailures);
+        Assert.Equal(Start.AddSeconds(6).UtcDateTime, limited.NextAttemptAtUtc);
+        Assert.False(config.RetainerListingRefresh.NeedsAttention);
+
+        coordinator.Tick(Start.AddSeconds(5), true);
+        Assert.Equal([100u], runtime.RequestedItems);
+        coordinator.Tick(Start.AddSeconds(6), true);
+        Assert.Equal([100u, 100u], runtime.RequestedItems);
+
+        runtime.Fail("MarketBoardRateLimited", "The market board asked MMF to wait.");
+        coordinator.Tick(Start.AddSeconds(7), true);
+        Assert.Equal(Start.AddSeconds(22).UtcDateTime, limited.NextAttemptAtUtc);
+        coordinator.Tick(Start.AddSeconds(21), true);
+        Assert.Equal([100u, 100u], runtime.RequestedItems);
+        coordinator.Tick(Start.AddSeconds(22), true);
+        Assert.Equal([100u, 100u, 100u], runtime.RequestedItems);
+
+        runtime.Fail("MarketBoardRateLimited", "The market board asked MMF to wait.");
+        coordinator.Tick(Start.AddSeconds(23), true);
+        Assert.Equal(Start.AddSeconds(53).UtcDateTime, limited.NextAttemptAtUtc);
+        Assert.DoesNotContain(200u, runtime.RequestedItems);
+
+        coordinator.Tick(Start.AddSeconds(53), true);
+        Assert.Equal([100u, 100u, 100u, 100u], runtime.RequestedItems);
+        runtime.Fail("MarketBoardRateLimited", "The market board asked MMF to wait.");
+        coordinator.Tick(Start.AddSeconds(54), true);
+        Assert.Equal(RetainerListingRefreshItemState.Deferred, limited.State);
+        Assert.Equal(4, limited.RateLimitFailures);
+        Assert.Equal(Start.AddSeconds(84).UtcDateTime, limited.NextAttemptAtUtc);
+        Assert.False(config.RetainerListingRefresh.NeedsAttention);
+    }
+
+    [Fact]
+    public void Legacy_rate_limit_block_is_recovered_automatically()
+    {
+        var config = CreateConfig();
+        config.RetainerListingRefresh.NeedsAttention = true;
+        config.RetainerListingRefresh.Items =
+        [
+            new PersistedRetainerListingRefreshItem
+            {
+                ItemId = 100,
+                ItemName = "Iron Ore",
+                State = RetainerListingRefreshItemState.Blocked,
+                Attempts = 2,
+                LastCode = "ServerStatusRejected",
+                LastMessage = "The market-board server rejected the browse with status 0x70000002.",
+                AttentionNotified = true,
+            },
+        ];
+
+        _ = CreateCoordinator(config, new FakeSource("Quartermaster unavailable."), new FakeRuntime());
+
+        var recovered = Assert.Single(config.RetainerListingRefresh.Items);
+        Assert.Equal(RetainerListingRefreshItemState.Deferred, recovered.State);
+        Assert.Equal(2, recovered.RateLimitFailures);
+        Assert.NotNull(recovered.NextAttemptAtUtc);
+        Assert.Equal("RecoveredRateLimit", recovered.LastCode);
+        Assert.False(config.RetainerListingRefresh.NeedsAttention);
+        Assert.False(recovered.AttentionNotified);
+    }
+
+    [Fact]
     public void Missing_capture_stays_quiet_and_sends_nothing()
     {
         var source = new FakeSource("Quartermaster unavailable.");
