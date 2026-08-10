@@ -159,6 +159,33 @@ internal sealed class RetainerListingRefreshCoordinator
     public void NotifyListingCaptureChanged() =>
         System.Threading.Interlocked.Exchange(ref captureReadRequested, 1);
 
+    public bool ForceRetry(uint itemId, DateTimeOffset? nowUtc = null)
+    {
+        var state = config.RetainerListingRefresh;
+        var item = state.Items.FirstOrDefault(candidate =>
+            candidate.ItemId == itemId &&
+            candidate.State == RetainerListingRefreshItemState.Blocked);
+        if (item is null)
+            return false;
+
+        item.State = RetainerListingRefreshItemState.Deferred;
+        item.NextAttemptAtUtc = (nowUtc ?? DateTimeOffset.UtcNow).UtcDateTime;
+        item.OperationId = null;
+        item.AttentionNotified = false;
+
+        var remainingBlocked = state.Items.Count(candidate =>
+            candidate.State == RetainerListingRefreshItemState.Blocked);
+        state.NeedsAttention = remainingBlocked > 0;
+        state.AttentionNotified = false;
+        UpdateStatus(
+            remainingBlocked > 0 ? "Blocked" : "Queued",
+            remainingBlocked > 0
+                ? $"Queued a force retry for {FormatItem(item)}; {remainingBlocked} other item(s) remain blocked."
+                : $"Queued a force retry for {FormatItem(item)}.",
+            persistState: true);
+        return true;
+    }
+
     private void ObserveLatestCapture(DateTimeOffset nowUtc)
     {
         if (System.Threading.Volatile.Read(ref captureReadRequested) == 0 && nowUtc < nextCaptureReadAt)

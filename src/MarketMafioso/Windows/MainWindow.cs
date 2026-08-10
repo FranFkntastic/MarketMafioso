@@ -128,6 +128,7 @@ public class MainWindow : Window, IDisposable
         IPlayerState playerState,
         MarketBoardApproachService marketBoardApproachService,
         IMarketBoardBrowseRuntime marketBoardBrowseRuntime,
+        Func<uint, bool> forceRetryRetainerListingRefresh,
         string marketAcquisitionRouteDiagnosticsDirectory,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
@@ -510,6 +511,7 @@ public class MainWindow : Window, IDisposable
             reporter,
             log,
             () => _ = routeEngine.Stop(),
+            forceRetryRetainerListingRefresh,
             Plugin.Instance.RestartTimer,
             AgentReviewRegistry);
 

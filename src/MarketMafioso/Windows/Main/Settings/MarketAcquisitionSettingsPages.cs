@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Settings;
 using MarketMafioso.MarketAcquisition;
 
@@ -10,10 +11,18 @@ namespace MarketMafioso.Windows.Main.Settings;
 internal sealed class MarketAcquisitionSettingsPages
 {
     private readonly Configuration config;
+    private readonly Func<uint, bool> forceRetryRetainerListingRefresh;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
-    public MarketAcquisitionSettingsPages(Configuration config)
+    public MarketAcquisitionSettingsPages(
+        Configuration config,
+        Func<uint, bool> forceRetryRetainerListingRefresh,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
+        this.forceRetryRetainerListingRefresh = forceRetryRetainerListingRefresh
+            ?? throw new ArgumentNullException(nameof(forceRetryRetainerListingRefresh));
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         Descriptors =
         [
             new("market.operation", "Market Acquisition / Operation", DrawOperation, 30, IsUnlocked,
@@ -45,10 +54,16 @@ internal sealed class MarketAcquisitionSettingsPages
                 refresh.StatusMessage);
             if (refresh.Items.Count > 0)
             {
-                var blocked = refresh.Items.Count(item => item.State == RetainerListingRefreshItemState.Blocked);
+                var blockedItems = refresh.Items
+                    .Where(item => item.State == RetainerListingRefreshItemState.Blocked)
+                    .OrderBy(item => item.ItemName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(item => item.ItemId)
+                    .ToArray();
                 ImGui.TextColored(
-                    blocked > 0 ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted,
-                    $"{refresh.Items.Count} item(s) retained for refresh; {blocked} blocked.");
+                    blockedItems.Length > 0 ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted,
+                    $"{refresh.Items.Count} item(s) retained for refresh; {blockedItems.Length} blocked.");
+                foreach (var item in blockedItems)
+                    DrawBlockedRefreshItem(item);
             }
             ImGui.Spacing();
         }
@@ -97,6 +112,43 @@ internal sealed class MarketAcquisitionSettingsPages
 
     private void DrawCheckbox(SettingsPageContext context, string label, string description, Func<bool> getter, Action<bool> setter) =>
         SettingsPageUi.DrawConfigCheckbox(config, context, label, description, getter, setter);
+
+    private void DrawBlockedRefreshItem(PersistedRetainerListingRefreshItem item)
+    {
+        ImGui.PushID($"retainer-listing-refresh-{item.ItemId}");
+        ImGui.TextUnformatted(string.IsNullOrWhiteSpace(item.ItemName) ? $"Item {item.ItemId}" : item.ItemName);
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Force retry"))
+            forceRetryRetainerListingRefresh(item.ItemId);
+        reviewRegistry.Register(
+            $"settings.market.operation.retainer-listing-refresh.{item.ItemId}.force-retry",
+            $"Force retry {FormatItem(item)}",
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled: true,
+            selected: false,
+            value: item.LastCode,
+            arguments: null,
+            surfaceId: "settings.market.operation",
+            mutating: true,
+            completionOperationKind: null,
+            _ => forceRetryRetainerListingRefresh(item.ItemId)
+                ? AgentBridgeUiActionResult.Ok($"Queued a force retry for {FormatItem(item)}.")
+                : AgentBridgeUiActionResult.Fail($"{FormatItem(item)} is no longer blocked."));
+        if (!string.IsNullOrWhiteSpace(item.LastMessage))
+        {
+            ImGui.Indent();
+            ImGui.PushStyleColor(ImGuiCol.Text, MarketMafiosoUiTheme.Muted);
+            ImGui.TextWrapped(item.LastMessage);
+            ImGui.PopStyleColor();
+            ImGui.Unindent();
+        }
+        ImGui.PopID();
+    }
+
+    private static string FormatItem(PersistedRetainerListingRefreshItem item) =>
+        string.IsNullOrWhiteSpace(item.ItemName) ? $"item {item.ItemId}" : item.ItemName!;
 
     private static string FormatDiagnosticsLevel(MarketAcquisitionRouteDiagnosticsLevel level) => level switch
     {

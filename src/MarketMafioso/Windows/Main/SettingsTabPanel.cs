@@ -22,6 +22,7 @@ internal sealed class SettingsTabPanel
         HttpReporter reporter,
         IPluginLog log,
         Action stopMarketAcquisitionRoute,
+        Func<uint, bool> forceRetryRetainerListingRefresh,
         Action restartTimer,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
@@ -36,7 +37,10 @@ internal sealed class SettingsTabPanel
             new ServerConnectionSettingsPage(config, reporter, log).Descriptor,
         };
         pages.AddRange(new InventoryReporterSettingsPages(config, restartTimer, reporter, reviewRegistry).Descriptors);
-        pages.AddRange(new MarketAcquisitionSettingsPages(config).Descriptors);
+        pages.AddRange(new MarketAcquisitionSettingsPages(
+            config,
+            forceRetryRetainerListingRefresh,
+            reviewRegistry).Descriptors);
         pages.AddRange(new AdvancedSettingsPages(config, stopMarketAcquisitionRoute, reviewRegistry).Descriptors);
         navigationCatalog = new SettingsNavigationCatalog(pages);
     }

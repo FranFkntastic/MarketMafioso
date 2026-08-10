@@ -231,6 +231,7 @@ public sealed class Plugin : IDalamudPlugin
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
                 Log),
             marketBoardBrowseObserver,
+            itemId => retainerListingRefresh.ForceRetry(itemId),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log);
         exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
