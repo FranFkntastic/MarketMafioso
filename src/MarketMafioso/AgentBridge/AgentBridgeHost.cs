@@ -4,6 +4,9 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using Dalamud.Game.Command;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Ui;
 using SharedAgentBridgeHost = Franthropy.Dalamud.AgentBridge.AgentBridgeHost;
@@ -39,7 +42,10 @@ public sealed class AgentBridgeHost : IDisposable
         Func<bool> screenshotsEnabled,
         Func<string, AgentBridgeUiCaptureTransactionHandle> beginCapturePresentation,
         Func<string, AgentBridgeUiCaptureTransactionResult> completeCapturePresentation,
-        Func<string, AgentBridgeUiCaptureTransactionResult> cancelCapturePresentation)
+        Func<string, AgentBridgeUiCaptureTransactionResult> cancelCapturePresentation,
+        IDalamudPluginInterface pluginInterface,
+        ICommandManager commandManager,
+        IFramework framework)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         scheduleOnFramework = dispatchOnFramework ?? throw new ArgumentNullException(nameof(dispatchOnFramework));
@@ -53,6 +59,7 @@ public sealed class AgentBridgeHost : IDisposable
         profile = AgentBridgeProfileIdentity.FromPluginConfigDirectory(configDirectory);
         runtimeIdentity = AgentBridgeRuntimeIdentity.FromAssembly("MarketMafioso", Assembly.GetExecutingAssembly(), mainDllPath);
         RegisterCommands();
+        new DalamudPluginLifecycleBridge(pluginInterface, commandManager, framework).RegisterCommands(router);
         host = new SharedAgentBridgeHost(new AgentBridgeHostOptions
         {
             ConfigDirectory = configDirectory,
@@ -96,7 +103,7 @@ public sealed class AgentBridgeHost : IDisposable
         "MarketMafioso.proof.v2",
         [
             new("snapshot"), new("reviewed-actions"), new("proofs"),
-            new("encrypted-capture"), new("capture-transactions"),
+            new("encrypted-capture"), new("capture-transactions"), new("plugin-lifecycle"),
         ],
         provider.GetReviewSurfaces(),
         provider.GetCaptureSurfaces(),
