@@ -72,6 +72,9 @@ internal sealed class RetainerListingRefreshCoordinator
     private static readonly TimeSpan RejectedRequestDeferral = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan AmbiguousRequestDeferral = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan MissingOperationReconciliationDelay = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan RateLimitInitialRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RateLimitMaximumRetryDelay = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan RateLimitFailureCooldown = TimeSpan.FromSeconds(30);
 
     private readonly Configuration config;
     private readonly IRetainerListingRefreshSource source;
@@ -407,6 +410,10 @@ internal sealed class RetainerListingRefreshCoordinator
                 Block(item, code, "RequestData rejected three spaced background attempts.");
                 return;
 
+            case "MarketBoardRateLimited":
+                DeferRateLimited(item, nowUtc, message);
+                return;
+
             case "BrowseTimeout":
             case "OperationEvidenceLost":
                 item.State = RetainerListingRefreshItemState.NeedsReconciliation;
@@ -440,6 +447,40 @@ internal sealed class RetainerListingRefreshCoordinator
             persistState: true);
     }
 
+    private void DeferRateLimited(
+        PersistedRetainerListingRefreshItem item,
+        DateTimeOffset nowUtc,
+        string message)
+    {
+        item.RateLimitFailures++;
+        var delay = GetRateLimitRetryDelay(item.RateLimitFailures);
+        var retryAt = nowUtc.UtcDateTime + delay;
+        item.State = RetainerListingRefreshItemState.Deferred;
+        item.NextAttemptAtUtc = retryAt;
+        item.OperationId = null;
+        item.LastCode = "MarketBoardRateLimited";
+        item.LastMessage = message;
+        item.AttentionNotified = false;
+
+        // CMB's recovery governor pauses every request behind one shared cooldown.
+        // Keep this item first so the retry proves the same request before the batch advances.
+        var followingRetryAt = retryAt.AddTicks(1);
+        foreach (var pending in config.RetainerListingRefresh.Items.Where(pending =>
+                     !ReferenceEquals(pending, item) &&
+                     pending.State == RetainerListingRefreshItemState.Deferred &&
+                     (pending.NextAttemptAtUtc is null || pending.NextAttemptAtUtc < followingRetryAt)))
+        {
+            pending.NextAttemptAtUtc = followingRetryAt;
+        }
+
+        config.RetainerListingRefresh.NeedsAttention = config.RetainerListingRefresh.Items.Any(pending =>
+            pending.State == RetainerListingRefreshItemState.Blocked);
+        UpdateStatus(
+            "RateLimited",
+            $"The market board asked MMF to wait; retrying {FormatItem(item)} in {delay.TotalSeconds:F0}s.",
+            persistState: true);
+    }
+
     private void Block(PersistedRetainerListingRefreshItem item, string code, string message)
     {
         item.State = RetainerListingRefreshItemState.Blocked;
@@ -465,6 +506,7 @@ internal sealed class RetainerListingRefreshCoordinator
     private void NormalizePersistedState()
     {
         var state = config.RetainerListingRefresh;
+        var recoveredRateLimits = 0;
         state.Items ??= [];
         state.SessionListings ??= [];
         state.CapturePending = false;
@@ -495,8 +537,8 @@ internal sealed class RetainerListingRefreshCoordinator
                     "MMF restarted while a read-only browse was active; the item is cooling down before reconciliation.";
             }
             else if (item.State == RetainerListingRefreshItemState.Blocked &&
-                     item.LastCode == GamePatchCompatibility.FailureCode &&
-                     browseRuntime.IsAvailable)
+                      item.LastCode == GamePatchCompatibility.FailureCode &&
+                      browseRuntime.IsAvailable)
             {
                 item.State = RetainerListingRefreshItemState.Deferred;
                 item.NextAttemptAtUtc = DateTime.UtcNow;
@@ -504,8 +546,40 @@ internal sealed class RetainerListingRefreshCoordinator
                 item.LastMessage = "The exact-build browse contract is available again.";
                 item.AttentionNotified = false;
             }
+            else if (item.State == RetainerListingRefreshItemState.Blocked && IsLegacyRateLimit(item))
+            {
+                item.State = RetainerListingRefreshItemState.Deferred;
+                item.NextAttemptAtUtc = DateTime.UtcNow;
+                item.RateLimitFailures = Math.Max(item.RateLimitFailures, Math.Max(1, item.Attempts));
+                item.LastCode = "RecoveredRateLimit";
+                item.LastMessage = "A previously terminal rate-limit response will be retried with adaptive backoff.";
+                item.AttentionNotified = false;
+                recoveredRateLimits++;
+            }
+        }
+
+        state.NeedsAttention = state.Items.Any(item => item.State == RetainerListingRefreshItemState.Blocked);
+        if (recoveredRateLimits > 0)
+        {
+            state.StatusCode = "Deferred";
+            state.StatusMessage = $"Recovered {recoveredRateLimits} rate-limited item(s) for automatic retry.";
+            state.AttentionNotified = false;
         }
     }
+
+    private static TimeSpan GetRateLimitRetryDelay(int failureCount)
+    {
+        if (failureCount >= 3)
+            return RateLimitFailureCooldown;
+
+        return TimeSpan.FromMilliseconds(Math.Min(
+            RateLimitMaximumRetryDelay.TotalMilliseconds,
+            RateLimitInitialRetryDelay.TotalMilliseconds * Math.Pow(3, Math.Max(0, failureCount - 1))));
+    }
+
+    private static bool IsLegacyRateLimit(PersistedRetainerListingRefreshItem item) =>
+        string.Equals(item.LastCode, "ServerStatusRejected", StringComparison.Ordinal) &&
+        item.LastMessage?.Contains("0x70000002", StringComparison.OrdinalIgnoreCase) == true;
 
     private void UpdateStatus(string code, string message, bool persistState)
     {

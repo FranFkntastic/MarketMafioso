@@ -85,7 +85,6 @@ public sealed class MarketBoardBrowseOperationGateTests
 
     [Theory]
     [InlineData(0x181u)]
-    [InlineData(0x70000002u)]
     [InlineData(0x70000003u)]
     public void NonzeroHeaderStatus_IsRejected(uint status)
     {
@@ -95,6 +94,17 @@ public sealed class MarketBoardBrowseOperationGateTests
 
         AssertFailure(gate, "ServerStatusRejected");
         Assert.Equal(status, gate.Snapshot.HeaderStatus);
+    }
+
+    [Fact]
+    public void RateLimitHeaderStatus_IsClassifiedForRetry()
+    {
+        var gate = BeginAccepted(ItemId);
+
+        gate.ObserveHeader(0x70000002u, 0);
+
+        AssertFailure(gate, "MarketBoardRateLimited");
+        Assert.Equal(0x70000002u, gate.Snapshot.HeaderStatus);
     }
 
     [Fact]
