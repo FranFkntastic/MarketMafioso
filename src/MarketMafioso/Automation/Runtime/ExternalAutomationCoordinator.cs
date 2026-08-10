@@ -22,12 +22,14 @@ public sealed class ExternalAutomationCoordinator : IDisposable
 {
     private const string TextAdvanceStopRequests = "TextAdvance.StopRequests";
     private const string YesAlreadyStopRequests = "YesAlready.StopRequests";
+    private const string DropboxStopRequests = "Dropbox.StopRequests";
     private const string StopRequestOwner = "MarketMafioso";
 
     private readonly IPluginDataStore pluginDataStore;
     private readonly IPluginLog log;
     private bool textAdvanceSuppressed;
     private bool tradeAutoConfirmSuppressed;
+    private bool dropboxAutoAcceptSuppressed;
 
     internal ExternalAutomationCoordinator(IPluginDataStore pluginDataStore, IPluginLog log)
     {
@@ -81,9 +83,33 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         tradeAutoConfirmSuppressed = false;
     }
 
+    public void SuppressDropboxAutoAccept()
+    {
+        if (!pluginDataStore.TryGetData<HashSet<string>>(DropboxStopRequests, out var stopRequests) || stopRequests == null)
+            return;
+
+        if (stopRequests.Add(StopRequestOwner))
+        {
+            dropboxAutoAcceptSuppressed = true;
+            log.Debug("[MarketMafioso] Paused Dropbox while MMF owns trade auto-accept.");
+        }
+    }
+
+    public void RestoreDropboxAutoAccept()
+    {
+        if (!dropboxAutoAcceptSuppressed)
+            return;
+
+        if (pluginDataStore.TryGetData<HashSet<string>>(DropboxStopRequests, out var stopRequests) && stopRequests?.Remove(StopRequestOwner) == true)
+            log.Debug("[MarketMafioso] Restored Dropbox trade auto-accept ownership.");
+
+        dropboxAutoAcceptSuppressed = false;
+    }
+
     public void Dispose()
     {
         RestoreTextAdvance();
         RestoreTradeAutoConfirm();
+        RestoreDropboxAutoAccept();
     }
 }

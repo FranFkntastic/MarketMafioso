@@ -8,6 +8,8 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using ECommons.Automation;
 using ECommons.Automation.UIInput;
+using ECommons.GameHelpers;
+using ECommons.UIHelpers.AddonMasterImplementations;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
@@ -39,7 +41,7 @@ public interface ITradeQueueIo
     bool TryCancelTrade(out string error);
 }
 
-public sealed class DalamudTradeQueueIo : ITradeQueueIo
+public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 {
     private const string TradeAddon = "Trade";
     private const string NumericInputAddon = "InputNumeric";
@@ -70,7 +72,6 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     private readonly IReadOnlyDictionary<uint, string> itemNames;
     private readonly string tradeConfirmationText;
     private OfferItemTradeDelegate? offerItemTrade;
-    private DateTimeOffset nextIncomingTradeAcceptAt;
     private bool patchBlockLogged;
 
     public DalamudTradeQueueIo(
@@ -100,32 +101,14 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     public bool IsTradeOpen => condition[ConditionFlag.TradeOpen];
 
+    public bool IsPartnerReadyForTrade =>
+        IsTradeOpen && TradeDetectionManager.PartnerReadyForTrade;
+
     public unsafe bool CanClickReady => TryGetReadyButton(out _, out _);
 
     public unsafe bool CanConfirmTrade => TryGetTradeConfirmation(out _);
 
     public unsafe bool CanCancelTrade => TryGetCancelButton(out _, out _);
-
-    public unsafe void TickIncomingTradeAutoAccept(bool enabled)
-    {
-        if (!enabled || DateTimeOffset.UtcNow < nextIncomingTradeAcceptAt)
-            return;
-
-        if (!TryGetIncomingTradeRequest(out var addon))
-            return;
-
-        if (!TryAuthorizePatchContract(out var error))
-        {
-            nextIncomingTradeAcceptAt = DateTimeOffset.UtcNow.AddSeconds(1);
-            if (!string.IsNullOrWhiteSpace(error))
-                log.Warning("[MarketMafioso] Incoming trade auto-accept unavailable: {Reason}", error);
-            return;
-        }
-
-        addon->AtkUnitBase.FireCallbackInt(0);
-        nextIncomingTradeAcceptAt = DateTimeOffset.UtcNow.AddSeconds(1);
-        log.Debug("[MarketMafioso] Accepted an incoming trade request.");
-    }
 
     public unsafe bool IsNumericInputOpen
     {
@@ -427,18 +410,10 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
         if (!TryAuthorizePatchContract(out error))
             return false;
 
-        var addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
-        if (addon == null || !IsReady(&addon->AtkUnitBase))
+        if (!TryGetTradeConfirmation(out var addon))
             return false;
 
-        var prompt = addon->PromptText->NodeText.ExtractText();
-        if (!string.Equals(prompt, tradeConfirmationText, StringComparison.Ordinal))
-        {
-            error = $"An unrelated confirmation prompt is open: {prompt}";
-            return false;
-        }
-
-        addon->AtkUnitBase.FireCallbackInt(0);
+        new AddonMaster.SelectYesno(addon).Yes();
         return true;
     }
 
@@ -470,35 +445,24 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     private unsafe bool TryGetTradeConfirmation(out AddonSelectYesno* addon)
     {
-        addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
-        if (addon == null || !IsReady(&addon->AtkUnitBase))
-            return false;
-
-        var prompt = addon->PromptText->NodeText.ExtractText();
-        return string.Equals(prompt, tradeConfirmationText, StringComparison.Ordinal);
-    }
-
-    private unsafe bool TryGetIncomingTradeRequest(out AddonSelectYesno* addon)
-    {
         addon = null;
-        var inventoryManager = InventoryManager.Instance();
-        if (inventoryManager == null ||
-            inventoryManager->TradeLocalState != TradeState.TradeRequestPending &&
-            inventoryManager->TradeRemoteState != TradeState.TradeRequestPending)
+        for (var index = 1; index < 100; index++)
         {
-            return false;
+            var candidate = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, index);
+            if (candidate == null)
+                return false;
+            if (!IsReady(&candidate->AtkUnitBase))
+                continue;
+
+            var prompt = candidate->PromptText->NodeText.ExtractText();
+            if (string.Equals(prompt, tradeConfirmationText, StringComparison.Ordinal))
+            {
+                addon = candidate;
+                return true;
+            }
         }
 
-        var candidate = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
-        if (candidate == null || !IsReady(&candidate->AtkUnitBase))
-            return false;
-
-        var prompt = candidate->PromptText->NodeText.ExtractText();
-        if (!prompt.Contains("trade", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        addon = candidate;
-        return true;
+        return false;
     }
 
     private unsafe bool TryGetCancelButton(

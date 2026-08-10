@@ -78,6 +78,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
     private readonly ExternalAutomationCoordinator tradeAutomationCoordinator;
     private readonly DalamudTradeQueueIo tradeQueueIo;
+    private readonly TradeAutoAcceptController tradeAutoAcceptController;
     private readonly TradeQueueRunner tradeQueueRunner;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
@@ -193,6 +194,10 @@ public sealed class Plugin : IDalamudPlugin
             Condition,
             SigScanner,
             DataManager,
+            Log);
+        tradeAutoAcceptController = new TradeAutoAcceptController(
+            tradeQueueIo,
+            Configuration.TradeQueueTiming,
             Log);
         tradeQueueRunner = new TradeQueueRunner(
             Configuration.TradeQueueItems,
@@ -668,7 +673,12 @@ public sealed class Plugin : IDalamudPlugin
             refreshReady,
             refreshDeferredReason);
         mainWindow.MarketListingOverlay.IsOpen = true;
-        tradeQueueIo.TickIncomingTradeAutoAccept(Configuration.AutoAcceptIncomingTrades);
+        if (Configuration.AutoAcceptIncomingTrades)
+            tradeAutomationCoordinator.SuppressDropboxAutoAccept();
+        else
+            tradeAutomationCoordinator.RestoreDropboxAutoAccept();
+        tradeAutoAcceptController.Tick(
+            Configuration.AutoAcceptIncomingTrades && !tradeQueueRunner.IsActive);
         tradeQueueRunner.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
