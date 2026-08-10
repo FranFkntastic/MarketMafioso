@@ -6,6 +6,7 @@ internal enum TradeQueueOfferLineState
 {
     ReadyToOffer,
     WaitingForQuantityInput,
+    AwaitingSubmitClosure,
     WaitingForSlot,
     Completed,
     Failed,
@@ -81,13 +82,20 @@ internal sealed class TradeQueueOfferLineOperation
                     ? Result()
                     : Fail(quantityError);
 
-            state = TradeQueueOfferLineState.WaitingForSlot;
+            state = TradeQueueOfferLineState.AwaitingSubmitClosure;
+            return Result();
+        }
+
+        if (state == TradeQueueOfferLineState.AwaitingSubmitClosure)
+        {
+            if (io.IsNumericInputOpen)
+                return Result();
+            if (io.OfferedSlotCount == expectedSlotCountAfterOffer)
+                state = TradeQueueOfferLineState.Completed;
         }
 
         if (state == TradeQueueOfferLineState.WaitingForSlot)
         {
-            if (io.IsNumericInputOpen)
-                return Fail($"Trade quantity input remained open after offering {line.ItemName}.");
             if (io.OfferedSlotCount == expectedSlotCountAfterOffer)
                 state = TradeQueueOfferLineState.Completed;
         }
@@ -106,6 +114,7 @@ internal sealed class TradeQueueOfferLineOperation
         {
             TradeQueueOfferLineState.ReadyToOffer => $"Ready to offer {line.ItemName}.",
             TradeQueueOfferLineState.WaitingForQuantityInput => $"Waiting for the quantity input for {line.ItemName}.",
+            TradeQueueOfferLineState.AwaitingSubmitClosure => $"Waiting for the quantity input for {line.ItemName} to close.",
             TradeQueueOfferLineState.WaitingForSlot => $"Waiting for {line.ItemName} to occupy its trade slot.",
             TradeQueueOfferLineState.Completed => $"Offered {line.ItemName}.",
             _ => $"Offering {line.ItemName} failed.",

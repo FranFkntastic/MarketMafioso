@@ -396,7 +396,8 @@ public sealed class TradeQueueRunnerTests
 
         var completed = offer.Advance(OfferNow);
 
-        Assert.True(completed.IsCompleted);
+        Assert.Equal(TradeQueueOfferLineState.AwaitingSubmitClosure, completed.State);
+        Assert.True(offer.Advance(OfferNow).IsCompleted);
         Assert.False(io.IsNumericInputOpen);
         Assert.Equal(2, io.LastSubmittedQuantity);
     }
@@ -410,6 +411,7 @@ public sealed class TradeQueueRunnerTests
         Assert.Equal(TradeQueueOfferLineState.WaitingForQuantityInput, offer.Advance(OfferNow).State);
         Assert.Equal(TradeQueueOfferLineState.WaitingForQuantityInput, offer.Advance(OfferNow).State);
         Assert.Equal(0, io.LastSubmittedQuantity);
+        Assert.Equal(TradeQueueOfferLineState.AwaitingSubmitClosure, offer.Advance(OfferNow).State);
         Assert.True(offer.Advance(OfferNow).IsCompleted);
         Assert.Equal(2, io.LastSubmittedQuantity);
     }
@@ -432,8 +434,59 @@ public sealed class TradeQueueRunnerTests
         var offer = Offer(io, quantity: 4, sourceStackQuantity: 4);
 
         Assert.Equal(TradeQueueOfferLineState.WaitingForQuantityInput, offer.Advance(OfferNow).State);
+        Assert.Equal(TradeQueueOfferLineState.AwaitingSubmitClosure, offer.Advance(OfferNow).State);
         Assert.True(offer.Advance(OfferNow).IsCompleted);
         Assert.Equal(4, io.LastSubmittedQuantity);
+    }
+
+    [Fact]
+    public void OfferLine_ObservesQuantityDialogClosureOnTheTickAfterSubmission()
+    {
+        var io = new FakeIo(Inventory(4)) { QuantityDialogCloseAfterTicks = 1 };
+        var offer = Offer(io, quantity: 2, sourceStackQuantity: 4);
+
+        Assert.Equal(TradeQueueOfferLineState.WaitingForQuantityInput, offer.Advance(OfferNow).State);
+        Assert.Equal(TradeQueueOfferLineState.AwaitingSubmitClosure, offer.Advance(OfferNow).State);
+
+        Assert.True(offer.Advance(OfferNow).IsCompleted);
+        Assert.Equal(1, io.OfferedSlotCount);
+        Assert.Equal(2, io.LastSubmittedQuantity);
+    }
+
+    [Fact]
+    public void Runner_CancelsWhenSubmittedQuantityDialogNeverClosesBeforeTimeout()
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2)) { QuantityDialogCloseAfterTicks = -1 };
+        var clock = new TestClock();
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            new TradeQueueTimingOptions(),
+            () => { },
+            io,
+            new FakeQualityLowering(),
+            coordinator,
+            TestPluginLog.Create(),
+            clock.Read);
+
+        Assert.True(runner.Start().Success);
+        runner.Tick();
+        io.IsTradeOpenValue = true;
+        clock.Advance(TimeSpan.FromSeconds(4));
+        runner.Tick();
+        clock.Advance(TimeSpan.FromMilliseconds(300));
+        runner.Tick();
+        runner.Tick();
+
+        clock.Advance(TimeSpan.FromSeconds(31));
+        runner.Tick();
+
+        Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
+        Assert.False(io.IsTradeOpen);
+        Assert.Contains("Timed out", runner.Snapshot.Message, StringComparison.Ordinal);
+        Assert.Contains("trade was canceled", runner.Snapshot.Message, StringComparison.Ordinal);
+        Assert.Equal(2, Assert.Single(queue).Quantity);
     }
 
     [Fact]
@@ -665,12 +718,20 @@ public sealed class TradeQueueRunnerTests
         public bool IsTradeOpen => IsTradeOpenValue;
         private bool isNumericInputOpen;
         private int numericInputDelayChecksRemaining;
+        private int quantityDialogCloseTicksRemaining;
+        private bool quantitySubmissionPendingClosure;
         public bool IsNumericInputOpen
         {
             get
             {
                 if (numericInputDelayChecksRemaining-- > 0)
                     return false;
+                if (quantitySubmissionPendingClosure && quantityDialogCloseTicksRemaining > 0)
+                {
+                    quantityDialogCloseTicksRemaining--;
+                    if (quantityDialogCloseTicksRemaining == 0)
+                        CloseQuantityDialog();
+                }
                 return isNumericInputOpen;
             }
             private set => isNumericInputOpen = value;
@@ -686,6 +747,7 @@ public sealed class TradeQueueRunnerTests
         public bool RejectGilInput { get; set; }
         public int GilNumericInputDelayChecks { get; set; }
         public int NumericInputDelayChecks { get; set; }
+        public int QuantityDialogCloseAfterTicks { get; set; }
         public int LastSubmittedQuantity { get; private set; }
         private bool gilInputRequested;
 
@@ -766,17 +828,30 @@ public sealed class TradeQueueRunnerTests
 
             error = string.Empty;
             LastSubmittedQuantity = quantity;
-            IsNumericInputOpen = false;
             if (gilInputRequested)
             {
                 SubmittedGil = quantity;
                 gilInputRequested = false;
+                IsNumericInputOpen = false;
             }
-            else if (!ExposeSlotBeforeQuantity)
+            else if (QuantityDialogCloseAfterTicks == 0)
             {
-                OfferedSlotCount++;
+                CloseQuantityDialog();
+            }
+            else
+            {
+                quantitySubmissionPendingClosure = true;
+                quantityDialogCloseTicksRemaining = QuantityDialogCloseAfterTicks;
             }
             return true;
+        }
+
+        private void CloseQuantityDialog()
+        {
+            IsNumericInputOpen = false;
+            quantitySubmissionPendingClosure = false;
+            if (!ExposeSlotBeforeQuantity)
+                OfferedSlotCount++;
         }
 
         public bool TryClickReady(out string error)
