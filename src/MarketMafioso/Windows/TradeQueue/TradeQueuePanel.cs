@@ -108,14 +108,14 @@ internal sealed class TradeQueuePanel
         ImGui.Spacing();
 
         var autoAcceptIncomingTrades = config.AutoAcceptIncomingTrades;
-        if (ImGui.Checkbox("Auto-accept incoming trades", ref autoAcceptIncomingTrades))
+        if (ImGui.Checkbox("Auto-accept trades", ref autoAcceptIncomingTrades))
         {
             config.AutoAcceptIncomingTrades = autoAcceptIncomingTrades;
             config.Save();
         }
         reviewRegistry.Register(
             "trade-queue.auto-accept",
-            "Auto-accept incoming trades",
+            "Auto-accept trades",
             AgentBridgeUiControlKind.Toggle,
             ImGui.GetItemRectMin(),
             ImGui.GetItemRectMax(),
@@ -133,11 +133,11 @@ internal sealed class TradeQueuePanel
                 config.Save();
                 return AgentBridgeUiActionResult.Ok(
                     config.AutoAcceptIncomingTrades
-                        ? "Incoming trade auto-accept enabled."
-                        : "Incoming trade auto-accept disabled.");
+                        ? "Trade auto-accept enabled."
+                        : "Trade auto-accept disabled.");
             });
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Accept incoming player trade requests while enabled.");
+            ImGui.SetTooltip("Ready after the other player is ready, then confirm the completed trade.");
         ImGui.Spacing();
 
         DrawInventoryHeader();
@@ -498,7 +498,7 @@ internal sealed class TradeQueuePanel
 
         ImGui.TextColored(
             MainWindow.ColMuted,
-            "Action delay paces item and quantity inputs; command retry limits repeated /trade attempts.");
+            "Action delay paces item, quantity, and auto-accept inputs; command retry limits repeated /trade attempts.");
 
         if (ImGui.Button("Reset timing defaults"))
         {

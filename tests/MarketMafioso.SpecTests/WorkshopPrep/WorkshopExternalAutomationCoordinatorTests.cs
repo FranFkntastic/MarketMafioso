@@ -13,6 +13,7 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
         RestoreTextAdvanceRemovesOnlyMarketMafiosoStopRequest();
         DisposeRestoresTextAdvanceStopRequest();
         TradeAutoConfirmUsesYesAlreadyOwnerScopedStopRequest();
+        TradeAutoAcceptUsesDropboxOwnerScopedStopRequest();
     }
 
     private static void SuppressTextAdvanceAddsMarketMafiosoStopRequest()
@@ -64,6 +65,21 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
         coordinator.SuppressTradeAutoConfirm();
         Assert.Contains("MarketMafioso", stopRequests);
         coordinator.RestoreTradeAutoConfirm();
+
+        Assert.DoesNotContain("MarketMafioso", stopRequests);
+        Assert.Contains("OtherPlugin", stopRequests);
+    }
+
+    private static void TradeAutoAcceptUsesDropboxOwnerScopedStopRequest()
+    {
+        var stopRequests = new HashSet<string> { "OtherPlugin" };
+        using var coordinator = new ExternalAutomationCoordinator(
+            new FakePluginDataStore(stopRequests, "Dropbox.StopRequests"),
+            TestPluginLog.Create());
+
+        coordinator.SuppressDropboxAutoAccept();
+        Assert.Contains("MarketMafioso", stopRequests);
+        coordinator.RestoreDropboxAutoAccept();
 
         Assert.DoesNotContain("MarketMafioso", stopRequests);
         Assert.Contains("OtherPlugin", stopRequests);
