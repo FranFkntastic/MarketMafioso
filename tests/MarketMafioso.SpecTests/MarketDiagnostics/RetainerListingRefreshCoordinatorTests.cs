@@ -154,6 +154,71 @@ public sealed class RetainerListingRefreshCoordinatorTests
     }
 
     [Fact]
+    public void Force_retry_requeues_only_selected_block_and_refuses_stale_replay()
+    {
+        var config = CreateConfig();
+        config.RetainerListingRefresh.NeedsAttention = true;
+        config.RetainerListingRefresh.Items =
+        [
+            new PersistedRetainerListingRefreshItem
+            {
+                ItemId = 100,
+                ItemName = "Iron Ore",
+                State = RetainerListingRefreshItemState.Blocked,
+                Attempts = 3,
+                RateLimitFailures = 2,
+                LastCode = "RequestIdDiscontinuity",
+                LastMessage = "Page request id changed inside one browse.",
+                AttentionNotified = true,
+            },
+            new PersistedRetainerListingRefreshItem
+            {
+                ItemId = 200,
+                ItemName = "Cobalt Ore",
+                State = RetainerListingRefreshItemState.Blocked,
+                LastCode = "HistoryItemMismatch",
+                LastMessage = "Sale history named another item.",
+                AttentionNotified = true,
+            },
+        ];
+        var runtime = new FakeRuntime();
+        var persistCalls = 0;
+        var coordinator = new RetainerListingRefreshCoordinator(
+            config,
+            new FakeSource("Shared listing evidence is unavailable."),
+            runtime,
+            () => persistCalls++,
+            _ => { },
+            nextSuccessDelay: () => TimeSpan.Zero);
+
+        Assert.True(coordinator.ForceRetry(100, Start));
+
+        var retried = Assert.Single(config.RetainerListingRefresh.Items, item => item.ItemId == 100);
+        Assert.Equal(RetainerListingRefreshItemState.Deferred, retried.State);
+        Assert.Equal(Start.UtcDateTime, retried.NextAttemptAtUtc);
+        Assert.Equal(3, retried.Attempts);
+        Assert.Equal(2, retried.RateLimitFailures);
+        Assert.Equal("RequestIdDiscontinuity", retried.LastCode);
+        Assert.Equal("Page request id changed inside one browse.", retried.LastMessage);
+        Assert.False(retried.AttentionNotified);
+        Assert.Equal(RetainerListingRefreshItemState.Blocked, config.RetainerListingRefresh.Items.Single(item => item.ItemId == 200).State);
+        Assert.True(config.RetainerListingRefresh.NeedsAttention);
+        Assert.Equal("Blocked", config.RetainerListingRefresh.StatusCode);
+        Assert.Equal(1, persistCalls);
+
+        Assert.False(coordinator.ForceRetry(100, Start.AddSeconds(1)));
+        Assert.Equal(1, persistCalls);
+
+        Assert.True(coordinator.ForceRetry(200, Start.AddSeconds(2)));
+        Assert.False(config.RetainerListingRefresh.NeedsAttention);
+        Assert.Equal("Queued", config.RetainerListingRefresh.StatusCode);
+        Assert.Equal(2, persistCalls);
+
+        coordinator.Tick(Start, true);
+        Assert.Equal([100u], runtime.RequestedItems);
+    }
+
+    [Fact]
     public void Rate_limit_retries_same_item_with_shared_cmb_backoff()
     {
         var source = new FakeSource(new RetainerListingRefreshCandidate[]
