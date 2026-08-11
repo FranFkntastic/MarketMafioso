@@ -356,6 +356,7 @@ public class MainWindow : Window, IDisposable
             dataManager,
             Plugin.ClientState,
             Plugin.ObjectTable,
+            Plugin.Condition,
             beginAutomation: () =>
             {
                 workshopVendorAutomationCoordinator.SuppressTextAdvance();
