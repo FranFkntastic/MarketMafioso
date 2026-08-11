@@ -64,6 +64,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly RetainerHistoryObserver retainerHistoryObserver;
     private readonly DalamudMarketBoardBrowseObserver marketBoardBrowseObserver;
     private readonly RetainerListingRefreshCoordinator retainerListingRefresh;
+    private readonly RetainerListingRefreshReadinessGate retainerListingRefreshReadiness = new();
     private readonly FranthropyRetainerListingRefreshSource? sharedObservationListings;
     private readonly DalamudSharedObservationHost? sharedObservationHost;
     private readonly RemoteMarketAccessProbe remoteMarketAccessProbe;
@@ -670,10 +671,15 @@ public sealed class Plugin : IDalamudPlugin
     {
         retainerSaleChatObserver.Tick();
         retainerHistoryObserver.Tick();
+        var nowUtc = DateTimeOffset.UtcNow;
         var retainerSessionActive = IsRetainerSessionActive();
-        var (refreshReady, refreshDeferredReason) = GetRetainerListingRefreshReadiness(retainerSessionActive);
+        var (immediatelyReady, immediateDeferredReason) = GetImmediateRetainerListingRefreshReadiness(retainerSessionActive);
+        var (refreshReady, refreshDeferredReason) = retainerListingRefreshReadiness.Observe(
+            nowUtc,
+            immediatelyReady,
+            immediateDeferredReason);
         retainerListingRefresh.Tick(
-            DateTimeOffset.UtcNow,
+            nowUtc,
             refreshReady,
             refreshDeferredReason);
         mainWindow.MarketListingOverlay.IsOpen = true;
@@ -688,7 +694,7 @@ public sealed class Plugin : IDalamudPlugin
         agentBridge.Tick();
     }
 
-    private static (bool Ready, string? Reason) GetRetainerListingRefreshReadiness(bool retainerSessionActive)
+    private static (bool Ready, string? Reason) GetImmediateRetainerListingRefreshReadiness(bool retainerSessionActive)
     {
         if (!ClientState.IsLoggedIn || PlayerState.ContentId == 0)
             return (false, "Waiting for a logged-in character before refreshing retainer listings.");
