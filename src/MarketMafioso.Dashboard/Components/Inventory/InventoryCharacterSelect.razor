@@ -6,20 +6,20 @@
             aria-label="Character">
         <option value="">Latest available</option>
         @foreach (var group in Characters
-            .GroupBy(character => character.ServiceAccountGroup)
-            .OrderBy(group => GroupOrder(group.Key)))
+            .GroupBy(character => character.ServiceAccountNumber)
+            .OrderBy(group => group.Key is null ? int.MaxValue : group.Key.Value))
         {
-            <optgroup label="@group.Key">
-                @foreach (var character in group.OrderBy(character => character.CharacterName, StringComparer.OrdinalIgnoreCase))
+            <optgroup label="@GroupLabel(group.Key)">
+                @foreach (var character in group.OrderBy(character => character.DisplayName, StringComparer.OrdinalIgnoreCase))
                 {
-                    <option value="@character.Id">@character.CharacterName</option>
+                    <option value="@character.Id">@character.DisplayName</option>
                 }
             </optgroup>
         }
     </select>
     @if (SelectedCharacter is { } selected)
     {
-        <span class="inventory-character-context">@selected.HomeWorld · @selected.ServiceAccountGroup</span>
+        <span class="inventory-character-context">@selected.DisplayName · @selected.ServiceAccountGroup</span>
     }
 </label>
 
@@ -30,7 +30,9 @@
 
     private string CurrentValue => Value?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
     private DashboardCharacterOption? SelectedCharacter => Value is { } id ? Characters.FirstOrDefault(character => character.Id == id) : null;
-    private static int GroupOrder(string group) => group.StartsWith("Service Account ", StringComparison.Ordinal) ? 0 : 1;
+    private static string GroupLabel(int? serviceAccountNumber) => serviceAccountNumber is > 0
+        ? $"Service Account {serviceAccountNumber}"
+        : "Awaiting account assignment";
 
     private Task HandleChangedAsync(ChangeEventArgs args)
     {

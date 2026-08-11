@@ -13,7 +13,8 @@ internal static class InventoryReportRowMapper
             reader.GetString(1),
             reader.IsDBNull(2) ? null : reader.GetString(2),
             ParseDateTimeOffset(reader.GetString(3)),
-            reader.IsDBNull(4) ? null : reader.GetString(4));
+            reader.IsDBNull(4) ? null : reader.GetInt32(4),
+            reader.IsDBNull(5) ? null : reader.GetString(5));
 
     public static InventorySnapshotRow ReadSnapshot(SqliteDataReader reader) =>
         new(
@@ -22,18 +23,19 @@ internal static class InventoryReportRowMapper
             reader.IsDBNull(2) ? null : reader.GetString(2),
             reader.IsDBNull(3) ? null : reader.GetString(3),
             reader.IsDBNull(4) ? null : reader.GetString(4),
-            reader.IsDBNull(5) ? null : checked((ulong)reader.GetInt64(5)),
-            reader.GetString(6),
+            reader.IsDBNull(5) ? null : reader.GetInt32(5),
+            reader.IsDBNull(6) ? null : checked((ulong)reader.GetInt64(6)),
+            reader.GetString(7),
             new InventoryReportMetadata
             {
-                SchemaVersion = reader.GetInt32(7),
-                SourcePlugin = reader.GetString(8),
-                PluginVersion = reader.GetString(9),
-                GeneratedAtUtc = reader.GetString(10),
+                SchemaVersion = reader.GetInt32(8),
+                SourcePlugin = reader.GetString(9),
+                PluginVersion = reader.GetString(10),
+                GeneratedAtUtc = reader.GetString(11),
             },
-            reader.IsDBNull(11)
+            reader.IsDBNull(12)
                 ? null
-                : JsonSerializer.Deserialize<QuartermasterStowageReport>(reader.GetString(11)));
+                : JsonSerializer.Deserialize<QuartermasterStowageReport>(reader.GetString(12)));
 
     public static InventoryOwnerRow ReadOwner(SqliteDataReader reader) =>
         new(
@@ -148,6 +150,7 @@ internal sealed record InventorySnapshotRow(
     string? CharacterName,
     string? HomeWorld,
     string? ServiceAccountKey,
+    int? ServiceAccountNumber,
     ulong? PlayerGil,
     string ReportTimestamp,
     InventoryReportMetadata Metadata,

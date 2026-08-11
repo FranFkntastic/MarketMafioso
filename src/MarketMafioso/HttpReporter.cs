@@ -24,7 +24,6 @@ public class HttpReporter : IDisposable
     private readonly IPluginLog log;
     private readonly IChatGui chatGui;
     private readonly InventoryScanner scanner;
-    private readonly DalamudServiceAccountIdentitySource serviceAccountIdentity;
     private readonly QuartermasterIpcClient quartermaster;
     private int disposeStarted;
     private InventoryReport? lastAcknowledgedReport;
@@ -50,7 +49,6 @@ public class HttpReporter : IDisposable
         IPluginLog log,
         IChatGui chatGui,
         InventoryScanner scanner,
-        DalamudServiceAccountIdentitySource serviceAccountIdentity,
         QuartermasterIpcClient quartermaster)
     {
         this.config = config;
@@ -58,7 +56,6 @@ public class HttpReporter : IDisposable
         this.log = log;
         this.chatGui = chatGui;
         this.scanner = scanner;
-        this.serviceAccountIdentity = serviceAccountIdentity;
         this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
     }
 
@@ -359,15 +356,15 @@ public class HttpReporter : IDisposable
         {
             Metadata = new InventoryReportMetadata
             {
-                SchemaVersion = 4,
+                SchemaVersion = 5,
                 SourcePlugin = "MarketMafioso",
                 PluginVersion = PluginBuildInfo.DisplayVersion,
                 GeneratedAtUtc = generatedAtUtc,
             },
             CharacterName = charName,
             HomeWorld = homeWorld,
-            ServiceAccountKey = config.IncludeCharacterInfo
-                ? serviceAccountIdentity.Resolve(playerState.ContentId)
+            ServiceAccountNumber = config.IncludeCharacterInfo && config.ServiceAccountNumber is > 0
+                ? config.ServiceAccountNumber
                 : null,
             PlayerGil = scanner.ScanPlayerGil(),
             Timestamp = generatedAtUtc,

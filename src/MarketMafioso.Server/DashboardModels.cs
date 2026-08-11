@@ -5,11 +5,15 @@ public sealed record DashboardCharacterOption(
     string CharacterName,
     string? HomeWorld,
     DateTimeOffset LastSeenAt,
-    string ServiceAccountGroup)
+    int? ServiceAccountNumber)
 {
     public string DisplayName => string.IsNullOrWhiteSpace(HomeWorld)
         ? CharacterName
         : $"{CharacterName} @ {HomeWorld}";
+
+    public string ServiceAccountGroup => ServiceAccountNumber is > 0
+        ? $"Service Account {ServiceAccountNumber}"
+        : "Awaiting account assignment";
 }
 
 public sealed record DashboardSettingsView

@@ -114,6 +114,81 @@ public sealed class InventoryReportStoreSqliteTests
     }
 
     [Fact]
+    public async Task SaveAsync_DoesNotCreateCharacterFromIncompleteIdentity()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var report = CreateReport("Character One", "Siren", 2) with { HomeWorld = null };
+
+        await fixture.Store.SaveAsync(fixture.AccountId, report, null, "{}", CancellationToken.None);
+        await fixture.Store.SaveAsync(fixture.AccountId, report, null, "{}", CancellationToken.None);
+
+        Assert.Equal(0, await fixture.CountAsync("characters"));
+        Assert.Empty(await fixture.Store.ListCharactersAsync(fixture.AccountId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SaveAsync_IncompleteIdentityReusesUniqueCompleteCharacterWithoutErasingAccountNumber()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var complete = CreateReport("Character One", "Siren", 2) with { ServiceAccountNumber = 2 };
+        var incomplete = CreateReport("Character One", "Siren", 3) with { HomeWorld = null };
+
+        await fixture.Store.SaveAsync(fixture.AccountId, complete, null, "{}", CancellationToken.None);
+        await fixture.Store.SaveAsync(fixture.AccountId, incomplete, null, "{}", CancellationToken.None);
+
+        Assert.Equal(1, await fixture.CountAsync("characters"));
+        var character = Assert.Single(await fixture.Store.ListCharactersAsync(fixture.AccountId, CancellationToken.None));
+        Assert.Equal("Siren", character.HomeWorld);
+        Assert.Equal(2, character.ServiceAccountNumber);
+    }
+
+    [Fact]
+    public async Task SaveAsync_IncompleteIdentityWithConflictingAccountNumberStaysUnlinked()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var complete = CreateReport("Character One", "Siren", 2) with { ServiceAccountNumber = 1 };
+        var incomplete = CreateReport("Character One", "Siren", 3) with
+        {
+            HomeWorld = null,
+            ServiceAccountNumber = 2,
+        };
+
+        await fixture.Store.SaveAsync(fixture.AccountId, complete, null, "{}", CancellationToken.None);
+        var stored = await fixture.Store.SaveAsync(fixture.AccountId, incomplete, null, "{}", CancellationToken.None);
+
+        await using var connection = await fixture.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT character_id FROM snapshots WHERE id = $id";
+        command.Parameters.AddWithValue("$id", stored.Id);
+        Assert.Equal(DBNull.Value, await command.ExecuteScalarAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SaveAsync_LegacyReportCannotEraseConfirmedAccountNumber()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var current = CreateReport("Character One", "Siren", 2) with { ServiceAccountNumber = 2 };
+        var legacy = CreateReport("Character One", "Siren", 3) with
+        {
+            Metadata = new InventoryReportMetadata
+            {
+                SchemaVersion = 4,
+                SourcePlugin = "MarketMafioso",
+                PluginVersion = "legacy",
+            },
+            ServiceAccountKey = "legacy-profile-key",
+            ServiceAccountNumber = null,
+        };
+
+        await fixture.Store.SaveAsync(fixture.AccountId, current, null, "{}", CancellationToken.None);
+        await fixture.Store.SaveAsync(fixture.AccountId, legacy, null, "{}", CancellationToken.None);
+
+        var character = Assert.Single(await fixture.Store.ListCharactersAsync(fixture.AccountId, CancellationToken.None));
+        Assert.Equal(2, character.ServiceAccountNumber);
+        Assert.Equal("legacy-profile-key", character.ServiceAccountKey);
+    }
+
+    [Fact]
     public async Task ListSummariesAsync_IsScopedByAccount()
     {
         var fixture = await StoreFixture.CreateAsync();
@@ -271,6 +346,7 @@ public sealed class InventoryReportStoreSqliteTests
         var report = CreateReport("Semantic Character", "Siren", 5057) with
         {
             ServiceAccountKey = "profile-a-service-account-0",
+            ServiceAccountNumber = 2,
             PlayerGil = 560_530_934,
             PlayerStorage = new StorageSourceEvidence { RequestedSources = ["Inventory1", "Crystals"], ObservedSources = ["Inventory1"] },
             Retainers =
@@ -352,6 +428,7 @@ public sealed class InventoryReportStoreSqliteTests
 
         Assert.NotNull(loaded);
         Assert.Equal("profile-a-service-account-0", loaded.Report.ServiceAccountKey);
+        Assert.Equal(2, loaded.Report.ServiceAccountNumber);
         Assert.Equal((ulong)560_530_934, loaded.Report.PlayerGil);
         Assert.Equal(["Inventory1", "Crystals"], loaded.Report.PlayerStorage.RequestedSources);
         Assert.Equal(["Inventory1"], loaded.Report.PlayerStorage.ObservedSources);

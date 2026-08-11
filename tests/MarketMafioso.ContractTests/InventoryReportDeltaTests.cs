@@ -33,10 +33,12 @@ public sealed class InventoryReportDeltaTests
 
         Assert.Equal(InventoryDeltaBuildDisposition.Delta, result.Disposition);
         var delta = Assert.IsType<InventoryReportDelta>(result.Delta);
+        Assert.Equal(2, delta.ServiceAccountNumber);
         var changedBag = Assert.Single(delta.UpsertedPlayerBags);
         Assert.Equal("Inventory2", changedBag.BagName);
         var reconstructed = InventoryReportDeltaApplier.Apply("base-1", before, delta);
         Assert.Equal(9u, reconstructed.PlayerInventory[1].Items[0].Quantity);
+        Assert.Equal(2, reconstructed.ServiceAccountNumber);
         Assert.Equal(after.Timestamp, reconstructed.Timestamp);
         Assert.True(
             JsonSerializer.Serialize(delta, JsonOptions).Length <
@@ -108,6 +110,59 @@ public sealed class InventoryReportDeltaTests
         Assert.Equal(7u, stored.PlayerInventory[0].Items[0].Quantity);
         Assert.Equal(20, stored.PlayerInventory.Count);
         Assert.DoesNotContain("baseSnapshotId", raw, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeltaEndpoint_IncompleteIdentityDoesNotCreateSelectableCharacter()
+    {
+        await using var application = ServerTestHost.Create();
+        using var client = application.CreateClient();
+        var before = CreateReport() with { HomeWorld = null };
+        var fullResponse = await client.PostAsJsonAsync("/inventory", before, JsonOptions);
+        fullResponse.EnsureSuccessStatusCode();
+        var baseId = await ReadIdAsync(fullResponse);
+        var after = before with
+        {
+            Timestamp = "2026-07-30T12:02:00Z",
+            PlayerGil = 42,
+        };
+        var delta = InventoryReportDeltaBuilder.Build(baseId, before, after).Delta!;
+
+        var deltaResponse = await client.PostAsJsonAsync("/inventory/delta", delta, JsonOptions);
+
+        deltaResponse.EnsureSuccessStatusCode();
+        Assert.Empty((await client.GetFromJsonAsync<DashboardCharacterOption[]>("/api/inventory/characters"))!);
+    }
+
+    [Fact]
+    public async Task DeltaEndpoint_LegacyFullAndDeltaCannotEraseConfirmedAccountNumber()
+    {
+        await using var application = ServerTestHost.Create();
+        using var client = application.CreateClient();
+        var current = CreateReport();
+        (await client.PostAsJsonAsync("/inventory", current, JsonOptions)).EnsureSuccessStatusCode();
+        var legacy = current with
+        {
+            Metadata = current.Metadata with { SchemaVersion = 4 },
+            ServiceAccountKey = "legacy-profile-key",
+            ServiceAccountNumber = null,
+            Timestamp = "2026-07-30T12:01:00Z",
+        };
+        var legacyFullResponse = await client.PostAsJsonAsync("/inventory", legacy, JsonOptions);
+        legacyFullResponse.EnsureSuccessStatusCode();
+        var legacyBaseId = await ReadIdAsync(legacyFullResponse);
+        var legacyAfter = legacy with
+        {
+            Timestamp = "2026-07-30T12:02:00Z",
+            PlayerGil = 77,
+        };
+        var delta = InventoryReportDeltaBuilder.Build(legacyBaseId, legacy, legacyAfter).Delta!;
+
+        var deltaResponse = await client.PostAsJsonAsync("/inventory/delta", delta, JsonOptions);
+
+        deltaResponse.EnsureSuccessStatusCode();
+        var character = Assert.Single((await client.GetFromJsonAsync<DashboardCharacterOption[]>("/api/inventory/characters"))!);
+        Assert.Equal(2, character.ServiceAccountNumber);
     }
 
     [Fact]
@@ -191,7 +246,7 @@ public sealed class InventoryReportDeltaTests
     {
         Metadata = new InventoryReportMetadata
         {
-            SchemaVersion = 4,
+            SchemaVersion = 5,
             SourcePlugin = "MarketMafioso",
             PluginVersion = "test",
             GeneratedAtUtc = "2026-07-30T12:00:00Z",
@@ -199,6 +254,7 @@ public sealed class InventoryReportDeltaTests
         CharacterName = "Delta Tester",
         HomeWorld = "Siren",
         ServiceAccountKey = "test-account",
+        ServiceAccountNumber = 2,
         PlayerGil = 10,
         Timestamp = "2026-07-30T12:00:00Z",
         PlayerInventory = Enumerable.Range(1, 20)

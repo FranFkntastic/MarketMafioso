@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using MarketMafioso.Contracts.Inventory;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 
@@ -40,6 +41,35 @@ public sealed class DashboardAccountAuthTests
 
         Assert.Equal(HttpStatusCode.OK, session.StatusCode);
         Assert.Equal(HttpStatusCode.OK, inventory.StatusCode);
+    }
+
+    [Fact]
+    public async Task InventoryCharacters_UsesConfiguredAccountNumberAndCompleteDisplayName()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireDashboardAuth", "false"));
+        using var client = application.CreateClient();
+        var report = new InventoryReport
+        {
+            Metadata = new InventoryReportMetadata { SchemaVersion = 5, SourcePlugin = "MarketMafioso" },
+            CharacterName = "Eriana Ning",
+            HomeWorld = "Siren",
+            ServiceAccountNumber = 2,
+            PlayerStorage = new StorageSourceEvidence
+            {
+                RequestedSources = ["Inventory1"],
+                ObservedSources = ["Inventory1"],
+            },
+        };
+
+        var ingest = await client.PostAsJsonAsync("/inventory", report);
+        ingest.EnsureSuccessStatusCode();
+        var characters = await client.GetFromJsonAsync<DashboardCharacterOption[]>("/api/inventory/characters");
+
+        var character = Assert.Single(characters!);
+        Assert.Equal("Eriana Ning @ Siren", character.DisplayName);
+        Assert.Equal(2, character.ServiceAccountNumber);
+        Assert.Equal("Service Account 2", character.ServiceAccountGroup);
     }
 
     [Theory]

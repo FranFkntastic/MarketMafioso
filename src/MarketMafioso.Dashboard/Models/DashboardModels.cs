@@ -61,7 +61,8 @@ public sealed record DashboardCharacterOption
     public string? HomeWorld { get; init; }
     public DateTimeOffset LastSeenAt { get; init; }
     public string DisplayName { get; init; } = string.Empty;
-    public string ServiceAccountGroup { get; init; } = "Awaiting account evidence";
+    public int? ServiceAccountNumber { get; init; }
+    public string ServiceAccountGroup { get; init; } = "Awaiting account assignment";
 }
 
 public sealed record ReportSummaryView

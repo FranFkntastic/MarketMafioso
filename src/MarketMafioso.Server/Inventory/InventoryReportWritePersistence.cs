@@ -7,8 +7,11 @@ namespace MarketMafioso.Server.Inventory;
 
 internal sealed class InventoryReportWritePersistence(
     SqliteConnectionFactory connectionFactory,
-    IConfiguration configuration)
+    IConfiguration configuration,
+    ILogger log)
 {
+    private readonly HashSet<string> incompleteIdentityDiagnostics = new(StringComparer.Ordinal);
+
     public async Task WriteSnapshotAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -120,7 +123,7 @@ internal sealed class InventoryReportWritePersistence(
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task<long?> UpsertCharacterAsync(
+    private async Task<long?> UpsertCharacterAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         long accountId,
@@ -128,27 +131,129 @@ internal sealed class InventoryReportWritePersistence(
         DateTimeOffset seenAt,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(report.CharacterName))
+        var characterName = report.CharacterName?.Trim();
+        if (string.IsNullOrWhiteSpace(characterName))
             return null;
+
+        var homeWorld = string.IsNullOrWhiteSpace(report.HomeWorld) ? null : report.HomeWorld.Trim();
+        var matchingIds = await FindCompleteCharacterIdsAsync(
+            connection,
+            transaction,
+            accountId,
+            characterName,
+            homeWorld,
+            cancellationToken);
+        if (matchingIds.Count > 1 ||
+            (homeWorld is null &&
+             (matchingIds.Count != 1 ||
+              report.ServiceAccountNumber is > 0 &&
+              matchingIds[0].ServiceAccountNumber is > 0 &&
+              report.ServiceAccountNumber != matchingIds[0].ServiceAccountNumber)))
+        {
+            var diagnosticKey = $"{accountId}:{characterName.ToUpperInvariant()}";
+            if (incompleteIdentityDiagnostics.Add(diagnosticKey))
+            {
+                log.LogWarning(
+                    "Stored inventory without a selectable character for {CharacterName}: the home world was unavailable and {CandidateCount} complete candidate(s) existed.",
+                    characterName,
+                    matchingIds.Count);
+            }
+            return null;
+        }
+
+        if (matchingIds.Count == 1)
+        {
+            await using var update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE characters
+                SET service_account_key = COALESCE($serviceAccountKey, service_account_key),
+                    service_account_number = CASE
+                        WHEN $serviceAccountNumber IS NULL THEN service_account_number
+                        ELSE $serviceAccountNumber
+                    END,
+                    last_seen_at_utc = $seenAt
+                WHERE id = $id;
+                """;
+            update.Parameters.AddWithValue("$serviceAccountKey", (object?)report.ServiceAccountKey ?? DBNull.Value);
+            update.Parameters.AddWithValue("$serviceAccountNumber", report.ServiceAccountNumber is > 0 ? report.ServiceAccountNumber.Value : DBNull.Value);
+            update.Parameters.AddWithValue("$seenAt", seenAt.ToString("O", CultureInfo.InvariantCulture));
+            update.Parameters.AddWithValue("$id", matchingIds[0].Id);
+            await update.ExecuteNonQueryAsync(cancellationToken);
+            return matchingIds[0].Id;
+        }
 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO characters (account_id, character_name, home_world, service_account_key, first_seen_at_utc, last_seen_at_utc)
-            VALUES ($accountId, $characterName, $homeWorld, $serviceAccountKey, $seenAt, $seenAt)
-            ON CONFLICT(account_id, character_name, home_world)
-            DO UPDATE SET
-                service_account_key = COALESCE(excluded.service_account_key, characters.service_account_key),
-                last_seen_at_utc = excluded.last_seen_at_utc
+            INSERT INTO characters (
+                account_id,
+                character_name,
+                home_world,
+                service_account_key,
+                service_account_number,
+                first_seen_at_utc,
+                last_seen_at_utc)
+            VALUES ($accountId, $characterName, $homeWorld, $serviceAccountKey, $serviceAccountNumber, $seenAt, $seenAt)
             RETURNING id;
             """;
         command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$characterName", report.CharacterName);
-        command.Parameters.AddWithValue("$homeWorld", (object?)report.HomeWorld ?? DBNull.Value);
+        command.Parameters.AddWithValue("$characterName", characterName);
+        command.Parameters.AddWithValue("$homeWorld", homeWorld!);
         command.Parameters.AddWithValue("$serviceAccountKey", (object?)report.ServiceAccountKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$serviceAccountNumber", report.ServiceAccountNumber is > 0 ? report.ServiceAccountNumber.Value : DBNull.Value);
         command.Parameters.AddWithValue("$seenAt", seenAt.ToString("O", CultureInfo.InvariantCulture));
         return (long)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
+
+    private static async Task<List<CharacterIdentityCandidate>> FindCompleteCharacterIdsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        string characterName,
+        string? homeWorld,
+        CancellationToken cancellationToken)
+    {
+        var candidates = new List<CharacterIdentityCandidate>(2);
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = homeWorld is null
+            ? """
+              SELECT id, service_account_number
+              FROM characters
+              WHERE account_id = $accountId
+                AND lower(trim(character_name)) = lower(trim($characterName))
+                AND home_world IS NOT NULL
+                AND trim(home_world) <> ''
+              ORDER BY id
+              LIMIT 2;
+              """
+            : """
+              SELECT id, service_account_number
+              FROM characters
+              WHERE account_id = $accountId
+                AND lower(trim(character_name)) = lower(trim($characterName))
+                AND lower(trim(home_world)) = lower(trim($homeWorld))
+              ORDER BY id
+              LIMIT 2;
+              """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$characterName", characterName);
+        if (homeWorld is not null)
+            command.Parameters.AddWithValue("$homeWorld", homeWorld);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            candidates.Add(new CharacterIdentityCandidate(
+                reader.GetInt64(0),
+                reader.IsDBNull(1) ? null : reader.GetInt32(1)));
+        }
+
+        return candidates;
+    }
+
+    private sealed record CharacterIdentityCandidate(long Id, int? ServiceAccountNumber);
 
     private static async Task InsertSnapshotAsync(
         SqliteConnection connection,
@@ -175,6 +280,7 @@ internal sealed class InventoryReportWritePersistence(
                 character_name,
                 home_world,
                 service_account_key,
+                service_account_number,
                 player_gil,
                 report_timestamp,
                 schema_version,
@@ -193,6 +299,7 @@ internal sealed class InventoryReportWritePersistence(
                 $characterName,
                 $homeWorld,
                 $serviceAccountKey,
+                $serviceAccountNumber,
                 $playerGil,
                 $reportTimestamp,
                 $schemaVersion,
@@ -211,6 +318,7 @@ internal sealed class InventoryReportWritePersistence(
         command.Parameters.AddWithValue("$characterName", (object?)report.CharacterName ?? DBNull.Value);
         command.Parameters.AddWithValue("$homeWorld", (object?)report.HomeWorld ?? DBNull.Value);
         command.Parameters.AddWithValue("$serviceAccountKey", (object?)report.ServiceAccountKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$serviceAccountNumber", report.ServiceAccountNumber is > 0 ? report.ServiceAccountNumber.Value : DBNull.Value);
         command.Parameters.AddWithValue("$playerGil", report.PlayerGil is { } playerGil ? checked((long)playerGil) : DBNull.Value);
         command.Parameters.AddWithValue("$reportTimestamp", report.Timestamp);
         command.Parameters.AddWithValue("$schemaVersion", metadata.SchemaVersion);

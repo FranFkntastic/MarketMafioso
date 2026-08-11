@@ -36,13 +36,6 @@ internal static class DashboardDataEndpoints
             characters.AddRange(accountCharacters);
         }
 
-        var serviceAccountLabels = characters
-            .Where(character => !string.IsNullOrWhiteSpace(character.ServiceAccountKey))
-            .GroupBy(character => character.ServiceAccountKey!, StringComparer.Ordinal)
-            .OrderBy(group => group.Min(character => character.Id))
-            .Select((group, index) => (group.Key, Label: $"Service Account {index + 1}"))
-            .ToDictionary(entry => entry.Key, entry => entry.Label, StringComparer.Ordinal);
-
         return Results.Ok(characters
             .GroupBy(character => character.Id)
             .Select(group => group.First())
@@ -53,9 +46,7 @@ internal static class DashboardDataEndpoints
                 character.CharacterName,
                 character.HomeWorld,
                 character.LastSeenAt,
-                character.ServiceAccountKey is { Length: > 0 } key && serviceAccountLabels.TryGetValue(key, out var label)
-                    ? label
-                    : "Awaiting account evidence"))
+                character.ServiceAccountNumber is > 0 ? character.ServiceAccountNumber : null))
             .ToArray());
     }
 
@@ -281,6 +272,8 @@ internal static class DashboardDataEndpoints
             SELECT 1
             FROM characters
             WHERE id = $characterId
+              AND home_world IS NOT NULL
+              AND trim(home_world) <> ''
               AND account_id IN ({string.Join(", ", accountIds.Select((_, index) => $"$account{index}"))})
             LIMIT 1
             """;
