@@ -104,8 +104,7 @@ public sealed class Plugin : IDalamudPlugin
         scanner = new InventoryScanner(DataManager, Log);
         quartermaster = new QuartermasterIpcClient(new DalamudQuartermasterIpcAdapter(PluginInterface));
         standaloneSquire = new StandaloneSquireIpcClient(new DalamudStandaloneSquireIpcAdapter(PluginInterface));
-        var serviceAccountIdentity = new DalamudServiceAccountIdentitySource(PluginInterface, Log);
-        reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner, serviceAccountIdentity, quartermaster);
+        reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner, quartermaster);
         retainerSaleChatObserver = new RetainerSaleChatObserver(
             Configuration,
             PlayerState,

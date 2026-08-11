@@ -65,6 +65,7 @@ public class Configuration : IPluginConfiguration
 
     public bool IncludeItemNames { get; set; } = true;
     public bool IncludeCharacterInfo { get; set; } = true;
+    public int? ServiceAccountNumber { get; set; }
 
     public bool EnableAutoSendTimer { get; set; } = false;
     public int AutoSendIntervalMinutes { get; set; } = 5;

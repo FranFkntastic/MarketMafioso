@@ -41,7 +41,9 @@ public sealed class SqliteSchemaMigrator
         await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil_observed_at_utc", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "listings_observed_at_utc", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "characters", "service_account_key", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "characters", "service_account_number", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_key", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_number", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "player_gil", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "retainer_management_json", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "location", "TEXT NULL", cancellationToken);
@@ -66,9 +68,127 @@ public sealed class SqliteSchemaMigrator
         await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "candidate_count", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "character_name", "TEXT NULL", cancellationToken);
 
+        var characterRepair = await RepairIncompleteCharacterIdentitiesAsync(connection, transaction, cancellationToken);
+        await CreateNormalizedCharacterIdentityIndexAsync(connection, transaction, cancellationToken);
+
         await transaction.CommitAsync(cancellationToken);
 
+        if (characterRepair.Repaired > 0)
+            log.LogInformation("Reconciled {CharacterCount} incomplete character identities.", characterRepair.Repaired);
+        if (characterRepair.Preserved > 0)
+        {
+            log.LogWarning(
+                "Preserved {CharacterCount} ambiguous or unmatched incomplete character identities outside dashboard selection.",
+                characterRepair.Preserved);
+        }
         log.LogInformation("SQLite schema is ready at {DatabasePath}.", connectionFactory.DatabasePath);
+    }
+
+    private static async Task<CharacterRepairResult> RepairIncompleteCharacterIdentitiesAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var repairs = new List<(long IncompleteId, long CanonicalId)>();
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = """
+                SELECT incomplete.id, min(canonical.id)
+                FROM characters incomplete
+                JOIN characters canonical
+                  ON canonical.account_id = incomplete.account_id
+                 AND lower(trim(canonical.character_name)) = lower(trim(incomplete.character_name))
+                 AND canonical.home_world IS NOT NULL
+                 AND trim(canonical.home_world) <> ''
+                WHERE incomplete.home_world IS NULL OR trim(incomplete.home_world) = ''
+                GROUP BY incomplete.id
+                HAVING count(canonical.id) = 1
+                   AND (
+                       max(incomplete.service_account_number) IS NULL
+                       OR max(canonical.service_account_number) IS NULL
+                       OR max(incomplete.service_account_number) = max(canonical.service_account_number));
+                """;
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                repairs.Add((reader.GetInt64(0), reader.GetInt64(1)));
+        }
+
+        foreach (var (incompleteId, canonicalId) in repairs)
+        {
+            await ExecuteAsync(
+                connection,
+                transaction,
+                """
+                UPDATE snapshots SET character_id = $canonicalId WHERE character_id = $incompleteId;
+                UPDATE dashboard_preferences
+                SET preferences_json = json_set(preferences_json, '$.defaultCharacterId', $canonicalId)
+                WHERE json_valid(preferences_json)
+                  AND json_extract(preferences_json, '$.defaultCharacterId') = $incompleteId;
+                UPDATE characters
+                SET first_seen_at_utc = min(first_seen_at_utc, (SELECT first_seen_at_utc FROM characters WHERE id = $incompleteId)),
+                    last_seen_at_utc = max(last_seen_at_utc, (SELECT last_seen_at_utc FROM characters WHERE id = $incompleteId)),
+                    service_account_key = COALESCE(service_account_key, (SELECT service_account_key FROM characters WHERE id = $incompleteId)),
+                    service_account_number = COALESCE(service_account_number, (SELECT service_account_number FROM characters WHERE id = $incompleteId))
+                WHERE id = $canonicalId;
+                DELETE FROM characters WHERE id = $incompleteId;
+                """,
+                cancellationToken,
+                ("$canonicalId", canonicalId),
+                ("$incompleteId", incompleteId));
+        }
+
+        await ExecuteAsync(
+            connection,
+            transaction,
+            """
+            UPDATE dashboard_preferences
+            SET preferences_json = json_set(preferences_json, '$.defaultCharacterId', NULL)
+            WHERE json_valid(preferences_json)
+              AND EXISTS (
+                  SELECT 1
+                  FROM characters
+                  WHERE id = json_extract(dashboard_preferences.preferences_json, '$.defaultCharacterId')
+                    AND (home_world IS NULL OR trim(home_world) = ''));
+            """,
+            cancellationToken);
+
+        await using var count = connection.CreateCommand();
+        count.Transaction = transaction;
+        count.CommandText = "SELECT count(*) FROM characters WHERE home_world IS NULL OR trim(home_world) = ''";
+        var preserved = checked((int)(long)(await count.ExecuteScalarAsync(cancellationToken))!);
+        return new CharacterRepairResult(repairs.Count, preserved);
+    }
+
+    private sealed record CharacterRepairResult(int Repaired, int Preserved);
+
+    private static Task CreateNormalizedCharacterIdentityIndexAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(
+            connection,
+            transaction,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_characters_complete_identity_normalized
+            ON characters (account_id, lower(trim(character_name)), lower(trim(home_world)))
+            WHERE home_world IS NOT NULL AND trim(home_world) <> '';
+            """,
+            cancellationToken);
+
+    private static async Task ExecuteAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string sql,
+        CancellationToken cancellationToken,
+        params (string Name, object Value)[] parameters)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+        foreach (var (name, value) in parameters)
+            command.Parameters.AddWithValue(name, value);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task AddColumnIfMissingAsync(
@@ -214,6 +334,7 @@ public sealed class SqliteSchemaMigrator
             character_name TEXT NOT NULL,
             home_world TEXT NULL,
             service_account_key TEXT NULL,
+            service_account_number INTEGER NULL,
             first_seen_at_utc TEXT NOT NULL,
             last_seen_at_utc TEXT NOT NULL,
             UNIQUE(account_id, character_name, home_world)
@@ -228,6 +349,7 @@ public sealed class SqliteSchemaMigrator
             character_name TEXT NULL,
             home_world TEXT NULL,
             service_account_key TEXT NULL,
+            service_account_number INTEGER NULL,
             player_gil INTEGER NULL,
             report_timestamp TEXT NOT NULL,
             schema_version INTEGER NOT NULL,

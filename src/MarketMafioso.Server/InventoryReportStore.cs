@@ -24,7 +24,7 @@ public sealed class InventoryReportStore
         this.connectionFactory = connectionFactory;
         this.configuration = configuration;
         this.log = log;
-        writePersistence = new InventoryReportWritePersistence(connectionFactory, configuration);
+        writePersistence = new InventoryReportWritePersistence(connectionFactory, configuration, log);
         readQueries = new InventoryReportReadQueries(connectionFactory);
         rawJsonRetention = new InventoryRawJsonRetention(connectionFactory, configuration);
 
@@ -222,6 +222,7 @@ public sealed record CharacterSummary(
     string CharacterName,
     string? HomeWorld,
     DateTimeOffset LastSeenAt,
+    int? ServiceAccountNumber = null,
     string? ServiceAccountKey = null);
 
 public sealed record InventoryRetentionSummary

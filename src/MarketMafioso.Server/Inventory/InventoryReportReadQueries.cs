@@ -23,9 +23,11 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, character_name, home_world, last_seen_at_utc, service_account_key
+            SELECT id, character_name, home_world, last_seen_at_utc, service_account_number, service_account_key
             FROM characters
             WHERE account_id = $accountId
+              AND home_world IS NOT NULL
+              AND trim(home_world) <> ''
             ORDER BY last_seen_at_utc DESC, character_name COLLATE NOCASE
             """;
         command.Parameters.AddWithValue("$accountId", accountId);
@@ -185,6 +187,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
             CharacterName = snapshot.CharacterName,
             HomeWorld = snapshot.HomeWorld,
             ServiceAccountKey = snapshot.ServiceAccountKey,
+            ServiceAccountNumber = snapshot.ServiceAccountNumber,
             PlayerGil = snapshot.PlayerGil,
             Timestamp = snapshot.ReportTimestamp,
             PlayerInventory = playerBags,
@@ -217,6 +220,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
                 character_name,
                 home_world,
                 service_account_key,
+                service_account_number,
                 player_gil,
                 report_timestamp,
                 schema_version,

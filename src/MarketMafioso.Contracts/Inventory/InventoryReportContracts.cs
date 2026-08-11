@@ -18,6 +18,10 @@ public sealed record InventoryReport
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ServiceAccountKey { get; init; }
 
+    [JsonPropertyName("serviceAccountNumber")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ServiceAccountNumber { get; init; }
+
     [JsonPropertyName("playerGil")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ulong? PlayerGil { get; init; }
@@ -318,6 +322,10 @@ public sealed record InventoryReportDelta
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ServiceAccountKey { get; init; }
 
+    [JsonPropertyName("serviceAccountNumber")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ServiceAccountNumber { get; init; }
+
     [JsonPropertyName("timestamp")]
     public string Timestamp { get; init; } = string.Empty;
 
@@ -447,6 +455,7 @@ public static class InventoryReportDeltaBuilder
                 CharacterName = after.CharacterName,
                 HomeWorld = after.HomeWorld,
                 ServiceAccountKey = after.ServiceAccountKey,
+                ServiceAccountNumber = after.ServiceAccountNumber,
                 Timestamp = after.Timestamp,
                 ReplacePlayerGil = replacePlayerGil,
                 PlayerGil = replacePlayerGil ? after.PlayerGil : null,
@@ -508,7 +517,8 @@ public static class InventoryReportDeltaBuilder
     private static bool SameIdentity(InventoryReport before, InventoryReport after) =>
         string.Equals(before.CharacterName, after.CharacterName, StringComparison.Ordinal) &&
         string.Equals(before.HomeWorld, after.HomeWorld, StringComparison.Ordinal) &&
-        string.Equals(before.ServiceAccountKey, after.ServiceAccountKey, StringComparison.Ordinal);
+        string.Equals(before.ServiceAccountKey, after.ServiceAccountKey, StringComparison.Ordinal) &&
+        before.ServiceAccountNumber == after.ServiceAccountNumber;
 
     private static bool TryIndexBags(
         IReadOnlyList<InventoryBag> bags,
@@ -647,7 +657,8 @@ public static class InventoryReportDeltaApplier
     private static bool SameIdentity(InventoryReport before, InventoryReportDelta delta) =>
         string.Equals(before.CharacterName, delta.CharacterName, StringComparison.Ordinal) &&
         string.Equals(before.HomeWorld, delta.HomeWorld, StringComparison.Ordinal) &&
-        string.Equals(before.ServiceAccountKey, delta.ServiceAccountKey, StringComparison.Ordinal);
+        string.Equals(before.ServiceAccountKey, delta.ServiceAccountKey, StringComparison.Ordinal) &&
+        before.ServiceAccountNumber == delta.ServiceAccountNumber;
 
     private static Dictionary<ulong, RetainerReport> IndexRetainers(IReadOnlyList<RetainerReport> retainers)
     {

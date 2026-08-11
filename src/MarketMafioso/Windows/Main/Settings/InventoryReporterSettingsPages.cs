@@ -23,7 +23,7 @@ internal sealed class InventoryReporterSettingsPages
         [
             new InventoryReporterActionsSettingsPage(reporter, reviewRegistry).Descriptor,
             new("inventory.capture", "Inventory Reporter / Capture", DrawCapture, 10,
-                searchTerms: ["armoury chest", "crystal bag", "equipped gear", "saddlebag", "item names", "character world"]),
+                searchTerms: ["armoury chest", "crystal bag", "equipped gear", "saddlebag", "item names", "character world", "service account"]),
             new("inventory.scheduling", "Inventory Reporter / Scheduling", DrawScheduling, 11,
                 searchTerms: ["auto-send", "retainer close", "automatic periodic sending", "send interval", "timer"]),
             new("inventory.market-diagnostics", "Inventory Reporter / Market Diagnostics", DrawMarketDiagnostics, 12,
@@ -43,6 +43,28 @@ internal sealed class InventoryReporterSettingsPages
         DrawCheckbox(context, "Saddlebag (if subscribed)", "Include the chocobo saddlebag when its inventory is available.", () => config.IncludeSaddlebag, value => config.IncludeSaddlebag = value);
         DrawCheckbox(context, "Resolve item names via Lumina", "Write player-facing item names beside item IDs.", () => config.IncludeItemNames, value => config.IncludeItemNames = value);
         DrawCheckbox(context, "Include character name and world", "Identify the character and world that owns the report.", () => config.IncludeCharacterInfo, value => config.IncludeCharacterInfo = value);
+        DrawServiceAccountNumber(context);
+    }
+
+    private void DrawServiceAccountNumber(SettingsPageContext context)
+    {
+        if (!context.Matches("Service account number", "service account", "account grouping")) return;
+
+        var number = config.ServiceAccountNumber ?? 0;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.InputInt("Service account number", ref number, 1, 1))
+        {
+            int? normalized = number > 0 ? number : null;
+            if (normalized != config.ServiceAccountNumber)
+            {
+                config.ServiceAccountNumber = normalized;
+                config.Save();
+            }
+        }
+
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            "Groups this profile's characters in hosted Inventory. Use 0 when unassigned.");
     }
 
     private void DrawScheduling(SettingsPageContext context)
