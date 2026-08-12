@@ -35,6 +35,7 @@ internal sealed class SettingsTabPanel
         var pages = new List<SettingsPageDescriptor>
         {
             new ServerConnectionSettingsPage(config, reporter, log).Descriptor,
+            new TradeQueueSettingsPage(config, reviewRegistry).Descriptor,
         };
         pages.AddRange(new InventoryReporterSettingsPages(config, restartTimer, reporter, reviewRegistry).Descriptors);
         pages.AddRange(new MarketAcquisitionSettingsPages(

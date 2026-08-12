@@ -5,7 +5,12 @@ using Dalamud.Bindings.ImGui;
 
 namespace MarketMafioso.Windows.Main;
 
-internal readonly record struct UtilityStatusFact(string Label, string Value, Vector4? Color = null);
+internal readonly record struct UtilityStatusFact(
+    string Label,
+    string Value,
+    Vector4? Color = null,
+    Action? DrawAction = null,
+    float ActionWidth = 0f);
 
 internal static class UtilityWorkspaceUi
 {
@@ -25,6 +30,12 @@ internal static class UtilityWorkspaceUi
         foreach (var fact in facts)
         {
             ImGui.TableNextColumn();
+            var cellStartX = ImGui.GetCursorPosX();
+            var valueWidth = fact.DrawAction == null
+                ? 0f
+                : Math.Max(1f, ImGui.GetContentRegionAvail().X - fact.ActionWidth - ImGui.GetStyle().ItemSpacing.X);
+            if (fact.DrawAction != null)
+                ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + valueWidth);
             if (fact.Color is { } color)
             {
                 ImGui.PushStyleColor(ImGuiCol.Text, color);
@@ -33,6 +44,13 @@ internal static class UtilityWorkspaceUi
             }
             else
                 ImGui.TextWrapped(fact.Value);
+            if (fact.DrawAction != null)
+            {
+                ImGui.PopTextWrapPos();
+                ImGui.SameLine();
+                ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), cellStartX + valueWidth + ImGui.GetStyle().ItemSpacing.X));
+                fact.DrawAction();
+            }
         }
 
         ImGui.EndTable();
