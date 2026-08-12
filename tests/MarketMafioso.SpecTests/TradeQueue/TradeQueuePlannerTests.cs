@@ -6,6 +6,23 @@ namespace MarketMafioso.SpecTests.TradeQueue;
 
 public sealed class TradeQueuePlannerTests
 {
+    [Theory]
+    [InlineData(150f, 75f)]
+    [InlineData(1f, 1f)]
+    public void Quantity_editor_owns_the_left_half_of_the_queued_cell(float availableWidth, float expected)
+    {
+        Assert.Equal(expected, TradeQueuePanel.ResolveQuantityEditTargetWidth(availableWidth));
+    }
+
+    [Theory]
+    [InlineData(-1, 36, 0)]
+    [InlineData(12, 36, 12)]
+    [InlineData(40, 36, 36)]
+    public void Granular_quantity_clamps_to_the_observed_available_range(int requested, int available, int expected)
+    {
+        Assert.Equal(expected, TradeQueuePanel.ClampQueuedQuantity(requested, available));
+    }
+
     [Fact]
     public void Planner_EnforcesInventoryBatchingEvidenceAndWorkshopHandoffContracts()
     {
