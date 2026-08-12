@@ -1,15 +1,16 @@
 <label class="inventory-select-field">
     <span class="visually-hidden">Inventory scope</span>
     <select class="inventory-native-select"
-            @onchange="HandleChangedAsync"
+            @bind:get="Value"
+            @bind:set="HandleChangedAsync"
             aria-label="Inventory scope">
-        <option value="all" selected="@IsSelected("all")">All locations (@Scopes.Sum(scope => scope.StackCount).ToString("N0"))</option>
+        <option value="all">All locations (@Scopes.Sum(scope => scope.StackCount).ToString("N0"))</option>
         @foreach (var group in Scopes.GroupBy(CharacterLabel).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
         {
             <optgroup label="@group.Key">
                 @foreach (var scope in group)
                 {
-                    <option value="@scope.ScopeKey" selected="@IsSelected(scope.ScopeKey)">@scope.DisplayName (@scope.StackCount.ToString("N0"))</option>
+                    <option value="@scope.ScopeKey">@scope.DisplayName (@scope.StackCount.ToString("N0"))</option>
                 }
             </optgroup>
         }
@@ -21,11 +22,8 @@
     [Parameter] public string Value { get; set; } = "all";
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
 
-    private Task HandleChangedAsync(ChangeEventArgs args) =>
-        ValueChanged.InvokeAsync(args.Value?.ToString() ?? "all");
-
-    private bool IsSelected(string scope) =>
-        string.Equals(Value, scope, StringComparison.OrdinalIgnoreCase);
+    private Task HandleChangedAsync(string value) =>
+        ValueChanged.InvokeAsync(string.IsNullOrWhiteSpace(value) ? "all" : value);
 
     private static string CharacterLabel(InventoryBrowserScopeView scope)
     {
