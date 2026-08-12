@@ -697,7 +697,7 @@ public sealed class Plugin : IDalamudPlugin
             nowUtc,
             refreshReady,
             refreshDeferredReason);
-        mainWindow.MarketListingOverlay.IsOpen = true;
+        mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
         if (Configuration.AutoAcceptIncomingTrades)
             tradeAutomationCoordinator.SuppressDropboxAutoAccept();
         else

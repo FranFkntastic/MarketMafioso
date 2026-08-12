@@ -5,6 +5,9 @@ namespace MarketMafioso.MarketAcquisition.MarketBoard;
 
 internal static class MarketListingBrowseEvidenceAdapter
 {
+    public static bool CanAdoptNativeObservation(MarketBoardBrowseSnapshot browse) =>
+        browse.Owner is null or MarketBoardBrowseOwner.MarketListingAcquisition;
+
     public static MarketBoardBrowseEvidence? FromRuntime(MarketBoardBrowseSnapshot browse) =>
         browse.IsComplete &&
         browse.Owner == MarketBoardBrowseOwner.MarketListingAcquisition &&

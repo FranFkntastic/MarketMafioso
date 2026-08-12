@@ -31,6 +31,7 @@ public sealed class MarketListingOverlayWindow : Window
     private readonly string[] projectedFilters = new string[7];
     private int projectedSortColumn = -1;
     private ImGuiSortDirection projectedSortDirection;
+    private bool presentationActive;
     private MarketListingRowView[] selectedListings = [];
     private long selectedQuantity;
     private ulong selectedGil;
@@ -65,6 +66,14 @@ public sealed class MarketListingOverlayWindow : Window
     }
 
     public override bool DrawConditions() => controller.ShouldPresentOverlay();
+
+    internal void SynchronizePresentationLifetime()
+    {
+        var active = controller.ShouldPresentOverlay();
+        if (active && !presentationActive)
+            IsOpen = true;
+        presentationActive = active;
+    }
 
     public override void PreDraw()
     {
@@ -195,48 +204,52 @@ public sealed class MarketListingOverlayWindow : Window
             return;
 
         tableProjection.DrawFilterRow();
-        foreach (var listing in GetProjectedListings(view, ImGui.TableGetSortSpecs()))
-        {
-            var status = listing.BatchStatus;
-            var selected = selectedListingIds.Contains(listing.ListingId);
-            var selectable = !listing.AlreadyPurchased && status is null && !batchActive;
-
-            ImGui.TableNextRow();
-            ImGui.TableNextColumn();
-            if (!selectable)
-                ImGui.BeginDisabled();
-            if (ImGui.Selectable($"##rmsel{listing.ListingId}", selected, ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowItemOverlap) && selectable)
-            {
-                if (selected)
-                    selectedListingIds.Remove(listing.ListingId);
-                else
-                    selectedListingIds.Add(listing.ListingId);
-                confirmArmed = false;
-                RebuildSelection(view);
-            }
-            ImGui.SameLine();
-            ImGui.TextUnformatted(listing.Quantity.ToString());
-            if (!selectable)
-                ImGui.EndDisabled();
-
-            var muted = listing.AlreadyPurchased || status is MarketListingBatchStatus.Confirmed or MarketListingBatchStatus.Skipped;
-            Cell(listing.UnitPrice.ToString("N0"), muted);
-            Cell(listing.TotalTax.ToString("N0"), muted);
-            Cell(listing.TotalGil.ToString("N0"), muted);
-            Cell(listing.MateriaCount > 0 ? listing.MateriaCount.ToString() : string.Empty, muted);
-            Cell(listing.RetainerName, muted);
-
-            ImGui.TableNextColumn();
-            if (status == MarketListingBatchStatus.Failed)
-                ImGui.TextColored(MarketMafiosoUiTheme.Error, "FAILED");
-            else if (status == MarketListingBatchStatus.Sending)
-                ImGui.TextColored(MarketMafiosoUiTheme.Header, "sending");
-            else if (listing.AlreadyPurchased)
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "purchased");
-            else if (status is not null)
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, status.Value.ToString().ToLowerInvariant());
-        }
+        tableProjection.DrawClippedRows(
+            GetProjectedListings(view, ImGui.TableGetSortSpecs()),
+            (listing, _) => DrawListingRow(listing, view, batchActive));
         tableProjection.End();
+    }
+
+    private void DrawListingRow(MarketListingRowView listing, MarketListingView view, bool batchActive)
+    {
+        var status = listing.BatchStatus;
+        var selected = selectedListingIds.Contains(listing.ListingId);
+        var selectable = !listing.AlreadyPurchased && status is null && !batchActive;
+
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        if (!selectable)
+            ImGui.BeginDisabled();
+        if (ImGui.Selectable($"##rmsel{listing.ListingId}", selected, ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowItemOverlap) && selectable)
+        {
+            if (selected)
+                selectedListingIds.Remove(listing.ListingId);
+            else
+                selectedListingIds.Add(listing.ListingId);
+            confirmArmed = false;
+            RebuildSelection(view);
+        }
+        ImGui.SameLine();
+        ImGui.TextUnformatted(listing.Quantity.ToString());
+        if (!selectable)
+            ImGui.EndDisabled();
+
+        var muted = listing.AlreadyPurchased || status is MarketListingBatchStatus.Confirmed or MarketListingBatchStatus.Skipped;
+        Cell(listing.UnitPrice.ToString("N0"), muted);
+        Cell(listing.TotalTax.ToString("N0"), muted);
+        Cell(listing.TotalGil.ToString("N0"), muted);
+        Cell(listing.MateriaCount > 0 ? listing.MateriaCount.ToString() : string.Empty, muted);
+        Cell(listing.RetainerName, muted);
+
+        ImGui.TableNextColumn();
+        if (status == MarketListingBatchStatus.Failed)
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, "FAILED");
+        else if (status == MarketListingBatchStatus.Sending)
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, "sending");
+        else if (listing.AlreadyPurchased)
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "purchased");
+        else if (status is not null)
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, status.Value.ToString().ToLowerInvariant());
     }
 
     private unsafe IReadOnlyList<MarketListingRowView> GetProjectedListings(

@@ -60,6 +60,22 @@ public sealed class RenderPathBoundaryTests
     }
 
     [Fact]
+    public void MarketListingOverlayIsNotForcedOpenAndOnlyDrawsVisibleRows()
+    {
+        var plugin = ReadSource("src", "MarketMafioso", "Plugin.cs");
+        var overlay = ReadSource("src", "MarketMafioso", "Windows", "MarketListingOverlayWindow.cs");
+        var frameworkUpdate = ExtractMethodBody(plugin, "OnFrameworkUpdate");
+        var drawListings = ExtractMethodBody(overlay, "DrawListingsTable");
+        var synchronizeLifetime = ExtractMethodBody(overlay, "SynchronizePresentationLifetime");
+
+        Assert.DoesNotContain("MarketListingOverlay.IsOpen = true", frameworkUpdate, StringComparison.Ordinal);
+        Assert.Contains("MarketListingOverlay.SynchronizePresentationLifetime()", frameworkUpdate, StringComparison.Ordinal);
+        Assert.Contains("if (active && !presentationActive)", synchronizeLifetime, StringComparison.Ordinal);
+        Assert.Contains("tableProjection.DrawClippedRows(", drawListings, StringComparison.Ordinal);
+        Assert.DoesNotContain("foreach (", drawListings, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ConfirmedListingPurchaseReconcilesInPlace()
     {
         var coordinator = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketListingPurchaseCoordinator.cs");

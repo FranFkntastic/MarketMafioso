@@ -32,6 +32,21 @@ public sealed class MarketListingBrowseEvidenceAdapterTests
     }
 
     [Theory]
+    [InlineData(null, true)]
+    [InlineData(MarketBoardBrowseOwner.MarketListingAcquisition, true)]
+    [InlineData(MarketBoardBrowseOwner.MarketAcquisition, false)]
+    [InlineData(MarketBoardBrowseOwner.RetainerListingRefresh, false)]
+    [InlineData(MarketBoardBrowseOwner.RemoteAccessProbe, false)]
+    public void OnlyManualOrListingOwnedBrowseCanDriveListingPresentation(
+        MarketBoardBrowseOwner? owner,
+        bool expected)
+    {
+        var browse = CompletedBrowse() with { Owner = owner };
+
+        Assert.Equal(expected, MarketListingBrowseEvidenceAdapter.CanAdoptNativeObservation(browse));
+    }
+
+    [Theory]
     [InlineData((int)MarketListingPurchasePhase.Sending, true)]
     [InlineData((int)MarketListingPurchasePhase.Sent, true)]
     [InlineData((int)MarketListingPurchasePhase.AwaitingConfirmation, false)]

@@ -263,18 +263,22 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
         if (observation.Source is null)
             return;
 
+        var browse = browseRuntime.Snapshot;
+        if (!MarketListingBrowseEvidenceAdapter.CanAdoptNativeObservation(browse))
+            return;
+
         var previousContextItemId = listingSnapshot.Length == 0 ? 0 : listingSnapshot[0].ItemId;
         var previousContextHighQuality = listingSnapshot.Length != 0 && listingSnapshot[0].IsHighQuality;
         var transition = listingSession.Observe(
             observation,
-            MarketListingBrowseEvidenceAdapter.FromRuntime(browseRuntime.Snapshot));
+            MarketListingBrowseEvidenceAdapter.FromRuntime(browse));
         if (!transition.Changed || transition.Revision is not { } revision)
             return;
 
         listingSnapshot = revision.Listings
             .Select(ToListingView)
             .ToArray();
-        presentationSession.ObserveSnapshot();
+        presentationSession.ObserveSnapshot(clientState.TerritoryType);
         if (listingSnapshot.Length == 0)
         {
             marketContext = null;
@@ -691,6 +695,8 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
             purchaseGuard.ObserveMarketAgentActive(agentActive);
             var resultVisible = IsAddonVisible(ItemSearchResultAddon);
             presentationSession.ObserveNativeState(
+                clientState.IsLoggedIn,
+                clientState.TerritoryType,
                 resultVisible,
                 resultVisible && IsMarketBoardResultVisible(),
                 IsAddonVisible("ItemSearch"),

@@ -10,6 +10,8 @@ public sealed class MarketListingPresentationSessionTests
         var session = ActiveSession();
 
         session.ObserveNativeState(
+            clientAvailable: true,
+            currentTerritoryId: 129,
             resultVisible: false,
             resultMatchesSnapshot: false,
             searchVisible: false,
@@ -25,6 +27,8 @@ public sealed class MarketListingPresentationSessionTests
         var session = ActiveSession();
 
         session.ObserveNativeState(
+            clientAvailable: true,
+            currentTerritoryId: 129,
             resultVisible: false,
             resultMatchesSnapshot: false,
             searchVisible: false,
@@ -40,6 +44,8 @@ public sealed class MarketListingPresentationSessionTests
         var session = ActiveSession();
 
         session.ObserveNativeState(
+            clientAvailable: true,
+            currentTerritoryId: 129,
             resultVisible: false,
             resultMatchesSnapshot: false,
             searchVisible: true,
@@ -55,6 +61,8 @@ public sealed class MarketListingPresentationSessionTests
         var session = ActiveSession();
 
         session.ObserveNativeState(
+            clientAvailable: true,
+            currentTerritoryId: 129,
             resultVisible: false,
             resultMatchesSnapshot: false,
             searchVisible: false,
@@ -67,7 +75,7 @@ public sealed class MarketListingPresentationSessionTests
     private static MarketListingPresentationSession ActiveSession()
     {
         var session = new MarketListingPresentationSession();
-        session.ObserveSnapshot();
+        session.ObserveSnapshot(129);
         return session;
     }
 
@@ -77,7 +85,30 @@ public sealed class MarketListingPresentationSessionTests
         var session = ActiveSession();
 
         session.ObserveNativeState(
+            clientAvailable: true,
+            currentTerritoryId: 129,
             resultVisible: true,
+            resultMatchesSnapshot: false,
+            searchVisible: false,
+            agentActive: true,
+            recoveryActive: false);
+
+        Assert.False(session.IsActive);
+    }
+
+    [Theory]
+    [InlineData(false, 129)]
+    [InlineData(true, 130)]
+    public void LogoutOrTerritoryChangeEndsListingPresentation(
+        bool clientAvailable,
+        uint currentTerritoryId)
+    {
+        var session = ActiveSession();
+
+        session.ObserveNativeState(
+            clientAvailable,
+            currentTerritoryId,
+            resultVisible: false,
             resultMatchesSnapshot: false,
             searchVisible: false,
             agentActive: true,
