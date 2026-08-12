@@ -17,6 +17,8 @@ internal sealed class TradeQueuePanel
         new("recipientName", AgentBridgeActionArgumentKind.String),
         new("homeWorld", AgentBridgeActionArgumentKind.String),
     ]);
+    private static readonly AgentBridgeActionArgumentSchema BulkQuantitySchema = new(
+        [new("quantity", AgentBridgeActionArgumentKind.Integer, Minimum: 0)]);
     private readonly Configuration config;
     private readonly MarketMafioso.TradeQueue.TradeQueueRunner runner;
     private readonly ITradeQueueIo io;
@@ -26,6 +28,7 @@ internal sealed class TradeQueuePanel
     private string inventoryFilter = string.Empty;
     private bool showQueuedOnly;
     private bool confirmClear;
+    private int bulkQuantity = 1;
     private uint? editingQuantityItemId;
     private string receiverStatus = "No incoming trade action has been invoked.";
 
@@ -79,7 +82,8 @@ internal sealed class TradeQueuePanel
             DalamudTableSelection<TradeQueueInventoryRow>.Multi(
                 inventorySelection,
                 row => row.Key.ItemId,
-                IsSelectableInventoryRow));
+                IsSelectableInventoryRow),
+            row => row.SelectedQuantity > 0 ? 0 : 1);
     }
 
     public bool HasItems => config.TradeQueueItems.Any(item => item.Quantity > 0);
@@ -222,28 +226,40 @@ internal sealed class TradeQueuePanel
         var selectionCountLabel = inventorySelection.Count > 0
             ? $"{inventorySelection.Count:N0} row{(inventorySelection.Count == 1 ? string.Empty : "s")} selected"
             : "No rows selected";
-        var selectionDetail = inventorySelection.Count == 0
-            ? "Select rows, then apply one queue action to all of them."
-            : inventorySelection.Count == visibleSelectedCount
-                ? "Ready for one bulk queue action."
-                : $"{visibleSelectedCount:N0} selected row{(visibleSelectedCount == 1 ? string.Empty : "s")} visible.";
+        var selectionDetail = inventorySelection.Count > 0 && inventorySelection.Count != visibleSelectedCount
+            ? $"{visibleSelectedCount:N0} selected row{(visibleSelectedCount == 1 ? string.Empty : "s")} visible."
+            : null;
 
         var style = ImGui.GetStyle();
         var barHeight = ImGui.GetFrameHeightWithSpacing() + 10f;
-        var barBackground = inventorySelection.Count > 0
+        var idleBackground = new System.Numerics.Vector4(
+            MainWindow.ColHeader.X * 0.10f,
+            MainWindow.ColHeader.Y * 0.10f,
+            MainWindow.ColHeader.Z * 0.10f,
+            0.96f);
+        var idleBorder = new System.Numerics.Vector4(
+            MainWindow.ColHeader.X * 0.38f,
+            MainWindow.ColHeader.Y * 0.38f,
+            MainWindow.ColHeader.Z * 0.38f,
+            1f);
+        var barBackground = runner.IsActive
+            ? new System.Numerics.Vector4(MainWindow.ColWarning.X * 0.20f, MainWindow.ColWarning.Y * 0.20f, MainWindow.ColWarning.Z * 0.20f, 0.96f)
+            : inventorySelection.Count > 0
             ? new System.Numerics.Vector4(
                 MainWindow.ColHeader.X * 0.20f,
                 MainWindow.ColHeader.Y * 0.20f,
                 MainWindow.ColHeader.Z * 0.20f,
                 0.96f)
-            : style.Colors[(int)ImGuiCol.ChildBg];
-        var barBorder = inventorySelection.Count > 0
+            : idleBackground;
+        var barBorder = runner.IsActive
+            ? MainWindow.ColWarning
+            : inventorySelection.Count > 0
             ? new System.Numerics.Vector4(
                 MainWindow.ColHeader.X * 0.65f,
                 MainWindow.ColHeader.Y * 0.65f,
                 MainWindow.ColHeader.Z * 0.65f,
                 1f)
-            : style.Colors[(int)ImGuiCol.Border];
+            : idleBorder;
         ImGui.PushStyleColor(ImGuiCol.ChildBg, barBackground);
         ImGui.PushStyleColor(ImGuiCol.Border, barBorder);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 2f);
@@ -266,7 +282,7 @@ internal sealed class TradeQueuePanel
             selectionCountLabel);
         var actionWidth = CalculateSelectionActionWidth();
         var availableForDetail = ImGui.GetContentRegionAvail().X - actionWidth - style.ItemSpacing.X;
-        if (availableForDetail > 180f)
+        if (selectionDetail != null && availableForDetail > 180f)
         {
             ImGui.SameLine();
             ImGui.TextColored(MainWindow.ColMuted, selectionDetail);
@@ -296,6 +312,32 @@ internal sealed class TradeQueuePanel
 
         ImGui.SameLine();
         var canBulkEdit = inventorySelection.Count > 0 && !runner.IsActive;
+        if (runner.IsActive)
+            ImGui.BeginDisabled();
+        ImGui.SetNextItemWidth(72f);
+        ImGui.InputInt("##trade-queue-bulk-quantity", ref bulkQuantity, 1, 10);
+        if (runner.IsActive)
+            ImGui.EndDisabled();
+        bulkQuantity = Math.Max(0, bulkQuantity);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Set quantity", canBulkEdit))
+            ApplyBulkAction(rows, TradeQueueBulkAction.SetQuantity, bulkQuantity);
+        RegisterLastAction(
+            "trade-queue.set-selected-quantity",
+            "Set queued quantity for the selected rows",
+            canBulkEdit,
+            $"selected={inventorySelection.Count:N0}; quantity={bulkQuantity:N0}",
+            BulkQuantitySchema,
+            arguments =>
+            {
+                var requested = arguments!.Value.GetProperty("quantity").GetInt32();
+                if (!ApplyBulkAction(rows, TradeQueueBulkAction.SetQuantity, requested))
+                    return AgentBridgeUiActionResult.Fail("Trade Queue cannot be edited while trading is active.");
+                return AgentBridgeUiActionResult.Ok(
+                    $"Set queued quantity to {requested:N0} for {inventorySelection.Count:N0} selected row(s), clamped to available stock.");
+            });
+
+        ImGui.SameLine();
         if (ImGuiUi.PrimaryButton("Queue all available", canBulkEdit))
             ApplyBulkAction(rows, TradeQueueBulkAction.QueueAllAvailable);
         RegisterLastAction(
@@ -428,6 +470,7 @@ internal sealed class TradeQueuePanel
                 if (ImGui.IsItemClicked())
                     editingQuantityItemId = row.Key.ItemId;
             }
+            RegisterQuantityInput(row, !runner.IsActive);
             return;
         }
 
@@ -453,6 +496,7 @@ internal sealed class TradeQueuePanel
         {
             editingQuantityItemId = null;
         }
+        RegisterQuantityInput(row, !runner.IsActive);
     }
 
     private static System.Numerics.Vector4? ResolveInventoryRowBackground(TradeQueueInventoryRow row)
@@ -466,9 +510,10 @@ internal sealed class TradeQueuePanel
     private static float CalculateSelectionActionWidth()
     {
         var style = ImGui.GetStyle();
-        var labels = new[] { "Select visible", "Queue all available", "Remove from queue", "Clear row selection" };
-        return labels.Sum(label => ImGui.CalcTextSize(label).X + (style.FramePadding.X * 2f)) +
-               ((labels.Length - 1) * style.ItemSpacing.X);
+        var buttonLabels = new[] { "Select visible", "Set quantity", "Queue all available", "Remove from queue", "Clear row selection" };
+        return 72f +
+               buttonLabels.Sum(label => ImGui.CalcTextSize(label).X + (style.FramePadding.X * 2f)) +
+               (buttonLabels.Length * style.ItemSpacing.X);
     }
 
     private static string QueueStateLabel(TradeQueueInventoryRow row)
@@ -499,7 +544,8 @@ internal sealed class TradeQueuePanel
 
     private bool ApplyBulkAction(
         IReadOnlyList<TradeQueueInventoryRow> rows,
-        TradeQueueBulkAction action)
+        TradeQueueBulkAction action,
+        int quantity = 0)
     {
         if (runner.IsActive)
             return false;
@@ -507,7 +553,8 @@ internal sealed class TradeQueuePanel
             config.TradeQueueItems,
             rows,
             inventorySelection.SelectedKeys,
-            action);
+            action,
+            quantity);
         config.TradeQueueItems.Clear();
         foreach (var item in updated)
             config.TradeQueueItems.Add(item);
@@ -705,6 +752,42 @@ internal sealed class TradeQueuePanel
             mutating: true,
             completionOperationKind: null,
             invoke);
+
+    private void RegisterQuantityInput(TradeQueueInventoryRow row, bool enabled)
+    {
+        var schema = BulkQuantitySchema with
+        {
+            Properties =
+            [
+                new(
+                    "quantity",
+                    AgentBridgeActionArgumentKind.Integer,
+                    Minimum: 0,
+                    Maximum: row.AvailableQuantity),
+            ],
+        };
+        reviewRegistry.Register(
+            $"trade-queue.row-{row.Key.ItemId}.quantity",
+            $"Set queued quantity for {row.ItemName}",
+            AgentBridgeUiControlKind.Input,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            selected: false,
+            row.SelectedQuantity.ToString(),
+            schema,
+            surfaceId: "trade-queue",
+            mutating: true,
+            completionOperationKind: null,
+            arguments =>
+            {
+                var requested = arguments!.Value.GetProperty("quantity").GetInt32();
+                SetSelectedQuantity(row, requested);
+                editingQuantityItemId = null;
+                return AgentBridgeUiActionResult.Ok(
+                    $"Set {row.ItemName} queued quantity to {requested:N0}.");
+            });
+    }
 
     private void DrawTimingControls()
     {
