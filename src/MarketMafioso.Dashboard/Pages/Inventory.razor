@@ -178,6 +178,7 @@ else
     private InventoryBrowserView _view = new();
     private InventoryBrowserView? _lastValidView;
     private long? _selectedCharacterId;
+    private bool _explicitAllKnown;
     private string? _snapshotId;
     private string _filterText = string.Empty;
     private string _scope = "all";
@@ -262,18 +263,21 @@ else
             if (applyDefaultCharacter)
             {
                 var settings = await Api.GetDashboardSettingsAsync();
-                if (string.IsNullOrWhiteSpace(_snapshotId))
+                if (string.IsNullOrWhiteSpace(_snapshotId) && !_explicitAllKnown)
                     _selectedCharacterId ??= settings.DefaultCharacterId;
             }
             if (_selectedCharacterId is not null && _characters.All(character => character.Id != _selectedCharacterId))
+            {
                 _selectedCharacterId = null;
+                _explicitAllKnown = true;
+            }
             await LoadInventoryAsync();
         }
         catch (DashboardUnauthorizedException) { ExpireSession(); }
         catch (Exception ex) { Status.Error($"Inventory load failed: {ex.Message}"); }
     }
 
-    private async Task OnCharacterChanged(long? value) { CancelFilterDebounce(); _selectedCharacterId = value; _snapshotId = null; _scope = "all"; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
+    private async Task OnCharacterChanged(long? value) { CancelFilterDebounce(); _selectedCharacterId = value; _explicitAllKnown = value is null; _snapshotId = null; _scope = "all"; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
     private Task OnFilterEdited(WebFilterAutocompleteEdit edit)
     {
         _filterText = edit.Value;
@@ -415,8 +419,13 @@ else
             _filters[_mode] = filter;
             _filterCaret = filter.Length;
         }
-        if (values.TryGetValue("characterId", out var characterId) && long.TryParse(characterId, out var parsedCharacterId))
-            _selectedCharacterId = parsedCharacterId;
+        if (values.TryGetValue("characterId", out var characterId))
+        {
+            if (string.Equals(characterId, "all", StringComparison.OrdinalIgnoreCase))
+                _explicitAllKnown = true;
+            else if (long.TryParse(characterId, out var parsedCharacterId))
+                _selectedCharacterId = parsedCharacterId;
+        }
         if (values.TryGetValue("snapshotId", out var snapshotId) && !string.IsNullOrWhiteSpace(snapshotId))
             _snapshotId = snapshotId;
     }

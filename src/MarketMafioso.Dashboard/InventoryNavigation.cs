@@ -21,6 +21,8 @@ public static class InventoryNavigation
             query.Add($"filter={Uri.EscapeDataString(filter)}");
         if (characterId is { } selectedCharacterId)
             query.Add($"characterId={selectedCharacterId}");
+        else if (string.IsNullOrWhiteSpace(snapshotId))
+            query.Add("characterId=all");
         if (!string.IsNullOrWhiteSpace(snapshotId))
             query.Add($"snapshotId={Uri.EscapeDataString(snapshotId)}");
 
