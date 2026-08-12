@@ -8,6 +8,7 @@ namespace MarketMafioso.Windows.TradeQueue;
 internal enum TradeQueueBulkAction
 {
     QueueAllAvailable,
+    SetQuantity,
     RemoveFromQueue,
 }
 
@@ -17,7 +18,8 @@ internal static class TradeQueueBulkEdit
         IReadOnlyList<TradeQueueItem> currentQueue,
         IReadOnlyList<TradeQueueInventoryRow> inventoryRows,
         IReadOnlySet<uint> selectedItemIds,
-        TradeQueueBulkAction action)
+        TradeQueueBulkAction action,
+        int quantity = 0)
     {
         ArgumentNullException.ThrowIfNull(currentQueue);
         ArgumentNullException.ThrowIfNull(inventoryRows);
@@ -37,7 +39,7 @@ internal static class TradeQueueBulkEdit
 
         if (action == TradeQueueBulkAction.RemoveFromQueue)
             return updated;
-        if (action != TradeQueueBulkAction.QueueAllAvailable)
+        if (action is not (TradeQueueBulkAction.QueueAllAvailable or TradeQueueBulkAction.SetQuantity))
             throw new ArgumentOutOfRangeException(nameof(action), action, null);
 
         foreach (var row in inventoryRows
@@ -47,11 +49,16 @@ internal static class TradeQueueBulkEdit
                      .OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
                      .ThenBy(row => row.Key.ItemId))
         {
+            var selectedQuantity = action == TradeQueueBulkAction.SetQuantity
+                ? Math.Clamp(quantity, 0, row.AvailableQuantity)
+                : row.AvailableQuantity;
+            if (selectedQuantity <= 0)
+                continue;
             updated.Add(new TradeQueueItem
             {
                 ItemId = row.Key.ItemId,
                 ItemName = row.ItemName,
-                Quantity = row.AvailableQuantity,
+                Quantity = selectedQuantity,
             });
         }
 
