@@ -11,6 +11,63 @@ namespace MarketMafioso.Server.ContractTests;
 public sealed class DashboardSessionStoreTests
 {
     [Fact]
+    public async Task CreateAsync_RetriesAContendedLoginWithoutLeavingAnOrphanSession()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            "MarketMafioso.Server.Tests",
+            Guid.NewGuid().ToString("N"),
+            "marketmafioso.db");
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["MarketMafioso:DatabasePath"] = databasePath,
+                ["MarketMafioso:SqliteBusyTimeoutSeconds"] = "1",
+            })
+            .Build();
+        var connectionFactory = new SqliteConnectionFactory(
+            configuration,
+            new TestHostEnvironment(Path.GetDirectoryName(databasePath)!));
+        await new SqliteSchemaMigrator(connectionFactory, NullLogger<SqliteSchemaMigrator>.Instance)
+            .MigrateAsync(CancellationToken.None);
+
+        var passwordHasher = new DashboardPasswordHasher();
+        await using (var connection = await connectionFactory.OpenConnectionAsync(CancellationToken.None))
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO dashboard_users (username, password_hash, created_at_utc)
+                VALUES ('viewer', $passwordHash, $createdAt)
+                """;
+            insert.Parameters.AddWithValue("$passwordHash", passwordHasher.HashPassword("correct horse battery staple"));
+            insert.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
+            await insert.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+
+        await using var writer = await connectionFactory.OpenConnectionAsync(CancellationToken.None);
+        await using var transaction = (SqliteTransaction)await writer.BeginTransactionAsync(CancellationToken.None);
+        await using (var update = writer.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = "UPDATE dashboard_users SET last_login_at_utc = $now WHERE username = 'viewer'";
+            update.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+            Assert.Equal(1, await update.ExecuteNonQueryAsync(CancellationToken.None));
+        }
+
+        var store = new DashboardSessionStore(connectionFactory, passwordHasher, configuration);
+        var login = store.CreateAsync("viewer", "correct horse battery staple", CancellationToken.None);
+        await Task.Delay(TimeSpan.FromMilliseconds(1500));
+        await transaction.RollbackAsync(CancellationToken.None);
+        var created = await login;
+
+        Assert.NotNull(created);
+        await using var verify = await connectionFactory.OpenConnectionAsync(CancellationToken.None);
+        await using var count = verify.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM dashboard_sessions";
+        Assert.Equal(1L, await count.ExecuteScalarAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task GetAsync_RemainsReadOnlyWhileAnotherWriterOwnsTheDatabase()
     {
         var databasePath = Path.Combine(
