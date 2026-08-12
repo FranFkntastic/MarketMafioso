@@ -781,6 +781,8 @@ internal sealed class TradeQueuePanel
             completionOperationKind: null,
             arguments =>
             {
+                if (runner.IsActive)
+                    return AgentBridgeUiActionResult.Fail("Trade Queue cannot be edited while trading is active.");
                 var requested = arguments!.Value.GetProperty("quantity").GetInt32();
                 SetSelectedQuantity(row, requested);
                 editingQuantityItemId = null;
