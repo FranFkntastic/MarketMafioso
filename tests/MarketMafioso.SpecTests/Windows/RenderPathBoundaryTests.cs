@@ -110,6 +110,17 @@ public sealed class RenderPathBoundaryTests
     }
 
     [Fact]
+    public void WorkbenchRecoveryExposesRestorePreviousAsAReviewedAction()
+    {
+        var source = ReadSource("src", "MarketMafioso", "Windows", "MainWindow.cs");
+        var toolbar = ExtractMethodBody(source, "DrawMarketAcquisitionWorkbenchToolbar");
+
+        Assert.Contains("\"acquisition.recovery.restore-previous-workbench\"", toolbar, StringComparison.Ordinal);
+        Assert.Contains("canMutate && acquisitionRequestBuilder.HasPreviousWorkbench", toolbar, StringComparison.Ordinal);
+        Assert.Contains("acquisitionRequestBuilder.RestorePreviousWorkbench", toolbar, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ControllerConsumesSharedEventDrivenListingObserver()
     {
         var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketBoardAcquisitionController.cs");

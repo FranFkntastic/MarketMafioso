@@ -1486,6 +1486,16 @@ public class MainWindow : Window, IDisposable
             false,
             acquisitionWorkspace.ClaimedRequest?.Id,
             () => DetachMarketAcquisitionHostedStateLocally());
+        AgentReviewRegistry.Register(
+            "acquisition.recovery.restore-previous-workbench",
+            "Restore the previously preserved Market Acquisition Workbench",
+            AgentBridgeUiControlKind.Button,
+            recoveryMinimum,
+            recoveryMaximum,
+            canMutate && acquisitionRequestBuilder.HasPreviousWorkbench,
+            false,
+            acquisitionRequestBuilder.HasPreviousWorkbench.ToString(),
+            () => acquisitionRequestBuilder.RestorePreviousWorkbench());
 
         if (!ImGui.BeginPopup("AcquisitionWorkbenchRecovery"))
             return;
