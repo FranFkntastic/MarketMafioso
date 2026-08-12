@@ -73,10 +73,8 @@ internal static class InventorySemanticFingerprint
         Normalize(item.ItemType),
         item.Quantity,
         item.IsHQ,
-        item.Condition,
         Normalize(item.ContainerKey),
         item.SlotIndex,
-        item.ConditionPercent,
         item.Equipped);
 
     private static SemanticListing Listing(RetainerMarketListing listing) => new(
@@ -85,10 +83,8 @@ internal static class InventorySemanticFingerprint
         Normalize(listing.ItemType),
         listing.Quantity,
         listing.IsHQ,
-        listing.Condition,
         Normalize(listing.ContainerKey),
         listing.SlotIndex,
-        listing.ConditionPercent,
         listing.UnitPrice,
         Normalize(listing.ListedAt));
 
@@ -112,10 +108,8 @@ internal static class InventorySemanticFingerprint
         string ItemType,
         uint Quantity,
         bool IsHq,
-        float Condition,
         string ContainerKey,
         int? SlotIndex,
-        float? ConditionPercent,
         bool? Equipped);
 
     private sealed record SemanticListing(
@@ -124,10 +118,8 @@ internal static class InventorySemanticFingerprint
         string ItemType,
         uint Quantity,
         bool IsHq,
-        float Condition,
         string ContainerKey,
         int? SlotIndex,
-        float? ConditionPercent,
         uint? UnitPrice,
         string ListedAt);
 }

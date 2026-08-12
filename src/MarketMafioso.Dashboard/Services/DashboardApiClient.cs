@@ -391,9 +391,22 @@ public sealed class DashboardApiClient
 
     private async Task<T> GetJsonAsync<T>(string path, T fallback, CancellationToken cancellationToken)
     {
-        using var response = await http.GetAsync(path, cancellationToken);
-        EnsureAuthorizedSuccess(response);
-        return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken) ?? fallback;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var response = await http.GetAsync(path, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.ServiceUnavailable && attempt == 0)
+            {
+                var retryDelay = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromMilliseconds(250);
+                retryDelay = TimeSpan.FromMilliseconds(Math.Clamp(retryDelay.TotalMilliseconds, 0, 2_000));
+                await Task.Delay(retryDelay, cancellationToken);
+                continue;
+            }
+
+            EnsureAuthorizedSuccess(response);
+            return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken) ?? fallback;
+        }
+
+        throw new InvalidOperationException("Dashboard read retry ended without a response.");
     }
 
     private static void EnsureAuthorizedSuccess(HttpResponseMessage response)

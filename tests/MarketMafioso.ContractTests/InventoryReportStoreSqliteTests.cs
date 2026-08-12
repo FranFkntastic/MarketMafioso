@@ -402,6 +402,61 @@ public sealed class InventoryReportStoreSqliteTests
     }
 
     [Fact]
+    public async Task SaveAsync_ConditionOnlyDeliveryDoesNotCreateHistoryOrRevision()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var baseline = CreateReport("Crafting Character", "Siren", 42);
+        var report = baseline with
+        {
+            PlayerInventory =
+            [
+                baseline.PlayerInventory[0] with
+                {
+                    Items =
+                    [
+                        baseline.PlayerInventory[0].Items[0] with
+                        {
+                            Condition = 100,
+                            ConditionPercent = 100,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var first = await fixture.Store.SaveAsync(fixture.AccountId, report, null, "{}", CancellationToken.None);
+        var firstRevision = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+        var second = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            report with
+            {
+                Timestamp = "2026-06-23T12:05:00.0000000Z",
+                PlayerInventory =
+                [
+                    report.PlayerInventory[0] with
+                    {
+                        Items =
+                        [
+                            report.PlayerInventory[0].Items[0] with
+                            {
+                                Condition = 80,
+                                ConditionPercent = 80,
+                            },
+                        ],
+                    },
+                ],
+            },
+            null,
+            "{}",
+            CancellationToken.None);
+        var secondRevision = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal(firstRevision.Token, secondRevision.Token);
+        Assert.Equal(1, await fixture.CountAsync("snapshots"));
+    }
+
+    [Fact]
     public async Task SaveAsync_QuietCharacterCurrentHeadSurvivesOtherCharacterHistoryPruning()
     {
         var fixture = await StoreFixture.CreateAsync(
