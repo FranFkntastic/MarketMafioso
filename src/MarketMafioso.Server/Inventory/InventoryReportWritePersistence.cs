@@ -55,22 +55,14 @@ internal sealed class InventoryReportWritePersistence(
 
         if (current is not null && string.Equals(current.SemanticHash, semanticHash, StringComparison.Ordinal))
         {
-            await UpdateCurrentDeliveryAsync(
+            await RefreshCurrentHeadAsync(
                 connection,
                 transaction,
                 current.SnapshotId,
                 receivedAt,
                 apiKeyLabel,
-                rawReportJson,
                 report,
                 metadata,
-                cancellationToken);
-            await UpsertItemMetadataCatalogAsync(
-                connection,
-                transaction,
-                accountId,
-                receivedAt,
-                report,
                 cancellationToken);
             return new InventoryWriteResult(current.SnapshotId, characterId, current.SemanticRevision, false);
         }
@@ -527,13 +519,12 @@ internal sealed class InventoryReportWritePersistence(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task UpdateCurrentDeliveryAsync(
+    private static async Task RefreshCurrentHeadAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         string snapshotId,
         DateTimeOffset receivedAt,
         string? apiKeyLabel,
-        string? rawReportJson,
         InventoryReport report,
         InventoryReportMetadata metadata,
         CancellationToken cancellationToken)
@@ -547,8 +538,6 @@ internal sealed class InventoryReportWritePersistence(
                 api_key_label = $apiKeyLabel,
                 report_timestamp = $reportTimestamp,
                 generated_at_utc = $generatedAtUtc,
-                raw_report_json = $rawReportJson,
-                raw_json_retained_at_utc = CASE WHEN $rawReportJson IS NULL THEN NULL ELSE $receivedAt END,
                 retainer_management_json = $retainerManagementJson
             WHERE id = $snapshotId AND is_current = 1;
             """;
@@ -556,7 +545,6 @@ internal sealed class InventoryReportWritePersistence(
         command.Parameters.AddWithValue("$apiKeyLabel", string.IsNullOrWhiteSpace(apiKeyLabel) ? DBNull.Value : "provided");
         command.Parameters.AddWithValue("$reportTimestamp", report.Timestamp);
         command.Parameters.AddWithValue("$generatedAtUtc", metadata.GeneratedAtUtc);
-        command.Parameters.AddWithValue("$rawReportJson", (object?)rawReportJson ?? DBNull.Value);
         command.Parameters.AddWithValue(
             "$retainerManagementJson",
             report.RetainerManagement is null

@@ -101,8 +101,11 @@ public sealed class InventoryReportStore
                 apiKeyLabel,
                 rawReportJson,
                 cancellationToken);
-            await rawJsonRetention.PruneAsync(connection, transaction, accountId, cancellationToken);
-            await writePersistence.PruneSnapshotsAsync(connection, transaction, accountId, cancellationToken);
+            if (writeResult.SemanticChanged)
+            {
+                await rawJsonRetention.PruneAsync(connection, transaction, accountId, cancellationToken);
+                await writePersistence.PruneSnapshotsAsync(connection, transaction, accountId, cancellationToken);
+            }
             await transaction.CommitAsync(cancellationToken);
 
             return (await GetAsync(accountId, writeResult.SnapshotId, cancellationToken))
