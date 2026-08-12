@@ -2299,7 +2299,7 @@ public class MainWindow : Window, IDisposable
             return [];
 
         var requirements = workshopCatalog.BuildRequirements(config.WorkshopPrepQueue);
-        var playerInventory = scanner.CountPlayerInventory(config);
+        var playerInventory = scanner.CountWorkshopUsableInventory();
         quartermaster.TryGetSnapshot(out var snapshot, out _);
         return WorkshopMaterialAvailabilityService.BuildAvailability(
             requirements,
@@ -2331,7 +2331,7 @@ public class MainWindow : Window, IDisposable
             var preflight = WorkshopAssemblyPreflightService.Check(
                 config.WorkshopPrepQueue,
                 workshopCatalog.GetProjects(),
-                scanner.CountPlayerInventory(config));
+                scanner.CountWorkshopUsableInventory());
             if (!preflight.CanStart || preflight.Plan == null)
             {
                 workshopStatus = preflight.Message;
