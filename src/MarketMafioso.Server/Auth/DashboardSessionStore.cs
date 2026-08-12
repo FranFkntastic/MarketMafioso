@@ -136,16 +136,6 @@ public sealed class DashboardSessionStore
             reader.GetString(2),
             DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture));
 
-        await using var update = connection.CreateCommand();
-        update.CommandText = """
-            UPDATE dashboard_sessions
-            SET last_seen_at_utc = $lastSeenAt
-            WHERE id = $sessionId
-            """;
-        update.Parameters.AddWithValue("$lastSeenAt", now.ToString("O", CultureInfo.InvariantCulture));
-        update.Parameters.AddWithValue("$sessionId", session.SessionId);
-        await update.ExecuteNonQueryAsync(cancellationToken);
-
         return session;
     }
 
