@@ -2,8 +2,8 @@
     <span class="visually-hidden">Inventory scope</span>
     <select class="inventory-native-select"
             @key="SelectionKey"
-            @bind:get="Value"
-            @bind:set="HandleChangedAsync"
+            value="@Value"
+            @onchange="HandleChangedAsync"
             aria-label="Inventory scope">
         <option value="all">All locations (@Scopes.Sum(scope => scope.StackCount).ToString("N0"))</option>
         @foreach (var group in Scopes.GroupBy(CharacterLabel).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
@@ -23,8 +23,8 @@
     [Parameter] public string Value { get; set; } = "all";
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
 
-    private Task HandleChangedAsync(string value) =>
-        ValueChanged.InvokeAsync(string.IsNullOrWhiteSpace(value) ? "all" : value);
+    private Task HandleChangedAsync(ChangeEventArgs args) =>
+        ValueChanged.InvokeAsync(args.Value?.ToString() ?? "all");
 
     private string SelectionKey => $"{Value}\u001f{Scopes.Count}";
 
