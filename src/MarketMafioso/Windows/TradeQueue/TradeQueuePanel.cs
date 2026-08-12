@@ -13,6 +13,9 @@ namespace MarketMafioso.Windows.TradeQueue;
 
 internal sealed class TradeQueuePanel
 {
+    internal const float QueuedColumnWidth = 220f;
+    private const float BulkQuantityInputWidth = 110f;
+
     private static readonly AgentBridgeActionArgumentSchema ExactRecipientSchema = new(
     [
         new("recipientName", AgentBridgeActionArgumentKind.String),
@@ -67,12 +70,12 @@ internal sealed class TradeQueuePanel
                 HeaderTooltip: "Current quantity in tradeable player inventory."),
             new(
                 "Queued",
-                150f,
+                QueuedColumnWidth,
                 row => row.SelectedQuantity.ToString("N0"),
                 row => row.SelectedQuantity,
                 ImGuiTableColumnFlags.WidthFixed,
                 Draw: DrawQueuedQuantityCell,
-                Id: "queued",
+                Id: "queued-quantity",
                 HeaderTooltip: "Durable quantity currently queued for trade. The left half edits; the right half selects the row.",
                 SelectionTargetFraction: 0.5f),
             new(
@@ -319,8 +322,8 @@ internal sealed class TradeQueuePanel
         var canBulkEdit = inventorySelection.Count > 0 && !runner.IsActive;
         if (runner.IsActive)
             ImGui.BeginDisabled();
-        ImGui.SetNextItemWidth(72f);
-        ImGui.InputInt("##trade-queue-bulk-quantity", ref bulkQuantity, 1, 10);
+        ImGui.SetNextItemWidth(BulkQuantityInputWidth);
+        ImGui.InputInt("##trade-queue-bulk-quantity", ref bulkQuantity, 0, 0);
         if (runner.IsActive)
             ImGui.EndDisabled();
         bulkQuantity = Math.Max(0, bulkQuantity);
@@ -486,9 +489,11 @@ internal sealed class TradeQueuePanel
             ImGui.PushStyleColor(
                 ImGuiCol.Text,
                 row.SelectedQuantity > 0 ? MainWindow.ColSuccess : MainWindow.ColMuted);
+            ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, new Vector2(0f, 0.5f));
             var activated = ImGui.Button(
                 $"{row.SelectedQuantity:N0}##trade-queue-quantity-edit-{row.Key.ItemId}",
                 new Vector2(editWidth, frameHeight)) && enabled;
+            ImGui.PopStyleVar();
             ImGui.PopStyleColor(4);
             if (!enabled)
                 ImGui.EndDisabled();
@@ -511,22 +516,21 @@ internal sealed class TradeQueuePanel
             ImGui.SetKeyboardFocusHere();
             quantityEditorNeedsFocus = false;
         }
-        var committed = ImGui.InputInt(
-                $"##trade-queue-quantity-{row.Key.ItemId}",
-                ref editingQuantityValue,
-                1,
-                100,
-                "%d",
-                ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll);
-        var cancelled = ImGui.IsItemActive() && ImGui.IsKeyPressed(ImGuiKey.Escape);
-        var advance = ImGui.IsItemActive() && ImGui.IsKeyPressed(ImGuiKey.Tab);
+        ImGui.InputInt(
+            $"##trade-queue-quantity-{row.Key.ItemId}",
+            ref editingQuantityValue,
+            0,
+            0,
+            "%d",
+            ImGuiInputTextFlags.AutoSelectAll);
+        var active = ImGui.IsItemActive();
+        var deactivated = ImGui.IsItemDeactivated();
+        var interactionFrame = active || deactivated;
+        var cancelled = interactionFrame && ImGui.IsKeyPressed(ImGuiKey.Escape);
+        var advance = interactionFrame && ImGui.IsKeyPressed(ImGuiKey.Tab);
+        var submitted = interactionFrame && ImGui.IsKeyPressed(ImGuiKey.Enter);
         if (cancelled)
         {
-            editingQuantityItemId = null;
-        }
-        else if (committed)
-        {
-            SetSelectedQuantity(row, ClampQueuedQuantity(editingQuantityValue, row.AvailableQuantity));
             editingQuantityItemId = null;
         }
         else if (advance)
@@ -535,7 +539,7 @@ internal sealed class TradeQueuePanel
             editingQuantityItemId = null;
             queuedQuantityAdvanceItemId = row.Key.ItemId;
         }
-        else if (ImGui.IsItemDeactivatedAfterEdit())
+        else if (submitted || deactivated)
         {
             SetSelectedQuantity(row, ClampQueuedQuantity(editingQuantityValue, row.AvailableQuantity));
             editingQuantityItemId = null;
@@ -592,7 +596,7 @@ internal sealed class TradeQueuePanel
     {
         var style = ImGui.GetStyle();
         var buttonLabels = new[] { "Select visible", "Set quantity", "Queue all available", "Remove from queue", "Clear row selection" };
-        return 72f +
+        return BulkQuantityInputWidth +
                buttonLabels.Sum(label => ImGui.CalcTextSize(label).X + (style.FramePadding.X * 2f)) +
                (buttonLabels.Length * style.ItemSpacing.X);
     }

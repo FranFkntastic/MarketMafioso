@@ -7,7 +7,7 @@ namespace MarketMafioso.SpecTests.TradeQueue;
 public sealed class TradeQueuePlannerTests
 {
     [Theory]
-    [InlineData(150f, 75f)]
+    [InlineData(TradeQueuePanel.QueuedColumnWidth, 110f)]
     [InlineData(1f, 1f)]
     public void Quantity_editor_owns_the_left_half_of_the_queued_cell(float availableWidth, float expected)
     {
