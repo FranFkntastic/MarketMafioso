@@ -487,7 +487,7 @@ internal sealed class TradeQueuePanel
                 ImGuiCol.Text,
                 row.SelectedQuantity > 0 ? MainWindow.ColSuccess : MainWindow.ColMuted);
             var activated = ImGui.Button(
-                $"{row.SelectedQuantity:N0}  edit##trade-queue-quantity-edit-{row.Key.ItemId}",
+                $"{row.SelectedQuantity:N0}##trade-queue-quantity-edit-{row.Key.ItemId}",
                 new Vector2(editWidth, frameHeight)) && enabled;
             ImGui.PopStyleColor(4);
             if (!enabled)
