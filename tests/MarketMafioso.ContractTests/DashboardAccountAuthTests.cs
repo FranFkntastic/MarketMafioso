@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using MarketMafioso.Contracts.Inventory;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -70,6 +71,38 @@ public sealed class DashboardAccountAuthTests
         Assert.Equal("Eriana Ning @ Siren", character.DisplayName);
         Assert.Equal(2, character.ServiceAccountNumber);
         Assert.Equal("Service Account 2", character.ServiceAccountGroup);
+    }
+
+    [Fact]
+    public async Task InventoryBrowser_AllKnownAggregatesNewestPerCharacterWhileExplicitLinksRemainExact()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireDashboardAuth", "false"));
+        using var client = application.CreateClient();
+
+        var olderResponse = await client.PostAsJsonAsync("/inventory", BrowserReport("Eriana Ning", "Siren", 999, 1));
+        olderResponse.EnsureSuccessStatusCode();
+        var olderId = (await JsonDocument.ParseAsync(await olderResponse.Content.ReadAsStreamAsync())).RootElement.GetProperty("id").GetString()!;
+        (await client.PostAsJsonAsync("/inventory", BrowserReport("Eriana Ning", "Siren", 42, 2))).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/inventory", BrowserReport("Wei Ning", "Siren", 42, 3))).EnsureSuccessStatusCode();
+
+        var characters = await client.GetFromJsonAsync<DashboardCharacterOption[]>("/api/inventory/characters");
+        var erianaId = Assert.Single(characters!, character => character.CharacterName == "Eriana Ning").Id;
+        var allKnown = await client.GetFromJsonAsync<InventoryBrowserView>("/api/inventory/browser?filter=Item%2042");
+        var eriana = await client.GetFromJsonAsync<InventoryBrowserView>($"/api/inventory/browser?characterId={erianaId}&filter=Item%2042");
+        var historical = await client.GetFromJsonAsync<InventoryBrowserView>($"/api/inventory/browser?snapshotId={Uri.EscapeDataString(olderId)}");
+
+        Assert.NotNull(allKnown);
+        Assert.Null(allKnown.SnapshotId);
+        Assert.Null(allKnown.CharacterName);
+        Assert.Equal(5, Assert.Single(allKnown.Items).TotalQuantity);
+        Assert.Equal(2, allKnown.Scopes.Count);
+        Assert.NotNull(eriana);
+        Assert.Equal("Eriana Ning", eriana.CharacterName);
+        Assert.Equal(2, Assert.Single(eriana.Items).TotalQuantity);
+        Assert.NotNull(historical);
+        Assert.Equal(olderId, historical.SnapshotId);
+        Assert.Equal((uint)999, Assert.Single(historical.Items).ItemId);
     }
 
     [Theory]
@@ -174,6 +207,41 @@ public sealed class DashboardAccountAuthTests
 
         return new ApplicationValues(ServerTestHost.Create(host), host.DatabasePath);
     }
+
+    private static InventoryReport BrowserReport(
+        string characterName,
+        string homeWorld,
+        uint itemId,
+        uint quantity) => new()
+    {
+        Metadata = new InventoryReportMetadata { SchemaVersion = 5, SourcePlugin = "MarketMafioso" },
+        CharacterName = characterName,
+        HomeWorld = homeWorld,
+        Timestamp = DateTimeOffset.UtcNow.ToString("O"),
+        PlayerStorage = new StorageSourceEvidence
+        {
+            RequestedSources = ["Inventory1"],
+            ObservedSources = ["Inventory1"],
+        },
+        PlayerInventory =
+        [
+            new InventoryBag
+            {
+                BagName = "Inventory1",
+                Items =
+                [
+                    new ItemSlot
+                    {
+                        ItemId = itemId,
+                        ItemName = $"Item {itemId}",
+                        Quantity = quantity,
+                        SlotIndex = 0,
+                        ConditionPercent = 100,
+                    },
+                ],
+            },
+        ],
+    };
 
     private sealed record ApplicationValues(WebApplicationFactory<Program> Application, string DatabasePath);
 }

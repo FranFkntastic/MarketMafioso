@@ -15,33 +15,43 @@ public static class InventoryBrowserViewBuilder
         string? filter,
         string? scope = null,
         InventoryBrowserMode mode = InventoryBrowserMode.Items,
+        int? caretPosition = null) =>
+        Build(stored is null ? [] : [stored], filter, scope, mode, caretPosition);
+
+    public static InventoryBrowserView Build(
+        IReadOnlyList<StoredInventoryReport> storedReports,
+        string? filter,
+        string? scope = null,
+        InventoryBrowserMode mode = InventoryBrowserMode.Items,
         int? caretPosition = null)
     {
         var completionExpression = filter ?? string.Empty;
         var normalizedScope = string.IsNullOrWhiteSpace(scope) ? "all" : scope.Trim();
-        if (stored is null)
+        if (storedReports.Count == 0)
             return new InventoryBrowserView { Filter = completionExpression, Scope = normalizedScope, Mode = mode };
 
-        var stacks = EnumerateStacks(stored.Report)
+        var stacks = storedReports.SelectMany(stored => EnumerateStacks(stored.Report))
             .Where(row => normalizedScope.Equals("all", StringComparison.OrdinalIgnoreCase) ||
+                          row.ScopeKey.Equals(normalizedScope, StringComparison.OrdinalIgnoreCase) ||
                           row.OwnerName.Equals(normalizedScope, StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        var listings = EnumerateListings(stored).Where(row =>
+        var listings = storedReports.SelectMany(EnumerateListings).Where(row =>
                 normalizedScope.Equals("all", StringComparison.OrdinalIgnoreCase) ||
+                row.ScopeKey.Equals(normalizedScope, StringComparison.OrdinalIgnoreCase) ||
                 row.OwnerName.Equals(normalizedScope, StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        var vocabulary = FfxivFilterCatalog.Create(BuildResolvers(stacks, listings, stored.Report));
+        var vocabulary = FfxivFilterCatalog.Create(BuildResolvers(stacks, listings, storedReports.Select(stored => stored.Report)));
 
         return mode switch
         {
-            InventoryBrowserMode.Stacks => BuildStacksView(stored, completionExpression, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
-            InventoryBrowserMode.Listings => BuildListingsView(stored, completionExpression, completionExpression, caretPosition, normalizedScope, vocabulary, listings),
-            _ => BuildItemsView(stored, completionExpression, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
+            InventoryBrowserMode.Stacks => BuildStacksView(storedReports, completionExpression, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
+            InventoryBrowserMode.Listings => BuildListingsView(storedReports, completionExpression, completionExpression, caretPosition, normalizedScope, vocabulary, listings),
+            _ => BuildItemsView(storedReports, completionExpression, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
         };
     }
 
     private static InventoryBrowserView BuildItemsView(
-        StoredInventoryReport stored,
+        IReadOnlyList<StoredInventoryReport> storedReports,
         string filter,
         string completionExpression,
         int? caretPosition,
@@ -61,20 +71,20 @@ public static class InventoryBrowserViewBuilder
         var matchingItems = compilation.IsValid ? items.Where(compilation.Matches).ToArray() : [];
         var stacks = matchingItems.SelectMany(row => row.SourceStacks).Select(ToStackView).ToArray();
 
-        return CreateBase(stored, filter, completionExpression, caretPosition, scope, InventoryBrowserMode.Items, compilation, context) with
+        return CreateBase(storedReports, filter, completionExpression, caretPosition, scope, InventoryBrowserMode.Items, compilation, context) with
         {
             Items = matchingItems.Select(ToItemView).ToArray(),
             Stacks = stacks,
             MatchingRecordCount = matchingItems.Length,
             TotalQuantity = checked((int)matchingItems.Sum(row => (long)row.TotalQuantity)),
             HqQuantity = checked((int)matchingItems.Sum(row => (long)row.HqQuantity)),
-            OwnerCount = matchingItems.SelectMany(row => row.Locations).Select(location => location.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            OwnerCount = matchingItems.SelectMany(row => row.SourceStacks).Select(row => row.ScopeKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
             ItemTypeKnownCount = matchingItems.Count(row => !string.IsNullOrWhiteSpace(row.ItemType)),
         };
     }
 
     private static InventoryBrowserView BuildStacksView(
-        StoredInventoryReport stored,
+        IReadOnlyList<StoredInventoryReport> storedReports,
         string filter,
         string completionExpression,
         int? caretPosition,
@@ -97,19 +107,19 @@ public static class InventoryBrowserViewBuilder
         var records = compilation.IsValid ? source.Where(compilation.Matches).ToArray() : [];
         var stacks = records.Select(ToStackView).ToArray();
 
-        return CreateBase(stored, filter, completionExpression, caretPosition, scope, InventoryBrowserMode.Stacks, compilation, context) with
+        return CreateBase(storedReports, filter, completionExpression, caretPosition, scope, InventoryBrowserMode.Stacks, compilation, context) with
         {
             Stacks = stacks,
             MatchingRecordCount = stacks.Length,
             TotalQuantity = checked((int)stacks.Sum(row => (long)row.Quantity)),
             HqQuantity = checked((int)stacks.Where(row => row.IsHq).Sum(row => (long)row.Quantity)),
-            OwnerCount = stacks.Select(row => row.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            OwnerCount = records.Select(row => row.ScopeKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
             ItemTypeKnownCount = stacks.Count(row => !string.IsNullOrWhiteSpace(row.ItemType)),
         };
     }
 
     private static InventoryBrowserView BuildListingsView(
-        StoredInventoryReport stored,
+        IReadOnlyList<StoredInventoryReport> storedReports,
         string filter,
         string completionExpression,
         int? caretPosition,
@@ -133,32 +143,39 @@ public static class InventoryBrowserViewBuilder
         var records = compilation.IsValid ? source.Where(compilation.Matches).ToArray() : [];
         var listings = records.Select(ToListingView).ToArray();
 
-        return CreateBase(stored, filter, completionExpression, caretPosition, scope, InventoryBrowserMode.Listings, compilation, context) with
+        return CreateBase(storedReports, filter, completionExpression, caretPosition, scope, InventoryBrowserMode.Listings, compilation, context) with
         {
             MarketListings = listings,
             MatchingRecordCount = listings.Length,
             TotalQuantity = checked((int)listings.Sum(row => (long)row.Quantity)),
             HqQuantity = checked((int)listings.Sum(row => (long)row.HqQuantity)),
-            OwnerCount = listings.Select(row => row.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            OwnerCount = records.Select(row => row.ScopeKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
             ItemTypeKnownCount = listings.Count(row => !string.IsNullOrWhiteSpace(row.ItemType)),
             ListingPriceKnownCount = listings.Count(row => row.UnitPrice is not null),
         };
     }
 
     private static InventoryBrowserView CreateBase<TRecord>(
-        StoredInventoryReport stored,
+        IReadOnlyList<StoredInventoryReport> storedReports,
         string filter,
         string completionExpression,
         int? caretPosition,
         string scope,
         InventoryBrowserMode mode,
         FilterCompilation<TRecord> compilation,
-        FilterContext<TRecord> context) => new()
+        FilterContext<TRecord> context)
+    {
+        var single = storedReports.Count == 1 ? storedReports[0] : null;
+        ulong? playerGil = storedReports.All(stored => stored.Report.PlayerGil is not null)
+            ? storedReports.Aggregate(0UL, (sum, stored) => checked(sum + stored.Report.PlayerGil!.Value))
+            : null;
+        var retainerGil = storedReports.Aggregate(0UL, (sum, stored) => checked(sum + GetRetainerGil(stored.Report)));
+        return new InventoryBrowserView
         {
-            SnapshotId = stored.Id,
-            ReceivedAt = stored.ReceivedAt,
-            CharacterName = stored.Report.CharacterName,
-            HomeWorld = stored.Report.HomeWorld,
+            SnapshotId = single?.Id,
+            ReceivedAt = storedReports.Max(stored => stored.ReceivedAt),
+            CharacterName = single?.Report.CharacterName,
+            HomeWorld = single?.Report.HomeWorld,
             Filter = filter,
             NormalizedFilter = compilation.NormalizedExpression,
             SemanticFilter = compilation.SemanticExpression,
@@ -173,13 +190,14 @@ public static class InventoryBrowserViewBuilder
                     Math.Clamp(caretPosition ?? completionExpression.Length, 0, completionExpression.Length))).Items,
             Mode = mode,
             Scope = scope,
-            Scopes = BuildScopes(stored.Report),
-            PlayerGil = stored.Report.PlayerGil,
-            RetainerGil = GetRetainerGil(stored.Report),
-            TotalGil = stored.Report.PlayerGil is { } playerGil
-                ? checked(playerGil + GetRetainerGil(stored.Report))
+            Scopes = BuildScopes(storedReports.Select(stored => stored.Report)),
+            PlayerGil = playerGil,
+            RetainerGil = retainerGil,
+            TotalGil = playerGil is { } knownPlayerGil
+                ? checked(knownPlayerGil + retainerGil)
                 : null,
         };
+    }
 
     private static FilterReferenceModel CreateContextReference<TRecord>(FilterContext<TRecord> context)
     {
@@ -199,14 +217,14 @@ public static class InventoryBrowserViewBuilder
     private static FfxivFilterResolvers BuildResolvers(
         IReadOnlyList<StackRecord> stacks,
         IReadOnlyList<ListingRecord> listings,
-        InventoryReport report)
+        IEnumerable<InventoryReport> reports)
     {
         var items = stacks.Select(row => new { row.ItemKey, row.DisplayName })
             .Concat(listings.Select(row => new { row.ItemKey, row.DisplayName }))
             .GroupBy(row => row.ItemKey)
             .Select(group => new FilterLiteralCandidate<FfxivItemKey>(group.Key, group.First().DisplayName))
             .ToArray();
-        var retainers = report.Retainers
+        var retainers = reports.SelectMany(report => report.Retainers)
             .Where(retainer => retainer.RetainerId != 0 && !string.IsNullOrWhiteSpace(retainer.RetainerName))
             .GroupBy(retainer => retainer.RetainerId)
             .Select(group => new FilterLiteralCandidate<FfxivRetainerKey>(new(group.Key), group.First().RetainerName))
@@ -281,6 +299,7 @@ public static class InventoryBrowserViewBuilder
             DisplayName(item.ItemId, item.ItemName),
             item.ItemType,
             retainer?.RetainerName ?? "Player Inventory",
+            ScopeKey(report, retainer),
             retainer is null ? report.CharacterName : ResolveRetainerOwnerCharacterName(report, retainer),
             retainer is null ? report.HomeWorld : ResolveRetainerOwnerHomeWorld(report, retainer),
             item.ContainerKey ?? bag.BagName,
@@ -315,6 +334,7 @@ public static class InventoryBrowserViewBuilder
                     DisplayName(listing.ItemId, listing.ItemName),
                     listing.ItemType,
                     retainer.RetainerName,
+                    ScopeKey(stored.Report, retainer),
                     ResolveRetainerOwnerCharacterName(stored.Report, retainer),
                     ResolveRetainerOwnerHomeWorld(stored.Report, retainer),
                     new FfxivRetainerKey(retainer.RetainerId),
@@ -441,30 +461,50 @@ public static class InventoryBrowserViewBuilder
         };
     }
 
-    private static IReadOnlyList<InventoryBrowserScopeView> BuildScopes(InventoryReport report)
+    private static IReadOnlyList<InventoryBrowserScopeView> BuildScopes(IEnumerable<InventoryReport> reports)
     {
-        var scopes = new List<InventoryBrowserScopeView>
+        var scopes = new List<InventoryBrowserScopeView>();
+        foreach (var report in reports)
         {
-            new()
+            scopes.Add(new InventoryBrowserScopeView
             {
-                ScopeKey = "Player Inventory", DisplayName = "Player Inventory",
+                ScopeKey = ScopeKey(report, null), DisplayName = "Player inventory",
                 Description = "Player bags and configured inventory sections",
+                OwnerCharacterName = report.CharacterName,
+                OwnerHomeWorld = report.HomeWorld,
                 StackCount = report.PlayerInventory.SelectMany(bag => bag.Items).Count(), Gil = report.PlayerGil, LastUpdated = report.Timestamp,
-            },
-        };
-        scopes.AddRange(report.Retainers.Select(retainer => new InventoryBrowserScopeView
-        {
-            ScopeKey = retainer.RetainerName,
-            DisplayName = retainer.RetainerName,
-            Description = "Retainer inventory",
-            OwnerCharacterName = ResolveRetainerOwnerCharacterName(report, retainer),
-            OwnerHomeWorld = ResolveRetainerOwnerHomeWorld(report, retainer),
-            StackCount = retainer.Bags.Where(bag => !IsNonInventoryRetainerBag(bag.BagName)).SelectMany(bag => bag.Items).Count(),
-            Gil = retainer.Gil,
-            MarketListingCount = retainer.MarketListings.Count + CountLegacyMarketListings(retainer),
-            LastUpdated = retainer.LastUpdated,
-        }));
-        return scopes;
+            });
+            scopes.AddRange(report.Retainers.Select(retainer => new InventoryBrowserScopeView
+            {
+                ScopeKey = ScopeKey(report, retainer),
+                DisplayName = retainer.RetainerName,
+                Description = "Retainer inventory",
+                OwnerCharacterName = ResolveRetainerOwnerCharacterName(report, retainer),
+                OwnerHomeWorld = ResolveRetainerOwnerHomeWorld(report, retainer),
+                StackCount = retainer.Bags.Where(bag => !IsNonInventoryRetainerBag(bag.BagName)).SelectMany(bag => bag.Items).Count(),
+                Gil = retainer.Gil,
+                MarketListingCount = retainer.MarketListings.Count + CountLegacyMarketListings(retainer),
+                LastUpdated = retainer.LastUpdated,
+            }));
+        }
+
+        return scopes
+            .GroupBy(scope => scope.ScopeKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(scope => scope.OwnerCharacterName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(scope => scope.OwnerHomeWorld, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(scope => scope.Description.Equals("Player bags and configured inventory sections", StringComparison.Ordinal) ? 0 : 1)
+            .ThenBy(scope => scope.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string ScopeKey(InventoryReport report, RetainerReport? retainer)
+    {
+        var characterName = retainer is null ? report.CharacterName : ResolveRetainerOwnerCharacterName(report, retainer);
+        var homeWorld = retainer is null ? report.HomeWorld : ResolveRetainerOwnerHomeWorld(report, retainer);
+        var ownerKind = retainer is null ? "player" : "retainer";
+        var ownerName = retainer?.RetainerName ?? "Player Inventory";
+        return string.Join("::", ownerKind, characterName?.Trim() ?? string.Empty, homeWorld?.Trim() ?? string.Empty, ownerName.Trim());
     }
 
     private static ulong GetRetainerGil(InventoryReport report) =>
@@ -485,7 +525,7 @@ public static class InventoryBrowserViewBuilder
         string.IsNullOrWhiteSpace(retainer.OwnerHomeWorld) ? report.HomeWorld : retainer.OwnerHomeWorld;
 
     private sealed record StackRecord(
-        FfxivItemKey ItemKey, string DisplayName, string? ItemType, string OwnerName,
+        FfxivItemKey ItemKey, string DisplayName, string? ItemType, string OwnerName, string ScopeKey,
         string? OwnerCharacterName, string? OwnerHomeWorld, string BagName, int? SlotIndex, int Quantity,
         FfxivItemQuality Quality, FfxivStorageLocation Location, FieldEvidence<bool> Equipped,
         FieldEvidence<decimal> Condition,
@@ -502,7 +542,7 @@ public static class InventoryBrowserViewBuilder
         IReadOnlyList<StackRecord> SourceStacks);
 
     private sealed record ListingRecord(
-        FfxivItemKey ItemKey, string DisplayName, string? ItemType, string OwnerName,
+        FfxivItemKey ItemKey, string DisplayName, string? ItemType, string OwnerName, string ScopeKey,
         string? OwnerCharacterName, string? OwnerHomeWorld, FfxivRetainerKey RetainerKey, int Quantity,
         FfxivItemQuality Quality, FieldEvidence<decimal> Condition, FieldEvidence<decimal> UnitPrice,
         FieldEvidence<decimal> TotalPrice, FieldEvidence<TimeSpan> Age, string? ListedAt);

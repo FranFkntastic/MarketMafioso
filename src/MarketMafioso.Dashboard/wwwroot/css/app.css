@@ -745,6 +745,13 @@ body,
     padding: 0 5px;
 }
 
+.inventory-scope-character {
+    color: var(--mmf-text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    margin: 10px 8px 2px;
+}
+
 .inventory-scope {
     background: transparent;
     border: 0;
@@ -757,6 +764,10 @@ body,
     padding: 8px;
     text-align: left;
     width: 100%;
+}
+
+.inventory-scope.child {
+    padding-left: 18px;
 }
 
 .inventory-scope:hover,
@@ -1540,7 +1551,7 @@ body,
 }
 
 .inventory-grouped-table {
-    min-width: 890px;
+    min-width: 760px;
 }
 
 .inventory-grouped-table th {
@@ -1677,6 +1688,98 @@ body,
 
 .inventory-stack-owner {
     color: var(--mmf-info);
+}
+
+.inventory-logical-location {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+    min-width: 0;
+    position: relative;
+}
+
+.inventory-location-copy {
+    display: block;
+    min-width: 0;
+}
+
+.inventory-location-copy strong,
+.inventory-location-copy small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inventory-location-copy strong {
+    color: var(--mmf-text);
+    font-size: 11px;
+}
+
+.inventory-location-copy small,
+.inventory-location-more {
+    color: var(--mmf-text-subtle);
+    font-size: 10px;
+}
+
+.inventory-location-more {
+    white-space: nowrap;
+}
+
+.inventory-exact-disclosure {
+    align-items: center;
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    min-width: 140px;
+}
+
+.inventory-exact-toggle {
+    background: transparent;
+    border: 0;
+    color: var(--mmf-info);
+    cursor: pointer;
+    font-size: 9px;
+    margin-left: auto;
+    padding: 3px 0 3px 8px;
+    white-space: nowrap;
+}
+
+.inventory-exact-toggle:hover,
+.inventory-exact-toggle:focus-visible {
+    text-decoration: underline;
+}
+
+.inventory-exact-stack-list {
+    background: var(--mmf-app-bg);
+    border-left: 2px solid var(--mmf-accent-muted);
+    display: grid;
+    flex-basis: 100%;
+    gap: 3px;
+    margin: 4px 0 4px 8px;
+    max-width: 470px;
+    padding: 5px 7px;
+    width: 100%;
+}
+
+.inventory-exact-stack-list > span {
+    display: flex;
+    font-size: 9px;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.inventory-exact-stack-list b {
+    color: var(--mmf-text-muted);
+    font-weight: 500;
+}
+
+.inventory-exact-stack-list em,
+.inventory-exact-stack-list small {
+    color: var(--mmf-text-subtle);
+    font-size: 9px;
+    font-style: normal;
 }
 
 .inventory-quality {

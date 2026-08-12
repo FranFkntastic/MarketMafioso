@@ -39,12 +39,18 @@ public sealed record InventoryColumnFilterChange(string Column, string Value);
 public enum InventoryGroupedColumn
 {
     Item,
-    Owner,
     Quantity,
     Quality,
     Location,
-    Condition,
 }
+
+public sealed record InventoryLogicalLocationRow(
+    string Key,
+    string OwnerLabel,
+    string ContextLabel,
+    int Quantity,
+    int HqQuantity,
+    IReadOnlyList<InventoryBrowserStackView> Stacks);
 
 public sealed record InventoryGroupedItemRow(
     uint ItemId,
@@ -52,14 +58,10 @@ public sealed record InventoryGroupedItemRow(
     string? ItemType,
     int TotalQuantity,
     int HqQuantity,
-    int OwnerCount,
-    InventoryBrowserStackView PrimaryStack,
+    IReadOnlyList<InventoryLogicalLocationRow> Locations,
     IReadOnlyList<InventoryBrowserStackView> Stacks)
 {
-    public decimal? LowestCondition => Stacks
-        .Where(stack => stack.ConditionPercent is not null)
-        .Select(stack => stack.ConditionPercent)
-        .Min();
+    public InventoryLogicalLocationRow PrimaryLocation => Locations[0];
 }
 
 public static class InventoryTableProjection
@@ -70,34 +72,44 @@ public static class InventoryTableProjection
     {
         var filtered = source.Where(stack =>
             Text($"{stack.DisplayName} {stack.ItemType}", query.Filter("item")) &&
-            Text(stack.OwnerName, query.Filter("owner")) &&
             Number(stack.Quantity, query.Filter("quantity")) &&
             Text(stack.IsHq ? "HQ" : "NQ", query.Filter("quality")) &&
-            Text(InventoryDisplayFormatter.FormatStackStorage(stack), query.Filter("location")) &&
-            Number(stack.ConditionPercent, query.Filter("condition")));
+            Text(InventoryDisplayFormatter.FormatLogicalLocation(stack), query.Filter("location")));
 
         var groups = filtered
             .GroupBy(stack => stack.ItemId)
             .Select(group =>
             {
                 var stacks = group
-                    .OrderBy(stack => stack.OwnerName, StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(InventoryDisplayFormatter.FormatLogicalLocation, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(stack => InventoryDisplayFormatter.FormatStackStorage(stack), StringComparer.OrdinalIgnoreCase)
                     .ThenBy(stack => stack.SlotIndex ?? int.MaxValue)
                     .ToArray();
                 var first = stacks[0];
-                var primary = stacks
-                    .OrderByDescending(stack => stack.Quantity)
-                    .ThenBy(stack => stack.OwnerName, StringComparer.OrdinalIgnoreCase)
-                    .First();
+                var locations = stacks
+                    .GroupBy(stack => new
+                    {
+                        Owner = InventoryDisplayFormatter.FormatLogicalLocationOwner(stack),
+                        Context = InventoryDisplayFormatter.FormatLogicalLocationContext(stack),
+                    })
+                    .Select(location => new InventoryLogicalLocationRow(
+                        $"{location.Key.Owner}\u001f{location.Key.Context}",
+                        location.Key.Owner,
+                        location.Key.Context,
+                        checked((int)location.Sum(stack => (long)stack.Quantity)),
+                        checked((int)location.Where(stack => stack.IsHq).Sum(stack => (long)stack.Quantity)),
+                        location.ToArray()))
+                    .OrderByDescending(location => location.Quantity)
+                    .ThenBy(location => location.OwnerLabel, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(location => location.ContextLabel, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
                 return new InventoryGroupedItemRow(
                     group.Key,
                     first.DisplayName,
                     stacks.Select(stack => stack.ItemType).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
                     checked((int)stacks.Sum(stack => (long)stack.Quantity)),
                     checked((int)stacks.Where(stack => stack.IsHq).Sum(stack => (long)stack.Quantity)),
-                    stacks.Select(stack => stack.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
-                    primary,
+                    locations,
                     stacks);
             })
             .ToArray();
@@ -108,11 +120,9 @@ public static class InventoryTableProjection
         var rules = new[]
         {
             WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Item, row => row.DisplayName, StringComparer.OrdinalIgnoreCase),
-            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Owner, row => row.PrimaryStack.OwnerName, StringComparer.OrdinalIgnoreCase),
             WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Quantity, row => row.TotalQuantity),
             WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Quality, row => row.HqQuantity),
-            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Location, row => InventoryDisplayFormatter.FormatStackStorage(row.PrimaryStack), StringComparer.OrdinalIgnoreCase),
-            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Condition, row => row.LowestCondition ?? decimal.MaxValue),
+            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Location, row => $"{row.PrimaryLocation.OwnerLabel} {row.PrimaryLocation.ContextLabel}", StringComparer.OrdinalIgnoreCase),
         };
         return WebTableOrdering.Apply(
             groups,

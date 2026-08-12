@@ -155,6 +155,22 @@ public sealed class InventoryReportStore
         return newest;
     }
 
+    public async Task<IReadOnlyList<StoredInventoryReport>> GetLatestByCharacterAsync(
+        IReadOnlyList<long> accountIds,
+        CancellationToken cancellationToken)
+    {
+        var references = await readQueries.ListLatestSnapshotIdsByCharacterAsync(accountIds, cancellationToken);
+        var reports = new List<StoredInventoryReport>(references.Count);
+        foreach (var reference in references)
+        {
+            var report = await GetAsync(reference.AccountId, reference.SnapshotId, cancellationToken);
+            if (report != null)
+                reports.Add(report);
+        }
+
+        return reports;
+    }
+
     public Task<StoredInventoryReport?> GetAsync(string id, CancellationToken cancellationToken) =>
         GetAsync(1, id, cancellationToken);
 

@@ -4,10 +4,15 @@
             value="@Value"
             @onchange="HandleChangedAsync"
             aria-label="Inventory scope">
-        <option value="all">Everything (@Scopes.Sum(scope => scope.StackCount).ToString("N0"))</option>
-        @foreach (var scope in Scopes)
+        <option value="all">All locations (@Scopes.Sum(scope => scope.StackCount).ToString("N0"))</option>
+        @foreach (var group in Scopes.GroupBy(CharacterLabel).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
         {
-            <option value="@scope.ScopeKey">@scope.DisplayName (@scope.StackCount.ToString("N0"))</option>
+            <optgroup label="@group.Key">
+                @foreach (var scope in group)
+                {
+                    <option value="@scope.ScopeKey">@scope.DisplayName (@scope.StackCount.ToString("N0"))</option>
+                }
+            </optgroup>
         }
     </select>
 </label>
@@ -19,4 +24,13 @@
 
     private Task HandleChangedAsync(ChangeEventArgs args) =>
         ValueChanged.InvokeAsync(args.Value?.ToString() ?? "all");
+
+    private static string CharacterLabel(InventoryBrowserScopeView scope)
+    {
+        var name = scope.OwnerCharacterName?.Trim() ?? string.Empty;
+        var world = scope.OwnerHomeWorld?.Trim() ?? string.Empty;
+        if (name.Length == 0)
+            return "Unknown character";
+        return world.Length == 0 ? name : $"{name} @ {world}";
+    }
 }

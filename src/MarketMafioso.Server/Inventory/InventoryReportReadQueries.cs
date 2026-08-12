@@ -126,6 +126,49 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
         return id == null ? null : await GetAsync(accountId, id, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<(long AccountId, string SnapshotId)>> ListLatestSnapshotIdsByCharacterAsync(
+        IReadOnlyList<long> accountIds,
+        CancellationToken cancellationToken)
+    {
+        if (accountIds.Count == 0)
+            return [];
+
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        var accountParameters = accountIds.Select((_, index) => $"$account{index}").ToArray();
+        command.CommandText = $"""
+            WITH ranked AS (
+                SELECT
+                    s.account_id,
+                    s.id,
+                    s.received_at_utc,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY s.account_id, s.character_id
+                        ORDER BY s.received_at_utc DESC, s.id DESC
+                    ) AS position
+                FROM snapshots s
+                INNER JOIN characters c
+                    ON c.id = s.character_id
+                   AND c.account_id = s.account_id
+                WHERE s.account_id IN ({string.Join(", ", accountParameters)})
+                  AND c.home_world IS NOT NULL
+                  AND trim(c.home_world) <> ''
+            )
+            SELECT account_id, id
+            FROM ranked
+            WHERE position = 1
+            ORDER BY received_at_utc DESC, id DESC
+            """;
+        for (var index = 0; index < accountIds.Count; index++)
+            command.Parameters.AddWithValue(accountParameters[index], accountIds[index]);
+
+        var snapshots = new List<(long AccountId, string SnapshotId)>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            snapshots.Add((reader.GetInt64(0), reader.GetString(1)));
+        return snapshots;
+    }
+
     public async Task<StoredInventoryReport?> GetAsync(
         long accountId,
         string id,
