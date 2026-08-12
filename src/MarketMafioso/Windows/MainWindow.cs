@@ -31,6 +31,7 @@ using Franthropy.Dalamud.Automation.Retainers;
 using Franthropy.Dalamud.Automation.Vendors;
 using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using Franthropy.Dalamud.Travel;
+using Franthropy.Dalamud.Runtime;
 using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.MarketBoard;
@@ -130,6 +131,7 @@ public class MainWindow : Window, IDisposable
         IMarketBoardBrowseRuntime marketBoardBrowseRuntime,
         Func<uint, bool> forceRetryRetainerListingRefresh,
         string marketAcquisitionRouteDiagnosticsDirectory,
+        FramePacingGovernor framePacingGovernor,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
@@ -280,6 +282,7 @@ public class MainWindow : Window, IDisposable
                 () => marketAcquisitionRouteRunner.StatusMessage),
             new DalamudMarketAcquisitionRouteCallbackDispatcher(),
             new SystemMarketAcquisitionRouteClock(),
+            new MarketAcquisitionTravelFrameThrottle(framePacingGovernor),
             exactAcquisitionRouteStateStore,
             new FileMarketAcquisitionReportOutbox(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
@@ -532,6 +535,7 @@ public class MainWindow : Window, IDisposable
     public AgentBridgeTruth CreateAgentBridgeTruth()
     {
         var snapshot = routeEngine.CreateSnapshot();
+        var travelFrameThrottle = routeEngine.TravelFrameThrottleSnapshot;
         var activeOperation = snapshot.ActiveOperation;
         var activeStop = snapshot.ActiveStop;
         var persistedExactAcquisition = exactAcquisitionRouteStateStore.Restore();
@@ -729,6 +733,14 @@ public class MainWindow : Window, IDisposable
                 StopCount = snapshot.Stops.Count,
                 CompletedOrProbedStopCount = snapshot.CompletedOrProbedStopCount,
                 ExecutionMode = snapshot.ExecutionMode.ToString(),
+                TravelFrameThrottleActive = travelFrameThrottle.IsActive,
+                TravelFrameThrottleMaximumFramesPerSecond = travelFrameThrottle.MaximumFramesPerSecond,
+                TravelFrameThrottleLeaseId = travelFrameThrottle.LeaseId,
+                TravelFrameThrottleRouteRunId = travelFrameThrottle.RouteRunId,
+                TravelFrameThrottleTargetWorld = travelFrameThrottle.TargetWorld,
+                TravelFrameThrottleTotalDelayedFrames = travelFrameThrottle.TotalDelayedFrames,
+                TravelFrameThrottleTotalRequestedDelayMilliseconds = travelFrameThrottle.TotalRequestedDelay.TotalMilliseconds,
+                TravelFrameThrottleLastReleaseReason = travelFrameThrottle.LastReleaseReason,
                 ArmedExactAcquisitionDryRunScenario = routeEngine.ArmedExactAcquisitionDryRunScenario.ToString(),
                 ExactAcquisitionDryRunFaultEligible = routeEngine.IsExactAcquisitionDryRunFaultEligible,
                 ExactAcquisitionDryRunFaultInjected = routeEngine.WasExactAcquisitionDryRunFaultInjected,
