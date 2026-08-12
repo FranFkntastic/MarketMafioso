@@ -17,11 +17,6 @@ internal sealed class TradeQueuePanel
         new("recipientName", AgentBridgeActionArgumentKind.String),
         new("homeWorld", AgentBridgeActionArgumentKind.String),
     ]);
-    private static readonly AgentBridgeActionArgumentSchema AutoAcceptSchema = new(
-    [
-        new("enabled", AgentBridgeActionArgumentKind.Boolean),
-    ]);
-
     private readonly Configuration config;
     private readonly MarketMafioso.TradeQueue.TradeQueueRunner runner;
     private readonly ITradeQueueIo io;
@@ -46,17 +41,6 @@ internal sealed class TradeQueuePanel
         this.reviewRegistry = reviewRegistry;
         inventoryTable = new DalamudTableProjection<TradeQueueInventoryRow>(
         [
-            new(
-                "Selected",
-                34f,
-                row => inventorySelection.IsSelected(row.Key.ItemId) ? "Selected" : "Not selected",
-                Flags: ImGuiTableColumnFlags.WidthFixed |
-                       ImGuiTableColumnFlags.NoHide |
-                       ImGuiTableColumnFlags.NoSort |
-                       ImGuiTableColumnFlags.NoHeaderLabel,
-                Draw: DrawSelectionCell,
-                Id: "selected",
-                HeaderTooltip: "Select inventory rows for a bulk queue action."),
             new(
                 "Item",
                 1f,
@@ -94,7 +78,8 @@ internal sealed class TradeQueuePanel
         ],
             DalamudTableSelection<TradeQueueInventoryRow>.Multi(
                 inventorySelection,
-                row => row.Key.ItemId));
+                row => row.Key.ItemId,
+                IsSelectableInventoryRow));
     }
 
     public bool HasItems => config.TradeQueueItems.Any(item => item.Quantity > 0);
@@ -154,7 +139,9 @@ internal sealed class TradeQueuePanel
                 new(
                     "Queued",
                     selectedSummary,
-                    selectedRows > 0 ? MainWindow.ColHeader : MainWindow.ColMuted),
+                    selectedRows > 0 ? MainWindow.ColHeader : MainWindow.ColMuted,
+                    HasItems ? DrawQueueActions : null,
+                    HasItems ? 28f : 0f),
                 new(
                     "Recipient",
                     displayedRecipient ?? "No selected player",
@@ -168,39 +155,6 @@ internal sealed class TradeQueuePanel
         ImGui.TextColored(StatusColor(snapshot.State), snapshot.Message);
         ImGui.Spacing();
 
-        var autoAcceptIncomingTrades = config.AutoAcceptIncomingTrades;
-        if (ImGui.Checkbox("Auto-accept trades", ref autoAcceptIncomingTrades))
-        {
-            config.AutoAcceptIncomingTrades = autoAcceptIncomingTrades;
-            config.Save();
-        }
-        reviewRegistry.Register(
-            "trade-queue.auto-accept",
-            "Auto-accept trades",
-            AgentBridgeUiControlKind.Toggle,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
-            enabled: true,
-            selected: config.AutoAcceptIncomingTrades,
-            value: config.AutoAcceptIncomingTrades ? "enabled" : "disabled",
-            arguments: AutoAcceptSchema,
-            surfaceId: "trade-queue",
-            mutating: true,
-            completionOperationKind: null,
-            arguments =>
-            {
-                config.AutoAcceptIncomingTrades =
-                    arguments!.Value.GetProperty("enabled").GetBoolean();
-                config.Save();
-                return AgentBridgeUiActionResult.Ok(
-                    config.AutoAcceptIncomingTrades
-                        ? "Trade auto-accept enabled."
-                        : "Trade auto-accept disabled.");
-            });
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Ready after the other player is ready, then confirm the completed trade.");
-        ImGui.Spacing();
-
         DrawInventoryHeader();
         DrawInventoryFilter(rows);
         DrawInventorySelectionActions(rows);
@@ -210,31 +164,40 @@ internal sealed class TradeQueuePanel
         DrawTimingControls();
     }
 
-    private void DrawInventoryHeader()
+    private void DrawQueueActions()
     {
-        ImGuiUi.SectionHeaderWithActions(
-            "Inventory",
-            MarketMafiosoUiTheme.Header,
-            () =>
-            {
-                if (ImGuiUi.Button("Clear queue", HasItems && !runner.IsActive))
-                    confirmClear = true;
-            },
-            112);
-
-        if (!confirmClear)
-            return;
-
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Remove every item and gil amount from the Trade Queue?");
-        if (ImGuiUi.Button("Confirm Clear Queue", HasItems && !runner.IsActive))
+        if (ImGuiUi.Button("...##TradeQueueActions", HasItems && !runner.IsActive))
+            ImGui.OpenPopup("TradeQueueActions");
+        if (!ImGui.BeginPopup("TradeQueueActions"))
         {
-            config.TradeQueueItems.Clear();
-            config.Save();
             confirmClear = false;
+            return;
         }
-        ImGui.SameLine();
-        if (ImGui.Button("Cancel Clear"))
-            confirmClear = false;
+        if (!confirmClear && ImGui.Selectable("Clear entire queue...", false, ImGuiSelectableFlags.DontClosePopups))
+            confirmClear = true;
+        if (confirmClear)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Remove every queued item and gil amount?");
+            if (ImGuiUi.Button("Clear queue", HasItems && !runner.IsActive))
+            {
+                config.TradeQueueItems.Clear();
+                config.Save();
+                confirmClear = false;
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel"))
+            {
+                confirmClear = false;
+                ImGui.CloseCurrentPopup();
+            }
+        }
+        ImGui.EndPopup();
+    }
+
+    private static void DrawInventoryHeader()
+    {
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Inventory");
     }
 
     private void DrawInventoryFilter(IReadOnlyList<TradeQueueInventoryRow> rows)
@@ -408,7 +371,7 @@ internal sealed class TradeQueuePanel
                 index,
                 $"trade-queue-inventory-{row.Key.ItemId}",
                 background: ResolveInventoryRowBackground(row),
-                selectable: false,
+                selectable: IsSelectableInventoryRow(row),
                 enabled: !runner.IsActive));
         inventoryTable.End();
     }
@@ -423,23 +386,6 @@ internal sealed class TradeQueuePanel
 
     private static bool IsSelectableInventoryRow(TradeQueueInventoryRow row) =>
         row.Key.ItemId != TradeQueuePlanner.GilItemId && row.AvailableQuantity > 0;
-
-    private void DrawSelectionCell(TradeQueueInventoryRow row)
-    {
-        if (!IsSelectableInventoryRow(row))
-        {
-            ImGui.TextColored(MainWindow.ColMuted, "—");
-            return;
-        }
-
-        if (runner.IsActive)
-            ImGui.BeginDisabled();
-        var selected = inventorySelection.IsSelected(row.Key.ItemId);
-        if (ImGui.Checkbox($"##trade-queue-select-{row.Key.ItemId}", ref selected))
-            inventorySelection.SetSelected(row.Key.ItemId, selected);
-        if (runner.IsActive)
-            ImGui.EndDisabled();
-    }
 
     private void DrawItemCell(TradeQueueInventoryRow row)
     {
@@ -571,8 +517,14 @@ internal sealed class TradeQueuePanel
 
     private void DrawExecutionControls(IReadOnlyList<TradeQueueInventoryStack> inventory)
     {
+        ImGui.TextColored(
+            MainWindow.ColMuted,
+            config.AutoAcceptIncomingTrades
+                ? "Incoming trades are handled automatically."
+                : "Incoming trades require manual confirmation.");
         if (runner.IsActive)
         {
+            ImGuiUi.SameLineRight(ImGui.CalcTextSize("Stop Trading").X + ImGui.GetStyle().FramePadding.X * 2f);
             if (ImGui.Button("Stop Trading"))
                 runner.Stop();
             RegisterLastAction(
@@ -594,6 +546,7 @@ internal sealed class TradeQueuePanel
 
         if (io.IsTradeOpen)
         {
+            ImGui.Spacing();
             DrawReceiverControls();
             return;
         }
@@ -601,12 +554,14 @@ internal sealed class TradeQueuePanel
         var validation = TradeQueuePlanner.Validate(config.TradeQueueItems, inventory);
         var hasPartner = io.TryGetSelectedPartner(out var partner);
         var canResume = runner.CanResume;
+        var startLabel = hasPartner
+            ? canResume
+                ? $"Resume Trading with {partner.Name}"
+                : $"Start Trading with {partner.Name}"
+            : "Start Trading";
+        ImGuiUi.SameLineRight(ImGui.CalcTextSize(startLabel).X + ImGui.GetStyle().FramePadding.X * 2f);
         if (ImGuiUi.Button(
-                hasPartner
-                    ? canResume
-                        ? $"Resume Trading with {partner.Name}"
-                        : $"Start Trading with {partner.Name}"
-                    : "Start Trading",
+                startLabel,
                 validation.Success && hasPartner))
         {
             runner.Start();
