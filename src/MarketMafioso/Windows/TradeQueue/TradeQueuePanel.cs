@@ -33,6 +33,7 @@ internal sealed class TradeQueuePanel
     private uint? editingQuantityItemId;
     private bool quantityEditorNeedsFocus;
     private int editingQuantityValue;
+    private uint? queuedQuantityAdvanceItemId;
     private string receiverStatus = "No incoming trade action has been invoked.";
 
     public TradeQueuePanel(
@@ -402,6 +403,13 @@ internal sealed class TradeQueuePanel
             return;
 
         var visibleRows = inventoryTable.Apply(FilterRows(rows), ImGui.TableGetSortSpecs());
+        if (queuedQuantityAdvanceItemId is { } advanceItemId)
+        {
+            var nextRow = FindNextEditableQuantityRow(visibleRows, advanceItemId);
+            queuedQuantityAdvanceItemId = null;
+            if (nextRow is not null)
+                BeginQuantityEdit(nextRow);
+        }
 
         if (visibleRows.Count == 0)
         {
@@ -492,11 +500,7 @@ internal sealed class TradeQueuePanel
                 ImGui.SetTooltip($"Edit queued quantity (0–{row.AvailableQuantity:N0}).");
             }
             if (activated)
-            {
-                editingQuantityItemId = row.Key.ItemId;
-                editingQuantityValue = row.SelectedQuantity;
-                quantityEditorNeedsFocus = true;
-            }
+                BeginQuantityEdit(row);
             RegisterQuantityInput(row, enabled);
             return;
         }
@@ -513,8 +517,9 @@ internal sealed class TradeQueuePanel
                 1,
                 100,
                 "%d",
-                ImGuiInputTextFlags.EnterReturnsTrue);
+                ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll);
         var cancelled = ImGui.IsItemActive() && ImGui.IsKeyPressed(ImGuiKey.Escape);
+        var advance = ImGui.IsItemActive() && ImGui.IsKeyPressed(ImGuiKey.Tab);
         if (cancelled)
         {
             editingQuantityItemId = null;
@@ -523,6 +528,12 @@ internal sealed class TradeQueuePanel
         {
             SetSelectedQuantity(row, ClampQueuedQuantity(editingQuantityValue, row.AvailableQuantity));
             editingQuantityItemId = null;
+        }
+        else if (advance)
+        {
+            SetSelectedQuantity(row, ClampQueuedQuantity(editingQuantityValue, row.AvailableQuantity));
+            editingQuantityItemId = null;
+            queuedQuantityAdvanceItemId = row.Key.ItemId;
         }
         else if (ImGui.IsItemDeactivatedAfterEdit())
         {
@@ -537,6 +548,37 @@ internal sealed class TradeQueuePanel
 
     internal static int ClampQueuedQuantity(int requested, int available) =>
         Math.Clamp(requested, 0, Math.Max(0, available));
+
+    internal static TradeQueueInventoryRow? FindNextEditableQuantityRow(
+        IReadOnlyList<TradeQueueInventoryRow> rows,
+        uint currentItemId)
+    {
+        var currentIndex = -1;
+        for (var index = 0; index < rows.Count; index++)
+        {
+            if (rows[index].Key.ItemId == currentItemId)
+            {
+                currentIndex = index;
+                break;
+            }
+        }
+        if (currentIndex < 0)
+            return null;
+        for (var offset = 1; offset < rows.Count; offset++)
+        {
+            var candidate = rows[(currentIndex + offset) % rows.Count];
+            if (IsSelectableInventoryRow(candidate))
+                return candidate;
+        }
+        return null;
+    }
+
+    private void BeginQuantityEdit(TradeQueueInventoryRow row)
+    {
+        editingQuantityItemId = row.Key.ItemId;
+        editingQuantityValue = row.SelectedQuantity;
+        quantityEditorNeedsFocus = true;
+    }
 
     private static System.Numerics.Vector4? ResolveInventoryRowBackground(TradeQueueInventoryRow row)
     {

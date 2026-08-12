@@ -24,6 +24,21 @@ public sealed class TradeQueuePlannerTests
     }
 
     [Fact]
+    public void Quantity_tab_advance_skips_gil_and_wraps_through_editable_rows()
+    {
+        TradeQueueInventoryRow[] rows =
+        [
+            new(new TradeQueueItemKey(5366), "Cedar Lumber", 45, 0),
+            new(new TradeQueueItemKey(TradeQueuePlanner.GilItemId), "Gil", 100, 0),
+            new(new TradeQueueItemKey(11), "Earth Crystal", 4, 0),
+        ];
+
+        Assert.Equal(11u, TradeQueuePanel.FindNextEditableQuantityRow(rows, 5366)?.Key.ItemId);
+        Assert.Equal(5366u, TradeQueuePanel.FindNextEditableQuantityRow(rows, 11)?.Key.ItemId);
+        Assert.Null(TradeQueuePanel.FindNextEditableQuantityRow(rows, 999));
+    }
+
+    [Fact]
     public void Planner_EnforcesInventoryBatchingEvidenceAndWorkshopHandoffContracts()
     {
         ValidateCountsHqAndNqTogether();
