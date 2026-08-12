@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Game.Inventory;
+using Dalamud.Game.Inventory.InventoryEventArgTypes;
 using Dalamud.Game.Command;
 using Dalamud.IoC;
 using Dalamud.Plugin;
@@ -60,6 +63,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
+    private readonly InventoryDeliveryCoalescer inventoryDelivery;
     private readonly RetainerSaleChatObserver retainerSaleChatObserver;
     private readonly RetainerHistoryObserver retainerHistoryObserver;
     private readonly DalamudMarketBoardBrowseObserver marketBoardBrowseObserver;
@@ -89,7 +93,6 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeViewportCaptureService agentBridgeViewportCapture;
 
     private CancellationTokenSource? timerCancellation;
-    private CancellationTokenSource? marketDiagnosticReportCancellation;
 
     public Plugin()
     {
@@ -105,6 +108,18 @@ public sealed class Plugin : IDalamudPlugin
         quartermaster = new QuartermasterIpcClient(new DalamudQuartermasterIpcAdapter(PluginInterface));
         standaloneSquire = new StandaloneSquireIpcClient(new DalamudStandaloneSquireIpcAdapter(PluginInterface));
         reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner, quartermaster);
+        inventoryDelivery = new InventoryDeliveryCoalescer(
+            TimeSpan.FromMilliseconds(500),
+            token => Framework.RunOnTick(
+                () => reporter.SendDeltaReportAsync(quiet: true),
+                cancellationToken: token),
+            (message, exception) =>
+            {
+                if (exception is null)
+                    Log.Information("[MarketMafioso] {Message}", message);
+                else
+                    Log.Warning(exception, "[MarketMafioso] {Message}", message);
+            });
         retainerSaleChatObserver = new RetainerSaleChatObserver(
             Configuration,
             PlayerState,
@@ -310,6 +325,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi += OpenConfigUi;
         Framework.Update += OnFrameworkUpdate;
         quartermaster.Changed += OnQuartermasterChanged;
+        GameInventory.InventoryChanged += OnInventoryChanged;
 
         StartTimer();
         Log.Information("[MarketMafioso] Plugin loaded. Use /mmf to open settings.");
@@ -755,6 +771,8 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= OpenConfigUi;
         Framework.Update -= OnFrameworkUpdate;
         quartermaster.Changed -= OnQuartermasterChanged;
+        GameInventory.InventoryChanged -= OnInventoryChanged;
+        inventoryDelivery.Dispose();
 
         CommandManager.RemoveHandler(CmdMain);
 
@@ -789,41 +807,18 @@ public sealed class Plugin : IDalamudPlugin
             string.Equals(changed.Kind, "retainer_listings", StringComparison.Ordinal))
             retainerListingRefresh.NotifyListingCaptureChanged();
 
-        if (!Configuration.EnableMarketDiagnostics)
-            return;
-
-        marketDiagnosticReportCancellation?.Cancel();
-        marketDiagnosticReportCancellation?.Dispose();
-        marketDiagnosticReportCancellation = new CancellationTokenSource();
-        _ = SendMarketDiagnosticReportAfterDebounceAsync(
-            changed.Revision,
-            marketDiagnosticReportCancellation.Token);
+        ScheduleInventoryReport($"Quartermaster revision {changed.Revision}");
     }
 
-    private async Task SendMarketDiagnosticReportAfterDebounceAsync(
-        long revision,
-        CancellationToken cancellationToken)
+    private void OnInventoryChanged(IReadOnlyCollection<InventoryEventArgs> events)
     {
-        try
-        {
-            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
-            await Framework.RunOnTick(
-                () => reporter.SendDeltaReportAsync(quiet: true),
-                cancellationToken: cancellationToken);
-            Log.Information(
-                "[MarketMafioso] Processed inventory delta after Quartermaster revision {Revision}.",
-                revision);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception exception)
-        {
-            Log.Warning(
-                exception,
-                "[MarketMafioso] Failed to ship the inventory report for Quartermaster revision {Revision}.",
-                revision);
-        }
+        if (events.Count > 0)
+            ScheduleInventoryReport($"{events.Count} game inventory event(s)");
+    }
+
+    private void ScheduleInventoryReport(string reason)
+    {
+        inventoryDelivery.Notify(reason);
     }
 
     private void StartTimer()
@@ -867,9 +862,5 @@ public sealed class Plugin : IDalamudPlugin
             timerCancellation = null;
             Log.Debug("[MarketMafioso] Auto-send timer stopped");
         }
-
-        marketDiagnosticReportCancellation?.Cancel();
-        marketDiagnosticReportCancellation?.Dispose();
-        marketDiagnosticReportCancellation = null;
     }
 }

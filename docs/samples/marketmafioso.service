@@ -19,7 +19,7 @@ Environment=MarketMafioso__PublicOrigin=https://marketmafioso.example.com
 Environment=MarketMafioso__StorageLabel=self-hosted Workshop Host storage
 Environment=MarketMafioso__DatabasePath=/var/lib/marketmafioso/marketmafioso.db
 Environment=MarketMafioso__RawJsonRetentionCount=20
-Environment=MarketMafioso__SnapshotRetentionCount=500
+Environment=MarketMafioso__InventoryHistoryRetentionPerCharacter=100
 Environment=MarketMafioso__DiagnosticsRetentionCount=5000
 Environment=MarketMafioso__RequireDashboardAuth=true
 Environment=MarketMafioso__DashboardBootstrapUsername=marketmafioso

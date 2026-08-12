@@ -2,7 +2,8 @@
 @inject DashboardApiClient Api
 @inject DashboardStatusService Status
 @inject NavigationManager Navigation
-@implements IDisposable
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
 <PageTitle>MarketMafioso Inventory</PageTitle>
 
@@ -21,10 +22,6 @@ else
         <MudText Typo="Typo.h5">Inventory</MudText>
         <MudText Typo="Typo.caption" Class="muted">@SnapshotLabel</MudText>
         <MudSpacer />
-        @if (_mode == InventoryBrowserMode.Listings && _marketDiagnostics.CollectorUpdatedAtUtc is { } collectorAt)
-        {
-            <span class="market-collector-state"><MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" /> Collector updated @collectorAt.ToLocalTime().ToString("HH:mm:ss")</span>
-        }
         <MudButton Variant="Variant.Outlined" Class="quiet-button" Disabled="_loading" OnClick="RefreshAsync">Refresh</MudButton>
     </div>
 
@@ -134,20 +131,28 @@ else
                 }
             </div>
 
-            @if (_mode == InventoryBrowserMode.Listings)
-            {
-                <MarketDiagnosticListingWorkbench Workbench="_marketDiagnostics" />
-            }
-            else
-            {
-                <div class="inventory-summary-strip">
-                    <div><strong>@_visibleMatchingRecordCount.ToString("N0")</strong><span>@RecordLabel(_mode)</span></div>
-                    <div><strong>@_visibleTotalQuantity.ToString("N0")</strong><span>total quantity</span></div>
-                    <div><strong>@_visibleHqQuantity.ToString("N0")</strong><span>HQ</span></div>
-                    <div><strong>@_visibleInventoryCount.ToString("N0")</strong><span>@(_visibleInventoryCount == 1 ? "inventory" : "inventories")</span></div>
-                </div>
-                <div class="inventory-content">
-                    <div class="inventory-table-host">
+            <div class="inventory-summary-strip">
+                <div><strong>@_visibleMatchingRecordCount.ToString("N0")</strong><span>@RecordLabel(_mode)</span></div>
+                <div><strong>@_visibleTotalQuantity.ToString("N0")</strong><span>total quantity</span></div>
+                <div><strong>@_visibleHqQuantity.ToString("N0")</strong><span>HQ</span></div>
+                <div><strong>@_visibleInventoryCount.ToString("N0")</strong><span>@(_visibleInventoryCount == 1 ? "inventory" : "inventories")</span></div>
+            </div>
+            <div class="inventory-content">
+                <div class="inventory-table-host">
+                    @if (_mode == InventoryBrowserMode.Listings)
+                    {
+                        <InventoryListingTable Listings="_visibleListings"
+                                               Query="CurrentTableQuery"
+                                               ShowPrices="HasListingPrices"
+                                               SortChanged="SortTable"
+                                               FilterChanged="FilterTable" />
+                        @if (_view.FilterValid && _visibleMatchingRecordCount == 0)
+                        {
+                            <div class="inventory-empty">No matching owned listings.</div>
+                        }
+                    }
+                    else
+                    {
                         <InventoryGroupedTable Groups="_visibleInventoryGroups"
                                                Query="CurrentTableQuery"
                                                SortChanged="SortTable"
@@ -156,9 +161,9 @@ else
                         {
                             <div class="inventory-empty">No matching inventory items.</div>
                         }
-                    </div>
+                    }
                 </div>
-            }
+            </div>
         </div>
     </section>
 </MudStack>
@@ -171,7 +176,6 @@ else
     private readonly Dictionary<InventoryBrowserMode, InventoryTableQueryState> _tableQueries = Enum.GetValues<InventoryBrowserMode>().ToDictionary(mode => mode, _ => new InventoryTableQueryState());
     private static readonly InventoryBrowserMode[] AvailableModes = [InventoryBrowserMode.Items, InventoryBrowserMode.Listings];
     private InventoryBrowserView _view = new();
-    private MarketDiagnosticWorkbenchView _marketDiagnostics = new();
     private InventoryBrowserView? _lastValidView;
     private long? _selectedCharacterId;
     private string? _snapshotId;
@@ -192,6 +196,11 @@ else
     private int _visibleHqQuantity;
     private int _visibleInventoryCount;
     private int _visibleListingPriceKnownCount;
+    private string _revisionToken = string.Empty;
+    private string _pendingRevisionToken = string.Empty;
+    private DotNetObjectReference<Inventory>? _dotNetRef;
+    private CancellationTokenSource? _revisionDebounceCts;
+    private bool _eventsStarted;
 
     private bool IsAllKnown => _selectedCharacterId is null && string.IsNullOrWhiteSpace(_snapshotId);
     private string SnapshotLabel => IsAllKnown
@@ -237,7 +246,13 @@ else
             await LoadInventoryContextAsync();
     }
 
-    private async Task OnLoginSucceededAsync(DashboardSessionResponse session) { _session = session; await LoadInventoryContextAsync(); }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_session is not null && !_eventsStarted)
+            await StartEventsAsync();
+    }
+
+    private async Task OnLoginSucceededAsync(DashboardSessionResponse session) { _session = session; await LoadInventoryContextAsync(); await StartEventsAsync(); }
 
     private async Task LoadInventoryContextAsync()
     {
@@ -315,7 +330,6 @@ else
 
     private async Task RefreshAsync()
     {
-        _marketDiagnostics = new MarketDiagnosticWorkbenchView();
         await LoadInventoryAsync();
     }
 
@@ -340,15 +354,7 @@ else
                 _mode,
                 _filterCaret,
                 token);
-            if (_mode == InventoryBrowserMode.Listings)
-            {
-                var selectedScope = response.Scopes.FirstOrDefault(candidate => candidate.ScopeKey.Equals(_scope, StringComparison.OrdinalIgnoreCase));
-                _marketDiagnostics = await Api.GetMarketDiagnosticWorkbenchAsync(
-                    response.CharacterName ?? selectedScope?.OwnerCharacterName,
-                    selectedScope?.DisplayName ?? _scope,
-                    _filterText,
-                    token);
-            }
+            _revisionToken = response.RevisionToken;
             if (response.FilterValid)
             {
                 _view = response;
@@ -466,5 +472,79 @@ else
         return world.Length == 0 ? name : $"{name} @ {world}";
     }
 
-    public void Dispose() { CancelFilterDebounce(); _loadCts?.Cancel(); _loadCts?.Dispose(); }
+    private async Task StartEventsAsync()
+    {
+        if (_eventsStarted)
+            return;
+
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("marketMafiosoEvents.start", "api/inventory/events/stream", _dotNetRef);
+        _eventsStarted = true;
+    }
+
+    [JSInvokable]
+    public Task OnEventStreamOpenAsync() => Task.CompletedTask;
+
+    [JSInvokable]
+    public Task OnEventStreamErrorAsync(string message) => Task.CompletedTask;
+
+    [JSInvokable]
+    public Task OnInventoryRevisionAsync(string json)
+    {
+        var revision = System.Text.Json.JsonSerializer.Deserialize<InventoryRevisionView>(
+            json,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        if (revision is null || string.IsNullOrWhiteSpace(revision.Token) ||
+            string.Equals(revision.Token, _revisionToken, StringComparison.Ordinal) ||
+            string.Equals(revision.Token, _pendingRevisionToken, StringComparison.Ordinal))
+        {
+            return Task.CompletedTask;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_snapshotId))
+        {
+            _revisionToken = revision.Token;
+            return Task.CompletedTask;
+        }
+
+        _pendingRevisionToken = revision.Token;
+        _revisionDebounceCts?.Cancel();
+        _revisionDebounceCts?.Dispose();
+        _revisionDebounceCts = new CancellationTokenSource();
+        _ = AdoptRevisionAsync(revision.Token, _revisionDebounceCts.Token);
+        return Task.CompletedTask;
+    }
+
+    private async Task AdoptRevisionAsync(string revisionToken, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(150, token);
+            await InvokeAsync(async () =>
+            {
+                await LoadInventoryContextAsync();
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (string.Equals(_pendingRevisionToken, revisionToken, StringComparison.Ordinal))
+                _pendingRevisionToken = string.Empty;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        CancelFilterDebounce();
+        _revisionDebounceCts?.Cancel();
+        _revisionDebounceCts?.Dispose();
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        try { await JS.InvokeVoidAsync("marketMafiosoEvents.stop"); } catch (JSDisconnectedException) { }
+        _eventsStarted = false;
+        _dotNetRef?.Dispose();
+    }
 }

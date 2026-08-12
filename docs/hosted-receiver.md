@@ -42,7 +42,7 @@ MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
 MarketMafioso__StorageLabel=dev receiver storage
 MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
 MarketMafioso__RawJsonRetentionCount=20
-MarketMafioso__SnapshotRetentionCount=500
+MarketMafioso__InventoryHistoryRetentionPerCharacter=100
 MarketMafioso__RequireDashboardAuth=true
 MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
@@ -163,7 +163,7 @@ For the dev VPS, the database is:
 /srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
 ```
 
-The original incoming JSON is retained only for the newest `MarketMafioso__RawJsonRetentionCount` snapshots, defaulting to `20`. Older snapshots remain available through structured dashboard and API views until `MarketMafioso__SnapshotRetentionCount`, defaulting to `500`, deletes old structured snapshots. Raw JSON routes return `410 Gone` with `raw_json_pruned` after the original payload has been pruned.
+The receiver keeps one durable current inventory for every known character. Older semantic changes remain available through structured dashboard and API views up to `MarketMafioso__InventoryHistoryRetentionPerCharacter`, defaulting to `100` per character. Original incoming JSON is governed separately by `MarketMafioso__RawJsonRetentionCount`, defaulting to `20`; raw JSON routes return `410 Gone` with `raw_json_pruned` after that diagnostic payload is pruned.
 
 On first startup after the SQLite migration, existing JSON files under `data/reports/*.json` are imported into the default local account. The import is idempotent and does not delete source JSON files.
 

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using MarketMafioso.Server.Auth;
+using MarketMafioso.Server.Inventory;
 using MarketMafioso.Server.Sqlite;
 using MarketMafioso.Contracts.Inventory;
 
@@ -12,6 +13,7 @@ internal static class DashboardDataEndpoints
     {
         app.MapGet("/api/inventory/characters", ListCharacters);
         app.MapGet("/api/inventory/browser", GetInventoryBrowser);
+        app.MapGet("/api/inventory/events/stream", StreamInventoryEvents);
         app.MapGet("/api/inventory/snapshots", ListSnapshots);
         app.MapGet("/api/settings/dashboard", GetSettings);
         app.MapPut("/api/settings/dashboard", SaveSettings);
@@ -88,7 +90,61 @@ internal static class DashboardDataEndpoints
             reports = await store.GetLatestByCharacterAsync(accountIds, token);
         }
 
-        return Results.Ok(InventoryBrowserViewBuilder.Build(reports, filter ?? search, scope, mode ?? InventoryBrowserMode.Items, caret));
+        var revision = await store.GetRevisionAsync(accountIds, token);
+        return Results.Ok(InventoryBrowserViewBuilder.Build(reports, filter ?? search, scope, mode ?? InventoryBrowserMode.Items, caret) with
+        {
+            RevisionToken = revision.Token,
+        });
+    }
+
+    private static async Task StreamInventoryEvents(
+        HttpContext context,
+        SqliteConnectionFactory connectionFactory,
+        InventoryReportStore store,
+        CancellationToken token)
+    {
+        context.Response.Headers.ContentType = "text/event-stream";
+        context.Response.Headers.CacheControl = "no-cache";
+        context.Response.Headers.Connection = "keep-alive";
+
+        var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
+        string? lastToken = null;
+        var nextHeartbeat = DateTimeOffset.MinValue;
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var revision = await store.GetRevisionAsync(accountIds, token);
+                var now = DateTimeOffset.UtcNow;
+                if (!string.Equals(lastToken, revision.Token, StringComparison.Ordinal) || now >= nextHeartbeat)
+                {
+                    await WriteSseEventAsync(
+                        context.Response,
+                        "inventory",
+                        new InventoryRevisionView { Token = revision.Token, UpdatedAtUtc = revision.UpdatedAtUtc },
+                        token);
+                    lastToken = revision.Token;
+                    nextHeartbeat = now.AddSeconds(15);
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(500), token);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+    }
+
+    private static async Task WriteSseEventAsync<T>(
+        HttpResponse response,
+        string eventName,
+        T payload,
+        CancellationToken token)
+    {
+        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        await response.WriteAsync($"event: {eventName}\n", token);
+        await response.WriteAsync($"data: {json}\n\n", token);
+        await response.Body.FlushAsync(token);
     }
 
     private static async Task<IResult> ListSnapshots(
@@ -205,12 +261,14 @@ internal static class DashboardDataEndpoints
 
         return Results.Ok(new ReceiverStorageSummaryView
         {
-            SnapshotRetentionCount = configuration.GetValue("MarketMafioso:SnapshotRetentionCount", 500),
+            HistoryRetentionPerCharacter = InventoryReportWritePersistence.ResolveHistoryRetention(configuration),
             RawJsonRetentionCount = configuration.GetValue("MarketMafioso:RawJsonRetentionCount", 20),
             DiagnosticEventRetentionCount = Math.Max(
                 1,
                 configuration.GetValue("MarketMafioso:DiagnosticEventRetention", 5000)),
             SnapshotCount = inventory.SnapshotCount,
+            CurrentHeadCount = inventory.CurrentHeadCount,
+            HistoryCount = inventory.HistoryCount,
             RawJsonRetainedCount = inventory.RawJsonRetainedCount,
             RawJsonPrunedCount = inventory.RawJsonPrunedCount,
             DiagnosticEventCount = diagnosticCount,

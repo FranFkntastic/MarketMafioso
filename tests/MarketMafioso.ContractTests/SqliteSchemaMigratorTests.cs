@@ -28,6 +28,7 @@ public sealed class SqliteSchemaMigratorTests
         Assert.True(await TableExistsAsync(connection, "ingest_keys"));
         Assert.True(await TableExistsAsync(connection, "characters"));
         Assert.True(await TableExistsAsync(connection, "snapshots"));
+        Assert.True(await TableExistsAsync(connection, "inventory_account_revisions"));
         Assert.True(await TableExistsAsync(connection, "inventory_owners"));
         Assert.True(await TableExistsAsync(connection, "inventory_bags"));
         Assert.True(await TableExistsAsync(connection, "inventory_items"));
@@ -52,6 +53,10 @@ public sealed class SqliteSchemaMigratorTests
         Assert.True(await ColumnExistsAsync(connection, "ingest_keys", "last_used_at_utc"));
         Assert.True(await ColumnExistsAsync(connection, "characters", "service_account_number"));
         Assert.True(await ColumnExistsAsync(connection, "snapshots", "service_account_number"));
+        Assert.True(await ColumnExistsAsync(connection, "snapshots", "is_current"));
+        Assert.True(await ColumnExistsAsync(connection, "snapshots", "semantic_revision"));
+        Assert.True(await ColumnExistsAsync(connection, "snapshots", "semantic_hash"));
+        Assert.True(await ColumnExistsAsync(connection, "snapshots", "last_delivery_at_utc"));
     }
 
     [Fact]
@@ -113,6 +118,10 @@ public sealed class SqliteSchemaMigratorTests
         await using var verify = await factory.OpenConnectionAsync(CancellationToken.None);
         Assert.Equal(1, await ScalarLongAsync(verify, "SELECT count(*) FROM characters"));
         Assert.Equal(10, await ScalarLongAsync(verify, "SELECT character_id FROM snapshots WHERE id = 'legacy'"));
+        Assert.Equal(1, await ScalarLongAsync(verify, "SELECT is_current FROM snapshots WHERE id = 'legacy'"));
+        Assert.Equal(1, await ScalarLongAsync(verify, "SELECT semantic_revision FROM snapshots WHERE id = 'legacy'"));
+        Assert.Equal(64, (await ScalarStringAsync(verify, "SELECT semantic_hash FROM snapshots WHERE id = 'legacy'")).Length);
+        Assert.Equal(1, await ScalarLongAsync(verify, "SELECT revision FROM inventory_account_revisions WHERE account_id = 1"));
         Assert.Equal(10, await ScalarLongAsync(verify, "SELECT json_extract(preferences_json, '$.defaultCharacterId') FROM dashboard_preferences"));
         Assert.Equal("2026-08-10T01:00:00Z", await ScalarStringAsync(verify, "SELECT first_seen_at_utc FROM characters WHERE id = 10"));
         Assert.Equal("2026-08-11T03:00:00Z", await ScalarStringAsync(verify, "SELECT last_seen_at_utc FROM characters WHERE id = 10"));

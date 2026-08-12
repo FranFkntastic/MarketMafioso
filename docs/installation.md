@@ -169,7 +169,7 @@ The most important settings are:
 ```text
 MarketMafioso__ClientApiKey
 MarketMafioso__DatabasePath
-MarketMafioso__SnapshotRetentionCount
+MarketMafioso__InventoryHistoryRetentionPerCharacter
 MarketMafioso__RequireDashboardAuth
 MarketMafioso__DashboardBootstrapUsername
 MarketMafioso__DashboardBootstrapPassword

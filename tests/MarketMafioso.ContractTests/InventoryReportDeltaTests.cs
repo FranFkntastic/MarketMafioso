@@ -182,6 +182,31 @@ public sealed class InventoryReportDeltaTests
     }
 
     [Fact]
+    public async Task DeltaEndpoint_StaleRetainedBaseCannotRegressCurrentHead()
+    {
+        await using var application = ServerTestHost.Create();
+        using var client = application.CreateClient();
+        var before = CreateReport();
+        var fullResponse = await client.PostAsJsonAsync("/inventory", before, JsonOptions);
+        fullResponse.EnsureSuccessStatusCode();
+        var baseId = await ReadIdAsync(fullResponse);
+        var current = before with { Timestamp = "2026-07-30T12:02:00Z", PlayerGil = 42 };
+        var currentDelta = InventoryReportDeltaBuilder.Build(baseId, before, current).Delta!;
+        var currentResponse = await client.PostAsJsonAsync("/inventory/delta", currentDelta, JsonOptions);
+        currentResponse.EnsureSuccessStatusCode();
+        var currentId = await ReadIdAsync(currentResponse);
+        var stale = before with { Timestamp = "2026-07-30T12:01:00Z", PlayerGil = 7 };
+        var staleDelta = InventoryReportDeltaBuilder.Build(baseId, before, stale).Delta!;
+
+        var staleResponse = await client.PostAsJsonAsync("/inventory/delta", staleDelta, JsonOptions);
+        var stored = await client.GetFromJsonAsync<StoredInventoryReport>($"/api/reports/{currentId}");
+
+        Assert.Equal(HttpStatusCode.Conflict, staleResponse.StatusCode);
+        Assert.Contains("inventory_delta_base_stale", await staleResponse.Content.ReadAsStringAsync());
+        Assert.Equal((ulong)42, stored!.Report.PlayerGil);
+    }
+
+    [Fact]
     public async Task FullEndpoint_AcceptsObservedEmptyStorageAndRejectsUnavailableCapture()
     {
         await using var application = ServerTestHost.Create();

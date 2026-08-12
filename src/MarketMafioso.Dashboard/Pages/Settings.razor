@@ -117,14 +117,15 @@ else
                         </MudItem>
                         <MudItem xs="12" md="8">
                             <div class="snapshot-retention-summary">
-                                <MetricTile Label="Structured Snapshots" Value="@_storage.SnapshotCount.ToString("N0")" />
+                                <MetricTile Label="Current Inventories" Value="@_storage.CurrentHeadCount.ToString("N0")" />
+                                <MetricTile Label="Semantic History" Value="@_storage.HistoryCount.ToString("N0")" />
                                 <MetricTile Label="Raw JSON Retained" Value="@_storage.RawJsonRetainedCount.ToString("N0")" />
                                 <MetricTile Label="Raw JSON Pruned" Value="@_storage.RawJsonPrunedCount.ToString("N0")" />
                             </div>
                         </MudItem>
                         <MudItem xs="12">
                             <div class="snapshot-retention-summary wide">
-                                <MetricTile Label="Structured Retention" Value="@($"{_storage.SnapshotRetentionCount:N0} snapshots")" />
+                                <MetricTile Label="History Retention" Value="@($"{_storage.HistoryRetentionPerCharacter:N0} changes / character")" />
                                 <MetricTile Label="Raw JSON Retention" Value="@($"{_storage.RawJsonRetentionCount:N0} snapshots")" />
                                 <MetricTile Label="Newest Snapshot" Value="@NewestSnapshotLabel" />
                                 <MetricTile Label="Oldest Snapshot" Value="@OldestSnapshotLabel" />

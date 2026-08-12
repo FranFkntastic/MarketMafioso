@@ -108,7 +108,7 @@ public class HttpReporter : IDisposable
             if (result.Disposition == InventoryDeltaBuildDisposition.Unchanged)
             {
                 LastStatus = "No inventory changes";
-                log.Debug("[MarketMafioso] Quartermaster revision produced no semantic inventory changes; upload skipped.");
+                log.Debug("[MarketMafioso] Inventory trigger produced no transport-relevant changes; upload skipped.");
                 return;
             }
 

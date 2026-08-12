@@ -129,7 +129,7 @@ MarketMafioso__PublicOrigin=<public-origin-for-dashboard-links>
 MarketMafioso__CraftArchitectAppraiseUrl=<optional-loopback-ca-appraisal-url>
 MarketMafioso__DatabasePath=<sqlite-file-path>
 MarketMafioso__RawJsonRetentionCount=20
-MarketMafioso__SnapshotRetentionCount=500
+MarketMafioso__InventoryHistoryRetentionPerCharacter=100
 MarketMafioso__DiagnosticsRetentionCount=5000
 MarketMafioso__RequireDashboardAuth=true
 MarketMafioso__DashboardBootstrapUsername=<dashboard-user>
@@ -154,7 +154,7 @@ Reverse proxy, HTTPS, path-prefix, manual Docker, and direct .NET hosting notes 
 
 Workshop Host state lives in one SQLite database. Back up the configured `MarketMafioso__DatabasePath` file while the service is stopped, or use SQLite's online backup tooling if you need hot backups.
 
-The original uploaded JSON is intentionally pruned after `RawJsonRetentionCount` snapshots. Structured inventory rows remain until `SnapshotRetentionCount` pruning removes older snapshots.
+The receiver keeps one durable current inventory for every known character. `InventoryHistoryRetentionPerCharacter` bounds older semantic changes independently, while `RawJsonRetentionCount` separately bounds original uploaded JSON used for diagnostics.
 
 ## Smoke Test
 

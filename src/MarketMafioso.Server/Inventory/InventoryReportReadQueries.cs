@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using MarketMafioso.Server.Sqlite;
 using Microsoft.Data.Sqlite;
 
@@ -10,6 +13,16 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM snapshots WHERE account_id = $accountId AND id = $id";
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$id", id);
+        return await command.ExecuteScalarAsync(cancellationToken) != null;
+    }
+
+    public async Task<bool> CanApplyDeltaBaseAsync(long accountId, string id, CancellationToken cancellationToken)
+    {
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM snapshots WHERE account_id = $accountId AND id = $id AND (character_id IS NULL OR is_current = 1)";
         command.Parameters.AddWithValue("$accountId", accountId);
         command.Parameters.AddWithValue("$id", id);
         return await command.ExecuteScalarAsync(cancellationToken) != null;
@@ -83,7 +96,9 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
                 COALESCE(SUM(CASE WHEN raw_report_json IS NOT NULL THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN raw_report_json IS NULL THEN 1 ELSE 0 END), 0),
                 MAX(received_at_utc),
-                MIN(received_at_utc)
+                MIN(received_at_utc),
+                COALESCE(SUM(CASE WHEN is_current = 1 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN is_current = 0 THEN 1 ELSE 0 END), 0)
             FROM snapshots
             WHERE account_id IN ({string.Join(", ", accountParameters)})
             """;
@@ -98,6 +113,41 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
         return InventoryReportRowMapper.ReadRetentionSummary(reader);
     }
 
+    public async Task<InventoryRevisionState> GetRevisionAsync(
+        IReadOnlyList<long> accountIds,
+        CancellationToken cancellationToken)
+    {
+        if (accountIds.Count == 0)
+            return new InventoryRevisionState("empty", null);
+
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        var accountParameters = accountIds.Select((_, index) => $"$account{index}").ToArray();
+        command.CommandText = $"""
+            SELECT account_id, revision, updated_at_utc
+            FROM inventory_account_revisions
+            WHERE account_id IN ({string.Join(", ", accountParameters)})
+            ORDER BY account_id;
+            """;
+        for (var index = 0; index < accountIds.Count; index++)
+            command.Parameters.AddWithValue(accountParameters[index], accountIds[index]);
+
+        var revisions = new List<string>();
+        DateTimeOffset? updatedAt = null;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            revisions.Add($"{reader.GetInt64(0)}:{reader.GetInt64(1)}");
+            var candidate = DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+            if (updatedAt is null || candidate > updatedAt)
+                updatedAt = candidate;
+        }
+
+        var source = revisions.Count == 0 ? "empty" : string.Join("|", revisions);
+        var token = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)));
+        return new InventoryRevisionState(token, updatedAt);
+    }
+
     public async Task<StoredInventoryReport?> GetLatestAsync(
         long accountId,
         long? characterId,
@@ -108,13 +158,13 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
         command.CommandText = characterId == null
             ? """
               SELECT id FROM snapshots
-              WHERE account_id = $accountId
+              WHERE account_id = $accountId AND is_current = 1
               ORDER BY received_at_utc DESC
               LIMIT 1
               """
             : """
               SELECT id FROM snapshots
-              WHERE account_id = $accountId AND character_id = $characterId
+              WHERE account_id = $accountId AND character_id = $characterId AND is_current = 1
               ORDER BY received_at_utc DESC
               LIMIT 1
               """;
@@ -151,6 +201,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
                     ON c.id = s.character_id
                    AND c.account_id = s.account_id
                 WHERE s.account_id IN ({string.Join(", ", accountParameters)})
+                  AND s.is_current = 1
                   AND c.home_world IS NOT NULL
                   AND trim(c.home_world) <> ''
             )

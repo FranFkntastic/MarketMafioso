@@ -316,7 +316,7 @@ public static class InventoryBrowserViewBuilder
     private static IEnumerable<ListingRecord> EnumerateListings(StoredInventoryReport stored)
     {
         foreach (var retainer in stored.Report.Retainers)
-            foreach (var listing in retainer.MarketListings)
+            foreach (var listing in NormalizeListings(retainer))
             {
                 var listedAtText = listing.ListedAt ?? retainer.LastUpdated;
                 var age = DateTimeOffset.TryParse(listedAtText, out var listedAt)
@@ -346,6 +346,50 @@ public static class InventoryBrowserViewBuilder
                     age,
                     listedAtText);
             }
+    }
+
+    private static IReadOnlyList<RetainerMarketListing> NormalizeListings(RetainerReport retainer)
+    {
+        var listings = new List<RetainerMarketListing>();
+        var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var listing in retainer.MarketListings)
+        {
+            if (identities.Add(ListingIdentity(listing)))
+                listings.Add(listing);
+        }
+
+        foreach (var bag in retainer.Bags.Where(bag => bag.BagName.Equals("RetainerMarket", StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var item in bag.Items)
+            {
+                var listing = new RetainerMarketListing
+                {
+                    ItemId = item.ItemId,
+                    ItemName = item.ItemName,
+                    ItemType = item.ItemType,
+                    Quantity = item.Quantity,
+                    IsHQ = item.IsHQ,
+                    Condition = item.Condition,
+                    ContainerKey = item.ContainerKey ?? bag.BagName,
+                    SlotIndex = item.SlotIndex,
+                    ConditionPercent = item.ConditionPercent,
+                    ListedAt = retainer.LastUpdated,
+                };
+                if (identities.Add(ListingIdentity(listing)))
+                    listings.Add(listing);
+            }
+        }
+
+        return listings;
+    }
+
+    private static string ListingIdentity(RetainerMarketListing listing)
+    {
+        var container = string.IsNullOrWhiteSpace(listing.ContainerKey) ? "RetainerMarket" : listing.ContainerKey.Trim();
+        return listing.SlotIndex is { } slot
+            ? $"slot:{container}:{slot}"
+            : $"item:{container}:{listing.ItemId}:{listing.IsHQ}:{listing.Quantity}";
     }
 
     private static InventoryBrowserItemView ToItemView(ItemRecord row) => new()
@@ -483,7 +527,7 @@ public static class InventoryBrowserViewBuilder
                 OwnerHomeWorld = ResolveRetainerOwnerHomeWorld(report, retainer),
                 StackCount = retainer.Bags.Where(bag => !IsNonInventoryRetainerBag(bag.BagName)).SelectMany(bag => bag.Items).Count(),
                 Gil = retainer.Gil,
-                MarketListingCount = retainer.MarketListings.Count + CountLegacyMarketListings(retainer),
+                MarketListingCount = NormalizeListings(retainer).Count,
                 LastUpdated = retainer.LastUpdated,
             }));
         }
@@ -513,10 +557,6 @@ public static class InventoryBrowserViewBuilder
     private static bool IsNonInventoryRetainerBag(string bagName) =>
         bagName.Equals("RetainerGil", StringComparison.OrdinalIgnoreCase) ||
         bagName.Equals("RetainerMarket", StringComparison.OrdinalIgnoreCase);
-
-    private static int CountLegacyMarketListings(RetainerReport retainer) => retainer.Bags
-        .Where(bag => bag.BagName.Equals("RetainerMarket", StringComparison.OrdinalIgnoreCase))
-        .SelectMany(bag => bag.Items).Count();
 
     private static string? ResolveRetainerOwnerCharacterName(InventoryReport report, RetainerReport retainer) =>
         string.IsNullOrWhiteSpace(retainer.OwnerCharacterName) ? report.CharacterName : retainer.OwnerCharacterName;

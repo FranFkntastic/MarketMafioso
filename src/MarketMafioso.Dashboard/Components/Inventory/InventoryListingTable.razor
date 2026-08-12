@@ -16,7 +16,7 @@
     <thead>
         <tr class="inventory-column-row">
             <InventorySortHeader Label="Item" Column="item" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
-            <InventorySortHeader Label="Retainer" Column="retainer" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Stored in" Column="retainer" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
             <InventorySortHeader Label="Qty" Column="quantity" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
             <InventorySortHeader Label="Quality" Column="quality" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
             @if (ShowPrices)
@@ -28,7 +28,7 @@
         </tr>
         <tr class="inventory-filter-row">
             <InventoryColumnFilter Label="Item" Column="item" Query="Query" FilterChanged="FilterChanged" />
-            <InventoryColumnFilter Label="Retainer" Column="retainer" Query="Query" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Stored in" Column="retainer" Query="Query" FilterChanged="FilterChanged" />
             <InventoryColumnFilter Label="Qty" Column="quantity" Number="true" Query="Query" FilterChanged="FilterChanged" />
             <InventoryColumnFilter Label="Quality" Column="quality" Query="Query" FilterChanged="FilterChanged" />
             @if (ShowPrices)
@@ -42,7 +42,7 @@
     <tbody>
         <Virtualize TItem="InventoryBrowserMarketListingView" Items="VirtualizedListings" Context="listing" ItemSize="34" SpacerElement="tr">
             <tr>
-                <td><strong>@listing.DisplayName</strong></td><td>@listing.OwnerName</td><td class="number">@listing.Quantity.ToString("N0")</td>
+                <td><strong>@listing.DisplayName</strong></td><td>@StoredIn(listing)</td><td class="number">@listing.Quantity.ToString("N0")</td>
                 <td><span class="quality-pill @(listing.HqQuantity > 0 ? "hq" : null)">@(listing.HqQuantity > 0 ? "HQ" : "NQ")</span></td>
                 @if (ShowPrices)
                 {
@@ -59,7 +59,7 @@
     private static readonly IReadOnlyList<WebTableResizeColumn> PriceColumns =
     [
         new("item", "Item", 260, 140),
-        new("retainer", "Retainer", 160, 100),
+        new("retainer", "Stored in", 240, 150),
         new("quantity", "Qty", 80, 60),
         new("quality", "Quality", 80, 64),
         new("unit-price", "Unit price", 120, 90),
@@ -70,7 +70,7 @@
     private static readonly IReadOnlyList<WebTableResizeColumn> QuantityColumns =
     [
         new("item", "Item", 360, 140),
-        new("retainer", "Retainer", 240, 100),
+        new("retainer", "Stored in", 300, 150),
         new("quantity", "Qty", 110, 60),
         new("quality", "Quality", 110, 64),
         new("observed", "Observed", 120, 76),
@@ -87,4 +87,13 @@
     private static string FormatUnitPrice(uint? value) => value is null ? "Not recorded" : $"{value:N0} gil";
     private static string FormatTotalPrice(ulong? value) => value is null ? "Not recorded" : $"{value:N0} gil";
     private static string FormatAge(double? seconds) => seconds switch { null => "—", < 60 => "<1m", < 3600 => $"{seconds / 60:0}m", < 86400 => $"{seconds / 3600:0.#}h", _ => $"{seconds / 86400:0.#}d" };
+    private static string StoredIn(InventoryBrowserMarketListingView listing)
+    {
+        var character = string.IsNullOrWhiteSpace(listing.OwnerCharacterName)
+            ? "Unknown character"
+            : string.IsNullOrWhiteSpace(listing.OwnerHomeWorld)
+                ? listing.OwnerCharacterName
+                : $"{listing.OwnerCharacterName} @ {listing.OwnerHomeWorld}";
+        return $"{listing.OwnerName} — {character}";
+    }
 }

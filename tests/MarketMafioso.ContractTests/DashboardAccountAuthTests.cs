@@ -95,6 +95,7 @@ public sealed class DashboardAccountAuthTests
         Assert.NotNull(allKnown);
         Assert.Null(allKnown.SnapshotId);
         Assert.Null(allKnown.CharacterName);
+        Assert.False(string.IsNullOrWhiteSpace(allKnown.RevisionToken));
         Assert.Equal(5, Assert.Single(allKnown.Items).TotalQuantity);
         Assert.Equal(2, allKnown.Scopes.Count);
         Assert.NotNull(eriana);
@@ -103,6 +104,31 @@ public sealed class DashboardAccountAuthTests
         Assert.NotNull(historical);
         Assert.Equal(olderId, historical.SnapshotId);
         Assert.Equal((uint)999, Assert.Single(historical.Items).ItemId);
+    }
+
+    [Fact]
+    public async Task InventoryEventStream_EmitsTheAuthorizedAccountRevision()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireDashboardAuth", "false"));
+        using var client = application.CreateClient();
+        (await client.PostAsJsonAsync("/inventory", BrowserReport("Eriana Ning", "Siren", 42, 2))).EnsureSuccessStatusCode();
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var response = await client.SendAsync(
+            new HttpRequestMessage(HttpMethod.Get, "/api/inventory/events/stream"),
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellation.Token);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellation.Token);
+        using var reader = new StreamReader(stream);
+
+        Assert.Equal("event: inventory", await reader.ReadLineAsync(cancellation.Token));
+        var data = await reader.ReadLineAsync(cancellation.Token);
+        Assert.NotNull(data);
+        Assert.StartsWith("data: ", data);
+        var revision = JsonSerializer.Deserialize<InventoryRevisionView>(data![6..], new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.False(string.IsNullOrWhiteSpace(revision?.Token));
     }
 
     [Theory]

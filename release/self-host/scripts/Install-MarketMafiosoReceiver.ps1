@@ -250,7 +250,7 @@ $lines = @(
     "MarketMafioso__DatabasePath=/data/marketmafioso.db",
     "",
     "MarketMafioso__RawJsonRetentionCount=20",
-    "MarketMafioso__SnapshotRetentionCount=500",
+    "MarketMafioso__InventoryHistoryRetentionPerCharacter=100",
     "MarketMafioso__DiagnosticsRetentionCount=5000",
     "",
     "MarketMafioso__RequireDashboardAuth=true",

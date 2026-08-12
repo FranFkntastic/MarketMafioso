@@ -25,10 +25,12 @@ public sealed record DashboardFeatureFlagsView
 
 public sealed record ReceiverStorageSummaryView
 {
-    public int SnapshotRetentionCount { get; init; }
+    public int HistoryRetentionPerCharacter { get; init; }
     public int RawJsonRetentionCount { get; init; }
     public int DiagnosticEventRetentionCount { get; init; }
     public int SnapshotCount { get; init; }
+    public int CurrentHeadCount { get; init; }
+    public int HistoryCount { get; init; }
     public int RawJsonRetainedCount { get; init; }
     public int RawJsonPrunedCount { get; init; }
     public int DiagnosticEventCount { get; init; }
