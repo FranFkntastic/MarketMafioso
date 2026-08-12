@@ -2,16 +2,15 @@
     <span class="visually-hidden">Inventory scope</span>
     <select class="inventory-native-select"
             @key="SelectionKey"
-            value="@Value"
             @onchange="HandleChangedAsync"
             aria-label="Inventory scope">
-        <option value="all">All locations (@Scopes.Sum(scope => scope.StackCount).ToString("N0"))</option>
+        <option value="all" selected="@IsSelected("all")">All locations (@Scopes.Sum(scope => scope.StackCount).ToString("N0"))</option>
         @foreach (var group in Scopes.GroupBy(CharacterLabel).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
         {
             <optgroup label="@group.Key">
                 @foreach (var scope in group)
                 {
-                    <option value="@scope.ScopeKey">@scope.DisplayName (@scope.StackCount.ToString("N0"))</option>
+                    <option value="@scope.ScopeKey" selected="@IsSelected(scope.ScopeKey)">@scope.DisplayName (@scope.StackCount.ToString("N0"))</option>
                 }
             </optgroup>
         }
@@ -27,6 +26,9 @@
         ValueChanged.InvokeAsync(args.Value?.ToString() ?? "all");
 
     private string SelectionKey => $"{Value}\u001f{Scopes.Count}";
+
+    private bool IsSelected(string scope) =>
+        string.Equals(Value, scope, StringComparison.OrdinalIgnoreCase);
 
     private static string CharacterLabel(InventoryBrowserScopeView scope)
     {
