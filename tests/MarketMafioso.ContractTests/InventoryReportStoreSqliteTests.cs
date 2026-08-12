@@ -313,10 +313,10 @@ public sealed class InventoryReportStoreSqliteTests
     }
 
     [Fact]
-    public async Task SaveAsync_PrunesStructuredSnapshotsPastConfiguredRetentionCount()
+    public async Task SaveAsync_PrunesSemanticHistoryWithoutDeletingCurrentHead()
     {
         var fixture = await StoreFixture.CreateAsync(
-            new KeyValuePair<string, string?>("MarketMafioso:SnapshotRetentionCount", "2"));
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistoryRetentionPerCharacter", "1"));
 
         var first = await fixture.Store.SaveAsync(
             fixture.AccountId,
@@ -353,7 +353,7 @@ public sealed class InventoryReportStoreSqliteTests
     public async Task SaveAsync_SerializesConcurrentInventoryWrites()
     {
         var fixture = await StoreFixture.CreateAsync(
-            new KeyValuePair<string, string?>("MarketMafioso:SnapshotRetentionCount", "8"));
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistoryRetentionPerCharacter", "8"));
 
         var writes = Enumerable.Range(0, 16)
             .Select(index => fixture.Store.SaveAsync(
@@ -367,7 +367,67 @@ public sealed class InventoryReportStoreSqliteTests
         var stored = await Task.WhenAll(writes);
 
         Assert.Equal(16, stored.Select(snapshot => snapshot.Id).Distinct().Count());
-        Assert.Equal(8, await fixture.CountAsync("snapshots"));
+        Assert.Equal(9, await fixture.CountAsync("snapshots"));
+    }
+
+    [Fact]
+    public async Task SaveAsync_NoOpDeliveryRefreshesCurrentHeadWithoutCreatingHistoryOrRevision()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var report = CreateReport("Quiet Character", "Siren", 42);
+
+        var first = await fixture.Store.SaveAsync(fixture.AccountId, report, null, "{}", CancellationToken.None);
+        var firstRevision = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+        var second = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            report with
+            {
+                Timestamp = "2026-06-23T12:05:00.0000000Z",
+                Metadata = report.Metadata with { GeneratedAtUtc = "2026-06-23T12:05:00.0000000Z" },
+                RetainerManagement = new QuartermasterStowageReport
+                {
+                    ProviderInstanceId = "quartermaster-a",
+                    Revision = 2,
+                },
+            },
+            null,
+            "{}",
+            CancellationToken.None);
+        var secondRevision = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal(firstRevision.Token, secondRevision.Token);
+        Assert.Equal(1, await fixture.CountAsync("snapshots"));
+        Assert.Equal(2, (await fixture.Store.GetAsync(fixture.AccountId, first.Id, CancellationToken.None))!.Report.RetainerManagement!.Revision);
+    }
+
+    [Fact]
+    public async Task SaveAsync_QuietCharacterCurrentHeadSurvivesOtherCharacterHistoryPruning()
+    {
+        var fixture = await StoreFixture.CreateAsync(
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistoryRetentionPerCharacter", "1"));
+        var quiet = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Quiet Character", "Siren", 42),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        for (uint itemId = 100; itemId < 110; itemId++)
+        {
+            await fixture.Store.SaveAsync(
+                fixture.AccountId,
+                CreateReport("Busy Character", "Siren", itemId),
+                null,
+                "{}",
+                CancellationToken.None);
+        }
+
+        var current = await fixture.Store.GetLatestByCharacterAsync([fixture.AccountId], CancellationToken.None);
+
+        Assert.Equal(2, current.Count);
+        Assert.Contains(current, report => report.Id == quiet.Id);
+        Assert.Equal(3, await fixture.CountAsync("snapshots"));
     }
 
     [Fact]
@@ -530,6 +590,57 @@ public sealed class InventoryReportStoreSqliteTests
     }
 
     [Fact]
+    public void InventoryBrowser_NormalizesLegacyMarketBagWithoutDuplicatingExplicitListings()
+    {
+        var report = CreateReport("Listing Character", "Siren", 42) with
+        {
+            Retainers =
+            [
+                new RetainerReport
+                {
+                    RetainerName = "Seller",
+                    RetainerId = 99,
+                    OwnerCharacterName = "Listing Character",
+                    OwnerHomeWorld = "Siren",
+                    LastUpdated = "2026-06-23T12:00:00.0000000Z",
+                    MarketListings =
+                    [
+                        new RetainerMarketListing
+                        {
+                            ItemId = 100,
+                            ItemName = "Explicit",
+                            Quantity = 1,
+                            ContainerKey = "RetainerMarket",
+                            SlotIndex = 0,
+                            UnitPrice = 500,
+                        },
+                    ],
+                    Bags =
+                    [
+                        Bag(
+                            "RetainerMarket",
+                            Slot(100, 1, 0, 100) with { ContainerKey = "RetainerMarket", ItemName = "Legacy duplicate" },
+                            Slot(200, 2, 1, 100) with { ContainerKey = "RetainerMarket", ItemName = "Legacy only" }),
+                    ],
+                },
+            ],
+        };
+        var stored = new StoredInventoryReport
+        {
+            Id = "mixed-listings",
+            ReceivedAt = DateTimeOffset.Parse("2026-06-23T12:01:00Z"),
+            Report = report,
+        };
+
+        var view = InventoryBrowserViewBuilder.Build(stored, null, mode: InventoryBrowserMode.Listings);
+
+        Assert.Equal(2, view.MarketListings.Count);
+        Assert.Equal(2, Assert.Single(view.Scopes, scope => scope.DisplayName == "Seller").MarketListingCount);
+        Assert.Single(view.MarketListings, listing => listing.ItemId == 100 && listing.UnitPrice == 500);
+        Assert.Single(view.MarketListings, listing => listing.ItemId == 200 && listing.UnitPrice is null);
+    }
+
+    [Fact]
     public async Task ItemMetadataCatalog_SelfHealsOlderSnapshotsWithoutCrossingAccountBoundaries()
     {
         var fixture = await StoreFixture.CreateAsync();
@@ -568,6 +679,62 @@ public sealed class InventoryReportStoreSqliteTests
     }
 
     private static InventoryReport WithoutItemType(InventoryReport report) => WithItemType(report, null);
+
+    [Fact]
+    public async Task DeleteAsync_CurrentHeadPromotesNewestHistoryAndAdvancesRevision()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var historical = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Delete Character", "Siren", 2),
+            null,
+            "{}",
+            CancellationToken.None);
+        var current = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Delete Character", "Siren", 3),
+            null,
+            "{}",
+            CancellationToken.None);
+        var before = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+
+        Assert.True(await fixture.Store.DeleteAsync(fixture.AccountId, current.Id, CancellationToken.None));
+
+        var latest = await fixture.Store.GetLatestAsync(fixture.AccountId, characterId: null, CancellationToken.None);
+        var after = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+        Assert.Equal(historical.Id, latest!.Id);
+        Assert.NotEqual(before.Token, after.Token);
+    }
+
+    [Fact]
+    public async Task SaveAsync_OutOfOrderFullReportCannotRegressCurrentHead()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var first = CreateReport("Ordered Character", "Siren", 2) with
+        {
+            Timestamp = "2026-06-23T12:00:00.0000000Z",
+        };
+        var currentReport = CreateReport("Ordered Character", "Siren", 3) with
+        {
+            Timestamp = "2026-06-23T12:02:00.0000000Z",
+        };
+        var staleReport = CreateReport("Ordered Character", "Siren", 4) with
+        {
+            Timestamp = "2026-06-23T12:01:00.0000000Z",
+        };
+
+        await fixture.Store.SaveAsync(fixture.AccountId, first, null, "{}", CancellationToken.None);
+        var current = await fixture.Store.SaveAsync(fixture.AccountId, currentReport, null, "{}", CancellationToken.None);
+        var before = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+
+        var accepted = await fixture.Store.SaveAsync(fixture.AccountId, staleReport, null, "{}", CancellationToken.None);
+        var after = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+
+        Assert.Equal(current.Id, accepted.Id);
+        Assert.Equal((uint)3, accepted.Report.PlayerInventory[0].Items[0].ItemId);
+        Assert.Equal(before.Token, after.Token);
+        Assert.Equal(2, await fixture.CountAsync("snapshots"));
+    }
 
     private static InventoryReport WithItemType(InventoryReport report, string? itemType) => report with
     {

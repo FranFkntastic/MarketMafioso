@@ -170,15 +170,15 @@ This controls how many original uploaded JSON payloads are kept for diagnostics.
 
 Why it matters: raw JSON is useful for troubleshooting but can grow over time. Lower values save space; higher values preserve more debug history.
 
-### `MarketMafioso__SnapshotRetentionCount`
+### `MarketMafioso__InventoryHistoryRetentionPerCharacter`
 
 Example:
 
 ```text
-MarketMafioso__SnapshotRetentionCount=500
+MarketMafioso__InventoryHistoryRetentionPerCharacter=100
 ```
 
-This controls how many structured inventory snapshots are kept.
+This controls how many older semantic inventory changes are kept for each character. Every character's current inventory is retained separately and is never deleted by history pruning. Existing installations may continue using `MarketMafioso__SnapshotRetentionCount` as a deprecated alias until they adopt the new setting.
 
 Why it matters: this is the main inventory history limit. Higher values keep more history and use more disk space.
 

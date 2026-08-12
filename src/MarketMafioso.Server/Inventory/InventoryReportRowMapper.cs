@@ -133,6 +133,8 @@ internal static class InventoryReportRowMapper
             OldestSnapshotReceivedAtUtc = reader.IsDBNull(4)
                 ? null
                 : ParseDateTimeOffset(reader.GetString(4)),
+            CurrentHeadCount = checked((int)reader.GetInt64(5)),
+            HistoryCount = checked((int)reader.GetInt64(6)),
         };
 
     private static DateTimeOffset ParseDateTimeOffset(string value) =>

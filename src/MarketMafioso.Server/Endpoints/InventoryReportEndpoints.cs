@@ -337,6 +337,15 @@ internal static class InventoryReportEndpoints
             });
         }
 
+        if (!await store.CanApplyDeltaBaseAsync(accountId, delta.BaseSnapshotId, token))
+        {
+            return Results.Conflict(new
+            {
+                error = "inventory_delta_base_stale",
+                baseSnapshotId = delta.BaseSnapshotId,
+            });
+        }
+
         InventoryReport reconstructed;
         try
         {

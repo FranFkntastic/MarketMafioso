@@ -49,10 +49,10 @@ Reports are stored in SQLite at `src/MarketMafioso.Server/data/marketmafioso.db`
 
 The original incoming JSON is retained only for the newest 20 snapshots by default. Older snapshots remain available through parsed dashboard/API views until the structured snapshot retention limit is reached, while raw JSON routes return `410 Gone` once the original JSON has been pruned.
 
-Structured snapshots are retained for the newest 500 snapshots by default. Override this with:
+Current inventory is retained independently for every known character. Semantic history keeps 100 changes per character by default; override it with:
 
 ```powershell
-$env:MarketMafioso__SnapshotRetentionCount = "500"
+$env:MarketMafioso__InventoryHistoryRetentionPerCharacter = "100"
 ```
 
 ## API Key

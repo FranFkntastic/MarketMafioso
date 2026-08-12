@@ -55,12 +55,12 @@ else
                         <MetricTile Label="Matching Items" Value="@_inventory.Items.Count.ToString("N0")" />
                         <MetricTile Label="Total Quantity" Value="@_inventory.TotalQuantity.ToString("N0")" />
                         <MetricTile Label="Retainer Gil" Value="@FormatGil(_inventory.RetainerGil)" />
-                        <MetricTile Label="Snapshots Stored" Value="@_storage.SnapshotCount.ToString("N0")" />
+                        <MetricTile Label="Current Inventories" Value="@_storage.CurrentHeadCount.ToString("N0")" />
                         <MetricTile Label="Raw JSON Kept" Value="@_storage.RawJsonRetainedCount.ToString("N0")" />
                         <MetricTile Label="Raw JSON Pruned" Value="@_storage.RawJsonPrunedCount.ToString("N0")" />
                     </div>
                     <MudText Typo="Typo.caption" Class="muted">
-                        Structured retention keeps @_storage.SnapshotRetentionCount.ToString("N0") snapshot(s);
+                        Semantic history keeps up to @_storage.HistoryRetentionPerCharacter.ToString("N0") change(s) per character; current inventories are retained separately.
                         raw JSON retention keeps @_storage.RawJsonRetentionCount.ToString("N0").
                     </MudText>
                 </div>

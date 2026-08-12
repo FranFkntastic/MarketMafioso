@@ -81,9 +81,9 @@ This database is the durable Workshop Host history.
 
 How many original uploaded JSON reports to keep for diagnostics.
 
-### `MarketMafioso__SnapshotRetentionCount`
+### `MarketMafioso__InventoryHistoryRetentionPerCharacter`
 
-How many structured inventory snapshots to keep.
+How many older semantic inventory changes to keep per character. Current inventory is retained separately. `MarketMafioso__SnapshotRetentionCount` remains a deprecated compatibility alias.
 
 ### `MarketMafioso__DiagnosticsRetentionCount`
 

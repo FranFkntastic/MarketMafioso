@@ -91,6 +91,8 @@ window.marketMafiosoEvents = (() => {
 
         if (eventName === "acquisition")
             await dotNetRef.invokeMethodAsync("OnAcquisitionEventAsync", data);
+        else if (eventName === "inventory")
+            await dotNetRef.invokeMethodAsync("OnInventoryRevisionAsync", data);
     }
 
     function scheduleReconnect(url, dotNetRef, streamGeneration) {

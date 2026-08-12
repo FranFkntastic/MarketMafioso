@@ -15,6 +15,7 @@ public enum InventoryBrowserMode
 
 public sealed record InventoryBrowserView
 {
+    public string RevisionToken { get; init; } = string.Empty;
     public string? SnapshotId { get; init; }
     public DateTimeOffset? ReceivedAt { get; init; }
     public string? CharacterName { get; init; }
@@ -41,6 +42,12 @@ public sealed record InventoryBrowserView
     public ulong? PlayerGil { get; init; }
     public ulong RetainerGil { get; init; }
     public ulong? TotalGil { get; init; }
+}
+
+public sealed record InventoryRevisionView
+{
+    public string Token { get; init; } = string.Empty;
+    public DateTimeOffset? UpdatedAtUtc { get; init; }
 }
 
 public sealed record InventoryBrowserItemView

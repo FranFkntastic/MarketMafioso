@@ -12,7 +12,7 @@ internal sealed class InventoryReportWritePersistence(
 {
     private readonly HashSet<string> incompleteIdentityDiagnostics = new(StringComparer.Ordinal);
 
-    public async Task WriteSnapshotAsync(
+    public async Task<InventoryWriteResult> WriteSnapshotAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         long accountId,
@@ -32,6 +32,53 @@ internal sealed class InventoryReportWritePersistence(
             receivedAt,
             cancellationToken);
 
+        var semanticHash = InventorySemanticFingerprint.Compute(report);
+        var current = characterId is null
+            ? null
+            : await ReadCurrentHeadAsync(connection, transaction, accountId, characterId.Value, cancellationToken);
+        if (current is not null && IsOlderObservation(report.Timestamp, current.ReportTimestamp))
+        {
+            await TouchCurrentDeliveryAsync(
+                connection,
+                transaction,
+                current.SnapshotId,
+                receivedAt,
+                apiKeyLabel,
+                cancellationToken);
+            log.LogWarning(
+                "Ignored an out-of-order inventory report for character {CharacterId}; current observation {CurrentTimestamp} is newer than {IncomingTimestamp}.",
+                characterId,
+                current.ReportTimestamp,
+                report.Timestamp);
+            return new InventoryWriteResult(current.SnapshotId, characterId, current.SemanticRevision, false);
+        }
+
+        if (current is not null && string.Equals(current.SemanticHash, semanticHash, StringComparison.Ordinal))
+        {
+            await UpdateCurrentDeliveryAsync(
+                connection,
+                transaction,
+                current.SnapshotId,
+                receivedAt,
+                apiKeyLabel,
+                rawReportJson,
+                report,
+                metadata,
+                cancellationToken);
+            await UpsertItemMetadataCatalogAsync(
+                connection,
+                transaction,
+                accountId,
+                receivedAt,
+                report,
+                cancellationToken);
+            return new InventoryWriteResult(current.SnapshotId, characterId, current.SemanticRevision, false);
+        }
+
+        var semanticRevision = current?.SemanticRevision + 1 ?? (characterId is null ? 0 : 1);
+        if (current is not null)
+            await DemoteCurrentHeadAsync(connection, transaction, current.SnapshotId, cancellationToken);
+
         await InsertSnapshotAsync(
             connection,
             transaction,
@@ -43,6 +90,9 @@ internal sealed class InventoryReportWritePersistence(
             rawReportJson,
             report,
             metadata,
+            characterId is not null,
+            semanticRevision,
+            semanticHash,
             cancellationToken);
         await UpsertItemMetadataCatalogAsync(
             connection,
@@ -74,6 +124,11 @@ internal sealed class InventoryReportWritePersistence(
                 retainer.MarketListings,
                 cancellationToken);
         }
+
+        if (characterId is not null)
+            await AdvanceAccountRevisionAsync(connection, transaction, accountId, receivedAt, cancellationToken);
+
+        return new InventoryWriteResult(id, characterId, semanticRevision, true);
     }
 
     public async Task PruneSnapshotsAsync(
@@ -82,21 +137,31 @@ internal sealed class InventoryReportWritePersistence(
         long accountId,
         CancellationToken cancellationToken)
     {
-        var retentionCount = configuration.GetValue("MarketMafioso:SnapshotRetentionCount", 500);
+        var retentionCount = ResolveHistoryRetention(configuration);
         if (retentionCount < 1)
-            throw new InvalidOperationException("MarketMafioso:SnapshotRetentionCount must be one or greater.");
+            throw new InvalidOperationException("MarketMafioso:InventoryHistoryRetentionPerCharacter must be one or greater.");
 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
+            WITH ranked_history AS (
+                SELECT
+                    id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(character_id, -1)
+                        ORDER BY received_at_utc DESC, id DESC
+                    ) AS history_position
+                FROM snapshots
+                WHERE account_id = $accountId
+                  AND is_current = 0
+            )
             DELETE FROM snapshots
             WHERE account_id = $accountId
-              AND id NOT IN (
+              AND is_current = 0
+              AND id IN (
                   SELECT id
-                  FROM snapshots
-                  WHERE account_id = $accountId
-                  ORDER BY received_at_utc DESC
-                  LIMIT $retentionCount
+                  FROM ranked_history
+                  WHERE history_position > $retentionCount
               );
             """;
         command.Parameters.AddWithValue("$accountId", accountId);
@@ -107,20 +172,72 @@ internal sealed class InventoryReportWritePersistence(
     public async Task<bool> DeleteAsync(long accountId, string id, CancellationToken cancellationToken)
     {
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId AND id = $id";
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId AND id = $id RETURNING character_id, is_current";
         command.Parameters.AddWithValue("$accountId", accountId);
         command.Parameters.AddWithValue("$id", id);
-        return await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+        long? characterId;
+        bool wasCurrent;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            if (!await reader.ReadAsync(cancellationToken))
+                return false;
+            characterId = reader.IsDBNull(0) ? null : reader.GetInt64(0);
+            wasCurrent = reader.GetInt32(1) != 0;
+        }
+
+        if (wasCurrent && characterId is { } deletedCharacterId)
+        {
+            await PromoteNewestHistoryAsync(connection, transaction, accountId, deletedCharacterId, cancellationToken);
+            await AdvanceAccountRevisionAsync(connection, transaction, accountId, DateTimeOffset.UtcNow, cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return true;
     }
 
     public async Task<int> DeleteAllAsync(long accountId, CancellationToken cancellationToken)
     {
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId";
         command.Parameters.AddWithValue("$accountId", accountId);
-        return await command.ExecuteNonQueryAsync(cancellationToken);
+        var deleted = await command.ExecuteNonQueryAsync(cancellationToken);
+        if (deleted > 0)
+            await AdvanceAccountRevisionAsync(connection, transaction, accountId, DateTimeOffset.UtcNow, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return deleted;
+    }
+
+    private static async Task PromoteNewestHistoryAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        long characterId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE snapshots
+            SET is_current = 1
+            WHERE id = (
+                SELECT id
+                FROM snapshots
+                WHERE account_id = $accountId
+                  AND character_id = $characterId
+                  AND is_current = 0
+                ORDER BY semantic_revision DESC, received_at_utc DESC, id DESC
+                LIMIT 1
+            );
+            """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$characterId", characterId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private async Task<long?> UpsertCharacterAsync(
@@ -266,6 +383,9 @@ internal sealed class InventoryReportWritePersistence(
         string? rawReportJson,
         InventoryReport report,
         InventoryReportMetadata metadata,
+        bool isCurrent,
+        long semanticRevision,
+        string semanticHash,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
@@ -289,7 +409,11 @@ internal sealed class InventoryReportWritePersistence(
                 generated_at_utc,
                 raw_report_json,
                 raw_json_retained_at_utc,
-                retainer_management_json)
+                retainer_management_json,
+                is_current,
+                semantic_revision,
+                semantic_hash,
+                last_delivery_at_utc)
             VALUES (
                 $id,
                 $accountId,
@@ -308,7 +432,11 @@ internal sealed class InventoryReportWritePersistence(
                 $generatedAtUtc,
                 $rawReportJson,
                 $rawJsonRetainedAt,
-                $retainerManagementJson);
+                $retainerManagementJson,
+                $isCurrent,
+                $semanticRevision,
+                $semanticHash,
+                $lastDeliveryAtUtc);
             """;
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$accountId", accountId);
@@ -332,8 +460,151 @@ internal sealed class InventoryReportWritePersistence(
             report.RetainerManagement is null
                 ? DBNull.Value
                 : JsonSerializer.Serialize(report.RetainerManagement));
+        command.Parameters.AddWithValue("$isCurrent", isCurrent ? 1 : 0);
+        command.Parameters.AddWithValue("$semanticRevision", semanticRevision);
+        command.Parameters.AddWithValue("$semanticHash", semanticHash);
+        command.Parameters.AddWithValue("$lastDeliveryAtUtc", receivedAt.ToString("O", CultureInfo.InvariantCulture));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    internal static int ResolveHistoryRetention(IConfiguration configuration) =>
+        configuration.GetValue<int?>("MarketMafioso:InventoryHistoryRetentionPerCharacter")
+        ?? configuration.GetValue("MarketMafioso:SnapshotRetentionCount", 100);
+
+    private static async Task<CurrentInventoryHead?> ReadCurrentHeadAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        long characterId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT id, semantic_revision, semantic_hash, report_timestamp
+            FROM snapshots
+            WHERE account_id = $accountId
+              AND character_id = $characterId
+              AND is_current = 1
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$characterId", characterId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+        return new CurrentInventoryHead(
+            reader.GetString(0),
+            reader.GetInt64(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.GetString(3));
+    }
+
+    private static bool IsOlderObservation(string incomingTimestamp, string currentTimestamp) =>
+        DateTimeOffset.TryParse(incomingTimestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var incoming) &&
+        DateTimeOffset.TryParse(currentTimestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var current) &&
+        incoming < current;
+
+    private static async Task TouchCurrentDeliveryAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string snapshotId,
+        DateTimeOffset receivedAt,
+        string? apiKeyLabel,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE snapshots
+            SET last_delivery_at_utc = $receivedAt,
+                api_key_label = $apiKeyLabel
+            WHERE id = $snapshotId AND is_current = 1;
+            """;
+        command.Parameters.AddWithValue("$receivedAt", receivedAt.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$apiKeyLabel", string.IsNullOrWhiteSpace(apiKeyLabel) ? DBNull.Value : "provided");
+        command.Parameters.AddWithValue("$snapshotId", snapshotId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpdateCurrentDeliveryAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string snapshotId,
+        DateTimeOffset receivedAt,
+        string? apiKeyLabel,
+        string? rawReportJson,
+        InventoryReport report,
+        InventoryReportMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE snapshots
+            SET received_at_utc = $receivedAt,
+                last_delivery_at_utc = $receivedAt,
+                api_key_label = $apiKeyLabel,
+                report_timestamp = $reportTimestamp,
+                generated_at_utc = $generatedAtUtc,
+                raw_report_json = $rawReportJson,
+                raw_json_retained_at_utc = CASE WHEN $rawReportJson IS NULL THEN NULL ELSE $receivedAt END,
+                retainer_management_json = $retainerManagementJson
+            WHERE id = $snapshotId AND is_current = 1;
+            """;
+        command.Parameters.AddWithValue("$receivedAt", receivedAt.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$apiKeyLabel", string.IsNullOrWhiteSpace(apiKeyLabel) ? DBNull.Value : "provided");
+        command.Parameters.AddWithValue("$reportTimestamp", report.Timestamp);
+        command.Parameters.AddWithValue("$generatedAtUtc", metadata.GeneratedAtUtc);
+        command.Parameters.AddWithValue("$rawReportJson", (object?)rawReportJson ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$retainerManagementJson",
+            report.RetainerManagement is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(report.RetainerManagement));
+        command.Parameters.AddWithValue("$snapshotId", snapshotId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task DemoteCurrentHeadAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string snapshotId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "UPDATE snapshots SET is_current = 0 WHERE id = $snapshotId AND is_current = 1";
+        command.Parameters.AddWithValue("$snapshotId", snapshotId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task AdvanceAccountRevisionAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        DateTimeOffset changedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO inventory_account_revisions (account_id, revision, updated_at_utc)
+            VALUES ($accountId, 1, $updatedAt)
+            ON CONFLICT(account_id) DO UPDATE SET
+                revision = inventory_account_revisions.revision + 1,
+                updated_at_utc = excluded.updated_at_utc;
+            """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$updatedAt", changedAt.ToString("O", CultureInfo.InvariantCulture));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private sealed record CurrentInventoryHead(
+        string SnapshotId,
+        long SemanticRevision,
+        string? SemanticHash,
+        string ReportTimestamp);
 
     private static async Task InsertOwnerAsync(
         SqliteConnection connection,
@@ -556,3 +827,9 @@ internal sealed class InventoryReportWritePersistence(
         }
     }
 }
+
+internal sealed record InventoryWriteResult(
+    string SnapshotId,
+    long? CharacterId,
+    long SemanticRevision,
+    bool SemanticChanged);

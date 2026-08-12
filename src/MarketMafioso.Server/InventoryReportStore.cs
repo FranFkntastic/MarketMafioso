@@ -69,6 +69,9 @@ public sealed class InventoryReportStore
     public Task<bool> ExistsAsync(long accountId, string id, CancellationToken cancellationToken) =>
         readQueries.ExistsAsync(accountId, id, cancellationToken);
 
+    public Task<bool> CanApplyDeltaBaseAsync(long accountId, string id, CancellationToken cancellationToken) =>
+        readQueries.CanApplyDeltaBaseAsync(accountId, id, cancellationToken);
+
     private async Task<StoredInventoryReport> SaveCoreAsync(
         long accountId,
         string id,
@@ -87,7 +90,7 @@ public sealed class InventoryReportStore
 
             await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-            await writePersistence.WriteSnapshotAsync(
+            var writeResult = await writePersistence.WriteSnapshotAsync(
                 connection,
                 transaction,
                 accountId,
@@ -102,8 +105,8 @@ public sealed class InventoryReportStore
             await writePersistence.PruneSnapshotsAsync(connection, transaction, accountId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            return (await GetAsync(accountId, id, cancellationToken))
-                ?? throw new InvalidOperationException($"Saved snapshot {id} could not be reloaded.");
+            return (await GetAsync(accountId, writeResult.SnapshotId, cancellationToken))
+                ?? throw new InvalidOperationException($"Saved inventory head {writeResult.SnapshotId} could not be reloaded.");
         }
         finally
         {
@@ -129,6 +132,11 @@ public sealed class InventoryReportStore
         IReadOnlyList<long> accountIds,
         CancellationToken cancellationToken) =>
         readQueries.GetRetentionSummaryAsync(accountIds, cancellationToken);
+
+    public Task<InventoryRevisionState> GetRevisionAsync(
+        IReadOnlyList<long> accountIds,
+        CancellationToken cancellationToken) =>
+        readQueries.GetRevisionAsync(accountIds, cancellationToken);
 
     public Task<StoredInventoryReport?> GetLatestAsync(CancellationToken cancellationToken) =>
         GetLatestAsync(1, null, cancellationToken);
@@ -221,14 +229,34 @@ public sealed class InventoryReportStore
     public Task<bool> DeleteAsync(string id, CancellationToken cancellationToken) =>
         DeleteAsync(1, id, cancellationToken);
 
-    public Task<bool> DeleteAsync(long accountId, string id, CancellationToken cancellationToken) =>
-        writePersistence.DeleteAsync(accountId, id, cancellationToken);
+    public async Task<bool> DeleteAsync(long accountId, string id, CancellationToken cancellationToken)
+    {
+        await writeGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await writePersistence.DeleteAsync(accountId, id, cancellationToken);
+        }
+        finally
+        {
+            writeGate.Release();
+        }
+    }
 
     public Task<int> DeleteAllAsync(CancellationToken cancellationToken) =>
         DeleteAllAsync(1, cancellationToken);
 
-    public Task<int> DeleteAllAsync(long accountId, CancellationToken cancellationToken) =>
-        writePersistence.DeleteAllAsync(accountId, cancellationToken);
+    public async Task<int> DeleteAllAsync(long accountId, CancellationToken cancellationToken)
+    {
+        await writeGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await writePersistence.DeleteAllAsync(accountId, cancellationToken);
+        }
+        finally
+        {
+            writeGate.Release();
+        }
+    }
 }
 
 public sealed record RawInventoryReportJson(string Id, string? RawJson);
@@ -246,6 +274,10 @@ public sealed record InventoryRetentionSummary
     public int SnapshotCount { get; init; }
     public int RawJsonRetainedCount { get; init; }
     public int RawJsonPrunedCount { get; init; }
+    public int CurrentHeadCount { get; init; }
+    public int HistoryCount { get; init; }
     public DateTimeOffset? NewestSnapshotReceivedAtUtc { get; init; }
     public DateTimeOffset? OldestSnapshotReceivedAtUtc { get; init; }
 }
+
+public sealed record InventoryRevisionState(string Token, DateTimeOffset? UpdatedAtUtc);

@@ -1,5 +1,6 @@
 namespace MarketMafioso.Server.Sqlite;
 
+using MarketMafioso.Server.Inventory;
 using Microsoft.Data.Sqlite;
 
 public sealed class SqliteSchemaMigrator
@@ -46,6 +47,10 @@ public sealed class SqliteSchemaMigrator
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_number", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "player_gil", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "retainer_management_json", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "is_current", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "semantic_revision", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "semantic_hash", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "last_delivery_at_utc", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "location", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "observed_at_utc", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "item_type", "TEXT NULL", cancellationToken);
@@ -70,8 +75,11 @@ public sealed class SqliteSchemaMigrator
 
         var characterRepair = await RepairIncompleteCharacterIdentitiesAsync(connection, transaction, cancellationToken);
         await CreateNormalizedCharacterIdentityIndexAsync(connection, transaction, cancellationToken);
+        await SeedInventoryCurrentHeadsAsync(connection, transaction, cancellationToken);
+        await CreateInventoryCurrentHeadIndexAsync(connection, transaction, cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
+        await BackfillCurrentSemanticHashesAsync(cancellationToken);
 
         if (characterRepair.Repaired > 0)
             log.LogInformation("Reconciled {CharacterCount} incomplete character identities.", characterRepair.Repaired);
@@ -82,6 +90,50 @@ public sealed class SqliteSchemaMigrator
                 characterRepair.Preserved);
         }
         log.LogInformation("SQLite schema is ready at {DatabasePath}.", connectionFactory.DatabasePath);
+    }
+
+    private async Task BackfillCurrentSemanticHashesAsync(CancellationToken cancellationToken)
+    {
+        var heads = new List<(long AccountId, string SnapshotId)>();
+        await using (var connection = await connectionFactory.OpenConnectionAsync(cancellationToken))
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT account_id, id
+                FROM snapshots
+                WHERE is_current = 1 AND semantic_hash IS NULL
+                ORDER BY account_id, character_id;
+                """;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                heads.Add((reader.GetInt64(0), reader.GetString(1)));
+        }
+
+        if (heads.Count == 0)
+            return;
+
+        var queries = new InventoryReportReadQueries(connectionFactory);
+        foreach (var (accountId, snapshotId) in heads)
+        {
+            var stored = await queries.GetAsync(accountId, snapshotId, cancellationToken);
+            if (stored is null)
+                continue;
+
+            await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE snapshots
+                SET semantic_hash = $semanticHash
+                WHERE account_id = $accountId
+                  AND id = $snapshotId
+                  AND is_current = 1
+                  AND semantic_hash IS NULL;
+                """;
+            command.Parameters.AddWithValue("$semanticHash", InventorySemanticFingerprint.Compute(stored.Report));
+            command.Parameters.AddWithValue("$accountId", accountId);
+            command.Parameters.AddWithValue("$snapshotId", snapshotId);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     private static async Task<CharacterRepairResult> RepairIncompleteCharacterIdentitiesAsync(
@@ -173,6 +225,79 @@ public sealed class SqliteSchemaMigrator
             CREATE UNIQUE INDEX IF NOT EXISTS ix_characters_complete_identity_normalized
             ON characters (account_id, lower(trim(character_name)), lower(trim(home_world)))
             WHERE home_world IS NOT NULL AND trim(home_world) <> '';
+            """,
+            cancellationToken);
+
+    private static async Task SeedInventoryCurrentHeadsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await ExecuteAsync(
+            connection,
+            transaction,
+            """
+            WITH ranked AS (
+                SELECT
+                    id,
+                    account_id,
+                    character_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY account_id, character_id
+                        ORDER BY received_at_utc DESC, id DESC
+                    ) AS newest_position,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY account_id, character_id
+                        ORDER BY received_at_utc, id
+                    ) AS semantic_position
+                FROM snapshots
+                WHERE character_id IS NOT NULL
+            )
+            UPDATE snapshots
+            SET semantic_revision = COALESCE(
+                    NULLIF(semantic_revision, 0),
+                    (SELECT semantic_position FROM ranked WHERE ranked.id = snapshots.id)),
+                last_delivery_at_utc = COALESCE(last_delivery_at_utc, received_at_utc),
+                is_current = CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM snapshots existing
+                        WHERE existing.account_id = snapshots.account_id
+                          AND existing.character_id = snapshots.character_id
+                          AND existing.is_current = 1)
+                    THEN is_current
+                    WHEN (SELECT newest_position FROM ranked WHERE ranked.id = snapshots.id) = 1
+                    THEN 1
+                    ELSE 0
+                END
+            WHERE character_id IS NOT NULL;
+
+            INSERT INTO inventory_account_revisions (account_id, revision, updated_at_utc)
+            SELECT
+                account_id,
+                MAX(1, COALESCE(MAX(semantic_revision), 0)),
+                COALESCE(MAX(last_delivery_at_utc), MAX(received_at_utc))
+            FROM snapshots
+            WHERE is_current = 1
+            GROUP BY account_id
+            ON CONFLICT(account_id) DO NOTHING;
+            """,
+            cancellationToken);
+    }
+
+    private static Task CreateInventoryCurrentHeadIndexAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(
+            connection,
+            transaction,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_snapshots_current_character
+            ON snapshots(account_id, character_id)
+            WHERE is_current = 1 AND character_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS ix_snapshots_account_current_received
+            ON snapshots(account_id, is_current, received_at_utc DESC);
             """,
             cancellationToken);
 
@@ -358,7 +483,17 @@ public sealed class SqliteSchemaMigrator
             generated_at_utc TEXT NOT NULL,
             raw_report_json TEXT NULL,
             raw_json_retained_at_utc TEXT NULL,
-            retainer_management_json TEXT NULL
+            retainer_management_json TEXT NULL,
+            is_current INTEGER NOT NULL DEFAULT 0,
+            semantic_revision INTEGER NOT NULL DEFAULT 0,
+            semantic_hash TEXT NULL,
+            last_delivery_at_utc TEXT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS inventory_account_revisions (
+            account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL,
+            updated_at_utc TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS inventory_owners (
