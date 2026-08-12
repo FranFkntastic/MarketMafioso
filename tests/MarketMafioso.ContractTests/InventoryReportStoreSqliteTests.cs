@@ -424,7 +424,12 @@ public sealed class InventoryReportStoreSqliteTests
             ],
         };
 
-        var first = await fixture.Store.SaveAsync(fixture.AccountId, report, null, "{}", CancellationToken.None);
+        var first = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            report,
+            null,
+            "{\"delivery\":\"semantic-head\"}",
+            CancellationToken.None);
         var firstRevision = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
         var second = await fixture.Store.SaveAsync(
             fixture.AccountId,
@@ -447,13 +452,14 @@ public sealed class InventoryReportStoreSqliteTests
                 ],
             },
             null,
-            "{}",
+            "{\"delivery\":\"transport-refresh\"}",
             CancellationToken.None);
         var secondRevision = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
 
         Assert.Equal(first.Id, second.Id);
         Assert.Equal(firstRevision.Token, secondRevision.Token);
         Assert.Equal(1, await fixture.CountAsync("snapshots"));
+        Assert.Equal("{\"delivery\":\"semantic-head\"}", await fixture.ReadRawReportJsonAsync(first.Id));
     }
 
     [Fact]
@@ -946,6 +952,15 @@ public sealed class InventoryReportStoreSqliteTests
             command.Parameters.AddWithValue("$receivedAt", receivedAt.ToString("O"));
             command.Parameters.AddWithValue("$id", snapshotId);
             Assert.Equal(1, await command.ExecuteNonQueryAsync(CancellationToken.None));
+        }
+
+        public async Task<string?> ReadRawReportJsonAsync(string snapshotId)
+        {
+            await using var connection = await connectionFactory.OpenConnectionAsync(CancellationToken.None);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT raw_report_json FROM snapshots WHERE id = $id";
+            command.Parameters.AddWithValue("$id", snapshotId);
+            return await command.ExecuteScalarAsync(CancellationToken.None) as string;
         }
 
         private static string CreateDatabasePath()
