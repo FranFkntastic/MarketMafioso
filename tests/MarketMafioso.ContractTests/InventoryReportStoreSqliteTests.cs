@@ -300,6 +300,8 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.All(view.Scopes, scope => Assert.False(string.IsNullOrWhiteSpace(scope.OwnerCharacterName)));
         Assert.Equal(22, grouped.TotalQuantity);
         Assert.Equal(4, grouped.Locations.Count);
+        Assert.Equal(4, grouped.Locations.Select(location => location.InventoryKey).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(grouped.Locations, location => Assert.StartsWith($"{grouped.ItemId}\u001e", location.Key, StringComparison.Ordinal));
         var erianaPlayer = Assert.Single(grouped.Locations, location =>
             location.OwnerLabel == "Eriana Ning @ Siren" && location.ContextLabel == "Player inventory");
         Assert.Equal(5, erianaPlayer.Quantity);

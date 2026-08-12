@@ -440,7 +440,7 @@ else
                 _visibleMatchingRecordCount = _visibleInventoryGroups.Count;
                 _visibleTotalQuantity = checked((int)_visibleInventoryGroups.Sum(item => (long)item.TotalQuantity));
                 _visibleHqQuantity = checked((int)_visibleInventoryGroups.Sum(item => (long)item.HqQuantity));
-                _visibleInventoryCount = _visibleInventoryGroups.SelectMany(item => item.Locations).Select(location => location.Key).Distinct(StringComparer.Ordinal).Count();
+                _visibleInventoryCount = _visibleInventoryGroups.SelectMany(item => item.Locations).Select(location => location.InventoryKey).Distinct(StringComparer.Ordinal).Count();
                 _visibleListingPriceKnownCount = 0;
                 break;
             default:

@@ -46,6 +46,7 @@ public enum InventoryGroupedColumn
 
 public sealed record InventoryLogicalLocationRow(
     string Key,
+    string InventoryKey,
     string OwnerLabel,
     string ContextLabel,
     int Quantity,
@@ -93,6 +94,7 @@ public static class InventoryTableProjection
                         Context = InventoryDisplayFormatter.FormatLogicalLocationContext(stack),
                     })
                     .Select(location => new InventoryLogicalLocationRow(
+                        $"{group.Key}\u001e{location.Key.Owner}\u001f{location.Key.Context}",
                         $"{location.Key.Owner}\u001f{location.Key.Context}",
                         location.Key.Owner,
                         location.Key.Context,
