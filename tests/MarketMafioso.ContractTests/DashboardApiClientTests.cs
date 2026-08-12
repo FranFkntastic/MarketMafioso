@@ -1,12 +1,25 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using MarketMafioso.Dashboard;
 using MarketMafioso.Dashboard.Services;
 
 namespace MarketMafioso.ContractTests;
 
 public sealed class DashboardApiClientTests
 {
+    [Fact]
+    public void InventoryNavigation_EncodesAnExplicitAllKnownSelection()
+    {
+        var path = InventoryNavigation.BuildPath(
+            MarketMafioso.Contracts.Inventory.InventoryBrowserMode.Listings,
+            "all",
+            filter: null,
+            characterId: null);
+
+        Assert.Contains("characterId=all", path, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task GetInventoryBrowserAsync_RetriesOneTransientServiceUnavailableResponse()
     {
