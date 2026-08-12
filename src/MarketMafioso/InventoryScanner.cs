@@ -88,6 +88,30 @@ public class InventoryScanner
             .ToDictionary(group => group.Key, group => group.Sum(item => (int)item.Quantity));
     }
 
+    /// <summary>
+    /// Counts only the four player bags that the native workshop contribution UI can consume.
+    /// Reporting preferences may include other owned storage such as saddlebags, but that stock
+    /// is not on hand at the fabrication station until it is moved into a player bag.
+    /// </summary>
+    public IReadOnlyDictionary<uint, int> CountWorkshopUsableInventory() =>
+        CountWorkshopUsableInventory(containerScanner.ScanLoadedContainers(PlayerBags));
+
+    internal static IReadOnlyDictionary<uint, int> CountWorkshopUsableInventory(
+        IReadOnlyList<AutomationInventoryContainerSnapshot> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        var usableContainers = PlayerBags
+            .Select(type => type.ToString())
+            .ToHashSet(StringComparer.Ordinal);
+        return snapshots
+            .Where(snapshot => snapshot.IsLoaded && usableContainers.Contains(snapshot.ContainerName))
+            .SelectMany(snapshot => snapshot.Slots)
+            .GroupBy(slot => slot.ItemId)
+            .ToDictionary(
+                group => group.Key,
+                group => checked(group.Sum(slot => slot.Quantity)));
+    }
+
     public PlayerBagPurchaseState CapturePlayerBagPurchaseState()
     {
         var snapshots = containerScanner.ScanLoadedContainers(PlayerBags);
