@@ -15,6 +15,8 @@ public sealed class TradeQueuePlannerTests
         GilUsesCurrencyCapacityWithoutConsumingAnItemSlot();
         WorkshopHandoffExportsAvailableFinalMaterialsAndCapsAtRequirement();
         InventoryProjectionGroupsQueuedRowsBeforeAvailableInventory();
+        BulkEditQueuesCurrentStockWithoutTouchingGilOrUnobservedLines();
+        BulkEditRemovesOnlySelectedObservableRows();
     }
 
     private static void ValidateCountsHqAndNqTogether()
@@ -154,6 +156,63 @@ public sealed class TradeQueuePlannerTests
         Assert.Equal([1, 4, 2, 0, 0], rows.Select(row => row.SelectedQuantity));
         Assert.Equal(0, rows[0].AvailableQuantity);
         Assert.Equal(9, rows[1].AvailableQuantity);
+    }
+
+    private static void BulkEditQueuesCurrentStockWithoutTouchingGilOrUnobservedLines()
+    {
+        var inventory = new List<TradeQueueInventoryStack>
+        {
+            Stack(0, 0, 100, "Apple", hq: false, 3),
+            Stack(0, 1, 400, "Zinc Ore", hq: false, 9),
+            Stack(uint.MaxValue, -1, TradeQueuePlanner.GilItemId, "Gil", hq: false, 5_000),
+        };
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = 400, ItemName = "Zinc Ore", Quantity = 2 },
+            new() { ItemId = 500, ItemName = "Birch Lumber", Quantity = 7 },
+            new() { ItemId = TradeQueuePlanner.GilItemId, ItemName = "Gil", Quantity = 50 },
+        };
+        var rows = TradeQueueInventoryProjection.Build(inventory, queue);
+
+        var updated = TradeQueueBulkEdit.Apply(
+            queue,
+            rows,
+            new HashSet<uint> { 100, 400, 500, TradeQueuePlanner.GilItemId },
+            TradeQueueBulkAction.QueueAllAvailable);
+
+        Assert.Equal(3, updated.Single(item => item.ItemId == 100).Quantity);
+        Assert.Equal(9, updated.Single(item => item.ItemId == 400).Quantity);
+        Assert.Equal(7, updated.Single(item => item.ItemId == 500).Quantity);
+        Assert.Equal(50, updated.Single(item => item.ItemId == TradeQueuePlanner.GilItemId).Quantity);
+        Assert.Equal(2, queue.Single(item => item.ItemId == 400).Quantity);
+    }
+
+    private static void BulkEditRemovesOnlySelectedObservableRows()
+    {
+        var inventory = new List<TradeQueueInventoryStack>
+        {
+            Stack(0, 0, 100, "Apple", hq: false, 3),
+            Stack(0, 1, 400, "Zinc Ore", hq: false, 9),
+        };
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = 100, ItemName = "Apple", Quantity = 3 },
+            new() { ItemId = 400, ItemName = "Zinc Ore", Quantity = 2 },
+            new() { ItemId = 500, ItemName = "Birch Lumber", Quantity = 7 },
+            new() { ItemId = TradeQueuePlanner.GilItemId, ItemName = "Gil", Quantity = 50 },
+        };
+        var rows = TradeQueueInventoryProjection.Build(inventory, queue);
+
+        var updated = TradeQueueBulkEdit.Apply(
+            queue,
+            rows,
+            new HashSet<uint> { 100, 500, TradeQueuePlanner.GilItemId },
+            TradeQueueBulkAction.RemoveFromQueue);
+
+        Assert.DoesNotContain(updated, item => item.ItemId == 100);
+        Assert.Equal(2, updated.Single(item => item.ItemId == 400).Quantity);
+        Assert.Equal(7, updated.Single(item => item.ItemId == 500).Quantity);
+        Assert.Equal(50, updated.Single(item => item.ItemId == TradeQueuePlanner.GilItemId).Quantity);
     }
 
     private static TradeQueueInventoryStack Stack(
