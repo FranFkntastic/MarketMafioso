@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MarketMafioso\MarketMafioso.csproj" />
+    <ProjectReference Include="..\..\src\MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj" />
     <ProjectReference Include="..\..\src\MarketMafioso.Server\MarketMafioso.Server.csproj" />
   </ItemGroup>
 

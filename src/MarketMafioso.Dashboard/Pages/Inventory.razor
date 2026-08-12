@@ -254,14 +254,17 @@ else
 
     private async Task OnLoginSucceededAsync(DashboardSessionResponse session) { _session = session; await LoadInventoryContextAsync(); await StartEventsAsync(); }
 
-    private async Task LoadInventoryContextAsync()
+    private async Task LoadInventoryContextAsync(bool applyDefaultCharacter = true)
     {
         try
         {
             _characters = await Api.GetCharactersAsync();
-            var settings = await Api.GetDashboardSettingsAsync();
-            if (string.IsNullOrWhiteSpace(_snapshotId))
-                _selectedCharacterId ??= settings.DefaultCharacterId;
+            if (applyDefaultCharacter)
+            {
+                var settings = await Api.GetDashboardSettingsAsync();
+                if (string.IsNullOrWhiteSpace(_snapshotId))
+                    _selectedCharacterId ??= settings.DefaultCharacterId;
+            }
             if (_selectedCharacterId is not null && _characters.All(character => character.Id != _selectedCharacterId))
                 _selectedCharacterId = null;
             await LoadInventoryAsync();
@@ -382,6 +385,11 @@ else
                 _view = response;
             }
             RebuildVisibleRows();
+            if (Status.Current is { IsError: true } notice &&
+                notice.Message.StartsWith("Inventory load failed:", StringComparison.Ordinal))
+            {
+                Status.Clear();
+            }
         }
         catch (OperationCanceledException) { }
         catch (DashboardUnauthorizedException) { ExpireSession(); }
@@ -522,7 +530,7 @@ else
             await Task.Delay(150, token);
             await InvokeAsync(async () =>
             {
-                await LoadInventoryContextAsync();
+                await LoadInventoryContextAsync(applyDefaultCharacter: false);
                 StateHasChanged();
             });
         }
