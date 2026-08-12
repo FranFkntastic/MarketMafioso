@@ -3,6 +3,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using MarketMafioso.Contracts.Inventory;
+using MarketMafioso.Dashboard.Components.Inventory;
 using MarketMafioso.Server.Sqlite;
 
 namespace MarketMafioso.Server.ContractTests;
@@ -246,6 +247,69 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.NotEqual(older.Id, latest.Id);
         Assert.NotNull(selected);
         Assert.Equal("Newer Character", selected.Report.CharacterName);
+    }
+
+    [Fact]
+    public async Task GetLatestByCharacterAsync_BuildsAuthorizedAllKnownInventoryWithoutPhysicalStackSpam()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var hiddenAccountId = await fixture.CreateAccountAsync("Hidden");
+        var older = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Eriana Ning", "Siren", 999),
+            null,
+            "{}",
+            CancellationToken.None);
+        await fixture.SetReceivedAtAsync(older.Id, DateTimeOffset.UtcNow.AddMinutes(-5));
+
+        var eriana = CreateReport("Eriana Ning", "Siren", 42) with
+        {
+            PlayerInventory =
+            [
+                Bag("Inventory1", Slot(42, 2, 0, 25)),
+                Bag("Inventory3", Slot(42, 3, 8, 50)),
+            ],
+            Retainers = [Retainer("Shared Name", 1001, "Eriana Ning", "Siren", 4)],
+        };
+        var wei = CreateReport("Wei Ning", "Siren", 42) with
+        {
+            PlayerInventory = [Bag("Inventory2", Slot(42, 6, 2, 75))],
+            Retainers = [Retainer("Shared Name", 2001, "Wei Ning", "Siren", 7)],
+        };
+        var erianaStored = await fixture.Store.SaveAsync(fixture.AccountId, eriana, null, "{}", CancellationToken.None);
+        var weiStored = await fixture.Store.SaveAsync(fixture.AccountId, wei, null, "{}", CancellationToken.None);
+        await fixture.Store.SaveAsync(
+            hiddenAccountId,
+            CreateReport("Hidden Character", "Siren", 42),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var latest = await fixture.Store.GetLatestByCharacterAsync([fixture.AccountId], CancellationToken.None);
+        var view = InventoryBrowserViewBuilder.Build(latest, "Item 42", mode: InventoryBrowserMode.Items);
+        var grouped = Assert.Single(InventoryTableProjection.GroupedInventory(view.Stacks, new InventoryTableQueryState()));
+
+        Assert.Equal(2, latest.Count);
+        Assert.Contains(latest, report => report.Id == erianaStored.Id);
+        Assert.Contains(latest, report => report.Id == weiStored.Id);
+        Assert.DoesNotContain(latest, report => report.Id == older.Id);
+        Assert.Null(view.SnapshotId);
+        Assert.Null(view.CharacterName);
+        Assert.Equal(4, view.Scopes.Count);
+        Assert.Equal(4, view.Scopes.Select(scope => scope.ScopeKey).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.All(view.Scopes, scope => Assert.False(string.IsNullOrWhiteSpace(scope.OwnerCharacterName)));
+        Assert.Equal(22, grouped.TotalQuantity);
+        Assert.Equal(4, grouped.Locations.Count);
+        Assert.Equal(4, grouped.Locations.Select(location => location.InventoryKey).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(grouped.Locations, location => Assert.StartsWith($"{grouped.ItemId}\u001e", location.Key, StringComparison.Ordinal));
+        var erianaPlayer = Assert.Single(grouped.Locations, location =>
+            location.OwnerLabel == "Eriana Ning @ Siren" && location.ContextLabel == "Player inventory");
+        Assert.Equal(5, erianaPlayer.Quantity);
+        Assert.Equal(2, erianaPlayer.Stacks.Count);
+        Assert.Contains("bag 1", InventoryDisplayFormatter.FormatStackStorage(erianaPlayer.Stacks[0]), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("slot 1", InventoryDisplayFormatter.FormatStackStorage(erianaPlayer.Stacks[0]), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Owner", Enum.GetNames<InventoryGroupedColumn>());
+        Assert.DoesNotContain("Condition", Enum.GetNames<InventoryGroupedColumn>());
     }
 
     [Fact]
@@ -549,6 +613,37 @@ public sealed class InventoryReportStoreSqliteTests
                 },
             ],
         };
+
+    private static InventoryBag Bag(string bagName, params ItemSlot[] items) => new()
+    {
+        BagName = bagName,
+        Items = [.. items],
+    };
+
+    private static ItemSlot Slot(uint itemId, uint quantity, int slotIndex, float conditionPercent) => new()
+    {
+        ItemId = itemId,
+        ItemName = $"Item {itemId}",
+        ItemType = "Test Item Type",
+        Quantity = quantity,
+        SlotIndex = slotIndex,
+        ConditionPercent = conditionPercent,
+    };
+
+    private static RetainerReport Retainer(
+        string retainerName,
+        ulong retainerId,
+        string characterName,
+        string homeWorld,
+        uint quantity) => new()
+    {
+        RetainerName = retainerName,
+        RetainerId = retainerId,
+        OwnerCharacterName = characterName,
+        OwnerHomeWorld = homeWorld,
+        LastUpdated = "2026-06-23T12:00:00.0000000Z",
+        Bags = [Bag("RetainerPage1", Slot(42, quantity, 0, 100))],
+    };
 
     private sealed class StoreFixture
     {

@@ -35,25 +35,29 @@ else
             <div class="inventory-character-select">
                 <InventoryCharacterSelect Characters="_characters" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" />
             </div>
-            <div class="inventory-scope-heading">Inventory scope</div>
+            <div class="inventory-scope-heading">Inventory locations</div>
             <div class="inventory-scope-list">
                 <button class="@ScopeButtonClass("all")" @onclick="@(() => SetScopeAsync("all"))">
-                    <span>Everything</span>
+                    <span>All locations</span>
                     <strong>@_view.Scopes.Sum(scope => scope.StackCount).ToString("N0")</strong>
-                    <small>Character and @_view.Scopes.Count(scope => scope.ScopeKey != "Player Inventory") retainers</small>
+                    <small>@ScopeCountSummary</small>
                 </button>
-                @foreach (var scope in _view.Scopes)
+                @foreach (var group in ScopeGroups)
                 {
-                    <button class="@ScopeButtonClass(scope.ScopeKey)" @onclick="@(() => SetScopeAsync(scope.ScopeKey))">
-                        <span>@scope.DisplayName</span>
-                        <strong>@scope.StackCount.ToString("N0")</strong>
-                        <small>@ScopeSummary(scope)</small>
-                    </button>
+                    <div class="inventory-scope-character">@group.Key</div>
+                    @foreach (var scope in group)
+                    {
+                        <button class="@($"{ScopeButtonClass(scope.ScopeKey)} child")" @onclick="@(() => SetScopeAsync(scope.ScopeKey))">
+                            <span>@scope.DisplayName</span>
+                            <strong>@scope.StackCount.ToString("N0")</strong>
+                            <small>@ScopeSummary(scope)</small>
+                        </button>
+                    }
                 }
             </div>
             <div class="inventory-scope-footer">
                 <strong>@CharacterLabel</strong>
-                <span>@_view.Scopes.Sum(scope => scope.StackCount).ToString("N0") stacks · @GilSummary</span>
+                <span>@(IsAllKnown ? "Newest observation from each character" : $"{_view.Scopes.Sum(scope => scope.StackCount):N0} stacks · {GilSummary}")</span>
             </div>
         </aside>
 
@@ -140,7 +144,7 @@ else
                     <div><strong>@_visibleMatchingRecordCount.ToString("N0")</strong><span>@RecordLabel(_mode)</span></div>
                     <div><strong>@_visibleTotalQuantity.ToString("N0")</strong><span>total quantity</span></div>
                     <div><strong>@_visibleHqQuantity.ToString("N0")</strong><span>HQ</span></div>
-                    <div><strong>@_visibleOwnerCount.ToString("N0")</strong><span>owners</span></div>
+                    <div><strong>@_visibleInventoryCount.ToString("N0")</strong><span>@(_visibleInventoryCount == 1 ? "inventory" : "inventories")</span></div>
                 </div>
                 <div class="inventory-content">
                     <div class="inventory-table-host">
@@ -186,11 +190,18 @@ else
     private int _visibleMatchingRecordCount;
     private int _visibleTotalQuantity;
     private int _visibleHqQuantity;
-    private int _visibleOwnerCount;
+    private int _visibleInventoryCount;
     private int _visibleListingPriceKnownCount;
 
-    private string SnapshotLabel => _view.ReceivedAt == null ? "No snapshot loaded" : $"{CharacterLabel} · captured {_view.ReceivedAt.Value.ToLocalTime():g}";
-    private string CharacterLabel => string.IsNullOrWhiteSpace(_view.CharacterName) ? "No character selected" : $"{_view.CharacterName} @ {_view.HomeWorld}";
+    private bool IsAllKnown => _selectedCharacterId is null && string.IsNullOrWhiteSpace(_snapshotId);
+    private string SnapshotLabel => IsAllKnown
+        ? "All known inventories · newest known state per character"
+        : _view.ReceivedAt == null
+            ? "No snapshot loaded"
+            : $"{CharacterLabel} · captured {_view.ReceivedAt.Value.ToLocalTime():g}";
+    private string CharacterLabel => IsAllKnown
+        ? "All known inventories"
+        : string.IsNullOrWhiteSpace(_view.CharacterName) ? "No character selected" : $"{_view.CharacterName} @ {_view.HomeWorld}";
     private string FilterPlaceholder => $"Filter {ModeLabel(_mode).ToLowerInvariant()}…";
     private bool HasListingPrices => _view.ListingPriceKnownCount > 0;
     private InventoryTableQueryState CurrentTableQuery => _tableQueries[_mode];
@@ -205,6 +216,14 @@ else
     private InventoryBrowserMode? SuggestedFilterMode => ShowFilterErrors ? InventoryFilterPresentation.SuggestedMode(_filterText, _mode) : null;
     private IEnumerable<Franthropy.Filtering.Documentation.FilterFieldReference> AvailableReferenceFields =>
         _view.FilterReference?.Fields.Where(entry => entry.IsAvailable && !entry.IsDefaultText) ?? [];
+    private IEnumerable<IGrouping<string, InventoryBrowserScopeView>> ScopeGroups => _view.Scopes
+        .GroupBy(ScopeCharacterLabel)
+        .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
+    private int ScopeCharacterCount => _view.Scopes
+        .Select(ScopeCharacterLabel)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Count();
+    private string ScopeCountSummary => $"{ScopeCharacterCount:N0} {(ScopeCharacterCount == 1 ? "character" : "characters")} · {_view.Scopes.Count:N0} {(_view.Scopes.Count == 1 ? "inventory" : "inventories")}";
 
     private static string ReferenceDetail(Franthropy.Filtering.Documentation.FilterFieldReference field) =>
         $"{field.Description} Operators: {string.Join(", ", field.Operators)}";
@@ -323,9 +342,10 @@ else
                 token);
             if (_mode == InventoryBrowserMode.Listings)
             {
+                var selectedScope = response.Scopes.FirstOrDefault(candidate => candidate.ScopeKey.Equals(_scope, StringComparison.OrdinalIgnoreCase));
                 _marketDiagnostics = await Api.GetMarketDiagnosticWorkbenchAsync(
-                    response.CharacterName,
-                    _scope,
+                    response.CharacterName ?? selectedScope?.OwnerCharacterName,
+                    selectedScope?.DisplayName ?? _scope,
                     _filterText,
                     token);
             }
@@ -420,18 +440,30 @@ else
                 _visibleMatchingRecordCount = _visibleInventoryGroups.Count;
                 _visibleTotalQuantity = checked((int)_visibleInventoryGroups.Sum(item => (long)item.TotalQuantity));
                 _visibleHqQuantity = checked((int)_visibleInventoryGroups.Sum(item => (long)item.HqQuantity));
-                _visibleOwnerCount = _visibleInventoryGroups.SelectMany(item => item.Stacks).Select(stack => stack.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                _visibleInventoryCount = _visibleInventoryGroups.SelectMany(item => item.Locations).Select(location => location.InventoryKey).Distinct(StringComparer.Ordinal).Count();
                 _visibleListingPriceKnownCount = 0;
                 break;
             default:
                 _visibleMatchingRecordCount = _visibleListings.Count;
                 _visibleTotalQuantity = checked((int)_visibleListings.Sum(listing => (long)listing.Quantity));
                 _visibleHqQuantity = checked((int)_visibleListings.Sum(listing => (long)listing.HqQuantity));
-                _visibleOwnerCount = _visibleListings.Select(listing => listing.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                _visibleInventoryCount = _visibleListings
+                    .Select(listing => $"{listing.OwnerCharacterName}\u001f{listing.OwnerHomeWorld}\u001f{listing.OwnerName}")
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count();
                 _visibleListingPriceKnownCount = _visibleListings.Count(listing => listing.UnitPrice is not null);
                 break;
         }
 
+    }
+
+    private static string ScopeCharacterLabel(InventoryBrowserScopeView scope)
+    {
+        var name = scope.OwnerCharacterName?.Trim() ?? string.Empty;
+        var world = scope.OwnerHomeWorld?.Trim() ?? string.Empty;
+        if (name.Length == 0)
+            return "Unknown character";
+        return world.Length == 0 ? name : $"{name} @ {world}";
     }
 
     public void Dispose() { CancelFilterDebounce(); _loadCts?.Cancel(); _loadCts?.Dispose(); }

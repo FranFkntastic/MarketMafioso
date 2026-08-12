@@ -70,19 +70,25 @@ internal static class DashboardDataEndpoints
         }
 
         var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
-        StoredInventoryReport? report;
+        IReadOnlyList<StoredInventoryReport> reports;
         if (!string.IsNullOrWhiteSpace(snapshotId))
         {
-            report = await store.GetAsync(accountIds, snapshotId, token);
-            if (report == null)
+            var report = await store.GetAsync(accountIds, snapshotId, token);
+            if (report is null)
                 return Results.NotFound();
+            reports = [report];
+        }
+        else if (characterId is not null)
+        {
+            var report = await store.GetLatestAsync(accountIds, characterId, token);
+            reports = report is null ? [] : [report];
         }
         else
         {
-            report = await store.GetLatestAsync(accountIds, characterId, token);
+            reports = await store.GetLatestByCharacterAsync(accountIds, token);
         }
 
-        return Results.Ok(InventoryBrowserViewBuilder.Build(report, filter ?? search, scope, mode ?? InventoryBrowserMode.Items, caret));
+        return Results.Ok(InventoryBrowserViewBuilder.Build(reports, filter ?? search, scope, mode ?? InventoryBrowserMode.Items, caret));
     }
 
     private static async Task<IResult> ListSnapshots(

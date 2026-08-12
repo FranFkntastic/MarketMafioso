@@ -1,5 +1,5 @@
 <WebGroupedTable TGroup="InventoryGroupedItemRow"
-                 TChild="InventoryBrowserStackView"
+                 TChild="InventoryLogicalLocationRow"
                  TGroupKey="uint"
                  TColumnId="InventoryGroupedColumn"
                  Groups="TableGroups"
@@ -11,7 +11,7 @@
                  SortState="CurrentSortState"
                  SortChanged="ChangeSort"
                  FilterCell="FilterCell"
-                 StorageKey="mmf.inventory.column-widths.v4.grouped"
+                 StorageKey="mmf.inventory.column-widths.v5.grouped"
                  ScrollClass="inventory-table-scroll"
                  CssClass="inventory-grouped-table"
                  AccentColor="var(--mmf-accent)"
@@ -22,49 +22,39 @@
 
 @code {
     private readonly HashSet<uint> expandedItemIds = [];
-    private IReadOnlyList<WebTableGroup<InventoryGroupedItemRow, InventoryBrowserStackView>> TableGroups { get; set; } = [];
+    private readonly HashSet<string> expandedExactLocations = new(StringComparer.Ordinal);
+    private IReadOnlyList<WebTableGroup<InventoryGroupedItemRow, InventoryLogicalLocationRow>> TableGroups { get; set; } = [];
 
     [Parameter] public IReadOnlyList<InventoryGroupedItemRow> Groups { get; set; } = [];
     [Parameter, EditorRequired] public InventoryTableQueryState Query { get; set; } = new();
     [Parameter] public EventCallback<string> SortChanged { get; set; }
     [Parameter] public EventCallback<InventoryColumnFilterChange> FilterChanged { get; set; }
 
-    private IReadOnlyList<WebGroupedTableColumn<InventoryGroupedItemRow, InventoryBrowserStackView, InventoryGroupedColumn>> Columns =>
+    private IReadOnlyList<WebGroupedTableColumn<InventoryGroupedItemRow, InventoryLogicalLocationRow, InventoryGroupedColumn>> Columns =>
     [
         new()
         {
-            Id = InventoryGroupedColumn.Item, Key = "item", Label = "Item", DefaultWidthPx = 290, MinWidthPx = 170,
+            Id = InventoryGroupedColumn.Item, Key = "item", Label = "Item", DefaultWidthPx = 360, MinWidthPx = 190,
             GroupCell = GroupItemCell, ChildCell = ChildItemCell,
         },
         new()
         {
-            Id = InventoryGroupedColumn.Owner, Key = "owner", Label = "Owner(s)", DefaultWidthPx = 125, MinWidthPx = 105,
-            GroupCell = GroupOwnerCell, ChildCell = ChildOwnerCell,
-        },
-        new()
-        {
-            Id = InventoryGroupedColumn.Quantity, Key = "quantity", Label = "Quantity", DefaultWidthPx = 90, MinWidthPx = 70,
+            Id = InventoryGroupedColumn.Quantity, Key = "quantity", Label = "Quantity", DefaultWidthPx = 100, MinWidthPx = 75,
             HeaderCssClass = "numeric", GroupCellCssClass = "numeric", ChildCellCssClass = "numeric",
             GroupCell = GroupQuantityCell, ChildCell = ChildQuantityCell,
         },
         new()
         {
-            Id = InventoryGroupedColumn.Quality, Key = "quality", Label = "Quality", DefaultWidthPx = 80, MinWidthPx = 68,
+            Id = InventoryGroupedColumn.Quality, Key = "quality", Label = "Quality", DefaultWidthPx = 90, MinWidthPx = 72,
             HeaderCssClass = "numeric", GroupCellCssClass = "numeric", ChildCellCssClass = "numeric",
             GroupCell = GroupQualityCell, ChildCell = ChildQualityCell,
         },
         new()
         {
-            Id = InventoryGroupedColumn.Location, Key = "location", Label = "Location", DefaultWidthPx = 255, MinWidthPx = 150,
+            Id = InventoryGroupedColumn.Location, Key = "location", Label = "Stored in", DefaultWidthPx = 390, MinWidthPx = 220,
             GroupCell = GroupLocationCell, ChildCell = ChildLocationCell,
-            GroupCellTitle = row => InventoryDisplayFormatter.FormatStackStorage(row.PrimaryStack),
-            ChildCellTitle = InventoryDisplayFormatter.FormatStackStorage,
-        },
-        new()
-        {
-            Id = InventoryGroupedColumn.Condition, Key = "condition", Label = "Condition", DefaultWidthPx = 90, MinWidthPx = 72,
-            HeaderCssClass = "numeric", GroupCellCssClass = "numeric", ChildCellCssClass = "numeric",
-            GroupCell = GroupConditionCell, ChildCell = ChildConditionCell,
+            GroupCellTitle = row => $"{row.PrimaryLocation.OwnerLabel} · {row.PrimaryLocation.ContextLabel}",
+            ChildCellTitle = location => $"{location.OwnerLabel} · {location.ContextLabel}",
         },
     ];
 
@@ -75,19 +65,26 @@
 
     protected override void OnParametersSet()
     {
-        TableGroups = Groups.Select(group => new WebTableGroup<InventoryGroupedItemRow, InventoryBrowserStackView>(group, group.Stacks)).ToArray();
+        TableGroups = Groups.Select(group => new WebTableGroup<InventoryGroupedItemRow, InventoryLogicalLocationRow>(group, group.Locations)).ToArray();
         expandedItemIds.RemoveWhere(itemId => Groups.All(group => group.ItemId != itemId));
+        var availableLocations = Groups.SelectMany(group => group.Locations).Select(location => location.Key).ToHashSet(StringComparer.Ordinal);
+        expandedExactLocations.RemoveWhere(key => !availableLocations.Contains(key));
     }
 
     private uint GroupKey(InventoryGroupedItemRow row) => row.ItemId;
-    private static object ChildKey(InventoryBrowserStackView stack) =>
-        $"{stack.ItemId}:{stack.OwnerName}:{stack.BagName}:{stack.SlotIndex}:{stack.IsHq}";
+    private static object ChildKey(InventoryLogicalLocationRow location) => location.Key;
     private bool IsExpanded(InventoryGroupedItemRow row) => expandedItemIds.Contains(row.ItemId);
 
     private void ToggleGroup(InventoryGroupedItemRow row)
     {
         if (!expandedItemIds.Add(row.ItemId))
             expandedItemIds.Remove(row.ItemId);
+    }
+
+    private void ToggleExact(string key)
+    {
+        if (!expandedExactLocations.Add(key))
+            expandedExactLocations.Remove(key);
     }
 
     private Task ChangeSort(WebTableSortState<InventoryGroupedColumn> state) =>
@@ -109,11 +106,9 @@
     private static string FilterPlaceholder(InventoryGroupedColumn column) => column switch
     {
         InventoryGroupedColumn.Item => "Item or category",
-        InventoryGroupedColumn.Owner => "Owner",
         InventoryGroupedColumn.Quantity => "Qty",
         InventoryGroupedColumn.Quality => "NQ / HQ",
-        InventoryGroupedColumn.Location => "Location",
-        InventoryGroupedColumn.Condition => "Condition",
+        InventoryGroupedColumn.Location => "Character, retainer, or storage",
         _ => "Filter",
     };
 
@@ -122,7 +117,7 @@
         <span class="inventory-group-item-copy">
             <strong>@row.DisplayName</strong>
             @if (!string.IsNullOrWhiteSpace(row.ItemType)) { <small>@row.ItemType</small> }
-            @if (row.PrimaryStack.Stowage is { } stowage) { <small>@StowageLabel(stowage)</small> }
+            @if (row.Stacks.Select(stack => stack.Stowage).FirstOrDefault(stowage => stowage is not null) is { } stowage) { <small>@StowageLabel(stowage)</small> }
         </span>
     </div>;
 
@@ -133,15 +128,69 @@
         _ => $"{stowage.PlanName}: hold {stowage.DesiredPlayerQuantity:N0}",
     };
 
-    private static RenderFragment ChildItemCell(InventoryBrowserStackView _) => @<span class="inventory-stack-marker">↳ physical stack</span>;
-    private static RenderFragment GroupOwnerCell(InventoryGroupedItemRow row) => @<span class="inventory-owner-summary"><b>@row.OwnerCount</b> @(row.OwnerCount == 1 ? "owner" : "owners")</span>;
-    private static RenderFragment ChildOwnerCell(InventoryBrowserStackView stack) => @<strong class="inventory-stack-owner">@stack.OwnerName</strong>;
+    private static RenderFragment ChildItemCell(InventoryLogicalLocationRow _) => @<span class="inventory-stack-marker">↳ location total</span>;
     private static RenderFragment GroupQuantityCell(InventoryGroupedItemRow row) => @<strong>@row.TotalQuantity.ToString("N0")</strong>;
-    private static RenderFragment ChildQuantityCell(InventoryBrowserStackView stack) => @<span>@stack.Quantity.ToString("N0")</span>;
+    private static RenderFragment ChildQuantityCell(InventoryLogicalLocationRow location) => @<span>@location.Quantity.ToString("N0")</span>;
     private static RenderFragment GroupQualityCell(InventoryGroupedItemRow row) => @<span class="hq-value">@row.HqQuantity.ToString("N0") HQ</span>;
-    private static RenderFragment ChildQualityCell(InventoryBrowserStackView stack) => @<span class="inventory-quality @(stack.IsHq ? "hq" : "nq")">@(stack.IsHq ? "HQ" : "NQ")</span>;
-    private static RenderFragment GroupLocationCell(InventoryGroupedItemRow row) => @<span>@row.PrimaryStack.OwnerName · @InventoryDisplayFormatter.FormatStackStorage(row.PrimaryStack)</span>;
-    private static RenderFragment ChildLocationCell(InventoryBrowserStackView stack) => @<span>@InventoryDisplayFormatter.FormatStackStorage(stack)</span>;
-    private static RenderFragment GroupConditionCell(InventoryGroupedItemRow row) => @<span class="muted">@(row.LowestCondition is { } condition ? $"{condition:0.#}% min" : "—")</span>;
-    private static RenderFragment ChildConditionCell(InventoryBrowserStackView stack) => @<span class="muted">@(stack.ConditionPercent is { } condition ? $"{condition:0.#}%" : "—")</span>;
+    private static RenderFragment ChildQualityCell(InventoryLogicalLocationRow location) => @<span class="inventory-quality @(location.HqQuantity > 0 ? "hq" : "nq")">@QualityLabel(location)</span>;
+
+    private RenderFragment GroupLocationCell(InventoryGroupedItemRow row) => @<div class="inventory-logical-location">
+        @LocationCopy(row.PrimaryLocation)
+        @if (row.Locations.Count > 1)
+        {
+            <small class="inventory-location-more">+@((row.Locations.Count - 1).ToString("N0")) more @(row.Locations.Count == 2 ? "location" : "locations")</small>
+        }
+        else
+        {
+            @ExactDisclosure(row.PrimaryLocation)
+        }
+    </div>;
+
+    private RenderFragment ChildLocationCell(InventoryLogicalLocationRow location) => @<div class="inventory-logical-location">
+        @LocationCopy(location)
+        @ExactDisclosure(location)
+    </div>;
+
+    private static RenderFragment LocationCopy(InventoryLogicalLocationRow location) => @<span class="inventory-location-copy">
+        <strong>@location.OwnerLabel</strong>
+        <small>@location.ContextLabel</small>
+    </span>;
+
+    private RenderFragment ExactDisclosure(InventoryLogicalLocationRow location) => @<span class="inventory-exact-disclosure">
+        <button class="inventory-exact-toggle"
+                title="Show exact bags, slots, and condition"
+                @onclick="@(() => ToggleExact(location.Key))"
+                @onclick:stopPropagation="true">@(expandedExactLocations.Contains(location.Key) ? "Hide exact details" : ExactLabel(location))</button>
+        @if (expandedExactLocations.Contains(location.Key))
+        {
+            <span class="inventory-exact-stack-list">
+                @foreach (var stack in location.Stacks.Take(12))
+                {
+                    <span><b>@InventoryDisplayFormatter.FormatStackStorage(stack)</b><em>@ConditionLabel(stack)</em></span>
+                }
+                @if (location.Stacks.Count > 12)
+                {
+                    <small>+@((location.Stacks.Count - 12).ToString("N0")) more exact stacks</small>
+                }
+            </span>
+        }
+    </span>;
+
+    private static string ExactLabel(InventoryLogicalLocationRow location) =>
+        location.Stacks.All(stack => stack.SlotIndex is not null)
+            ? $"{location.Stacks.Count:N0} {(location.Stacks.Count == 1 ? "slot" : "slots")}"
+            : "Exact details";
+
+    private static string ConditionLabel(InventoryBrowserStackView stack) =>
+        stack.ConditionPercent is { } condition ? $"{condition:0.#}%" : "Condition unknown";
+
+    private static string QualityLabel(InventoryLogicalLocationRow location)
+    {
+        var nq = location.Quantity - location.HqQuantity;
+        if (location.HqQuantity == 0)
+            return "NQ";
+        if (nq == 0)
+            return "HQ";
+        return $"{nq:N0} NQ / {location.HqQuantity:N0} HQ";
+    }
 }

@@ -4,7 +4,7 @@
             value="@CurrentValue"
             @onchange="HandleChangedAsync"
             aria-label="Character">
-        <option value="">Latest available</option>
+        <option value="">All known inventories</option>
         @foreach (var group in Characters
             .GroupBy(character => character.ServiceAccountNumber)
             .OrderBy(group => group.Key is null ? int.MaxValue : group.Key.Value))
