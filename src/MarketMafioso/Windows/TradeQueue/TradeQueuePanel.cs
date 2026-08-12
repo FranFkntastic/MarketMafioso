@@ -31,6 +31,7 @@ internal sealed class TradeQueuePanel
     private string inventoryFilter = string.Empty;
     private bool showQueuedOnly;
     private bool confirmClear;
+    private uint? editingQuantityItemId;
     private string receiverStatus = "No incoming trade action has been invoked.";
 
     public TradeQueuePanel(
@@ -45,6 +46,17 @@ internal sealed class TradeQueuePanel
         this.reviewRegistry = reviewRegistry;
         inventoryTable = new DalamudTableProjection<TradeQueueInventoryRow>(
         [
+            new(
+                "Selected",
+                34f,
+                row => inventorySelection.IsSelected(row.Key.ItemId) ? "Selected" : "Not selected",
+                Flags: ImGuiTableColumnFlags.WidthFixed |
+                       ImGuiTableColumnFlags.NoHide |
+                       ImGuiTableColumnFlags.NoSort |
+                       ImGuiTableColumnFlags.NoHeaderLabel,
+                Draw: DrawSelectionCell,
+                Id: "selected",
+                HeaderTooltip: "Select inventory rows for a bulk queue action."),
             new(
                 "Item",
                 1f,
@@ -244,13 +256,59 @@ internal sealed class TradeQueuePanel
             .Where(IsSelectableInventoryRow)
             .ToArray();
         var visibleSelectedCount = visibleSelectableRows.Count(row => inventorySelection.IsSelected(row.Key.ItemId));
-        var selectionLabel = inventorySelection.Count == visibleSelectedCount
-            ? $"{inventorySelection.Count:N0} row(s) selected"
-            : $"{inventorySelection.Count:N0} row(s) selected · {visibleSelectedCount:N0} visible";
+        var selectionCountLabel = inventorySelection.Count > 0
+            ? $"{inventorySelection.Count:N0} row{(inventorySelection.Count == 1 ? string.Empty : "s")} selected"
+            : "No rows selected";
+        var selectionDetail = inventorySelection.Count == 0
+            ? "Select rows, then apply one queue action to all of them."
+            : inventorySelection.Count == visibleSelectedCount
+                ? "Ready for one bulk queue action."
+                : $"{visibleSelectedCount:N0} selected row{(visibleSelectedCount == 1 ? string.Empty : "s")} visible.";
+
+        var style = ImGui.GetStyle();
+        var barHeight = ImGui.GetFrameHeightWithSpacing() + 10f;
+        var barBackground = inventorySelection.Count > 0
+            ? new System.Numerics.Vector4(
+                MainWindow.ColHeader.X * 0.20f,
+                MainWindow.ColHeader.Y * 0.20f,
+                MainWindow.ColHeader.Z * 0.20f,
+                0.96f)
+            : style.Colors[(int)ImGuiCol.ChildBg];
+        var barBorder = inventorySelection.Count > 0
+            ? new System.Numerics.Vector4(
+                MainWindow.ColHeader.X * 0.65f,
+                MainWindow.ColHeader.Y * 0.65f,
+                MainWindow.ColHeader.Z * 0.65f,
+                1f)
+            : style.Colors[(int)ImGuiCol.Border];
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, barBackground);
+        ImGui.PushStyleColor(ImGuiCol.Border, barBorder);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 2f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new System.Numerics.Vector2(8f, 5f));
+        if (!ImGui.BeginChild(
+                "TradeQueueInventorySelectionBar",
+                new System.Numerics.Vector2(0, barHeight),
+                true,
+                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
+        {
+            ImGui.EndChild();
+            ImGui.PopStyleVar(2);
+            ImGui.PopStyleColor(2);
+            return;
+        }
+
+        ImGui.AlignTextToFramePadding();
         ImGui.TextColored(
             inventorySelection.Count > 0 ? MainWindow.ColHeader : MainWindow.ColMuted,
-            selectionLabel);
-        ImGui.SameLine();
+            selectionCountLabel);
+        var actionWidth = CalculateSelectionActionWidth();
+        var availableForDetail = ImGui.GetContentRegionAvail().X - actionWidth - style.ItemSpacing.X;
+        if (availableForDetail > 180f)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(MainWindow.ColMuted, selectionDetail);
+        }
+        ImGuiUi.SameLineRight(actionWidth);
 
         var canSelectVisible = visibleSelectableRows.Length > 0 && !runner.IsActive;
         if (ImGuiUi.Button("Select visible", canSelectVisible))
@@ -275,7 +333,7 @@ internal sealed class TradeQueuePanel
 
         ImGui.SameLine();
         var canBulkEdit = inventorySelection.Count > 0 && !runner.IsActive;
-        if (ImGuiUi.Button("Queue all available", canBulkEdit))
+        if (ImGuiUi.PrimaryButton("Queue all available", canBulkEdit))
             ApplyBulkAction(rows, TradeQueueBulkAction.QueueAllAvailable);
         RegisterLastAction(
             "trade-queue.queue-selected-all",
@@ -323,6 +381,9 @@ internal sealed class TradeQueuePanel
                 inventorySelection.Clear();
                 return AgentBridgeUiActionResult.Ok("Cleared Trade Queue row selection.");
             });
+        ImGui.EndChild();
+        ImGui.PopStyleVar(2);
+        ImGui.PopStyleColor(2);
     }
 
     private unsafe void DrawInventoryTable(IReadOnlyList<TradeQueueInventoryRow> rows)
@@ -346,7 +407,8 @@ internal sealed class TradeQueuePanel
                 visibleRows,
                 index,
                 $"trade-queue-inventory-{row.Key.ItemId}",
-                selectable: IsSelectableInventoryRow(row),
+                background: ResolveInventoryRowBackground(row),
+                selectable: false,
                 enabled: !runner.IsActive));
         inventoryTable.End();
     }
@@ -361,6 +423,23 @@ internal sealed class TradeQueuePanel
 
     private static bool IsSelectableInventoryRow(TradeQueueInventoryRow row) =>
         row.Key.ItemId != TradeQueuePlanner.GilItemId && row.AvailableQuantity > 0;
+
+    private void DrawSelectionCell(TradeQueueInventoryRow row)
+    {
+        if (!IsSelectableInventoryRow(row))
+        {
+            ImGui.TextColored(MainWindow.ColMuted, "—");
+            return;
+        }
+
+        if (runner.IsActive)
+            ImGui.BeginDisabled();
+        var selected = inventorySelection.IsSelected(row.Key.ItemId);
+        if (ImGui.Checkbox($"##trade-queue-select-{row.Key.ItemId}", ref selected))
+            inventorySelection.SetSelected(row.Key.ItemId, selected);
+        if (runner.IsActive)
+            ImGui.EndDisabled();
+    }
 
     private void DrawItemCell(TradeQueueInventoryRow row)
     {
@@ -389,14 +468,61 @@ internal sealed class TradeQueuePanel
 
     private void DrawQueuedQuantityCell(TradeQueueInventoryRow row)
     {
-        if (runner.IsActive)
-            ImGui.BeginDisabled();
+        var isEditing = editingQuantityItemId == row.Key.ItemId;
+        if (!isEditing)
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(
+                row.SelectedQuantity > 0 ? MainWindow.ColSuccess : MainWindow.ColMuted,
+                row.SelectedQuantity.ToString("N0"));
+            if (!runner.IsActive && ImGui.IsItemHovered())
+            {
+                ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+                ImGui.SetTooltip("Click to edit the queued quantity.");
+                if (ImGui.IsItemClicked())
+                    editingQuantityItemId = row.Key.ItemId;
+            }
+            return;
+        }
+
         var quantity = row.SelectedQuantity;
         ImGui.SetNextItemWidth(100);
-        if (ImGui.InputInt($"##trade-queue-quantity-{row.Key.ItemId}", ref quantity))
+        if (ImGui.InputInt(
+                $"##trade-queue-quantity-{row.Key.ItemId}",
+                ref quantity,
+                1,
+                100,
+                "%d",
+                ImGuiInputTextFlags.EnterReturnsTrue))
+        {
             SetSelectedQuantity(row, Math.Clamp(quantity, 0, row.AvailableQuantity));
-        if (runner.IsActive)
-            ImGui.EndDisabled();
+            editingQuantityItemId = null;
+        }
+        else if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            SetSelectedQuantity(row, Math.Clamp(quantity, 0, row.AvailableQuantity));
+            editingQuantityItemId = null;
+        }
+        else if (ImGui.IsKeyPressed(ImGuiKey.Escape))
+        {
+            editingQuantityItemId = null;
+        }
+    }
+
+    private static System.Numerics.Vector4? ResolveInventoryRowBackground(TradeQueueInventoryRow row)
+    {
+        if (row.SelectedQuantity <= 0)
+            return null;
+        var color = row.AvailableQuantity > 0 ? MainWindow.ColSuccess : MainWindow.ColWarning;
+        return new System.Numerics.Vector4(color.X, color.Y, color.Z, 0.11f);
+    }
+
+    private static float CalculateSelectionActionWidth()
+    {
+        var style = ImGui.GetStyle();
+        var labels = new[] { "Select visible", "Queue all available", "Remove from queue", "Clear row selection" };
+        return labels.Sum(label => ImGui.CalcTextSize(label).X + (style.FramePadding.X * 2f)) +
+               ((labels.Length - 1) * style.ItemSpacing.X);
     }
 
     private static string QueueStateLabel(TradeQueueInventoryRow row)
