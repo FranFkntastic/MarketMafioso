@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Tables;
@@ -30,6 +31,8 @@ internal sealed class TradeQueuePanel
     private bool confirmClear;
     private int bulkQuantity = 1;
     private uint? editingQuantityItemId;
+    private bool quantityEditorNeedsFocus;
+    private int editingQuantityValue;
     private string receiverStatus = "No incoming trade action has been invoked.";
 
     public TradeQueuePanel(
@@ -69,7 +72,8 @@ internal sealed class TradeQueuePanel
                 ImGuiTableColumnFlags.WidthFixed,
                 Draw: DrawQueuedQuantityCell,
                 Id: "queued",
-                HeaderTooltip: "Durable quantity currently queued for trade."),
+                HeaderTooltip: "Durable quantity currently queued for trade. The left half edits; the right half selects the row.",
+                SelectionTargetFraction: 0.5f),
             new(
                 "State",
                 140f,
@@ -459,45 +463,80 @@ internal sealed class TradeQueuePanel
         var isEditing = editingQuantityItemId == row.Key.ItemId;
         if (!isEditing)
         {
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(
-                row.SelectedQuantity > 0 ? MainWindow.ColSuccess : MainWindow.ColMuted,
-                row.SelectedQuantity.ToString("N0"));
-            if (!runner.IsActive && ImGui.IsItemHovered())
+            var editWidth = ResolveQuantityEditTargetWidth(ImGui.GetContentRegionAvail().X);
+            var frameHeight = ImGui.GetFrameHeight();
+            var enabled = !runner.IsActive;
+            var idleBackground = ImGui.GetStyle().Colors[(int)ImGuiCol.FrameBg];
+
+            if (!enabled)
+                ImGui.BeginDisabled();
+            ImGui.PushStyleColor(
+                ImGuiCol.Button,
+                new Vector4(idleBackground.X, idleBackground.Y, idleBackground.Z, idleBackground.W * 0.72f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, ImGui.GetStyle().Colors[(int)ImGuiCol.FrameBgHovered]);
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, ImGui.GetStyle().Colors[(int)ImGuiCol.FrameBgActive]);
+            ImGui.PushStyleColor(
+                ImGuiCol.Text,
+                row.SelectedQuantity > 0 ? MainWindow.ColSuccess : MainWindow.ColMuted);
+            var activated = ImGui.Button(
+                $"{row.SelectedQuantity:N0}  edit##trade-queue-quantity-edit-{row.Key.ItemId}",
+                new Vector2(editWidth, frameHeight)) && enabled;
+            ImGui.PopStyleColor(4);
+            if (!enabled)
+                ImGui.EndDisabled();
+
+            var hovered = enabled && ImGui.IsItemHovered();
+            if (hovered)
             {
                 ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
-                ImGui.SetTooltip("Click to edit the queued quantity.");
-                if (ImGui.IsItemClicked())
-                    editingQuantityItemId = row.Key.ItemId;
+                ImGui.SetTooltip($"Edit queued quantity (0–{row.AvailableQuantity:N0}).");
             }
-            RegisterQuantityInput(row, !runner.IsActive);
+            if (activated)
+            {
+                editingQuantityItemId = row.Key.ItemId;
+                editingQuantityValue = row.SelectedQuantity;
+                quantityEditorNeedsFocus = true;
+            }
+            RegisterQuantityInput(row, enabled);
             return;
         }
 
-        var quantity = row.SelectedQuantity;
-        ImGui.SetNextItemWidth(100);
-        if (ImGui.InputInt(
+        ImGui.SetNextItemWidth(ResolveQuantityEditTargetWidth(ImGui.GetContentRegionAvail().X));
+        if (quantityEditorNeedsFocus)
+        {
+            ImGui.SetKeyboardFocusHere();
+            quantityEditorNeedsFocus = false;
+        }
+        var committed = ImGui.InputInt(
                 $"##trade-queue-quantity-{row.Key.ItemId}",
-                ref quantity,
+                ref editingQuantityValue,
                 1,
                 100,
                 "%d",
-                ImGuiInputTextFlags.EnterReturnsTrue))
+                ImGuiInputTextFlags.EnterReturnsTrue);
+        var cancelled = ImGui.IsItemActive() && ImGui.IsKeyPressed(ImGuiKey.Escape);
+        if (cancelled)
         {
-            SetSelectedQuantity(row, Math.Clamp(quantity, 0, row.AvailableQuantity));
+            editingQuantityItemId = null;
+        }
+        else if (committed)
+        {
+            SetSelectedQuantity(row, ClampQueuedQuantity(editingQuantityValue, row.AvailableQuantity));
             editingQuantityItemId = null;
         }
         else if (ImGui.IsItemDeactivatedAfterEdit())
         {
-            SetSelectedQuantity(row, Math.Clamp(quantity, 0, row.AvailableQuantity));
-            editingQuantityItemId = null;
-        }
-        else if (ImGui.IsKeyPressed(ImGuiKey.Escape))
-        {
+            SetSelectedQuantity(row, ClampQueuedQuantity(editingQuantityValue, row.AvailableQuantity));
             editingQuantityItemId = null;
         }
         RegisterQuantityInput(row, !runner.IsActive);
     }
+
+    internal static float ResolveQuantityEditTargetWidth(float availableWidth) =>
+        Math.Max(1f, availableWidth * 0.5f);
+
+    internal static int ClampQueuedQuantity(int requested, int available) =>
+        Math.Clamp(requested, 0, Math.Max(0, available));
 
     private static System.Numerics.Vector4? ResolveInventoryRowBackground(TradeQueueInventoryRow row)
     {
