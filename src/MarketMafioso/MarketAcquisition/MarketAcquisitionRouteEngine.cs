@@ -28,6 +28,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly IMarketAcquisitionRouteEvidenceRecorder evidence;
     private readonly MarketAcquisitionRouteReportDispatcher reportDispatcher;
     private readonly IMarketAcquisitionRouteClock clock;
+    private readonly MarketAcquisitionTravelFrameThrottle travelFrameThrottle;
     private readonly string reportPluginInstanceId;
     private readonly string? reportPluginVersion;
     private readonly MarketBoardListingReadAccumulator listingReadAccumulator = new();
@@ -62,6 +63,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionClaimLifecycleController claimLifecycle,
         IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
         IMarketAcquisitionRouteClock clock,
+        MarketAcquisitionTravelFrameThrottle travelFrameThrottle,
         IExactAcquisitionRouteExecutionStateStore exactAcquisitionStateStore,
         IMarketAcquisitionReportOutbox? reportOutbox = null,
         IShardAcquisitionCheckpointCoordinator? shardCheckpoints = null,
@@ -83,6 +85,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             reportOutbox,
             deadLetterOutbox: reportDeadLetter);
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        this.travelFrameThrottle = travelFrameThrottle ?? throw new ArgumentNullException(nameof(travelFrameThrottle));
         this.reportPluginInstanceId = reportPluginInstanceId ?? string.Empty;
         this.reportPluginVersion = reportPluginVersion;
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
@@ -102,6 +105,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public ExactAcquisitionDryRunScenario ArmedExactAcquisitionDryRunScenario => exactAcquisitionDryRunScenario;
     public bool IsExactAcquisitionDryRunFaultEligible => exactAcquisitionDryRunFaultEligible;
     public bool WasExactAcquisitionDryRunFaultInjected => exactAcquisitionDryRunFaultInjected;
+    public MarketAcquisitionTravelFrameThrottleSnapshot TravelFrameThrottleSnapshot => travelFrameThrottle.Snapshot;
 
     public bool ArmExactAcquisitionDryRunScenario(ExactAcquisitionDryRunScenario scenario)
     {
@@ -953,6 +957,39 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var travelOperation = needsWorldTravel
             ? EnsureWorldTravelArrivalOperation(activeStop, currentWorld)
             : null;
+        if (travelOperation != null)
+        {
+            if (!travelFrameThrottle.TryAcquire(
+                    state.ProgressNonce,
+                    activeStop.WorldName,
+                    out var throttle,
+                    out var throttleMessage))
+            {
+                ObserveWorldTravelOperation(
+                    travelOperation,
+                    MarketAcquisitionRouteOperationDisposition.Failed,
+                    throttleMessage,
+                    new Dictionary<string, string?>
+                    {
+                        ["frameThrottleAcquired"] = "False",
+                        ["frameThrottleMaximumFps"] = throttle.MaximumFramesPerSecond.ToString(),
+                        ["targetWorld"] = activeStop.WorldName,
+                    });
+                UpdateStatus(FailRoute(throttleMessage));
+                return;
+            }
+
+            runner.RecordRouteCleanup(
+                throttleMessage,
+                new Dictionary<string, string?>
+                {
+                    ["routeRunId"] = throttle.RouteRunId,
+                    ["leaseId"] = throttle.LeaseId,
+                    ["targetWorld"] = throttle.TargetWorld,
+                    ["maximumFramesPerSecond"] = throttle.MaximumFramesPerSecond.ToString(),
+                    ["terminalReason"] = "AcquiredBeforeLifestreamCommand",
+                });
+        }
         var travelResult = runner.PreparePendingStopForCurrentWorld(
             context.IsCurrentWorldAvailable,
             currentWorld,
@@ -974,6 +1011,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
         else if (travelOperation != null && !travelResult.Success)
         {
+            ReleaseTravelFrameThrottle("LifestreamCommandRejected");
             ObserveWorldTravelOperation(
                 travelOperation,
                 MarketAcquisitionRouteOperationDisposition.Failed,
@@ -985,6 +1023,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     ["leaseOwnership"] = "NotOwned",
                 });
             activeTravelLease = null;
+        }
+        else if (travelOperation != null && runner.ActiveStop?.Status != "TravelCommandSent")
+        {
+            ReleaseTravelFrameThrottle("LifestreamCommandNotSent");
         }
         UpdateStatus(travelResult);
         if (!travelResult.Success && string.Equals(runner.State, "Failed", StringComparison.OrdinalIgnoreCase))
@@ -1165,6 +1207,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return;
         }
 
+        ReleaseTravelFrameThrottle("ArrivalConfirmed");
         if (operationExecutor.ActiveSnapshot is { Kind: MarketAcquisitionRouteOperationKind.Travel } travelArrival)
         {
             ObserveWorldTravelOperation(
@@ -2482,6 +2525,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         evidence.Flush();
         CleanupOwnedApproach("Dispose");
         CleanupOwnedTravel("Dispose");
+        travelFrameThrottle.Dispose();
         CancelActiveOperation("Route engine disposed.");
         purchaseAutomation.Dispose();
         reportDispatcher.Dispose();
@@ -2579,6 +2623,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CleanupOwnedTravel(string terminalReason)
     {
+        ReleaseTravelFrameThrottle(terminalReason);
         var lease = activeTravelLease;
         if (lease == null)
             return;
@@ -2645,6 +2690,24 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ? "Route cleanup completed with unresolved external Lifestream automation."
                 : "Route cleanup completed.",
             CreateTravelCleanupDetails(lease, terminalReason, "Aggregate", unresolved, result, cleanupId));
+    }
+
+    private void ReleaseTravelFrameThrottle(string terminalReason)
+    {
+        var release = travelFrameThrottle.Release(terminalReason);
+        if (!release.Released)
+            return;
+
+        runner.RecordRouteCleanup(
+            $"Market acquisition travel frame throttle released ({terminalReason}).",
+            new Dictionary<string, string?>
+            {
+                ["routeRunId"] = release.RouteRunId,
+                ["leaseId"] = release.LeaseId,
+                ["targetWorld"] = release.TargetWorld,
+                ["maximumFramesPerSecond"] = release.MaximumFramesPerSecond.ToString(),
+                ["terminalReason"] = terminalReason,
+            });
     }
 
     private bool TryReconcileUnresolvedTravelLease(out string message, bool allowIdleResolution = false)

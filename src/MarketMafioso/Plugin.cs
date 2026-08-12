@@ -14,6 +14,7 @@ using Dalamud.Plugin.Services;
 using ECommons;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Franthropy.Dalamud.Observations;
+using Franthropy.Dalamud.Runtime;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Runtime;
@@ -87,6 +88,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TradeQueueRunner tradeQueueRunner;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
+    private readonly FramePacingGovernor framePacingGovernor = new();
     private readonly AgentBridgeProofStore agentBridgeProofStore;
     private readonly AgentBridgeProofWindow agentBridgeProofWindow;
     private readonly AgentBridgeHost agentBridge;
@@ -248,6 +250,7 @@ public sealed class Plugin : IDalamudPlugin
             marketBoardBrowseObserver,
             itemId => retainerListingRefresh.ForceRetry(itemId),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
+            framePacingGovernor,
             Log);
         exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
         marketAcquisitionItemContextMenu = new MarketAcquisitionItemContextMenu(
@@ -684,29 +687,36 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnFrameworkUpdate(IFramework framework)
     {
-        retainerSaleChatObserver.Tick();
-        retainerHistoryObserver.Tick();
-        var nowUtc = DateTimeOffset.UtcNow;
-        var retainerSessionActive = IsRetainerSessionActive();
-        var (immediatelyReady, immediateDeferredReason) = GetImmediateRetainerListingRefreshReadiness(retainerSessionActive);
-        var (refreshReady, refreshDeferredReason) = retainerListingRefreshReadiness.Observe(
-            nowUtc,
-            immediatelyReady,
-            immediateDeferredReason);
-        retainerListingRefresh.Tick(
-            nowUtc,
-            refreshReady,
-            refreshDeferredReason);
-        mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
-        if (Configuration.AutoAcceptIncomingTrades)
-            tradeAutomationCoordinator.SuppressDropboxAutoAccept();
-        else
-            tradeAutomationCoordinator.RestoreDropboxAutoAccept();
-        tradeAutoAcceptController.Tick(
-            Configuration.AutoAcceptIncomingTrades && !tradeQueueRunner.IsActive);
-        tradeQueueRunner.Tick();
-        mainWindow.OnFrameworkUpdate(framework);
-        agentBridge.Tick();
+        try
+        {
+            retainerSaleChatObserver.Tick();
+            retainerHistoryObserver.Tick();
+            var nowUtc = DateTimeOffset.UtcNow;
+            var retainerSessionActive = IsRetainerSessionActive();
+            var (immediatelyReady, immediateDeferredReason) = GetImmediateRetainerListingRefreshReadiness(retainerSessionActive);
+            var (refreshReady, refreshDeferredReason) = retainerListingRefreshReadiness.Observe(
+                nowUtc,
+                immediatelyReady,
+                immediateDeferredReason);
+            retainerListingRefresh.Tick(
+                nowUtc,
+                refreshReady,
+                refreshDeferredReason);
+            mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
+            if (Configuration.AutoAcceptIncomingTrades)
+                tradeAutomationCoordinator.SuppressDropboxAutoAccept();
+            else
+                tradeAutomationCoordinator.RestoreDropboxAutoAccept();
+            tradeAutoAcceptController.Tick(
+                Configuration.AutoAcceptIncomingTrades && !tradeQueueRunner.IsActive);
+            tradeQueueRunner.Tick();
+            mainWindow.OnFrameworkUpdate(framework);
+            agentBridge.Tick();
+        }
+        finally
+        {
+            framePacingGovernor.PaceFrame();
+        }
     }
 
     private static (bool Ready, string? Reason) GetImmediateRetainerListingRefreshReadiness(bool retainerSessionActive)
@@ -784,6 +794,7 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.ProjectBrowser.Dispose();
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.Dispose();
+        framePacingGovernor.Dispose();
         reporter.Dispose();
         remoteMarketAccessProbe.Dispose();
         marketBoardBrowseObserver.Dispose();
