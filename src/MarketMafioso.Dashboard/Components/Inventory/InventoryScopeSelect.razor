@@ -1,6 +1,7 @@
 <label class="inventory-select-field">
     <span class="visually-hidden">Inventory scope</span>
     <select class="inventory-native-select"
+            @key="SelectionKey"
             @bind:get="Value"
             @bind:set="HandleChangedAsync"
             aria-label="Inventory scope">
@@ -24,6 +25,8 @@
 
     private Task HandleChangedAsync(string value) =>
         ValueChanged.InvokeAsync(string.IsNullOrWhiteSpace(value) ? "all" : value);
+
+    private string SelectionKey => $"{Value}\u001f{Scopes.Count}";
 
     private static string CharacterLabel(InventoryBrowserScopeView scope)
     {
