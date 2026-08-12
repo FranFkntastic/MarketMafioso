@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using MarketMafioso.Server.Sqlite;
+using Microsoft.Data.Sqlite;
 
 namespace MarketMafioso.Server.Auth;
 
@@ -33,6 +34,27 @@ public sealed class DashboardSessionStore
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
             return null;
 
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await CreateOnceAsync(username, password, cancellationToken);
+            }
+            catch (SqliteException exception) when (
+                attempt < 2 &&
+                exception.SqliteErrorCode is 5 or 6)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
+            }
+        }
+    }
+
+    private async Task<DashboardSessionCreateResult?> CreateOnceAsync(
+        string username,
+        string password,
+        CancellationToken cancellationToken)
+    {
+
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         await using var query = connection.CreateCommand();
         query.CommandText = """
@@ -52,6 +74,7 @@ public sealed class DashboardSessionStore
         var passwordHash = reader.GetString(2);
         if (!passwordHasher.VerifyPassword(password, passwordHash))
             return null;
+        await reader.DisposeAsync();
 
         var now = DateTimeOffset.UtcNow;
         var expiresAt = now.Add(SessionLifetime);
@@ -59,8 +82,11 @@ public sealed class DashboardSessionStore
         var token = CreateToken();
         var tokenHash = HashToken(token);
 
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
         await using (var insert = connection.CreateCommand())
         {
+            insert.Transaction = transaction;
             insert.CommandText = """
                 INSERT INTO dashboard_sessions (
                     id,
@@ -90,6 +116,7 @@ public sealed class DashboardSessionStore
 
         await using (var updateLogin = connection.CreateCommand())
         {
+            updateLogin.Transaction = transaction;
             updateLogin.CommandText = """
                 UPDATE dashboard_users
                 SET last_login_at_utc = $lastLoginAt
@@ -99,6 +126,8 @@ public sealed class DashboardSessionStore
             updateLogin.Parameters.AddWithValue("$dashboardUserId", userId);
             await updateLogin.ExecuteNonQueryAsync(cancellationToken);
         }
+
+        await transaction.CommitAsync(cancellationToken);
 
         return new DashboardSessionCreateResult(
             token,
