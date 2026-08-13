@@ -135,6 +135,17 @@ public sealed class RenderPathBoundaryTests
         Assert.Contains("itemSearchAgent->Hide()", close, StringComparison.Ordinal);
         Assert.Contains("TryCloseAddon(\"ItemSearchResult\")", close, StringComparison.Ordinal);
         Assert.Contains("TryCloseAddon(\"ItemSearch\")", close, StringComparison.Ordinal);
+
+        var engine = ReadSource(
+            "src",
+            "MarketMafioso",
+            "MarketAcquisition",
+            "MarketAcquisitionRouteEngine.cs");
+        var pendingStop = ExtractMethodBody(engine, "HandlePendingStop");
+        Assert.Contains(
+            "requiresTravelPreparation && uiAutomation.TryCloseMarketBoardWindows()",
+            pendingStop,
+            StringComparison.Ordinal);
     }
 
     [Fact]

@@ -873,24 +873,22 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             preparation = EnsureTravelPreparationOperation(activeStop);
         }
 
-        if (runner.MarketBoardCloseRequiredBeforeTravel)
+        if (requiresTravelPreparation && uiAutomation.TryCloseMarketBoardWindows())
         {
-            if (uiAutomation.TryCloseMarketBoardWindows())
-            {
-                ObserveTravelPreparationOperation(
-                    preparation!,
-                    MarketAcquisitionRouteOperationDisposition.Pending,
-                    $"Waiting for market board windows to close before traveling to {activeStop.WorldName}.",
-                    new Dictionary<string, string?>
-                    {
-                        ["preparationState"] = "MarketBoardCloseRequested",
-                    });
-                state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
-                return;
-            }
-
-            UpdateStatus(runner.RecordMarketBoardClosedBeforeTravel());
+            ObserveTravelPreparationOperation(
+                preparation!,
+                MarketAcquisitionRouteOperationDisposition.Pending,
+                $"Waiting for market board windows to close before traveling to {activeStop.WorldName}.",
+                new Dictionary<string, string?>
+                {
+                    ["preparationState"] = "MarketBoardCloseRequested",
+                });
+            state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
+            return;
         }
+
+        if (runner.MarketBoardCloseRequiredBeforeTravel)
+            UpdateStatus(runner.RecordMarketBoardClosedBeforeTravel());
 
         if (preparation != null)
         {
