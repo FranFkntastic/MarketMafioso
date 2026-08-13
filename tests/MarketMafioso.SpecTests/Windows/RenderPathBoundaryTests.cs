@@ -121,6 +121,22 @@ public sealed class RenderPathBoundaryTests
     }
 
     [Fact]
+    public void RouteTravelPreflightClosesTheOwnedItemSearchAgentAsWellAsItsWindows()
+    {
+        var source = ReadSource(
+            "src",
+            "MarketMafioso",
+            "MarketAcquisition",
+            "DalamudMarketAcquisitionRouteEngineAdapters.cs");
+        var close = ExtractMethodBody(source, "TryCloseMarketBoardWindows");
+
+        Assert.Contains("GetAgentByInternalId(AgentId.ItemSearch)", close, StringComparison.Ordinal);
+        Assert.Contains("itemSearchAgent->Hide()", close, StringComparison.Ordinal);
+        Assert.Contains("TryCloseAddon(\"ItemSearchResult\")", close, StringComparison.Ordinal);
+        Assert.Contains("TryCloseAddon(\"ItemSearch\")", close, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ControllerConsumesSharedEventDrivenListingObserver()
     {
         var source = ReadSource("src", "MarketMafioso", "MarketAcquisition", "MarketBoard", "MarketBoardAcquisitionController.cs");

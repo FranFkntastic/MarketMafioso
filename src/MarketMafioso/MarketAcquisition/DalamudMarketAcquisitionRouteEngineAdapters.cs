@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Travel;
@@ -46,9 +47,17 @@ public sealed class DalamudMarketAcquisitionRouteUiAutomation : IMarketAcquisiti
 {
     public bool ProcessCommand(string command) => Plugin.CommandManager.ProcessCommand(command);
 
-    public bool TryCloseMarketBoardWindows()
+    public unsafe bool TryCloseMarketBoardWindows()
     {
         var closeRequested = TryCloseAddon("ItemSearchResult") | TryCloseAddon("ItemSearch");
+        var agentModule = AgentModule.Instance();
+        var itemSearchAgent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
+        if (itemSearchAgent != null && itemSearchAgent->IsAgentActive())
+        {
+            itemSearchAgent->Hide();
+            closeRequested = true;
+        }
+
         return closeRequested || IsAddonOpen("ItemSearchResult") || IsAddonOpen("ItemSearch");
     }
 
