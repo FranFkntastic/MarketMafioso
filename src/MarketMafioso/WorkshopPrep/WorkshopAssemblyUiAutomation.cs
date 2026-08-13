@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Game.ClientState.Conditions;
-using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.Runtime;
 
@@ -24,7 +23,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyUiAutomation(
         IGameGui gameGui,
-        IAddonLifecycle addonLifecycle,
         IPluginLog log,
         IObjectTable objectTable,
         ITargetManager targetManager,
@@ -34,7 +32,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         this.log = log;
         uiDriver = new WorkshopAssemblyUiDriver(
             gameGui,
-            addonLifecycle,
             log,
             objectTable,
             targetManager,
@@ -209,19 +206,16 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         if (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None)
             return new(false, $"Waiting for {pendingConfirmationKind} confirmation. {DescribeUiState()}");
 
-        if (uiDriver.TryConsumeRequestConfirmed())
-        {
-            return new(
-                true,
-                $"Workshop material request confirmed for {entry.ProjectName}.",
-                ActiveMaterialItemId: pendingContributionItemId);
-        }
-
         if (pendingContributionItemId != null)
         {
+            var turnIn = uiDriver.TryAdvanceMaterialRequest();
             return new(
                 false,
-                $"Waiting for request item selection for material {pendingContributionItemId}. {DescribeUiState()}");
+                turnIn.ActionTaken
+                    ? turnIn.Message
+                    : $"{turnIn.Message} {DescribeUiState()}",
+                ActionTaken: turnIn.ActionTaken,
+                ActiveMaterialItemId: pendingContributionItemId);
         }
 
         if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCollectFinishedProductEntry))

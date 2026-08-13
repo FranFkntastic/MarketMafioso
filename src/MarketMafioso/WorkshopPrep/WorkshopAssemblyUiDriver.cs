@@ -1,13 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Dalamud.Game.Addon.Lifecycle;
-using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
+using ECommons.Automation.UIInput;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.UI;
@@ -38,7 +37,6 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     ];
 
     private readonly IGameGui gameGui;
-    private readonly IAddonLifecycle addonLifecycle;
     private readonly IPluginLog log;
     private readonly IObjectTable objectTable;
     private readonly ITargetManager targetManager;
@@ -46,12 +44,10 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     private readonly ExternalAutomationCoordinator externalAutomationCoordinator;
     private readonly Action<string> onMaterialRequestConfirmed;
     private uint? pendingContributionItemId;
-    private bool requestItemSelectionStarted;
-    private bool requestConfirmed;
+    private readonly WorkshopRequestTurnInStateMachine requestTurnIn = new();
 
     public WorkshopAssemblyUiDriver(
         IGameGui gameGui,
-        IAddonLifecycle addonLifecycle,
         IPluginLog log,
         IObjectTable objectTable,
         ITargetManager targetManager,
@@ -60,7 +56,6 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         Action<string> onMaterialRequestConfirmed)
     {
         this.gameGui = gameGui;
-        this.addonLifecycle = addonLifecycle;
         this.log = log;
         this.objectTable = objectTable;
         this.targetManager = targetManager;
@@ -68,9 +63,6 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         this.externalAutomationCoordinator = externalAutomationCoordinator;
         this.onMaterialRequestConfirmed = onMaterialRequestConfirmed;
 
-        addonLifecycle.RegisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
-        addonLifecycle.RegisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
-        addonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, ContextIconMenuAddon, ContextIconMenuPostReceiveEvent);
     }
 
     public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
@@ -186,8 +178,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         WorkshopCraftMaterialState item)
     {
         pendingContributionItemId = item.ItemId;
-        requestItemSelectionStarted = false;
-        requestConfirmed = false;
+        requestTurnIn.Begin(item.ItemId);
         externalAutomationCoordinator.SuppressWorkshopRequestAutomation();
         externalAutomationCoordinator.SuppressTextAdvance();
 
@@ -238,20 +229,80 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         return false;
     }
 
-    public bool TryConsumeRequestConfirmed()
-    {
-        if (!requestConfirmed)
-            return false;
-
-        requestConfirmed = false;
-        return true;
-    }
-
     public void ClearMaterialRequest()
     {
         pendingContributionItemId = null;
-        requestItemSelectionStarted = false;
-        requestConfirmed = false;
+        requestTurnIn.Reset();
+        externalAutomationCoordinator.RestoreTextAdvance();
+        externalAutomationCoordinator.RestoreWorkshopRequestAutomation();
+    }
+
+    public unsafe WorkshopNativeRequestTurnInResult TryAdvanceMaterialRequest()
+    {
+        if (pendingContributionItemId == null)
+            return new(false, "No workshop material request is active.");
+
+        var request = gameGui.GetAddonByName<AddonRequest>(RequestAddon, 1);
+        var contextMenu = gameGui.GetAddonByName<AddonContextIconMenu>(ContextIconMenuAddon, 1);
+        var requestReady = request != null && IsAddonReady(&request->AtkUnitBase);
+        var contextMenuReady = contextMenu != null && IsAddonReady(&contextMenu->AtkUnitBase);
+        var handOverEnabled = requestReady && request->HandOverButton != null && request->HandOverButton->IsEnabled;
+        var decision = requestTurnIn.Advance(new(
+            requestReady,
+            requestReady ? request->EntryCount : 0,
+            contextMenuReady,
+            handOverEnabled));
+
+        switch (decision.Action)
+        {
+            case WorkshopRequestTurnInAction.OpenItemSelector:
+                {
+                    var values = stackalloc AtkValue[]
+                    {
+                        new() { Type = AtkValueType.Int, Int = WorkshopRequestTurnInProtocol.OpenItemSelectorPayload[0] },
+                        new() { Type = AtkValueType.Int, Int = WorkshopRequestTurnInProtocol.OpenItemSelectorPayload[1] },
+                        new() { Type = AtkValueType.UInt, UInt = (uint)WorkshopRequestTurnInProtocol.OpenItemSelectorPayload[2] },
+                        new() { Type = AtkValueType.UInt, UInt = (uint)WorkshopRequestTurnInProtocol.OpenItemSelectorPayload[3] },
+                    };
+                    request->AtkUnitBase.FireCallback(4, values, true);
+                    break;
+                }
+
+            case WorkshopRequestTurnInAction.SelectEligibleItem:
+                {
+                    var values = stackalloc AtkValue[]
+                    {
+                        new() { Type = AtkValueType.Int, Int = WorkshopRequestTurnInProtocol.SelectEligibleItemPayload[0] },
+                        new() { Type = AtkValueType.Int, Int = WorkshopRequestTurnInProtocol.SelectEligibleItemPayload[1] },
+                        new() { Type = AtkValueType.UInt, UInt = (uint)WorkshopRequestTurnInProtocol.SelectEligibleItemPayload[2] },
+                        new() { Type = AtkValueType.UInt, UInt = (uint)WorkshopRequestTurnInProtocol.SelectEligibleItemPayload[3] },
+                        new() { Type = AtkValueType.UInt, UInt = (uint)WorkshopRequestTurnInProtocol.SelectEligibleItemPayload[4] },
+                    };
+                    contextMenu->AtkUnitBase.FireCallback(5, values, true);
+                    break;
+                }
+
+            case WorkshopRequestTurnInAction.HandOver:
+                request->HandOverButton->ClickAddonButton(&request->AtkUnitBase);
+                onMaterialRequestConfirmed($"handed over request item for material {pendingContributionItemId}");
+                break;
+        }
+
+        if (decision.Action != WorkshopRequestTurnInAction.None)
+        {
+            log.Verbose("[MarketMafioso] {Message}", decision.Message);
+            Diagnostics.Record(
+                "request-turn-in",
+                decision.Message,
+                new Dictionary<string, string?>
+                {
+                    ["itemId"] = pendingContributionItemId.Value.ToString(),
+                    ["phase"] = requestTurnIn.Phase.ToString(),
+                    ["action"] = decision.Action.ToString(),
+                });
+        }
+
+        return new(decision.Action != WorkshopRequestTurnInAction.None, decision.Message);
     }
 
     public unsafe bool TrySelectString(Predicate<string> predicate)
@@ -381,9 +432,6 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
 
     public void Dispose()
     {
-        addonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, ContextIconMenuAddon, ContextIconMenuPostReceiveEvent);
-        addonLifecycle.UnregisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
-        addonLifecycle.UnregisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
         externalAutomationCoordinator.Dispose();
     }
 
@@ -512,94 +560,9 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             items);
     }
 
-    private unsafe void RequestPostSetup(AddonEvent type, AddonArgs args)
-    {
-        if (pendingContributionItemId == null)
-            return;
-
-        var addon = (AddonRequest*)args.Addon.Address;
-        if (addon == null || addon->EntryCount != 1)
-            return;
-
-        requestItemSelectionStarted = true;
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 2 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 44 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-        };
-        addon->AtkUnitBase.FireCallback(4, values, true);
-        log.Verbose($"[MarketMafioso] Opened request item selector for workshop material {pendingContributionItemId}.");
-        Diagnostics.Record(
-            "request-setup",
-            "Opened request item selector.",
-            new Dictionary<string, string?>
-            {
-                ["itemId"] = pendingContributionItemId.Value.ToString(),
-            });
-    }
-
-    private unsafe void ContextIconMenuPostReceiveEvent(AddonEvent type, AddonArgs args)
-    {
-        if (pendingContributionItemId == null || !requestItemSelectionStarted)
-            return;
-
-        var addon = (AddonContextIconMenu*)args.Addon.Address;
-        if (addon == null)
-            return;
-
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 0 },
-            new() { Type = AtkValueType.Int, Int = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = 0, Int = 0 },
-        };
-        addon->AtkUnitBase.FireCallback(5, values, true);
-        log.Verbose($"[MarketMafioso] Selected request item icon for workshop material {pendingContributionItemId}.");
-        Diagnostics.Record(
-            "request-icon",
-            "Selected request item icon.",
-            new Dictionary<string, string?>
-            {
-                ["itemId"] = pendingContributionItemId.Value.ToString(),
-            });
-    }
-
-    private unsafe void RequestPostRefresh(AddonEvent type, AddonArgs args)
-    {
-        if (pendingContributionItemId == null || !requestItemSelectionStarted)
-            return;
-
-        var addon = (AddonRequest*)args.Addon.Address;
-        if (addon == null || addon->EntryCount != 1)
-            return;
-
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-        };
-        addon->AtkUnitBase.FireCallback(4, values, true);
-        addon->AtkUnitBase.Close(false);
-        requestConfirmed = true;
-        onMaterialRequestConfirmed($"confirmed request item window for material {pendingContributionItemId}");
-        externalAutomationCoordinator.RestoreTextAdvance();
-        externalAutomationCoordinator.RestoreWorkshopRequestAutomation();
-        log.Verbose($"[MarketMafioso] Confirmed request item window for workshop material {pendingContributionItemId}.");
-        Diagnostics.Record(
-            "request-confirmed",
-            "Confirmed request item window.",
-            new Dictionary<string, string?>
-            {
-                ["itemId"] = pendingContributionItemId.Value.ToString(),
-            });
-    }
 }
+
+internal sealed record WorkshopNativeRequestTurnInResult(bool ActionTaken, string Message);
 
 internal enum WorkshopCutsceneSkipState
 {
