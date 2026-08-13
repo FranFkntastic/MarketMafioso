@@ -183,7 +183,6 @@ public sealed class Plugin : IDalamudPlugin
             Log,
             new WorkshopAssemblyUiAutomation(
                 GameGui,
-                AddonLifecycle,
                 Log,
                 ObjectTable,
                 TargetManager,
