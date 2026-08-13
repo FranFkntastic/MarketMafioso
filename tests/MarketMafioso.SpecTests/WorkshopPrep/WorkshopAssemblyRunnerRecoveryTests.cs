@@ -79,6 +79,51 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         Assert.True(runner.IsRunning);
     }
 
+    [Fact]
+    public void Stale_post_contribution_progress_reopens_station_instead_of_failing_run()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(true, "Project is open."));
+        ui.SubmitMaterialResults.Enqueue(new(
+            false,
+            "Submitted material request.",
+            ActionTaken: true,
+            ActiveMaterialItemId: 77,
+            ActiveMaterialStepsComplete: 2));
+        ui.SubmitMaterialResults.Enqueue(new(
+            true,
+            "Confirmed contribution.",
+            IsContributionConfirmed: true,
+            ActiveMaterialItemId: 77));
+        ui.ProgressResults.Enqueue(new(
+            false,
+            "Material progress is still 2/3.",
+            ActiveMaterialItemId: 77,
+            ActiveMaterialStepsComplete: 2));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForContributionLockout, runner.Progress.State);
+
+        clock.Advance(WorkshopAssemblyTiming.AddonTimeout + TimeSpan.FromMilliseconds(1));
+        frameworkDriver.Tick(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForFabricationStation, runner.Progress.State);
+        Assert.Null(runner.Progress.ActiveMaterialItemId);
+        Assert.Equal(0, runner.Progress.CompletedProjects);
+        Assert.True(runner.IsRunning);
+        Assert.Equal(2, ui.ResetCount);
+    }
+
     private static WorkshopAssemblyRunner CreateRunner(
         IFramework framework,
         IWorkshopAssemblyUiAutomation ui,
@@ -102,7 +147,9 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         public Queue<WorkshopAssemblyActionResult> SubmitMaterialResults { get; } = [];
         public Queue<WorkshopAssemblyActionResult> ProgressResults { get; } = [];
 
-        public void ResetState() { }
+        public int ResetCount { get; private set; }
+
+        public void ResetState() => ResetCount++;
 
         public bool IsFabricationStationUiReady() => FabricationStationReady;
 

@@ -341,7 +341,23 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         if (!result.Success)
         {
-            HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.WaitingForContributionLockout, result);
+            if (Now - stateStartedAt > WorkshopAssemblyTiming.AddonTimeout)
+            {
+                diagnostics.Record(
+                    "progress-reconcile",
+                    "Workshop material progress remained unchanged; reopening the fabrication station to reconcile authoritative state.",
+                    BuildActiveDetails(entry));
+                pendingProgressMaterialItemId = null;
+                pendingProgressStepsComplete = null;
+                activeMaterialItemId = null;
+                uiAutomation.ResetState();
+                SetState(
+                    WorkshopAssemblyRunnerState.WaitingForFabricationStation,
+                    $"Workshop material progress remained unchanged for {entry.ProjectName}; reopening the fabrication station.");
+                return;
+            }
+
+            Progress = BuildProgress(WorkshopAssemblyRunnerState.WaitingForContributionLockout, result.Message);
             return;
         }
 
