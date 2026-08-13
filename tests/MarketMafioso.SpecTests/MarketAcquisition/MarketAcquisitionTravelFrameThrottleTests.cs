@@ -15,11 +15,11 @@ public sealed class MarketAcquisitionTravelFrameThrottleTests
 
         Assert.True(acquired, message);
         Assert.True(active.IsActive);
-        Assert.Equal(30, active.MaximumFramesPerSecond);
+        Assert.Equal(10, active.MaximumFramesPerSecond);
         Assert.Equal("route-1", active.RouteRunId);
         Assert.Equal("Jenova", active.TargetWorld);
         Assert.NotNull(active.LeaseId);
-        Assert.Equal(30, governor.Snapshot().EffectiveMaximumFramesPerSecond);
+        Assert.Equal(10, governor.Snapshot().EffectiveMaximumFramesPerSecond);
 
         var released = throttle.Release("Arrival");
 

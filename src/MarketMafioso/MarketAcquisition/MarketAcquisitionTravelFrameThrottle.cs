@@ -23,7 +23,9 @@ public sealed record MarketAcquisitionTravelFrameThrottleRelease(
 
 public sealed class MarketAcquisitionTravelFrameThrottle : IDisposable
 {
-    internal const int MaximumFramesPerSecond = 30;
+    // World-arrival asset submission still exceeded the GPU safety target at 30 FPS.
+    // Travel is unattended and short-lived, so favor thermal/load containment over presentation smoothness.
+    internal const int MaximumFramesPerSecond = 10;
 
     private readonly object sync = new();
     private readonly FramePacingGovernor governor;
