@@ -21,7 +21,7 @@ namespace MarketMafioso.TradeQueue;
 
 public interface ITradeQueueIo
 {
-    IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory();
+    TradeQueueInventoryObservation ObserveTradeableInventory();
     IReadOnlyList<TradeQueuePartner> GetAvailablePartners();
     bool TryGetSelectedPartner(out TradeQueuePartner partner);
     bool TryGetPartner(string name, string homeWorld, out TradeQueuePartner partner);
@@ -141,11 +141,18 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         }
     }
 
-    public unsafe IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory()
+    public unsafe TradeQueueInventoryObservation ObserveTradeableInventory()
     {
         var inventoryManager = InventoryManager.Instance();
         if (inventoryManager == null)
-            return [];
+            return TradeQueueInventoryObservation.Unavailable;
+
+        foreach (var inventoryType in SupportedInventories)
+        {
+            var container = inventoryManager->GetInventoryContainer(inventoryType);
+            if (container == null || !container->IsLoaded)
+                return TradeQueueInventoryObservation.Unavailable;
+        }
 
         var stacks = new List<TradeQueueInventoryStack>();
         var gil = checked((int)inventoryManager->GetInventoryItemCount(
@@ -168,8 +175,6 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         foreach (var inventoryType in SupportedInventories)
         {
             var container = inventoryManager->GetInventoryContainer(inventoryType);
-            if (container == null || !container->IsLoaded)
-                continue;
 
             for (var slotIndex = 0; slotIndex < container->Size; slotIndex++)
             {
@@ -195,7 +200,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
             }
         }
 
-        return stacks;
+        return TradeQueueInventoryObservation.Authoritative(stacks);
     }
 
     public bool TryGetSelectedPartner(out TradeQueuePartner partner)

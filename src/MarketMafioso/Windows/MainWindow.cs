@@ -550,8 +550,13 @@ public class MainWindow : Window, IDisposable
         var listingView = marketBoardAcquisition.GetView();
         var nativeListingPresentation = marketBoardAcquisition.GetNativePresentationState();
         var tradeExecution = tradeQueueRunner.Snapshot;
-        var tradeInventory = tradeQueueIo.ScanTradeableInventory();
-        var tradeValidation = TradeQueuePlanner.Validate(config.TradeQueueItems, tradeInventory);
+        var tradeInventory = tradeQueueIo.ObserveTradeableInventory();
+        var tradeValidation = tradeInventory.IsAuthoritative
+            ? TradeQueuePlanner.Validate(config.TradeQueueItems, tradeInventory.Stacks)
+            : new TradeQueueValidationResult(
+                false,
+                TradeQueueValidationCode.InsufficientInventory,
+                "Current tradeable inventory evidence is not ready.");
         var selectedTradePartner = tradeQueueIo.TryGetSelectedPartner(out var selectedPartner)
             ? CreateTradePartnerTruth(selectedPartner)
             : null;

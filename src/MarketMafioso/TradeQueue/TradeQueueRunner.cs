@@ -10,6 +10,7 @@ namespace MarketMafioso.TradeQueue;
 public sealed class TradeQueueRunner : IDisposable
 {
     private static readonly TimeSpan OpenTradeTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan InventoryPreparationTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan OfferItemsTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PartnerTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
@@ -117,12 +118,52 @@ public sealed class TradeQueueRunner : IDisposable
         if (!io.PartnerIsAvailable(selectedPartner))
             return new(false, $"{selectedPartner.Name} @ {selectedPartner.HomeWorldName} is not an exact visible trade recipient.");
 
-        var inventory = io.ScanTradeableInventory();
+        partner = selectedPartner;
+        normalizeHighQualityItemsForRun = policy.NormalizeHighQualityItems;
+        var observation = io.ObserveTradeableInventory();
+        if (!observation.IsAuthoritative)
+        {
+            runId = Guid.NewGuid().ToString("N");
+            initialUnitCount = queue.Sum(item => item.Quantity);
+            completedUnitCount = 0;
+            completedBatchCount = 0;
+            batchNumber = 1;
+            SetActive(
+                TradeQueueExecutionState.PreparingInventory,
+                "Checking current tradeable inventory...",
+                InventoryPreparationTimeout);
+            return new(true, $"Started Trade Queue for {partner.Name}; checking current inventory.");
+        }
+
+        return StartFromAuthoritativeInventory(observation.Stacks);
+    }
+
+    private TradeQueueStartResult StartFromAuthoritativeInventory(
+        IReadOnlyList<TradeQueueInventoryStack> inventory)
+    {
+        var currentPartner = partner ?? throw new InvalidOperationException("Trade Queue has no captured recipient.");
+        var queueChanged = TradeQueueInventoryReconciler.Reconcile(queue, inventory);
+        if (queueChanged)
+            save();
+
         var validation = TradeQueuePlanner.Validate(queue.ToList(), inventory);
         if (!validation.Success)
-            return new(false, validation.Message);
+        {
+            if (validation.Code == TradeQueueValidationCode.Empty)
+            {
+                runId = Guid.NewGuid().ToString("N");
+                initialUnitCount = 0;
+                completedUnitCount = 0;
+                completedBatchCount = 0;
+                batchNumber = 0;
+                Finish(TradeQueueExecutionState.Completed, "Nothing currently available remains queued.");
+                return new(true, Snapshot.Message);
+            }
 
-        var isResume = CanResumeWith(selectedPartner);
+            return new(false, validation.Message);
+        }
+
+        var isResume = CanResumeWith(currentPartner);
         if (!isResume)
         {
             runId = Guid.NewGuid().ToString("N");
@@ -131,10 +172,8 @@ public sealed class TradeQueueRunner : IDisposable
             completedBatchCount = 0;
         }
 
-        partner = selectedPartner;
         batchNumber = completedBatchCount + 1;
         checkpointQueueSignature = ComputeQueueSignature(queue);
-        normalizeHighQualityItemsForRun = policy.NormalizeHighQualityItems;
         externalAutomation.SuppressTradeAutoConfirm();
         if (!normalizeHighQualityItemsForRun)
         {
@@ -144,8 +183,8 @@ public sealed class TradeQueueRunner : IDisposable
             return new(
                 true,
                 isResume
-                    ? $"Resumed Trade Queue for {partner.Name} from the last verified batch."
-                    : $"Started Trade Queue for {partner.Name}.");
+                    ? $"Resumed Trade Queue for {currentPartner.Name} from the last verified batch."
+                    : $"Started Trade Queue for {currentPartner.Name}.");
         }
 
         var qualitySnapshot = qualityLowering.Begin(
@@ -171,17 +210,25 @@ public sealed class TradeQueueRunner : IDisposable
         return new(
             true,
             isResume
-                ? $"Resumed Trade Queue for {partner.Name} from the last verified batch."
-                : $"Started Trade Queue for {partner.Name}.");
+                ? $"Resumed Trade Queue for {currentPartner.Name} from the last verified batch."
+                : $"Started Trade Queue for {currentPartner.Name}.");
     }
 
     public void Tick()
     {
-        if (!IsActive)
-            return;
-
         try
         {
+            if (!IsActive)
+            {
+                var idleObservation = io.ObserveTradeableInventory();
+                if (idleObservation.IsAuthoritative &&
+                    TradeQueueInventoryReconciler.Reconcile(queue, idleObservation.Stacks))
+                {
+                    save();
+                }
+                return;
+            }
+
             var now = clock();
             if (deadline != default && now > deadline)
             {
@@ -191,6 +238,9 @@ public sealed class TradeQueueRunner : IDisposable
 
             switch (Snapshot.State)
             {
+                case TradeQueueExecutionState.PreparingInventory:
+                    TickPreparingInventory();
+                    break;
                 case TradeQueueExecutionState.NormalizingQuality:
                     TickNormalizingQuality();
                     break;
@@ -216,6 +266,21 @@ public sealed class TradeQueueRunner : IDisposable
             log.Error(exception, "[MarketMafioso] Trade Queue runtime failed.");
             Fail($"Trade Queue failed: {exception.Message}");
         }
+    }
+
+    private void TickPreparingInventory()
+    {
+        if (partner == null || !io.PartnerIsAvailable(partner))
+        {
+            Fail("The selected trade partner is no longer available while checking current inventory.");
+            return;
+        }
+
+        var observation = io.ObserveTradeableInventory();
+        if (!observation.IsAuthoritative)
+            return;
+
+        StartFromAuthoritativeInventory(observation.Stacks);
     }
 
     public void Stop(string message = "Trade Queue stopped; unverified quantities remain queued.")
@@ -283,7 +348,13 @@ public sealed class TradeQueueRunner : IDisposable
         }
         if (result.State == ItemQualityLoweringAutomationState.Completed)
         {
-            PrepareBatch(io.ScanTradeableInventory(), "Inventory quality is ready; opening the first trade.");
+            var observation = io.ObserveTradeableInventory();
+            if (!observation.IsAuthoritative)
+            {
+                Snapshot = Snapshot with { Message = "Quality is ready; checking current inventory..." };
+                return;
+            }
+            PrepareBatch(observation.Stacks, "Inventory quality is ready; opening the first trade.");
             return;
         }
 
@@ -419,7 +490,16 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         }
 
-        var inventory = io.ScanTradeableInventory();
+        var observation = io.ObserveTradeableInventory();
+        if (!observation.IsAuthoritative)
+        {
+            Snapshot = Snapshot with
+            {
+                Message = $"Trade closed; checking batch {batchNumber:N0} inventory evidence.",
+            };
+            return;
+        }
+        var inventory = observation.Stacks;
         if (!TradeQueuePlanner.HasExpectedInventoryDelta(batch, inventory, out var diagnostic))
         {
             if (verificationStartedAt == default)
@@ -564,6 +644,7 @@ public sealed class TradeQueueRunner : IDisposable
     private static string DescribeState(TradeQueueExecutionState state) => state switch
     {
         TradeQueueExecutionState.NormalizingQuality => "normalizing HQ inventory",
+        TradeQueueExecutionState.PreparingInventory => "checking current inventory",
         TradeQueueExecutionState.OpeningTrade => "opening the trade",
         TradeQueueExecutionState.OfferingItems => "offering items",
         TradeQueueExecutionState.WaitingForPartner => "waiting for the partner",
