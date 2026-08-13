@@ -23,6 +23,8 @@ internal sealed class TradeQueuePanel
     ]);
     private static readonly AgentBridgeActionArgumentSchema BulkQuantitySchema = new(
         [new("quantity", AgentBridgeActionArgumentKind.Integer, Minimum: 0)]);
+    private static readonly AgentBridgeActionArgumentSchema QualityPolicySchema = new(
+        [new("enabled", AgentBridgeActionArgumentKind.Boolean)]);
     private readonly Configuration config;
     private readonly MarketMafioso.TradeQueue.TradeQueueRunner runner;
     private readonly ITradeQueueIo io;
@@ -649,6 +651,42 @@ internal sealed class TradeQueuePanel
 
     private void DrawExecutionControls(IReadOnlyList<TradeQueueInventoryStack> inventory)
     {
+        var normalizeQuality = config.TradeQueuePolicy.NormalizeHighQualityItems;
+        ImGui.BeginDisabled(runner.IsActive);
+        if (ImGui.Checkbox("Convert HQ items to NQ before trading", ref normalizeQuality))
+        {
+            config.TradeQueuePolicy.NormalizeHighQualityItems = normalizeQuality;
+            config.Save();
+        }
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Turn this off to trade HQ items as HQ. NQ stacks are still used first.");
+        reviewRegistry.Register(
+            "trade-queue.normalize-quality",
+            "Convert HQ items to NQ before trading",
+            AgentBridgeUiControlKind.Toggle,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            !runner.IsActive,
+            config.TradeQueuePolicy.NormalizeHighQualityItems,
+            config.TradeQueuePolicy.NormalizeHighQualityItems ? "enabled" : "disabled",
+            QualityPolicySchema,
+            "trade-queue",
+            true,
+            null,
+            arguments =>
+            {
+                if (runner.IsActive)
+                    return AgentBridgeUiActionResult.Fail("Quality policy cannot change while Trade Queue is active.");
+                config.TradeQueuePolicy.NormalizeHighQualityItems =
+                    arguments!.Value.GetProperty("enabled").GetBoolean();
+                config.Save();
+                return AgentBridgeUiActionResult.Ok(
+                    config.TradeQueuePolicy.NormalizeHighQualityItems
+                        ? "Trade Queue will convert HQ items to NQ before trading."
+                        : "Trade Queue will preserve and trade HQ items.");
+            });
+
         ImGui.TextColored(
             MainWindow.ColMuted,
             config.AutoAcceptIncomingTrades

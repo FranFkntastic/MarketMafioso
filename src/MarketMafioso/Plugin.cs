@@ -225,7 +225,8 @@ public sealed class Plugin : IDalamudPlugin
                 GameGui,
                 DalamudTradeQueueIo.SupportedInventories),
             tradeAutomationCoordinator,
-            Log);
+            Log,
+            Configuration.TradeQueuePolicy);
         mainWindow = new MainWindow(
             Configuration,
             reporter,

@@ -14,6 +14,7 @@ namespace MarketMafioso;
 public class Configuration : IPluginConfiguration
 {
     private TradeQueueTimingOptions? tradeQueueTiming = new();
+    private TradeQueuePolicyOptions? tradeQueuePolicy = new();
 
     public int Version { get; set; } = 1;
 
@@ -97,6 +98,11 @@ public class Configuration : IPluginConfiguration
     {
         get => tradeQueueTiming ??= new();
         set => tradeQueueTiming = value ?? new();
+    }
+    public TradeQueuePolicyOptions TradeQueuePolicy
+    {
+        get => tradeQueuePolicy ??= new();
+        set => tradeQueuePolicy = value ?? new();
     }
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
     public bool SplitWorkshopQueueAndMaterials { get; set; }

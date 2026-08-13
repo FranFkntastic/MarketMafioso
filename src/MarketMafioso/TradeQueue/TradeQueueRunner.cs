@@ -17,6 +17,7 @@ public sealed class TradeQueueRunner : IDisposable
 
     private readonly IList<TradeQueueItem> queue;
     private readonly TradeQueueTimingOptions timing;
+    private readonly TradeQueuePolicyOptions policy;
     private readonly Action save;
     private readonly ITradeQueueIo io;
     private readonly IItemQualityLoweringAutomation qualityLowering;
@@ -40,6 +41,7 @@ public sealed class TradeQueueRunner : IDisposable
     private int completedBatchCount;
     private string checkpointQueueSignature = string.Empty;
     private string? runId;
+    private bool normalizeHighQualityItemsForRun = true;
 
     public TradeQueueRunner(
         IList<TradeQueueItem> queue,
@@ -48,8 +50,9 @@ public sealed class TradeQueueRunner : IDisposable
         ITradeQueueIo io,
         IItemQualityLoweringAutomation qualityLowering,
         ExternalAutomationCoordinator externalAutomation,
-        IPluginLog log)
-        : this(queue, timing, save, io, qualityLowering, externalAutomation, log, () => DateTimeOffset.UtcNow)
+        IPluginLog log,
+        TradeQueuePolicyOptions? policy = null)
+        : this(queue, timing, save, io, qualityLowering, externalAutomation, log, () => DateTimeOffset.UtcNow, policy)
     {
     }
 
@@ -61,10 +64,12 @@ public sealed class TradeQueueRunner : IDisposable
         IItemQualityLoweringAutomation qualityLowering,
         ExternalAutomationCoordinator externalAutomation,
         IPluginLog log,
-        Func<DateTimeOffset> clock)
+        Func<DateTimeOffset> clock,
+        TradeQueuePolicyOptions? policy = null)
     {
         this.queue = queue;
         this.timing = timing;
+        this.policy = policy ?? new();
         this.save = save;
         this.io = io;
         this.qualityLowering = qualityLowering;
@@ -129,7 +134,20 @@ public sealed class TradeQueueRunner : IDisposable
         partner = selectedPartner;
         batchNumber = completedBatchCount + 1;
         checkpointQueueSignature = ComputeQueueSignature(queue);
+        normalizeHighQualityItemsForRun = policy.NormalizeHighQualityItems;
         externalAutomation.SuppressTradeAutoConfirm();
+        if (!normalizeHighQualityItemsForRun)
+        {
+            if (!PrepareBatch(inventory, "Quality normalization is disabled; opening the first trade."))
+                return new(false, Snapshot.Message);
+
+            return new(
+                true,
+                isResume
+                    ? $"Resumed Trade Queue for {partner.Name} from the last verified batch."
+                    : $"Started Trade Queue for {partner.Name}.");
+        }
+
         var qualitySnapshot = qualityLowering.Begin(
             queue
                 .Where(item => item.ItemId != TradeQueuePlanner.GilItemId)
@@ -454,7 +472,10 @@ public sealed class TradeQueueRunner : IDisposable
             return false;
         }
 
-        batch = TradeQueuePlanner.BuildNextBatch(queue.ToList(), inventory);
+        batch = TradeQueuePlanner.BuildNextBatch(
+            queue.ToList(),
+            inventory,
+            allowHighQualityItems: !normalizeHighQualityItemsForRun);
         offeredLineIndex = 0;
         offerLineOperation = null;
         offerGilOperation = null;

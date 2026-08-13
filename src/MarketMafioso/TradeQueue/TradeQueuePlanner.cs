@@ -50,7 +50,8 @@ public static class TradeQueuePlanner
     public static TradeQueueBatch BuildNextBatch(
         IReadOnlyList<TradeQueueItem> queue,
         IReadOnlyList<TradeQueueInventoryStack> inventory,
-        int maximumSlots = MaximumTradeSlots)
+        int maximumSlots = MaximumTradeSlots,
+        bool allowHighQualityItems = false)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(inventory);
@@ -78,8 +79,11 @@ public static class TradeQueuePlanner
         {
             var remaining = remainingByKey[key];
             foreach (var stack in inventory
-                         .Where(value => value.ItemId == key.ItemId && !value.IsHighQuality)
-                         .OrderBy(value => value.ContainerId)
+                         .Where(value =>
+                             value.ItemId == key.ItemId &&
+                             (allowHighQualityItems || !value.IsHighQuality))
+                         .OrderBy(value => value.IsHighQuality)
+                         .ThenBy(value => value.ContainerId)
                          .ThenBy(value => value.SlotIndex))
             {
                 if (remaining <= 0 || lines.Count == maximumSlots)
@@ -107,7 +111,9 @@ public static class TradeQueuePlanner
             {
                 throw new InvalidOperationException(
                     $"{queue.First(item => item.ItemId == key.ItemId).ItemName} still needs " +
-                    $"{remaining:N0} normal-quality units after quality normalization.");
+                    (allowHighQualityItems
+                        ? $"{remaining:N0} units after assigning all eligible inventory stacks."
+                        : $"{remaining:N0} normal-quality units after quality normalization."));
             }
         }
 

@@ -42,6 +42,7 @@ public sealed class TradeQueuePlannerTests
     public void Planner_EnforcesInventoryBatchingEvidenceAndWorkshopHandoffContracts()
     {
         ValidateCountsHqAndNqTogether();
+        BuildNextBatchUsesHqOnlyWhenQualityNormalizationIsDisabled();
         BuildNextBatchSplitsSourceStacksAndStopsAtFiveSlots();
         InventoryDeltaAndCompletedBatchRequireExactEvidence();
         GilUsesCurrencyCapacityWithoutConsumingAnItemSlot();
@@ -70,6 +71,28 @@ public sealed class TradeQueuePlannerTests
         var exception = Assert.Throws<InvalidOperationException>(
             () => TradeQueuePlanner.BuildNextBatch(queue, inventory));
         Assert.Contains("after quality normalization", exception.Message);
+    }
+
+    private static void BuildNextBatchUsesHqOnlyWhenQualityNormalizationIsDisabled()
+    {
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = 100, ItemName = "Cobalt Ingot", Quantity = 5 },
+        };
+        var inventory = new List<TradeQueueInventoryStack>
+        {
+            Stack(0, 0, 100, "Cobalt Ingot", hq: true, 4),
+            Stack(0, 1, 100, "Cobalt Ingot", hq: false, 2),
+        };
+
+        var batch = TradeQueuePlanner.BuildNextBatch(
+            queue,
+            inventory,
+            allowHighQualityItems: true);
+
+        Assert.Equal(5, batch.ItemUnitCount);
+        Assert.Equal([false, true], batch.Lines.Select(line => line.IsHighQuality).Distinct());
+        Assert.Equal([2, 3], batch.Lines.Select(line => line.Quantity));
     }
 
     private static void BuildNextBatchSplitsSourceStacksAndStopsAtFiveSlots()
