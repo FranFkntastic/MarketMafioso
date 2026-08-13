@@ -51,6 +51,7 @@ public sealed class TradeQueuePlannerTests
         BulkEditQueuesCurrentStockWithoutTouchingGilOrUnobservedLines();
         BulkEditSetsOneClampedQuantityAcrossSelectedRows();
         BulkEditRemovesOnlySelectedObservableRows();
+        ReconciliationRemovesStaleRowsClampsStockAndCollapsesDuplicates();
     }
 
     private static void ValidateCountsHqAndNqTogether()
@@ -207,11 +208,10 @@ public sealed class TradeQueuePlannerTests
         var rows = TradeQueueInventoryProjection.Build(inventory, queue);
 
         Assert.Equal(
-            ["Birch Lumber", "Cobalt Ingot", "Zinc Ore", "Adamantoise Shell", "Apple"],
+            ["Cobalt Ingot", "Zinc Ore", "Adamantoise Shell", "Apple"],
             rows.Select(row => row.ItemName));
-        Assert.Equal([1, 4, 2, 0, 0], rows.Select(row => row.SelectedQuantity));
-        Assert.Equal(0, rows[0].AvailableQuantity);
-        Assert.Equal(9, rows[1].AvailableQuantity);
+        Assert.Equal([4, 2, 0, 0], rows.Select(row => row.SelectedQuantity));
+        Assert.Equal(9, rows[0].AvailableQuantity);
     }
 
     private static void BulkEditQueuesCurrentStockWithoutTouchingGilOrUnobservedLines()
@@ -269,6 +269,17 @@ public sealed class TradeQueuePlannerTests
         Assert.Equal(2, updated.Single(item => item.ItemId == 400).Quantity);
         Assert.Equal(7, updated.Single(item => item.ItemId == 500).Quantity);
         Assert.Equal(50, updated.Single(item => item.ItemId == TradeQueuePlanner.GilItemId).Quantity);
+
+        var legacyUnavailableRows = new[]
+        {
+            new TradeQueueInventoryRow(new TradeQueueItemKey(500), "Birch Lumber", 0, 7),
+        };
+        var legacyRemoved = TradeQueueBulkEdit.Apply(
+            queue,
+            legacyUnavailableRows,
+            new HashSet<uint> { 500 },
+            TradeQueueBulkAction.RemoveFromQueue);
+        Assert.DoesNotContain(legacyRemoved, item => item.ItemId == 500);
     }
 
     private static void BulkEditSetsOneClampedQuantityAcrossSelectedRows()
@@ -294,6 +305,40 @@ public sealed class TradeQueuePlannerTests
         Assert.Equal(3, updated.Single(item => item.ItemId == 100).Quantity);
         Assert.Equal(5, updated.Single(item => item.ItemId == 400).Quantity);
         Assert.Equal(7, updated.Single(item => item.ItemId == 500).Quantity);
+    }
+
+    private static void ReconciliationRemovesStaleRowsClampsStockAndCollapsesDuplicates()
+    {
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = 100, ItemName = "Old Apple", Quantity = 4 },
+            new() { ItemId = 100, ItemName = "Apple", Quantity = 5 },
+            new() { ItemId = 200, ItemName = "Vanished", Quantity = 8 },
+            new() { ItemId = 300, ItemName = "Cobalt Ingot", Quantity = 2 },
+            new() { ItemId = 400, ItemName = "Invalid", Quantity = 0 },
+        };
+        var inventory = new List<TradeQueueInventoryStack>
+        {
+            Stack(0, 0, 100, "Apple", hq: false, 3),
+            Stack(0, 1, 100, "Apple", hq: true, 2),
+            Stack(0, 2, 300, "Cobalt Ingot", hq: false, 7),
+        };
+
+        Assert.True(TradeQueueInventoryReconciler.Reconcile(queue, inventory));
+        Assert.Collection(
+            queue,
+            apple =>
+            {
+                Assert.Equal(100u, apple.ItemId);
+                Assert.Equal("Apple", apple.ItemName);
+                Assert.Equal(5, apple.Quantity);
+            },
+            cobalt =>
+            {
+                Assert.Equal(300u, cobalt.ItemId);
+                Assert.Equal(2, cobalt.Quantity);
+            });
+        Assert.False(TradeQueueInventoryReconciler.Reconcile(queue, inventory));
     }
 
     private static TradeQueueInventoryStack Stack(

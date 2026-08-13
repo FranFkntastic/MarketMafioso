@@ -691,6 +691,108 @@ public sealed class TradeQueueRunnerTests
         Assert.Equal(0, qualityLowering.BeginCount);
     }
 
+    [Fact]
+    public void Runner_WaitsForAuthoritativeInventoryThenRepairsQueueAndContinues()
+    {
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = 100, ItemName = "Cobalt Ingot", Quantity = 5 },
+            new() { ItemId = 200, ItemName = "Vanished", Quantity = 9 },
+        };
+        var io = new FakeIo(Inventory(2)) { InventoryIsAuthoritative = false };
+        var clock = new TestClock();
+        var saves = 0;
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            new TradeQueueTimingOptions(),
+            () => saves++,
+            io,
+            new FakeQualityLowering(),
+            coordinator,
+            TestPluginLog.Create(),
+            clock.Read);
+
+        var start = runner.Start();
+
+        Assert.True(start.Success);
+        Assert.Equal(TradeQueueExecutionState.PreparingInventory, runner.Snapshot.State);
+        Assert.Equal(2, queue.Count);
+        Assert.Equal(0, saves);
+
+        io.InventoryIsAuthoritative = true;
+        runner.Tick();
+
+        Assert.Equal(TradeQueueExecutionState.NormalizingQuality, runner.Snapshot.State);
+        Assert.Equal(2, Assert.Single(queue).Quantity);
+        Assert.Equal(1, saves);
+    }
+
+    [Fact]
+    public void Runner_IdleTickRepairsPersistedQueueWithoutOpeningThePanel()
+    {
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = 100, ItemName = "Cobalt Ingot", Quantity = 8 },
+            new() { ItemId = 200, ItemName = "Vanished", Quantity = 9 },
+        };
+        var io = new FakeIo(Inventory(3)) { InventoryIsAuthoritative = false };
+        var saves = 0;
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            new TradeQueueTimingOptions(),
+            () => saves++,
+            io,
+            new FakeQualityLowering(),
+            coordinator,
+            TestPluginLog.Create());
+
+        runner.Tick();
+        Assert.Equal(2, queue.Count);
+        Assert.Equal(0, saves);
+
+        io.InventoryIsAuthoritative = true;
+        runner.Tick();
+
+        Assert.Equal(3, Assert.Single(queue).Quantity);
+        Assert.Equal(1, saves);
+        runner.Tick();
+        Assert.Equal(1, saves);
+    }
+
+    [Fact]
+    public void Runner_CleansAnEntirelyStaleQueueWithoutStartingAutomation()
+    {
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = 200, ItemName = "Vanished", Quantity = 9 },
+        };
+        var io = new FakeIo([]);
+        var qualityLowering = new FakeQualityLowering();
+        var saves = 0;
+        var stopRequests = new HashSet<string>();
+        using var coordinator = Coordinator(stopRequests);
+        using var runner = new TradeQueueRunner(
+            queue,
+            new TradeQueueTimingOptions(),
+            () => saves++,
+            io,
+            qualityLowering,
+            coordinator,
+            TestPluginLog.Create());
+
+        var start = runner.Start();
+
+        Assert.True(start.Success);
+        Assert.Empty(queue);
+        Assert.Equal(1, saves);
+        Assert.Equal(TradeQueueExecutionState.Completed, runner.Snapshot.State);
+        Assert.Contains("Nothing currently available", runner.Snapshot.Message);
+        Assert.Equal(0, qualityLowering.BeginCount);
+        Assert.DoesNotContain("MarketMafioso", stopRequests);
+    }
+
     private static void AdvanceOpenTradeToVerification(
         TradeQueueRunner runner,
         FakeIo io,
@@ -732,6 +834,7 @@ public sealed class TradeQueueRunnerTests
     private sealed class FakeIo(IReadOnlyList<TradeQueueInventoryStack> inventory) : ITradeQueueIo
     {
         public IReadOnlyList<TradeQueueInventoryStack> Inventory { get; set; } = inventory;
+        public bool InventoryIsAuthoritative { get; set; } = true;
         private bool isTradeOpenValue;
         public bool IsTradeOpenValue
         {
@@ -783,7 +886,10 @@ public sealed class TradeQueueRunnerTests
         public int LastSubmittedQuantity { get; private set; }
         private bool gilInputRequested;
 
-        public IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory() => Inventory;
+        public TradeQueueInventoryObservation ObserveTradeableInventory() =>
+            InventoryIsAuthoritative
+                ? TradeQueueInventoryObservation.Authoritative(Inventory)
+                : TradeQueueInventoryObservation.Unavailable;
 
         public IReadOnlyList<TradeQueuePartner> GetAvailablePartners() =>
             [new(1, "Recipient", 2, "Siren")];

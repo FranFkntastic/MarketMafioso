@@ -39,6 +39,7 @@ internal sealed class TradeQueuePanel
     private bool quantityEditorNeedsFocus;
     private int editingQuantityValue;
     private uint? queuedQuantityAdvanceItemId;
+    private IReadOnlyList<TradeQueueInventoryStack> lastAuthoritativeInventory = [];
     private string receiverStatus = "No incoming trade action has been invoked.";
 
     public TradeQueuePanel(
@@ -121,13 +122,24 @@ internal sealed class TradeQueuePanel
             "Trade Queue",
             "Select quantities from current tradeable inventory, target the recipient, and trade exact five-slot batches.");
 
-        var inventory = io.ScanTradeableInventory();
+        var observation = io.ObserveTradeableInventory();
+        if (observation.IsAuthoritative)
+        {
+            lastAuthoritativeInventory = observation.Stacks;
+            if (!runner.IsActive &&
+                TradeQueueInventoryReconciler.Reconcile(config.TradeQueueItems, observation.Stacks))
+            {
+                config.Save();
+            }
+        }
+        var inventory = observation.IsAuthoritative
+            ? observation.Stacks
+            : lastAuthoritativeInventory;
         var rows = TradeQueueInventoryProjection.Build(inventory, config.TradeQueueItems);
         inventorySelection.Retain(
             rows
                 .Where(row =>
-                    row.Key.ItemId != TradeQueuePlanner.GilItemId &&
-                    row.AvailableQuantity > 0)
+                    IsSelectableInventoryRow(row))
                 .Select(row => row.Key.ItemId));
         var snapshot = runner.Snapshot;
         var hasPartner = io.TryGetSelectedPartner(out var partner);
@@ -444,7 +456,8 @@ internal sealed class TradeQueuePanel
             .ToArray();
 
     private static bool IsSelectableInventoryRow(TradeQueueInventoryRow row) =>
-        row.Key.ItemId != TradeQueuePlanner.GilItemId && row.AvailableQuantity > 0;
+        row.Key.ItemId != TradeQueuePlanner.GilItemId &&
+        (row.AvailableQuantity > 0 || row.SelectedQuantity > 0);
 
     private void DrawItemCell(TradeQueueInventoryRow row)
     {
@@ -609,8 +622,6 @@ internal sealed class TradeQueuePanel
             return row.SelectedQuantity > 0 ? "Manual amount" : "Not queued";
         if (row.SelectedQuantity <= 0)
             return "Not queued";
-        if (row.AvailableQuantity <= 0)
-            return "Unavailable";
         return row.SelectedQuantity >= row.AvailableQuantity ? "All available" : "Partial";
     }
 
@@ -620,8 +631,7 @@ internal sealed class TradeQueuePanel
             "All available" => 0,
             "Partial" => 1,
             "Manual amount" => 2,
-            "Unavailable" => 3,
-            _ => 4,
+            _ => 3,
         };
 
     private static System.Numerics.Vector4? QueueStateColor(TradeQueueInventoryRow row) =>

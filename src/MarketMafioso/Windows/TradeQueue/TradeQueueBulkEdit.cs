@@ -28,7 +28,9 @@ internal static class TradeQueueBulkEdit
         var selected = inventoryRows
             .Where(row =>
                 row.Key.ItemId != TradeQueuePlanner.GilItemId &&
-                row.AvailableQuantity > 0 &&
+                (action == TradeQueueBulkAction.RemoveFromQueue
+                    ? row.SelectedQuantity > 0
+                    : row.AvailableQuantity > 0) &&
                 selectedItemIds.Contains(row.Key.ItemId))
             .Select(row => row.Key.ItemId)
             .ToHashSet();

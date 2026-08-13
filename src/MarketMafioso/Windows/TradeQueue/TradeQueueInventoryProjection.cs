@@ -25,17 +25,6 @@ internal static class TradeQueueInventoryProjection
                 group.Sum(stack => stack.Quantity),
                 selected.GetValueOrDefault(group.Key)))
             .ToList();
-        var observed = rows.Select(row => row.Key).ToHashSet();
-        rows.AddRange(
-            queue
-                .Where(item => item.Quantity > 0 && !observed.Contains(new(item.ItemId)))
-                .GroupBy(item => new TradeQueueItemKey(item.ItemId))
-                .Select(group => new TradeQueueInventoryRow(
-                    group.Key,
-                    group.First().ItemName,
-                    0,
-                    group.Sum(item => item.Quantity))));
-
         return rows
             .OrderByDescending(row => row.SelectedQuantity > 0)
             .ThenBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)

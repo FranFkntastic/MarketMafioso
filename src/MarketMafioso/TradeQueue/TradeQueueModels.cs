@@ -20,6 +20,16 @@ public sealed record TradeQueueInventoryStack(
     bool IsHighQuality,
     int Quantity);
 
+public sealed record TradeQueueInventoryObservation(
+    bool IsAuthoritative,
+    IReadOnlyList<TradeQueueInventoryStack> Stacks)
+{
+    public static TradeQueueInventoryObservation Unavailable { get; } = new(false, []);
+
+    public static TradeQueueInventoryObservation Authoritative(
+        IReadOnlyList<TradeQueueInventoryStack> stacks) => new(true, stacks);
+}
+
 public sealed record TradeQueueBatchLine(
     uint ContainerId,
     int SlotIndex,
@@ -99,6 +109,7 @@ public sealed record TradeQueueValidationResult(
 public enum TradeQueueExecutionState
 {
     Idle,
+    PreparingInventory,
     NormalizingQuality,
     OpeningTrade,
     OfferingItems,
