@@ -45,11 +45,21 @@ public sealed class DalamudMarketAcquisitionRouteContext : IMarketAcquisitionRou
 
 public sealed class DalamudMarketAcquisitionRouteUiAutomation : IMarketAcquisitionRouteUiAutomation
 {
+    private readonly Func<bool> closeOwnedMarketBoardForTravel;
+
+    public DalamudMarketAcquisitionRouteUiAutomation(Func<bool> closeOwnedMarketBoardForTravel)
+    {
+        this.closeOwnedMarketBoardForTravel = closeOwnedMarketBoardForTravel ??
+            throw new ArgumentNullException(nameof(closeOwnedMarketBoardForTravel));
+    }
+
     public bool ProcessCommand(string command) => Plugin.CommandManager.ProcessCommand(command);
 
     public unsafe bool TryCloseMarketBoardWindows()
     {
-        var closeRequested = TryCloseAddon("ItemSearchResult") | TryCloseAddon("ItemSearch");
+        var closeRequested = closeOwnedMarketBoardForTravel() |
+                             TryCloseAddon("ItemSearchResult") |
+                             TryCloseAddon("ItemSearch");
         var agentModule = AgentModule.Instance();
         var itemSearchAgent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
         if (itemSearchAgent != null && itemSearchAgent->IsAgentActive())

@@ -382,18 +382,23 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
     }
 
     public unsafe string CloseMarketBoardForTesting()
+        => TryCloseMarketBoardForTravel()
+            ? "Market board closed and acquisition ownership released."
+            : "Market board is already closed.";
+
+    public unsafe bool TryCloseMarketBoardForTravel()
     {
         var agentModule = AgentModule.Instance();
         var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
         if (agent == null || !agent->IsAgentActive())
-            return "Market board is already closed.";
+            return false;
 
         agent->Hide();
         AbandonTrackedBrowse("Market listings closed during testing.");
         presentationSession.Close();
         purchaseGuard.ObserveMarketAgentActive(false);
         purchaseCoordinator.ResetStagedState();
-        return "Market board closed and acquisition ownership released.";
+        return true;
     }
 
     public string OpenMarketBoard()
