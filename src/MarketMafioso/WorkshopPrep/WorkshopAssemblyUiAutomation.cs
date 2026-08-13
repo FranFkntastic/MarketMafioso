@@ -404,7 +404,12 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     ActiveMaterialStepsComplete: previousStepsComplete);
             }
 
-            return new(false, $"Waiting for workshop material progress for {materialItemId}. {DescribeUiState()}");
+            return new(
+                false,
+                $"Workshop UI closed while waiting for material {materialItemId} progress; reopening the fabrication station. {DescribeUiState()}",
+                RequiresWorkshopReopen: true,
+                ActiveMaterialItemId: materialItemId,
+                ActiveMaterialStepsComplete: previousStepsComplete);
         }
 
         var craftState = materialDelivery.CraftState;

@@ -14,6 +14,10 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
         DisposeRestoresTextAdvanceStopRequest();
         TradeAutoConfirmUsesYesAlreadyOwnerScopedStopRequest();
         TradeAutoAcceptUsesDropboxOwnerScopedStopRequest();
+        WorkshopRequestTemporarilyDisablesEnabledPandoraFeature();
+        WorkshopRequestDoesNotEnablePandoraFeatureThatBeganDisabled();
+        DisposeRestoresPandoraFeatureSuppressedByWorkshopRequest();
+        WorkshopRequestFailsBeforeOpeningUiWhenPandoraCannotReleaseOwnership();
     }
 
     private static void SuppressTextAdvanceAddsMarketMafiosoStopRequest()
@@ -85,6 +89,69 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
         Assert.Contains("OtherPlugin", stopRequests);
     }
 
+    private static void WorkshopRequestTemporarilyDisablesEnabledPandoraFeature()
+    {
+        var pandora = new FakePandoraFeatureControl(enabled: true);
+        using var coordinator = new ExternalAutomationCoordinator(
+            new FakePluginDataStore([]),
+            TestPluginLog.Create(),
+            pandora);
+
+        coordinator.SuppressWorkshopRequestAutomation();
+        coordinator.SuppressWorkshopRequestAutomation();
+        Assert.False(pandora.Enabled);
+        Assert.Equal(new[] { false }, pandora.Writes);
+
+        coordinator.RestoreWorkshopRequestAutomation();
+        coordinator.RestoreWorkshopRequestAutomation();
+        Assert.True(pandora.Enabled);
+        Assert.Equal(new[] { false, true }, pandora.Writes);
+    }
+
+    private static void WorkshopRequestDoesNotEnablePandoraFeatureThatBeganDisabled()
+    {
+        var pandora = new FakePandoraFeatureControl(enabled: false);
+        using var coordinator = new ExternalAutomationCoordinator(
+            new FakePluginDataStore([]),
+            TestPluginLog.Create(),
+            pandora);
+
+        coordinator.SuppressWorkshopRequestAutomation();
+        coordinator.RestoreWorkshopRequestAutomation();
+
+        Assert.False(pandora.Enabled);
+        Assert.Empty(pandora.Writes);
+    }
+
+    private static void DisposeRestoresPandoraFeatureSuppressedByWorkshopRequest()
+    {
+        var pandora = new FakePandoraFeatureControl(enabled: true);
+        var coordinator = new ExternalAutomationCoordinator(
+            new FakePluginDataStore([]),
+            TestPluginLog.Create(),
+            pandora);
+
+        coordinator.SuppressWorkshopRequestAutomation();
+        coordinator.Dispose();
+
+        Assert.True(pandora.Enabled);
+        Assert.Equal(new[] { false, true }, pandora.Writes);
+    }
+
+    private static void WorkshopRequestFailsBeforeOpeningUiWhenPandoraCannotReleaseOwnership()
+    {
+        var pandora = new FakePandoraFeatureControl(enabled: true, failDisable: true);
+        using var coordinator = new ExternalAutomationCoordinator(
+            new FakePluginDataStore([]),
+            TestPluginLog.Create(),
+            pandora);
+
+        var error = Assert.Throws<InvalidOperationException>(coordinator.SuppressWorkshopRequestAutomation);
+
+        Assert.Contains("Request-window ownership", error.Message);
+        Assert.True(pandora.Enabled);
+    }
+
     private sealed class FakePluginDataStore(
         HashSet<string> stopRequests,
         string expectedKey = "TextAdvance.StopRequests") : IPluginDataStore
@@ -100,6 +167,28 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
 
             data = (T)(object)stopRequests;
             return true;
+        }
+    }
+
+    private sealed class FakePandoraFeatureControl(bool enabled, bool failDisable = false) : IPandoraFeatureControl
+    {
+        public bool Enabled { get; private set; } = enabled;
+        public List<bool> Writes { get; } = [];
+
+        public bool? IsEnabled(string internalFeatureName)
+        {
+            Assert.Equal("AutoSelectTurnin", internalFeatureName);
+            return Enabled;
+        }
+
+        public void SetEnabled(string internalFeatureName, bool enabled)
+        {
+            Assert.Equal("AutoSelectTurnin", internalFeatureName);
+            if (!enabled && failDisable)
+                throw new InvalidOperationException("Pandora refused the disable request.");
+
+            Enabled = enabled;
+            Writes.Add(enabled);
         }
     }
 
