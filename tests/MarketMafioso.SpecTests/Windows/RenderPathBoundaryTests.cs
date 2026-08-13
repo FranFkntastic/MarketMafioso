@@ -130,6 +130,7 @@ public sealed class RenderPathBoundaryTests
             "DalamudMarketAcquisitionRouteEngineAdapters.cs");
         var close = ExtractMethodBody(source, "TryCloseMarketBoardWindows");
 
+        Assert.Contains("closeOwnedMarketBoardForTravel()", close, StringComparison.Ordinal);
         Assert.Contains("GetAgentByInternalId(AgentId.ItemSearch)", close, StringComparison.Ordinal);
         Assert.Contains("itemSearchAgent->Hide()", close, StringComparison.Ordinal);
         Assert.Contains("TryCloseAddon(\"ItemSearchResult\")", close, StringComparison.Ordinal);

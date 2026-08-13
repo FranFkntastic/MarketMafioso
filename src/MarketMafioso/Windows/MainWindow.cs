@@ -244,7 +244,8 @@ public class MainWindow : Window, IDisposable
         MarketListingOverlay = new MarketListingOverlayWindow(marketBoardAcquisition, AgentReviewRegistry);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
-        var routeUiAutomation = new DalamudMarketAcquisitionRouteUiAutomation();
+        var routeUiAutomation = new DalamudMarketAcquisitionRouteUiAutomation(
+            marketBoardAcquisition.TryCloseMarketBoardForTravel);
         var lifestream = new LifestreamIpc(Plugin.PluginInterface, log);
         var shardCheckpointRuntime = new DalamudShardAcquisitionCheckpointRuntime(
             playerState,
