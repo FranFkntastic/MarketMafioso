@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.WorkshopPrep;
 
@@ -12,17 +13,20 @@ internal sealed class WorkshopAssemblyPanel
     private readonly Func<string> getWorkshopStatus;
     private readonly Action<string> setWorkshopStatus;
     private readonly Action<bool> startWorkshopAssembly;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public WorkshopAssemblyPanel(
         WorkshopAssemblyRunner workshopAssemblyRunner,
         Func<string> getWorkshopStatus,
         Action<string> setWorkshopStatus,
-        Action<bool> startWorkshopAssembly)
+        Action<bool> startWorkshopAssembly,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.workshopAssemblyRunner = workshopAssemblyRunner ?? throw new ArgumentNullException(nameof(workshopAssemblyRunner));
         this.getWorkshopStatus = getWorkshopStatus ?? throw new ArgumentNullException(nameof(getWorkshopStatus));
         this.setWorkshopStatus = setWorkshopStatus ?? throw new ArgumentNullException(nameof(setWorkshopStatus));
         this.startWorkshopAssembly = startWorkshopAssembly ?? throw new ArgumentNullException(nameof(startWorkshopAssembly));
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
     public void Draw(bool hasPrepQueue)
@@ -55,6 +59,12 @@ internal sealed class WorkshopAssemblyPanel
         {
             if (ImGui.Button("Resume"))
                 setWorkshopStatus(workshopAssemblyRunner.Resume().Message);
+            RegisterAction(
+                "workshop-logistics.assembly.resume",
+                "Resume Workshop assembly",
+                true,
+                workshopAssemblyRunner.Progress.Message,
+                () => setWorkshopStatus(workshopAssemblyRunner.Resume().Message));
 
             ImGui.SameLine();
             if (ImGui.Button("Stop"))
@@ -62,11 +72,27 @@ internal sealed class WorkshopAssemblyPanel
                 workshopAssemblyRunner.Stop();
                 setWorkshopStatus("Workshop assembly stopped.");
             }
+            RegisterAction(
+                "workshop-logistics.assembly.stop",
+                "Stop Workshop assembly",
+                true,
+                workshopAssemblyRunner.Progress.Message,
+                () =>
+                {
+                    workshopAssemblyRunner.Stop();
+                    setWorkshopStatus("Workshop assembly stopped.");
+                });
         }
         else if (workshopAssemblyRunner.IsRunning)
         {
             if (ImGui.Button("Pause"))
                 setWorkshopStatus(workshopAssemblyRunner.Pause().Message);
+            RegisterAction(
+                "workshop-logistics.assembly.pause",
+                "Pause Workshop assembly",
+                true,
+                workshopAssemblyRunner.Progress.Message,
+                () => setWorkshopStatus(workshopAssemblyRunner.Pause().Message));
 
             ImGui.SameLine();
             if (ImGui.Button("Stop"))
@@ -74,6 +100,16 @@ internal sealed class WorkshopAssemblyPanel
                 workshopAssemblyRunner.Stop();
                 setWorkshopStatus("Workshop assembly stopped.");
             }
+            RegisterAction(
+                "workshop-logistics.assembly.stop",
+                "Stop Workshop assembly",
+                true,
+                workshopAssemblyRunner.Progress.Message,
+                () =>
+                {
+                    workshopAssemblyRunner.Stop();
+                    setWorkshopStatus("Workshop assembly stopped.");
+                });
         }
 
         if (workshopAssemblyRunner.HasActiveRun)
@@ -81,6 +117,12 @@ internal sealed class WorkshopAssemblyPanel
 
         if (ImGuiUi.MenuButton("Start Options", !workshopAssemblyRunner.HasActiveRun && hasPrepQueue))
             ImGui.OpenPopup("WorkshopAssemblyStartMenu");
+        RegisterAction(
+            "workshop-logistics.assembly.start-diagnostics",
+            "Start Workshop assembly with diagnostics",
+            !workshopAssemblyRunner.HasActiveRun && hasPrepQueue,
+            workshopAssemblyRunner.Progress.Message,
+            () => startWorkshopAssembly(true));
 
         if (ImGui.BeginPopup("WorkshopAssemblyStartMenu"))
         {
@@ -92,6 +134,25 @@ internal sealed class WorkshopAssemblyPanel
 
             ImGui.EndPopup();
         }
+    }
+
+    private void RegisterAction(
+        string id,
+        string label,
+        bool enabled,
+        string? value,
+        Action invoke)
+    {
+        reviewRegistry.Register(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            false,
+            value,
+            invoke);
     }
 
     private static Vector4 GetWorkshopStatusColor(string workshopStatus)

@@ -80,6 +80,38 @@ public sealed class AgentBridgeProofFactoryTests
         Assert.Contains("\"canReceiverReady\":true", json, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Serialize_ExposesObservableWorkshopAssemblyProgress()
+    {
+        var truth = CreateTruth() with
+        {
+            WorkshopAssembly = new AgentBridgeWorkshopAssemblyTruth
+            {
+                State = "SubmittingMaterial",
+                Message = "Handing over Cobalt Rivets.",
+                HasActiveRun = true,
+                IsRunning = true,
+                IsPaused = false,
+                ActiveProjectName = "Unkiu-class Bow",
+                ActiveWorkshopItemId = 1001,
+                ActiveMaterialItemId = 5069,
+                CompletedProjects = 1,
+                TotalProjects = 20,
+                UpdatedAt = DateTimeOffset.UnixEpoch,
+                DiagnosticFilePath = @"C:\logs\workshop-assembly.jsonl",
+            },
+        };
+
+        var json = AgentBridgeProofFactory.Serialize(AgentBridgeProofFactory.Create(truth, 1));
+
+        Assert.Contains("\"workshopAssembly\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"state\":\"SubmittingMaterial\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"activeProjectName\":\"Unkiu-class Bow\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"activeMaterialItemId\":5069", json, StringComparison.Ordinal);
+        Assert.Contains("\"completedProjects\":1", json, StringComparison.Ordinal);
+        Assert.Contains("\"diagnosticFilePath\":\"C:\\\\logs\\\\workshop-assembly.jsonl\"", json, StringComparison.Ordinal);
+    }
+
     private static AgentBridgeTruth CreateTruth() => new()
     {
         SchemaVersion = 1,
