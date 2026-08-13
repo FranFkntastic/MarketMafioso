@@ -188,7 +188,10 @@ public sealed class Plugin : IDalamudPlugin
                 ObjectTable,
                 TargetManager,
                 Condition,
-                new ExternalAutomationCoordinator(new DalamudPluginDataStore(PluginInterface), Log)),
+                new ExternalAutomationCoordinator(
+                    new DalamudPluginDataStore(PluginInterface),
+                    Log,
+                    new DalamudPandoraFeatureControl(PluginInterface))),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"),
             entry =>
             {

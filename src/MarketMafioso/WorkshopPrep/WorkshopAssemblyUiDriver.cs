@@ -79,6 +79,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     {
         ClearMaterialRequest();
         externalAutomationCoordinator.RestoreTextAdvance();
+        externalAutomationCoordinator.RestoreWorkshopRequestAutomation();
     }
 
     public unsafe bool IsFabricationStationUiReady(bool hasPendingConfirmation)
@@ -187,6 +188,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         pendingContributionItemId = item.ItemId;
         requestItemSelectionStarted = false;
         requestConfirmed = false;
+        externalAutomationCoordinator.SuppressWorkshopRequestAutomation();
         externalAutomationCoordinator.SuppressTextAdvance();
 
         var addon = (AtkUnitBase*)materialDelivery.AddonAddress;
@@ -587,6 +589,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         requestConfirmed = true;
         onMaterialRequestConfirmed($"confirmed request item window for material {pendingContributionItemId}");
         externalAutomationCoordinator.RestoreTextAdvance();
+        externalAutomationCoordinator.RestoreWorkshopRequestAutomation();
         log.Verbose($"[MarketMafioso] Confirmed request item window for workshop material {pendingContributionItemId}.");
         Diagnostics.Record(
             "request-confirmed",

@@ -12,6 +12,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private readonly IWorkshopAssemblyUiAutomation uiAutomation;
     private readonly string diagnosticsDirectory;
     private readonly Action<WorkshopAssemblyQueueEntry> onProjectRetrieved;
+    private readonly TimeProvider timeProvider;
     private WorkshopAssemblyPlan? activePlan;
     private WorkshopAssemblyDiagnostics diagnostics = WorkshopAssemblyDiagnostics.Disabled;
     private DateTimeOffset continueAt = DateTimeOffset.MinValue;
@@ -28,13 +29,15 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         IPluginLog log,
         IWorkshopAssemblyUiAutomation uiAutomation,
         string diagnosticsDirectory,
-        Action<WorkshopAssemblyQueueEntry>? onProjectRetrieved = null)
+        Action<WorkshopAssemblyQueueEntry>? onProjectRetrieved = null,
+        TimeProvider? timeProvider = null)
     {
         this.framework = framework;
         this.log = log;
         this.uiAutomation = uiAutomation;
         this.diagnosticsDirectory = diagnosticsDirectory;
         this.onProjectRetrieved = onProjectRetrieved ?? (_ => { });
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         Progress = BuildProgress(WorkshopAssemblyRunnerState.Idle, "Workshop assembly has not run.");
     }
 
@@ -55,7 +58,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         diagnostics.Dispose();
         diagnostics = enableDiagnostics
-            ? WorkshopAssemblyDiagnostics.CreateEnabled(diagnosticsDirectory, DateTimeOffset.Now)
+            ? WorkshopAssemblyDiagnostics.CreateEnabled(diagnosticsDirectory, Now)
             : WorkshopAssemblyDiagnostics.Disabled;
         uiAutomation.Diagnostics = diagnostics;
         LastDiagnosticFilePath = diagnostics.FilePath;
@@ -129,7 +132,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     private void OnFrameworkUpdate(IFramework _)
     {
-        if (!IsRunning || activePlan == null || DateTimeOffset.Now < continueAt)
+        if (!IsRunning || activePlan == null || Now < continueAt)
             return;
 
         try
@@ -160,7 +163,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             if (cutsceneResult.RequiresWorkshopReopen)
                 SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, cutsceneResult.Message);
 
-            continueAt = DateTimeOffset.Now + WorkshopAssemblyTiming.UiInteractionDelay;
+            continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
             return;
         }
 
@@ -210,12 +213,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var openResult = uiAutomation.TryOpenFabricationStation();
         if (openResult.ActionTaken)
         {
-            continueAt = DateTimeOffset.Now + WorkshopAssemblyTiming.UiInteractionDelay;
+            continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
             Progress = BuildProgress(WorkshopAssemblyRunnerState.WaitingForFabricationStation, openResult.Message);
             return;
         }
 
-        if (DateTimeOffset.Now - stateStartedAt > WorkshopAssemblyTiming.AddonTimeout)
+        if (Now - stateStartedAt > WorkshopAssemblyTiming.AddonTimeout)
             throw new InvalidOperationException(openResult.Message);
 
         Progress = BuildProgress(
@@ -297,7 +300,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     private void StartContributionLockout(WorkshopAssemblyActionResult result)
     {
-        continueAt = DateTimeOffset.Now + WorkshopAssemblyTiming.PostContributionLockout;
+        continueAt = Now + WorkshopAssemblyTiming.PostContributionLockout;
         diagnostics.Record(
             "lockout-start",
             "Post-contribution lockout started.",
@@ -327,6 +330,15 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             pendingProgressStepsComplete.Value);
         activeMaterialItemId = result.ActiveMaterialItemId;
         RecordActionResult("lockout-wait", entry, result);
+        if (result.RequiresWorkshopReopen)
+        {
+            pendingProgressMaterialItemId = null;
+            pendingProgressStepsComplete = null;
+            activeMaterialItemId = null;
+            SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, result.Message);
+            return;
+        }
+
         if (!result.Success)
         {
             HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.WaitingForContributionLockout, result);
@@ -348,11 +360,14 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         if (result.ActionTaken)
         {
-            SetState(state, result.Message);
+            // One material request spans several callbacks inside the same runner state.
+            // Each real sub-action is fresh progress and earns a fresh bounded wait window.
+            stateStartedAt = Now;
+            Progress = BuildProgress(state, result.Message);
             return;
         }
 
-        if (DateTimeOffset.Now - stateStartedAt > WorkshopAssemblyTiming.AddonTimeout)
+        if (Now - stateStartedAt > WorkshopAssemblyTiming.AddonTimeout)
             throw new InvalidOperationException(result.Message);
 
         Progress = BuildProgress(state, result.Message);
@@ -406,7 +421,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         if (Progress.State != state)
         {
-            stateStartedAt = DateTimeOffset.Now;
+            stateStartedAt = Now;
             diagnostics.Record(
                 "state",
                 $"Entered {state}.",
@@ -477,8 +492,10 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             activeMaterialItemId,
             completedProjects,
             totalProjects,
-            DateTimeOffset.Now);
+            Now);
     }
+
+    private DateTimeOffset Now => timeProvider.GetLocalNow();
 
     public void Dispose()
     {
