@@ -27,10 +27,27 @@ public sealed record AgentBridgeTruth
     public required string? PreparedPlanStatus { get; init; }
     public AgentBridgeCraftAppraisalTruth? CraftAppraisal { get; init; }
     public AgentBridgeWorkshopRestockTruth? WorkshopRestock { get; init; }
+    public AgentBridgeWorkshopAssemblyTruth? WorkshopAssembly { get; init; }
     public required AgentBridgeTradeQueueTruth TradeQueue { get; init; }
     public required AgentBridgeRemoteMarketTruth RemoteMarket { get; init; }
     public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+}
+
+public sealed record AgentBridgeWorkshopAssemblyTruth
+{
+    public required string State { get; init; }
+    public required string Message { get; init; }
+    public required bool HasActiveRun { get; init; }
+    public required bool IsRunning { get; init; }
+    public required bool IsPaused { get; init; }
+    public string? ActiveProjectName { get; init; }
+    public uint? ActiveWorkshopItemId { get; init; }
+    public uint? ActiveMaterialItemId { get; init; }
+    public required int CompletedProjects { get; init; }
+    public required int TotalProjects { get; init; }
+    public required DateTimeOffset UpdatedAt { get; init; }
+    public string? DiagnosticFilePath { get; init; }
 }
 
 public sealed record AgentBridgeTradeQueueTruth

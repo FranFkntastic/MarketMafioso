@@ -413,7 +413,8 @@ public class MainWindow : Window, IDisposable
             workshopAssemblyRunner,
             () => workshopStatus,
             status => workshopStatus = status,
-            StartWorkshopAssembly);
+            StartWorkshopAssembly,
+            AgentReviewRegistry);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
             workshopCatalog,
@@ -619,6 +620,21 @@ public class MainWindow : Window, IDisposable
                     0UL,
                     (sum, receipt) => checked(sum + receipt.SpentGil)) ?? 0,
                 ArmedItemId = workshopRun?.ArmedPurchase?.ItemId,
+            },
+            WorkshopAssembly = new AgentBridgeWorkshopAssemblyTruth
+            {
+                State = workshopAssemblyRunner.Progress.State.ToString(),
+                Message = workshopAssemblyRunner.Progress.Message,
+                HasActiveRun = workshopAssemblyRunner.HasActiveRun,
+                IsRunning = workshopAssemblyRunner.IsRunning,
+                IsPaused = workshopAssemblyRunner.IsPaused,
+                ActiveProjectName = workshopAssemblyRunner.Progress.ActiveProjectName,
+                ActiveWorkshopItemId = workshopAssemblyRunner.Progress.ActiveWorkshopItemId,
+                ActiveMaterialItemId = workshopAssemblyRunner.Progress.ActiveMaterialItemId,
+                CompletedProjects = workshopAssemblyRunner.Progress.CompletedProjects,
+                TotalProjects = workshopAssemblyRunner.Progress.TotalProjects,
+                UpdatedAt = workshopAssemblyRunner.Progress.UpdatedAt,
+                DiagnosticFilePath = workshopAssemblyRunner.LastDiagnosticFilePath,
             },
             TradeQueue = new AgentBridgeTradeQueueTruth
             {
