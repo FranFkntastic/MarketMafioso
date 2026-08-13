@@ -659,6 +659,38 @@ public sealed class TradeQueueRunnerTests
         Assert.Equal(TradeQueueExecutionState.OpeningTrade, runner.Snapshot.State);
     }
 
+    [Fact]
+    public void Runner_SkipsQualityAutomationAndOpensWithHqInventoryWhenDisabled()
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(
+        [
+            new(0, 0, 100, "Cobalt Ingot", true, 2),
+        ]);
+        var clock = new TestClock();
+        var qualityLowering = new FakeQualityLowering();
+        var policy = new TradeQueuePolicyOptions { NormalizeHighQualityItems = false };
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            new TradeQueueTimingOptions(),
+            () => { },
+            io,
+            qualityLowering,
+            coordinator,
+            TestPluginLog.Create(),
+            clock.Read,
+            policy);
+
+        Assert.True(runner.Start().Success);
+        Assert.Equal(TradeQueueExecutionState.OpeningTrade, runner.Snapshot.State);
+        Assert.Equal(0, qualityLowering.BeginCount);
+
+        policy.NormalizeHighQualityItems = true;
+        Assert.Equal(TradeQueueExecutionState.OpeningTrade, runner.Snapshot.State);
+        Assert.Equal(0, qualityLowering.BeginCount);
+    }
+
     private static void AdvanceOpenTradeToVerification(
         TradeQueueRunner runner,
         FakeIo io,
@@ -889,12 +921,15 @@ public sealed class TradeQueueRunnerTests
     {
         private int remainingActiveAdvances = activeAdvances;
 
+        public int BeginCount { get; private set; }
+
         public ItemQualityLoweringAutomationSnapshot Snapshot { get; private set; } =
             new(ItemQualityLoweringAutomationState.Idle, "Idle.", null, 0, false);
 
         public ItemQualityLoweringAutomationSnapshot Begin(
             IReadOnlyList<ItemQualityLoweringRequirement> requested)
         {
+            BeginCount++;
             if (failOnBegin)
             {
                 Snapshot = new(

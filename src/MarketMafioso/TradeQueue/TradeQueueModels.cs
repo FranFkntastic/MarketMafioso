@@ -75,6 +75,12 @@ public sealed class TradeQueueTimingOptions
             MaximumTradeRetryMilliseconds));
 }
 
+[Serializable]
+public sealed class TradeQueuePolicyOptions
+{
+    public bool NormalizeHighQualityItems { get; set; } = true;
+}
+
 public sealed record TradeQueueStartResult(bool Success, string Message);
 
 public enum TradeQueueValidationCode
