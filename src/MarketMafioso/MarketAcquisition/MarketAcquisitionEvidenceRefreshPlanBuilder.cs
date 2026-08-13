@@ -13,7 +13,19 @@ public static class MarketAcquisitionEvidenceRefreshPlanBuilder
     {
         ArgumentNullException.ThrowIfNull(claim);
 
-        var worlds = ResolveWorlds(claim, currentWorld);
+        var worlds = ResolveLegacyWorlds(claim, currentWorld);
+        return Build(claim, worlds, preparedAtUtc);
+    }
+
+    public static MarketAcquisitionPlan Build(
+        MarketAcquisitionClaimView claim,
+        IReadOnlyCollection<string> preparedWorlds,
+        DateTimeOffset preparedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(claim);
+        ArgumentNullException.ThrowIfNull(preparedWorlds);
+
+        var worlds = NormalizeWorlds(preparedWorlds);
         var requestLines = MarketAcquisitionPlanPreparationService.GetPlanLines(claim);
         var planLines = requestLines
             .Select(line => new MarketAcquisitionPlanLine
@@ -68,7 +80,7 @@ public static class MarketAcquisitionEvidenceRefreshPlanBuilder
         };
     }
 
-    private static IReadOnlyList<string> ResolveWorlds(MarketAcquisitionClaimView claim, string currentWorld)
+    private static IReadOnlyList<string> ResolveLegacyWorlds(MarketAcquisitionClaimView claim, string currentWorld)
     {
         IEnumerable<string> worlds = claim.WorldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase)
             ? claim.SelectedWorlds
@@ -77,12 +89,17 @@ public static class MarketAcquisitionEvidenceRefreshPlanBuilder
                 : throw new InvalidOperationException(
                     "Evidence refresh requires a selected-world or current-world request so it cannot expand into an unintended regional sweep.");
 
+        return NormalizeWorlds(worlds);
+    }
+
+    private static IReadOnlyList<string> NormalizeWorlds(IEnumerable<string> worlds)
+    {
         var normalized = worlds
             .Where(world => !string.IsNullOrWhiteSpace(world))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (normalized.Count == 0)
-            throw new InvalidOperationException("Evidence refresh requires at least one target world.");
+            throw new InvalidOperationException("Evidence refresh requires at least one prepared target world.");
 
         return normalized;
     }

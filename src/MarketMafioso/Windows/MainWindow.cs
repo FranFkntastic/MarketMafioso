@@ -1882,12 +1882,9 @@ public class MainWindow : Window, IDisposable
 
         try
         {
-            var request = acquisitionWorkspace.ResolveExecutionRequest(acquisitionRequestBuilder.CurrentDocument);
-            if (request.WorldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            return request.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) &&
-                   playerState.CurrentWorld.IsValid;
+            _ = acquisitionWorkspace.ResolveExecutionRequest(acquisitionRequestBuilder.CurrentDocument);
+            return acquisitionWorkspace.PreparedPlan is { WorldBatches.Count: > 0 } &&
+                   !acquisitionWorkspace.IsPreparedPlanStale();
         }
         catch
         {
@@ -1919,8 +1916,12 @@ public class MainWindow : Window, IDisposable
     {
         return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, (request, _) =>
         {
-            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
-            var plan = MarketAcquisitionEvidenceRefreshPlanBuilder.Build(request, currentWorld, DateTimeOffset.UtcNow);
+            var preparedPlan = acquisitionWorkspace.RequirePreparedPlan(
+                "Prepare a plan before refreshing its market evidence.");
+            var plan = MarketAcquisitionEvidenceRefreshPlanBuilder.Build(
+                request,
+                preparedPlan.WorldBatches.Select(batch => batch.WorldName).ToArray(),
+                DateTimeOffset.UtcNow);
             var diagnosticsLevel = MarketAcquisitionRouteDiagnosticsPolicy.Resolve(
                 config.MarketAcquisitionRouteDiagnostics);
             routeEngine.StartEvidenceRefresh(
