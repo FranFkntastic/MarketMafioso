@@ -366,7 +366,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             selectedLineInspectorRequested = false;
         }
         RegisterLastControl(
-            $"acquisition.workbench.line.{line.ItemId}.select",
+            MarketAcquisitionWorkbenchReviewedControlIds.SelectLine(document.Lines, index),
             $"Select {FormatLineItemName(line)} in the Workbench",
             enabled: true,
             selected: isSelected,
