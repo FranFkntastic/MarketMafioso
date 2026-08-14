@@ -43,9 +43,11 @@ public static class MarketAcquisitionRequestDocumentValidator
             foreach (var duplicate in document.Lines
                          .Where(line => line.ItemId != 0)
                          .GroupBy(line => line.ItemId)
-                         .Where(group => group.Count() > 1))
+                         .Where(group => group.Count() > 1 &&
+                                         !MarketAcquisitionLineIdentityPolicy.AreQualityDomainsDisjoint(
+                                             group.Select(line => line.HqPolicy))))
             {
-                errors.Add($"{duplicate.First().ItemName} appears more than once; edit the existing line instead.");
+                errors.Add($"{duplicate.First().ItemName} has overlapping acquisition lines; use one NQ-only and one HQ-only line or edit the existing line.");
             }
 
             for (var index = 0; index < document.Lines.Count; index++)

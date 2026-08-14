@@ -64,7 +64,7 @@ internal static class MarketAcquisitionRequestPolicy
             throw new ArgumentException("At least one acquisition line is required.", nameof(request));
         ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
         ValidateSelectedWorlds(request.WorldMode, request.SelectedWorlds, nameof(request));
-        ValidateUniqueItemIds(request.Lines, nameof(request));
+        ValidateUniqueLineIdentities(request.Lines, nameof(request));
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
@@ -99,7 +99,7 @@ internal static class MarketAcquisitionRequestPolicy
             throw new ArgumentException("At least one acquisition line is required.", nameof(request));
         ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
         ValidateSelectedWorlds(request.WorldMode, request.SelectedWorlds, nameof(request));
-        ValidateUniqueItemIds(request.Lines, nameof(request));
+        ValidateUniqueLineIdentities(request.Lines, nameof(request));
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
@@ -127,16 +127,18 @@ internal static class MarketAcquisitionRequestPolicy
         }
     }
 
-    private static void ValidateUniqueItemIds(
+    private static void ValidateUniqueLineIdentities(
         IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> lines,
         string argumentName)
     {
         var duplicate = lines
             .Where(line => line.ItemId != 0)
             .GroupBy(line => line.ItemId)
-            .FirstOrDefault(group => group.Count() > 1);
+            .FirstOrDefault(group => group.Count() > 1 &&
+                                     !MarketAcquisitionLineIdentityPolicy.AreQualityDomainsDisjoint(
+                                         group.Select(line => line.HqPolicy)));
         if (duplicate is not null)
-            throw new ArgumentException($"Item {duplicate.Key} appears more than once.", argumentName);
+            throw new ArgumentException($"Item {duplicate.Key} has overlapping acquisition lines.", argumentName);
     }
 
     public static string NormalizeSupportedRegion(string region, string argumentName)
