@@ -9,6 +9,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
+using Franthropy.Observations.V1;
 using MarketMafioso.Automation.Items;
 using MarketMafioso.Contracts.Inventory;
 using MarketMafioso.Quartermaster;
@@ -24,6 +25,7 @@ public class HttpReporter : IDisposable
     private readonly IPluginLog log;
     private readonly IChatGui chatGui;
     private readonly InventoryScanner scanner;
+    private readonly FranthropyRetainerReportSource retainerReports;
     private readonly QuartermasterIpcClient quartermaster;
     private int disposeStarted;
     private InventoryReport? lastAcknowledgedReport;
@@ -41,7 +43,7 @@ public class HttpReporter : IDisposable
     public string? LastPayload { get; private set; }
     public string? LastDashboardUrl { get; private set; }
     public string? LastDashboardReportUrl { get; private set; }
-    public string LastRetainerSourceStatus { get; private set; } = "Quartermaster has not been queried.";
+    public string LastRetainerSourceStatus { get; private set; } = "Franthropy retainer evidence has not been queried.";
 
     public HttpReporter(
         Configuration config,
@@ -49,6 +51,7 @@ public class HttpReporter : IDisposable
         IPluginLog log,
         IChatGui chatGui,
         InventoryScanner scanner,
+        FranthropyRetainerReportSource retainerReports,
         QuartermasterIpcClient quartermaster)
     {
         this.config = config;
@@ -56,6 +59,7 @@ public class HttpReporter : IDisposable
         this.log = log;
         this.chatGui = chatGui;
         this.scanner = scanner;
+        this.retainerReports = retainerReports ?? throw new ArgumentNullException(nameof(retainerReports));
         this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
     }
 
@@ -293,7 +297,7 @@ public class HttpReporter : IDisposable
         if (lastAcknowledgedReport is not null && retainerEvidenceUnavailable)
         {
             log.Debug(
-                "[MarketMafioso] Quartermaster evidence is unavailable; preserving the last acknowledged retainer state in the upload baseline.");
+                "[MarketMafioso] Franthropy retainer evidence is unavailable; preserving the last acknowledged retainer state in the upload baseline.");
         }
 
         return report;
@@ -324,31 +328,29 @@ public class HttpReporter : IDisposable
         var playerCapture = scanner.CapturePlayerInventory(config);
         var retainers = new List<RetainerReport>();
         QuartermasterSnapshot? quartermasterSnapshotForReport = null;
-        if (quartermaster.TryGetSnapshot(out var quartermasterSnapshot, out var quartermasterError))
+        if (ownerScope.LocalContentId is > 0 && ownerScope.HomeWorldId is > 0 &&
+            retainerReports.TryGetReports(
+                new ObservationOwner(ownerScope.LocalContentId.Value, ownerScope.HomeWorldId.Value),
+                ownerScope.CharacterName,
+                ownerScope.HomeWorldName,
+                config.IncludeCharacterInfo,
+                config.IncludeItemNames,
+                scanner.ResolveItemMetadata,
+                out retainers))
         {
-            if (ownerScope.Matches(quartermasterSnapshot!.Owner))
-            {
-                lastCaptureHasRetainerEvidence = true;
-                quartermasterSnapshotForReport = quartermasterSnapshot;
-                retainers = BuildRetainerReports(
-                    quartermasterSnapshot,
-                    ownerScope,
-                    config.IncludeCharacterInfo,
-                    scanner.ResolveItemMetadata,
-                    config.IncludeItemNames);
-                LastRetainerSourceStatus =
-                    $"Quartermaster supplied {retainers.Count} owner-scoped retainer(s).";
-            }
-            else
-            {
-                LastRetainerSourceStatus =
-                    "Quartermaster snapshot owner does not match the current character; retainer inventory omitted.";
-            }
+            lastCaptureHasRetainerEvidence = true;
+            LastRetainerSourceStatus = $"Franthropy supplied {retainers.Count} owner-scoped retainer(s).";
         }
         else
         {
             LastRetainerSourceStatus =
-                $"Quartermaster unavailable; report contains player inventory only. {quartermasterError}";
+                "Franthropy has no current owner-scoped retainer roster; the last acknowledged retainer state is preserved.";
+        }
+
+        if (quartermaster.TryGetSnapshot(out var quartermasterSnapshot, out _) &&
+            ownerScope.Matches(quartermasterSnapshot!.Owner))
+        {
+            quartermasterSnapshotForReport = quartermasterSnapshot;
         }
 
         var generatedAtUtc = DateTime.UtcNow.ToString("o");

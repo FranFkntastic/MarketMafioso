@@ -15,6 +15,7 @@ using ECommons;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Franthropy.Dalamud.Observations;
 using Franthropy.Dalamud.Runtime;
+using Franthropy.Observations.V1;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Runtime;
@@ -63,6 +64,7 @@ public sealed class Plugin : IDalamudPlugin
     public Configuration Configuration { get; init; }
 
     private readonly InventoryScanner scanner;
+    private readonly FranthropyRetainerReportSource retainerReports;
     private readonly HttpReporter reporter;
     private readonly InventoryDeliveryCoalescer inventoryDelivery;
     private readonly RetainerSaleChatObserver retainerSaleChatObserver;
@@ -70,7 +72,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly DalamudMarketBoardBrowseObserver marketBoardBrowseObserver;
     private readonly RetainerListingRefreshCoordinator retainerListingRefresh;
     private readonly RetainerListingRefreshReadinessGate retainerListingRefreshReadiness = new();
-    private readonly FranthropyRetainerListingRefreshSource? sharedObservationListings;
+    private readonly FranthropyRetainerListingRefreshSource sharedObservationListings;
+    private readonly DalamudSharedObservationClient sharedObservationClient;
     private readonly DalamudSharedObservationHost? sharedObservationHost;
     private readonly RemoteMarketAccessProbe remoteMarketAccessProbe;
     private readonly RemoteMarketProbeWindow remoteMarketProbeWindow;
@@ -108,8 +111,30 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));
         scanner = new InventoryScanner(DataManager, Log);
         quartermaster = new QuartermasterIpcClient(new DalamudQuartermasterIpcAdapter(PluginInterface));
+        sharedObservationClient = new DalamudSharedObservationClient(new DalamudSharedObservationClientOptions
+        {
+            PluginConfigDirectory = PluginInterface.GetPluginConfigDirectory(),
+            CurrentOwner = () => PlayerState.ContentId == 0 || !PlayerState.HomeWorld.IsValid
+                ? null
+                : new ObservationOwner(PlayerState.ContentId, PlayerState.HomeWorld.Value.RowId),
+            Diagnostic = (message, exception) =>
+            {
+                if (exception is null)
+                    Log.Warning("[MarketMafioso] {Message}", message);
+                else
+                    Log.Error(exception, "[MarketMafioso] {Message}", message);
+            },
+        });
+        retainerReports = new FranthropyRetainerReportSource(sharedObservationClient);
         standaloneSquire = new StandaloneSquireIpcClient(new DalamudStandaloneSquireIpcAdapter(PluginInterface));
-        reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner, quartermaster);
+        reporter = new HttpReporter(
+            Configuration,
+            PlayerState,
+            Log,
+            ChatGui,
+            scanner,
+            retainerReports,
+            quartermaster);
         inventoryDelivery = new InventoryDeliveryCoalescer(
             TimeSpan.FromMilliseconds(500),
             token => Framework.RunOnTick(
@@ -142,27 +167,17 @@ public sealed class Plugin : IDalamudPlugin
             Framework,
             GameGui,
             Log);
-        IRetainerListingRefreshSource listingRefreshSource;
-        if (Configuration.UseSharedObservationListings)
-        {
-            sharedObservationListings = new FranthropyRetainerListingRefreshSource(
-                PluginInterface.GetPluginConfigDirectory(),
-                PlayerState);
-            listingRefreshSource = sharedObservationListings;
-        }
-        else
-        {
-            listingRefreshSource = new QuartermasterRetainerListingRefreshSource(quartermaster, PlayerState);
-        }
+        sharedObservationListings = new FranthropyRetainerListingRefreshSource(
+            PluginInterface.GetPluginConfigDirectory(),
+            PlayerState);
         retainerListingRefresh = new RetainerListingRefreshCoordinator(
             Configuration,
-            listingRefreshSource,
+            sharedObservationListings,
             marketBoardBrowseObserver,
             Configuration.Save,
             message => ChatGui.PrintError($"[MMF] {message}"),
             message => Log.Information("[MarketMafioso] {Message}", message));
-        if (sharedObservationListings is not null)
-            sharedObservationListings.Changed += retainerListingRefresh.NotifyListingCaptureChanged;
+        sharedObservationListings.Changed += retainerListingRefresh.NotifyListingCaptureChanged;
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         remoteMarketAccessProbe = new RemoteMarketAccessProbe(
             Configuration,
@@ -233,6 +248,7 @@ public sealed class Plugin : IDalamudPlugin
             Configuration,
             reporter,
             scanner,
+            retainerReports,
             quartermaster,
             standaloneSquire,
             workshopCatalog,
@@ -331,9 +347,11 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi += OpenConfigUi;
         Framework.Update += OnFrameworkUpdate;
         quartermaster.Changed += OnQuartermasterChanged;
+        sharedObservationClient.RetainersChanged += OnSharedRetainersChanged;
         GameInventory.InventoryChanged += OnInventoryChanged;
 
         StartTimer();
+        sharedObservationClient.Start();
         Log.Information("[MarketMafioso] Plugin loaded. Use /mmf to open settings.");
 
         try
@@ -784,6 +802,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= OpenConfigUi;
         Framework.Update -= OnFrameworkUpdate;
         quartermaster.Changed -= OnQuartermasterChanged;
+        sharedObservationClient.RetainersChanged -= OnSharedRetainersChanged;
         GameInventory.InventoryChanged -= OnInventoryChanged;
         inventoryDelivery.Dispose();
 
@@ -803,11 +822,9 @@ public sealed class Plugin : IDalamudPlugin
         marketBoardBrowseObserver.Dispose();
         retainerHistoryObserver.Dispose();
         retainerSaleChatObserver.Dispose();
-        if (sharedObservationListings is not null)
-        {
-            sharedObservationListings.Changed -= retainerListingRefresh.NotifyListingCaptureChanged;
-            sharedObservationListings.Dispose();
-        }
+        sharedObservationListings.Changed -= retainerListingRefresh.NotifyListingCaptureChanged;
+        sharedObservationListings.Dispose();
+        sharedObservationClient.DisposeAsync().AsTask().GetAwaiter().GetResult();
         sharedObservationHost?.Dispose();
         quartermaster.Dispose();
         ECommonsMain.Dispose();
@@ -817,12 +834,11 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnQuartermasterChanged(QuartermasterChanged changed)
     {
-        if (sharedObservationListings is null &&
-            string.Equals(changed.Kind, "retainer_listings", StringComparison.Ordinal))
-            retainerListingRefresh.NotifyListingCaptureChanged();
-
         ScheduleInventoryReport($"Quartermaster revision {changed.Revision}");
     }
+
+    private void OnSharedRetainersChanged(object? sender, SharedRetainerObservationSnapshot snapshot) =>
+        ScheduleInventoryReport($"Franthropy retainer revision {snapshot.Revision}");
 
     private void OnInventoryChanged(IReadOnlyCollection<InventoryEventArgs> events)
     {
