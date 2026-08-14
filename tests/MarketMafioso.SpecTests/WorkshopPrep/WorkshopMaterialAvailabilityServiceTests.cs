@@ -157,6 +157,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         using var client = new QuartermasterIpcClient(adapter);
 
         Assert.True(client.TryGetSnapshot(out var advertised, out var advertisedError), advertisedError);
+        Assert.True(advertised!.HasStowageEvidence);
         var plan = Assert.Single(advertised!.StowagePlans);
         var rule = Assert.Single(plan.Rules);
         Assert.Equal("General", plan.Name);
@@ -182,6 +183,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         adapter.CapabilitiesJson = CapabilitiesJson();
         using var unadvertisedClient = new QuartermasterIpcClient(adapter);
         Assert.True(unadvertisedClient.TryGetSnapshot(out var unadvertised, out var unadvertisedError), unadvertisedError);
+        Assert.False(unadvertised!.HasStowageEvidence);
         Assert.Empty(unadvertised!.StowagePlans);
         Assert.Null(HttpReporter.BuildStowageReport(unadvertised, includeItemNames: true));
 
@@ -192,6 +194,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         };
         using var malformedClient = new QuartermasterIpcClient(malformedAdapter);
         Assert.True(malformedClient.TryGetSnapshot(out var coreSnapshot, out var coreError), coreError);
+        Assert.False(coreSnapshot!.HasStowageEvidence);
         Assert.Empty(coreSnapshot!.StowagePlans);
         Assert.Equal((uint)25, Assert.Single(Assert.Single(coreSnapshot.Retainers).Bags).Items.Single().Quantity);
         Assert.Contains("Optional Stowage Plans data was ignored", malformedClient.LastStatus, StringComparison.Ordinal);

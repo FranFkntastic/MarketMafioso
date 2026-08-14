@@ -114,6 +114,31 @@ public sealed class HttpReporterEvidenceTests
         Assert.Same(management, merged.RetainerManagement);
     }
 
+    [Fact]
+    public void PartialStorageObservation_ReplacesObservedBagAndPreservesOthers()
+    {
+        var acknowledged = new RetainerReport
+        {
+            RetainerId = 10,
+            Bags = [Bag("RetainerPage1", 1), Bag("RetainerPage2", 2)],
+        };
+        var partial = new RetainerReport
+        {
+            RetainerId = 10,
+            Bags = [Bag("RetainerPage1", 3)],
+            Storage = new StorageSourceEvidence
+            {
+                RequestedSources = ["RetainerPage1", "RetainerPage2"],
+                ObservedSources = ["RetainerPage1"],
+            },
+        };
+
+        var merged = Assert.Single(HttpReporter.PreserveMissingRetainerFields([partial], [acknowledged]));
+
+        Assert.Equal((uint)3, merged.Bags.Single(bag => bag.BagName == "RetainerPage1").Items[0].ItemId);
+        Assert.Equal((uint)2, merged.Bags.Single(bag => bag.BagName == "RetainerPage2").Items[0].ItemId);
+    }
+
     private static InventoryBag Bag(string name, uint itemId) => new()
     {
         BagName = name,

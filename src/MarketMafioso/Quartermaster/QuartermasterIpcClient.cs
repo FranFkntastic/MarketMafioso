@@ -256,7 +256,7 @@ public sealed class QuartermasterIpcClient : IDisposable
                 return false;
             }
             if (!before!.Capabilities.Contains(StowagePlansCapability, StringComparer.Ordinal))
-                candidate = candidate! with { StowagePlans = [] };
+                candidate = candidate! with { StowagePlans = [], HasStowageEvidence = false };
 
             if (!TryGetCapabilities(out var after, out error))
                 return false;
@@ -768,10 +768,13 @@ public sealed class QuartermasterIpcClient : IDisposable
         }
 
         var stowagePlans = ImmutableArray<QuartermasterStowagePlanSnapshot>.Empty;
+        var hasStowageEvidence = false;
         if (wire.StowagePlans is { ValueKind: not JsonValueKind.Null and not JsonValueKind.Undefined } stowageElement)
         {
             if (!TryParseStowagePlans(stowageElement, out stowagePlans, out var stowageError))
                 warning = $"Optional Stowage Plans data was ignored: {stowageError}";
+            else
+                hasStowageEvidence = true;
         }
 
         QuartermasterRetainerListingCapture? latestListingCapture = null;
@@ -814,6 +817,7 @@ public sealed class QuartermasterIpcClient : IDisposable
             PlayerRequestedSources = NormalizeSources(wire.PlayerStorage?.RequestedSources),
             PlayerObservedSources = NormalizeSources(wire.PlayerStorage?.ObservedSources),
             StowagePlans = stowagePlans,
+            HasStowageEvidence = hasStowageEvidence,
             LatestRetainerListingCapture = latestListingCapture,
         };
         return true;

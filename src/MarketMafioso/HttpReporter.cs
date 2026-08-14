@@ -354,7 +354,7 @@ public class HttpReporter : IDisposable
             ownerScope.Matches(quartermasterSnapshot!.Owner))
         {
             quartermasterSnapshotForReport = quartermasterSnapshot;
-            lastCaptureHasManagementEvidence = true;
+            lastCaptureHasManagementEvidence = quartermasterSnapshot.HasStowageEvidence;
         }
 
         var generatedAtUtc = DateTime.UtcNow.ToString("o");
@@ -585,8 +585,15 @@ public class HttpReporter : IDisposable
         {
             if (!previous.TryGetValue(retainer.RetainerId, out var prior))
                 return retainer;
-            if (retainer.Storage.RequestedSources.Count == 0 && retainer.Storage.ObservedSources.Count == 0)
-                retainer = retainer with { Bags = prior.Bags, Storage = prior.Storage };
+            var observedSources = retainer.Storage.ObservedSources.ToHashSet(StringComparer.Ordinal);
+            var bags = retainer.Bags.ToDictionary(BagKey, StringComparer.Ordinal);
+            foreach (var priorBag in prior.Bags)
+            {
+                var source = priorBag.Location ?? priorBag.BagName;
+                if (!observedSources.Contains(source))
+                    bags.TryAdd(BagKey(priorBag), priorBag);
+            }
+            retainer = retainer with { Bags = bags.Values.OrderBy(bag => bag.BagName, StringComparer.Ordinal).ToList() };
             if (retainer.GilObservedAtUtc is null)
                 retainer = retainer with { Gil = prior.Gil, GilObservedAtUtc = prior.GilObservedAtUtc };
             if (retainer.ListingsObservedAtUtc is null)
@@ -598,6 +605,8 @@ public class HttpReporter : IDisposable
             return retainer;
         }).ToList();
     }
+
+    private static string BagKey(InventoryBag bag) => $"{bag.BagName}\0{bag.Location}";
 
     public static QuartermasterStowageReport? BuildStowageReport(
         QuartermasterSnapshot snapshot,
