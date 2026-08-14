@@ -31,6 +31,7 @@ public class HttpReporter : IDisposable
     private InventoryReport? lastAcknowledgedReport;
     private string? lastAcknowledgedSnapshotId;
     private bool lastCaptureHasRetainerEvidence;
+    private bool lastCaptureHasManagementEvidence;
 
     private static readonly JsonSerializerOptions SerialiserOptions = new()
     {
@@ -249,7 +250,8 @@ public class HttpReporter : IDisposable
     internal static InventoryReport PreserveUnavailableEvidence(
         InventoryReport capture,
         InventoryReport? acknowledged,
-        bool captureHasRetainerEvidence)
+        bool captureHasRetainerEvidence,
+        bool captureHasManagementEvidence = false)
     {
         ArgumentNullException.ThrowIfNull(capture);
         if (acknowledged is null)
@@ -271,12 +273,10 @@ public class HttpReporter : IDisposable
 
         if (!captureHasRetainerEvidence)
         {
-            capture = capture with
-            {
-                Retainers = acknowledged.Retainers,
-                RetainerManagement = acknowledged.RetainerManagement,
-            };
+            capture = capture with { Retainers = acknowledged.Retainers };
         }
+        if (!captureHasManagementEvidence)
+            capture = capture with { RetainerManagement = acknowledged.RetainerManagement };
 
         return capture;
     }
@@ -288,7 +288,8 @@ public class HttpReporter : IDisposable
         var report = PreserveUnavailableEvidence(
             capture,
             lastAcknowledgedReport,
-            lastCaptureHasRetainerEvidence);
+            lastCaptureHasRetainerEvidence,
+            lastCaptureHasManagementEvidence);
         if (lastAcknowledgedReport is not null && playerEvidenceUnavailable)
         {
             log.Debug(
@@ -318,6 +319,7 @@ public class HttpReporter : IDisposable
     private InventoryReport BuildReport()
     {
         lastCaptureHasRetainerEvidence = false;
+        lastCaptureHasManagementEvidence = false;
         var ownerScope = new QuartermasterOwnerScope(
             playerState.ContentId == 0 ? null : playerState.ContentId,
             playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.RowId : null,
@@ -339,6 +341,7 @@ public class HttpReporter : IDisposable
                 out retainers))
         {
             lastCaptureHasRetainerEvidence = true;
+            retainers = PreserveMissingRetainerFields(retainers, lastAcknowledgedReport?.Retainers);
             LastRetainerSourceStatus = $"Franthropy supplied {retainers.Count} owner-scoped retainer(s).";
         }
         else
@@ -351,6 +354,7 @@ public class HttpReporter : IDisposable
             ownerScope.Matches(quartermasterSnapshot!.Owner))
         {
             quartermasterSnapshotForReport = quartermasterSnapshot;
+            lastCaptureHasManagementEvidence = true;
         }
 
         var generatedAtUtc = DateTime.UtcNow.ToString("o");
@@ -568,6 +572,31 @@ public class HttpReporter : IDisposable
                     .ToList(),
             })
             .ToList();
+    }
+
+    internal static List<RetainerReport> PreserveMissingRetainerFields(
+        IReadOnlyList<RetainerReport> current,
+        IReadOnlyList<RetainerReport>? acknowledged)
+    {
+        if (acknowledged is null || acknowledged.Count == 0)
+            return current.ToList();
+        var previous = acknowledged.ToDictionary(retainer => retainer.RetainerId);
+        return current.Select(retainer =>
+        {
+            if (!previous.TryGetValue(retainer.RetainerId, out var prior))
+                return retainer;
+            if (retainer.Storage.RequestedSources.Count == 0 && retainer.Storage.ObservedSources.Count == 0)
+                retainer = retainer with { Bags = prior.Bags, Storage = prior.Storage };
+            if (retainer.GilObservedAtUtc is null)
+                retainer = retainer with { Gil = prior.Gil, GilObservedAtUtc = prior.GilObservedAtUtc };
+            if (retainer.ListingsObservedAtUtc is null)
+                retainer = retainer with
+                {
+                    MarketListings = prior.MarketListings,
+                    ListingsObservedAtUtc = prior.ListingsObservedAtUtc,
+                };
+            return retainer;
+        }).ToList();
     }
 
     public static QuartermasterStowageReport? BuildStowageReport(

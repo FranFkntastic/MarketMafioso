@@ -69,6 +69,51 @@ public sealed class HttpReporterEvidenceTests
         Assert.False(HttpReporter.IsTransientReceiverStatus(System.Net.HttpStatusCode.InternalServerError));
     }
 
+    [Fact]
+    public void PartialRetainerObservation_PreservesAcknowledgedFields()
+    {
+        var acknowledged = Retainer(10, 2) with
+        {
+            Gil = 123,
+            GilObservedAtUtc = "2026-08-14T12:00:00Z",
+            ListingsObservedAtUtc = "2026-08-14T12:00:00Z",
+            MarketListings = [new RetainerMarketListing { ItemId = 9, Quantity = 1 }],
+            Storage = new StorageSourceEvidence
+            {
+                RequestedSources = ["RetainerPage1"],
+                ObservedSources = ["RetainerPage1"],
+            },
+        };
+        var rosterOnly = new RetainerReport { RetainerId = 10, RetainerName = "Alpha" };
+
+        var merged = Assert.Single(HttpReporter.PreserveMissingRetainerFields([rosterOnly], [acknowledged]));
+
+        Assert.Equal((uint)2, merged.Bags[0].Items[0].ItemId);
+        Assert.Equal((ulong)123, merged.Gil);
+        Assert.Equal((uint)9, merged.MarketListings[0].ItemId);
+    }
+
+    [Fact]
+    public void ManagementAvailability_IsIndependentFromRetainerAvailability()
+    {
+        var management = new QuartermasterStowageReport { ProviderInstanceId = "rq" };
+        var acknowledged = new InventoryReport
+        {
+            Retainers = [Retainer(10, 2)],
+            RetainerManagement = management,
+        };
+        var current = new InventoryReport { Retainers = [Retainer(10, 4)] };
+
+        var merged = HttpReporter.PreserveUnavailableEvidence(
+            current,
+            acknowledged,
+            captureHasRetainerEvidence: true,
+            captureHasManagementEvidence: false);
+
+        Assert.Equal((uint)4, merged.Retainers[0].Bags[0].Items[0].ItemId);
+        Assert.Same(management, merged.RetainerManagement);
+    }
+
     private static InventoryBag Bag(string name, uint itemId) => new()
     {
         BagName = name,
