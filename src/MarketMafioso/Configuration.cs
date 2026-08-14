@@ -72,7 +72,6 @@ public class Configuration : IPluginConfiguration
     public int AutoSendIntervalMinutes { get; set; } = 5;
     public bool EnableMarketDiagnostics { get; set; } = false;
     public bool EnableRetainerListingRefresh { get; set; } = false;
-    public bool UseSharedObservationListings { get; set; } = false;
     public PersistedRetainerListingRefreshState RetainerListingRefresh { get; set; } = new();
 
     [JsonIgnore]

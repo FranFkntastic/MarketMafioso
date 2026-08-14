@@ -44,6 +44,7 @@ public class MainWindow : Window, IDisposable
     private readonly Configuration config;
     private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
+    private readonly FranthropyRetainerReportSource retainerReports;
     private readonly QuartermasterIpcClient quartermaster;
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly WorkshopProjectCatalog workshopCatalog;
@@ -116,6 +117,7 @@ public class MainWindow : Window, IDisposable
         Configuration config,
         HttpReporter reporter,
         InventoryScanner scanner,
+        FranthropyRetainerReportSource retainerReports,
         QuartermasterIpcClient quartermaster,
         StandaloneSquireIpcClient standaloneSquire,
         WorkshopProjectCatalog workshopCatalog,
@@ -140,6 +142,7 @@ public class MainWindow : Window, IDisposable
         this.config = config;
         this.reporter = reporter;
         this.scanner = scanner;
+        this.retainerReports = retainerReports;
         this.quartermaster = quartermaster;
         this.standaloneSquire = standaloneSquire;
         this.workshopCatalog = workshopCatalog;
@@ -2345,12 +2348,23 @@ public class MainWindow : Window, IDisposable
 
         var requirements = workshopCatalog.BuildRequirements(config.WorkshopPrepQueue);
         var playerInventory = scanner.CountWorkshopUsableInventory();
-        quartermaster.TryGetSnapshot(out var snapshot, out _);
-        return WorkshopMaterialAvailabilityService.BuildAvailability(
+        var owner = GetCurrentQuartermasterOwnerScope();
+        var retainers = new List<MarketMafioso.Contracts.Inventory.RetainerReport>();
+        if (owner.LocalContentId is > 0 && owner.HomeWorldId is > 0)
+        {
+            retainerReports.TryGetReports(
+                new Franthropy.Observations.V1.ObservationOwner(owner.LocalContentId.Value, owner.HomeWorldId.Value),
+                owner.CharacterName,
+                owner.HomeWorldName,
+                includeOwnerFields: false,
+                config.IncludeItemNames,
+                scanner.ResolveItemMetadata,
+                out retainers);
+        }
+        return WorkshopMaterialAvailabilityService.BuildAvailabilityFromRetainers(
             requirements,
             playerInventory,
-            snapshot,
-            GetCurrentQuartermasterOwnerScope());
+            retainers);
     }
 
     private Vector4 GetWorkshopStatusColor()
