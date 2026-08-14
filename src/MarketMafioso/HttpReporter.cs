@@ -468,7 +468,10 @@ public class HttpReporter : IDisposable
     {
         lastAcknowledgedReport = report;
         lastAcknowledgedSnapshotId = response.ReportId;
-        lastAcknowledgedOwner = lastCaptureOwner;
+        // A transient login/loading frame can lack stable owner identity while the report
+        // intentionally preserves the prior baseline. Keep that baseline bound to its known
+        // owner so the next available, different identity still forces reconciliation.
+        lastAcknowledgedOwner = lastCaptureOwner ?? lastAcknowledgedOwner;
         LastDashboardUrl = ResolveDashboardUrlForDisplay(response.DashboardUrl, config.ServerUrl);
         LastDashboardReportUrl = response.ResolveReportUrl(config.ServerUrl);
     }
