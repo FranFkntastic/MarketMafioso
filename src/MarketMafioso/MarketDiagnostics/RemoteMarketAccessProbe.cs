@@ -16,7 +16,7 @@ namespace MarketMafioso.MarketDiagnostics;
 internal sealed class RemoteMarketAccessProbe : IDisposable
 {
     private static readonly TimeSpan ProbeWindow = TimeSpan.FromSeconds(120);
-    private const string ApprovedGameVersion = "2026.08.05.0000.0000";
+    private const string ApprovedGameVersion = "2026.08.11.0000.0000";
     private const string PatchContractId = "mmf.remote-market-direct-purchase-probe";
 
     private readonly Configuration configuration;
