@@ -168,7 +168,7 @@ public sealed class Plugin : IDalamudPlugin
             GameGui,
             Log);
         sharedObservationListings = new FranthropyRetainerListingRefreshSource(
-            PluginInterface.GetPluginConfigDirectory(),
+            sharedObservationClient,
             PlayerState);
         retainerListingRefresh = new RetainerListingRefreshCoordinator(
             Configuration,
@@ -834,8 +834,16 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnQuartermasterChanged(QuartermasterChanged changed)
     {
+        if (!ShouldScheduleInventoryReport(changed.Kind))
+            return;
         ScheduleInventoryReport($"Quartermaster revision {changed.Revision}");
     }
+
+    internal static bool ShouldScheduleInventoryReport(string? kind) => kind switch
+    {
+        "periodic" or "opened" or QuartermasterIpcClient.OperationChangedKind or QuartermasterIpcClient.RetainerListingsChangedKind => false,
+        _ => true,
+    };
 
     private void OnSharedRetainersChanged(object? sender, SharedRetainerObservationSnapshot snapshot) =>
         ScheduleInventoryReport($"Franthropy retainer revision {snapshot.Revision}");

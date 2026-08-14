@@ -67,21 +67,6 @@ public sealed record QuartermasterRetainerSnapshot(
     public DateTimeOffset? ListingsObservedAtUtc { get; init; }
 }
 
-public sealed record QuartermasterRetainerListingCapture(
-    string Semantics,
-    bool ComparisonAvailable,
-    string CaptureId,
-    ulong RetainerId,
-    DateTimeOffset CapturedAtUtc,
-    ImmutableArray<QuartermasterRetainerListingCaptureItem> Items)
-{
-    public const string ChangedListingsV1 = "changed-listings/v1";
-}
-
-public sealed record QuartermasterRetainerListingCaptureItem(
-    uint ItemId,
-    string? ItemName);
-
 public sealed record QuartermasterSnapshot(
     string ProviderInstanceId,
     long Revision,
@@ -93,7 +78,6 @@ public sealed record QuartermasterSnapshot(
     public ImmutableArray<string> PlayerObservedSources { get; init; } = [];
     public ImmutableArray<QuartermasterStowagePlanSnapshot> StowagePlans { get; init; } = [];
     public bool HasStowageEvidence { get; init; }
-    public QuartermasterRetainerListingCapture? LatestRetainerListingCapture { get; init; }
 }
 
 public sealed record QuartermasterStowagePlanSnapshot(
@@ -230,23 +214,6 @@ internal sealed class QuartermasterSnapshotWire
     public QuartermasterStorageSourcesWire? PlayerStorage { get; init; }
     public List<QuartermasterRetainerWire>? Retainers { get; init; }
     public JsonElement? StowagePlans { get; init; }
-    public QuartermasterRetainerListingCaptureWire? LatestRetainerListingCapture { get; init; }
-}
-
-internal sealed class QuartermasterRetainerListingCaptureWire
-{
-    public string? Semantics { get; init; }
-    public bool ComparisonAvailable { get; init; }
-    public string? CaptureId { get; init; }
-    public ulong RetainerId { get; init; }
-    public string? CapturedAtUtc { get; init; }
-    public List<QuartermasterRetainerListingCaptureItemWire>? Items { get; init; }
-}
-
-internal sealed class QuartermasterRetainerListingCaptureItemWire
-{
-    public uint ItemId { get; init; }
-    public string? ItemName { get; init; }
 }
 
 internal sealed class QuartermasterStowageEnvelopeWire

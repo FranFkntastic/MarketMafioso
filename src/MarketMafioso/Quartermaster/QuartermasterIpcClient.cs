@@ -62,6 +62,9 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
 
 public sealed class QuartermasterIpcClient : IDisposable
 {
+    public const string RetainerManagementChangedKind = "retainer_management";
+    public const string RetainerListingsChangedKind = "retainer_listings";
+    public const string OperationChangedKind = "operation";
     public const string GetCapabilitiesChannel = "Quartermaster.v1.GetCapabilities";
     public const string GetSnapshotChannel = "Quartermaster.v1.GetSnapshot";
     public const string SubmitShortagesChannel = "Quartermaster.v1.SubmitShortages";
@@ -777,48 +780,12 @@ public sealed class QuartermasterIpcClient : IDisposable
                 hasStowageEvidence = true;
         }
 
-        QuartermasterRetainerListingCapture? latestListingCapture = null;
-        if (wire.LatestRetainerListingCapture is { } captureWire)
-        {
-            if (!string.Equals(
-                    captureWire.Semantics,
-                    QuartermasterRetainerListingCapture.ChangedListingsV1,
-                    StringComparison.Ordinal))
-            {
-                error = "Quartermaster's retainer-listing capture does not provide changed-listing semantics.";
-                return false;
-            }
-            if (string.IsNullOrWhiteSpace(captureWire.CaptureId) ||
-                captureWire.RetainerId == 0 ||
-                !TryParseTimestamp(captureWire.CapturedAtUtc, out var capturedAtUtc))
-            {
-                error = "Quartermaster snapshot contained an invalid retainer-listing capture receipt.";
-                return false;
-            }
-            var captureItems = (captureWire.Items ?? [])
-                .Where(item => item.ItemId != 0)
-                .GroupBy(item => item.ItemId)
-                .Select(group => new QuartermasterRetainerListingCaptureItem(
-                    group.Key,
-                    group.Select(item => item.ItemName).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))))
-                .OrderBy(item => item.ItemId)
-                .ToImmutableArray();
-            latestListingCapture = new(
-                QuartermasterRetainerListingCapture.ChangedListingsV1,
-                captureWire.ComparisonAvailable,
-                captureWire.CaptureId,
-                captureWire.RetainerId,
-                capturedAtUtc,
-                captureItems);
-        }
-
         snapshot = new(wire.ProviderInstanceId, wire.Revision, generatedAt, owner, retainers.ToImmutable())
         {
             PlayerRequestedSources = NormalizeSources(wire.PlayerStorage?.RequestedSources),
             PlayerObservedSources = NormalizeSources(wire.PlayerStorage?.ObservedSources),
             StowagePlans = stowagePlans,
             HasStowageEvidence = hasStowageEvidence,
-            LatestRetainerListingCapture = latestListingCapture,
         };
         return true;
     }

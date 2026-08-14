@@ -433,7 +433,7 @@ public static class InventoryReportDeltaBuilder
             .ToList();
         var replacePlayerGil = before.PlayerGil != after.PlayerGil;
         var replacePlayerStorage = !Equivalent(before.PlayerStorage, after.PlayerStorage);
-        var replaceRetainerManagement = !Equivalent(before.RetainerManagement, after.RetainerManagement);
+        var replaceRetainerManagement = !EquivalentRetainerManagement(before.RetainerManagement, after.RetainerManagement);
 
         if (!replacePlayerGil &&
             upsertedPlayerBags.Count == 0 &&
@@ -550,6 +550,17 @@ public static class InventoryReportDeltaBuilder
 
     private static bool Equivalent<T>(T left, T right) =>
         JsonSerializer.Serialize(left, ComparisonOptions) == JsonSerializer.Serialize(right, ComparisonOptions);
+
+    private static bool EquivalentRetainerManagement(
+        QuartermasterStowageReport? left,
+        QuartermasterStowageReport? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+        return Equivalent(
+            left with { ProviderInstanceId = string.Empty, Revision = 0 },
+            right with { ProviderInstanceId = string.Empty, Revision = 0 });
+    }
 
     private static bool EquivalentBagContents(InventoryBag left, InventoryBag right) =>
         string.Equals(left.BagName, right.BagName, StringComparison.Ordinal) &&

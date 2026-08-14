@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -10,7 +9,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using Franthropy.Observations.V1;
-using MarketMafioso.Automation.Items;
 using MarketMafioso.Contracts.Inventory;
 using MarketMafioso.Quartermaster;
 
@@ -557,52 +555,6 @@ public class HttpReporter : IDisposable
         // becomes collectible with this reporter after admitted sends finish.
     }
 
-    public static List<RetainerReport> BuildRetainerReports(
-        QuartermasterSnapshot snapshot,
-        QuartermasterOwnerScope ownerScope,
-        bool includeOwnerFields,
-        Func<uint, AutomationItemMetadata>? resolveItemMetadata = null,
-        bool includeItemNames = true)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        ArgumentNullException.ThrowIfNull(ownerScope);
-        if (!ownerScope.Matches(snapshot.Owner))
-            return [];
-
-        return snapshot.Retainers
-            .Select(r => new RetainerReport
-            {
-                RetainerName = r.RetainerName,
-                RetainerId = r.RetainerId,
-                OwnerCharacterName = includeOwnerFields ? ownerScope.CharacterName : null,
-                OwnerHomeWorld = includeOwnerFields ? ownerScope.HomeWorldName : null,
-                LastUpdated = r.ObservedAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
-                Gil = r.Gil,
-                GilObservedAtUtc = r.GilObservedAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
-                ListingsObservedAtUtc = r.ListingsObservedAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
-                Storage = new StorageSourceEvidence
-                {
-                    RequestedSources = r.RequestedSources.ToList(),
-                    ObservedSources = r.ObservedSources.ToList(),
-                },
-                Bags = r.Bags
-                    .Select(b => new InventoryBag
-                    {
-                        BagName = b.BagName,
-                        Location = b.Location,
-                        ObservedAtUtc = b.ObservedAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
-                        Items = b.Items
-                            .Select(i => MapQuartermasterItem(i, resolveItemMetadata, includeItemNames))
-                            .ToList(),
-                    })
-                    .ToList(),
-                MarketListings = r.Listings
-                    .Select(i => MapQuartermasterListing(i, resolveItemMetadata, includeItemNames))
-                    .ToList(),
-            })
-            .ToList();
-    }
-
     internal static List<RetainerReport> PreserveMissingRetainerFields(
         IReadOnlyList<RetainerReport> current,
         IReadOnlyList<RetainerReport>? acknowledged)
@@ -680,57 +632,6 @@ public class HttpReporter : IDisposable
                         }).ToArray(),
                 }).ToArray(),
             }).ToArray(),
-        };
-    }
-
-    private static ItemSlot MapQuartermasterItem(
-        QuartermasterItemSnapshot item,
-        Func<uint, AutomationItemMetadata>? resolveItemMetadata,
-        bool includeItemNames)
-    {
-        var metadata = string.IsNullOrWhiteSpace(item.ItemType) || (includeItemNames && string.IsNullOrWhiteSpace(item.ItemName))
-            ? resolveItemMetadata?.Invoke(item.ItemId)
-            : null;
-        return new ItemSlot
-        {
-            ItemId = item.ItemId,
-            ItemName = includeItemNames
-                ? (string.IsNullOrWhiteSpace(item.ItemName) ? metadata?.Identity.Name : item.ItemName)
-                : null,
-            ItemType = string.IsNullOrWhiteSpace(item.ItemType) ? metadata?.ItemType : item.ItemType,
-            Quantity = item.Quantity,
-            IsHQ = item.IsHq,
-            Condition = metadata is { SupportsCondition: false } ? 0 : item.Condition,
-            ContainerKey = item.ContainerKey,
-            SlotIndex = item.SlotIndex,
-            ConditionPercent = metadata is { SupportsCondition: false } ? null : item.ConditionPercent,
-            Equipped = item.Equipped,
-        };
-    }
-
-    private static RetainerMarketListing MapQuartermasterListing(
-        QuartermasterListingSnapshot item,
-        Func<uint, AutomationItemMetadata>? resolveItemMetadata,
-        bool includeItemNames)
-    {
-        var metadata = string.IsNullOrWhiteSpace(item.ItemType) || (includeItemNames && string.IsNullOrWhiteSpace(item.ItemName))
-            ? resolveItemMetadata?.Invoke(item.ItemId)
-            : null;
-        return new RetainerMarketListing
-        {
-            ItemId = item.ItemId,
-            ItemName = includeItemNames
-                ? (string.IsNullOrWhiteSpace(item.ItemName) ? metadata?.Identity.Name : item.ItemName)
-                : null,
-            ItemType = string.IsNullOrWhiteSpace(item.ItemType) ? metadata?.ItemType : item.ItemType,
-            Quantity = item.Quantity,
-            IsHQ = item.IsHq,
-            Condition = metadata is { SupportsCondition: false } ? 0 : item.Condition,
-            ContainerKey = item.ContainerKey,
-            SlotIndex = item.SlotIndex,
-            ConditionPercent = metadata is { SupportsCondition: false } ? null : item.ConditionPercent,
-            UnitPrice = item.UnitPrice,
-            ListedAt = item.ListedAt,
         };
     }
 
