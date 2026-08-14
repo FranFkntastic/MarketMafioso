@@ -65,6 +65,42 @@ public sealed class InventoryReportDeltaTests
     }
 
     [Fact]
+    public void Builder_SkipsQuartermasterTransportIdentityOnlyChanges()
+    {
+        var management = Stowage("provider-a", 10, playerQuantity: 4);
+        var before = CreateReport() with { RetainerManagement = management };
+        var after = before with
+        {
+            RetainerManagement = management with { ProviderInstanceId = "provider-b", Revision = 99 },
+        };
+
+        var result = InventoryReportDeltaBuilder.Build("base-1", before, after);
+
+        Assert.Equal(InventoryDeltaBuildDisposition.Unchanged, result.Disposition);
+    }
+
+    [Fact]
+    public void Builder_StillSendsSemanticQuartermasterManagementChanges()
+    {
+        var management = Stowage("provider-a", 10, playerQuantity: 4);
+        var before = CreateReport() with { RetainerManagement = management };
+        var changedRule = management.Plans[0].Rules[0] with { PlayerQuantity = 5 };
+        var after = before with
+        {
+            RetainerManagement = management with
+            {
+                Revision = 11,
+                Plans = [management.Plans[0] with { Rules = [changedRule] }],
+            },
+        };
+
+        var result = InventoryReportDeltaBuilder.Build("base-1", before, after);
+
+        Assert.Equal(InventoryDeltaBuildDisposition.Delta, result.Disposition);
+        Assert.True(result.Delta!.ReplaceRetainerManagement);
+    }
+
+    [Fact]
     public void EvidencePredicate_DistinguishesUnavailableFromObservedEmptyStorage()
     {
         var unavailable = new InventoryReport();
@@ -305,6 +341,35 @@ public sealed class InventoryReportDeltaTests
                 ItemId = itemId,
                 ItemName = $"Item {itemId}",
                 Quantity = quantity,
+            },
+        ],
+    };
+
+    private static QuartermasterStowageReport Stowage(string provider, long revision, int playerQuantity) => new()
+    {
+        ProviderInstanceId = provider,
+        Revision = revision,
+        Owner = new QuartermasterStowageOwner { LocalContentId = 100, HomeWorldId = 74 },
+        Plans =
+        [
+            new QuartermasterStowagePlanReport
+            {
+                Id = Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Revision = 2,
+                Name = "General",
+                Enabled = true,
+                Rules =
+                [
+                    new QuartermasterStowageRuleReport
+                    {
+                        Id = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                        ItemId = 5333,
+                        DesiredPlayerQuantity = 10,
+                        Action = "deposit",
+                        Quantity = 6,
+                        PlayerQuantity = playerQuantity,
+                    },
+                ],
             },
         ],
     };

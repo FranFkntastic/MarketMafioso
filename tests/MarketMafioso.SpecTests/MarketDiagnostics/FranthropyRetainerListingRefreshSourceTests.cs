@@ -29,7 +29,12 @@ public sealed class FranthropyRetainerListingRefreshSourceTests
         {
             await open.Store!.WriteAsync(Listings(owner, 200, 1, [100, 200]));
             await open.Store.WriteAsync(Listings(owner, 201, 2, [200, 300]));
-            using var source = new FranthropyRetainerListingRefreshSource(pluginConfig, () => owner);
+            await using var client = CreateClient(pluginConfig, () => owner);
+            using var source = new FranthropyRetainerListingRefreshSource(client, () => owner);
+            var initialSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            source.Changed += () => initialSignal.TrySetResult();
+            client.Start();
+            await initialSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             var success = source.TryRead(out var snapshot, out var error);
 
@@ -38,12 +43,18 @@ public sealed class FranthropyRetainerListingRefreshSourceTests
             Assert.Equal([100u, 200u, 300u], snapshot.Items.Select(item => item.ItemId));
             Assert.False(snapshot.ComparisonAvailable);
 
+            var unrelatedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            source.Changed += () => unrelatedSignal.TrySetResult();
+            await open.Store.WriteAsync(Inventory(owner, 200, 3, 5333));
+            await Task.Delay(300);
+            Assert.False(unrelatedSignal.Task.IsCompleted);
+
             var changedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             source.Changed += () => changedSignal.TrySetResult();
-            await open.Store.WriteAsync(Listings(owner, 200, 3, [200]));
+            await open.Store.WriteAsync(Listings(owner, 200, 4, [200]));
             await changedSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(source.TryRead(out var changed, out error), error);
-            Assert.Equal("franthropy:3", changed!.CaptureId);
+            Assert.Equal("franthropy:4", changed!.CaptureId);
             Assert.Equal([100u, 200u, 300u], changed.Items.Select(item => item.ItemId));
             Assert.True(changed.ComparisonAvailable);
         }
@@ -77,7 +88,12 @@ public sealed class FranthropyRetainerListingRefreshSourceTests
         try
         {
             await open.Store!.WriteAsync(Listings(firstOwner, 200, 1, [100]));
-            using var source = new FranthropyRetainerListingRefreshSource(pluginConfig, () => currentOwner);
+            await using var client = CreateClient(pluginConfig, () => currentOwner);
+            using var source = new FranthropyRetainerListingRefreshSource(client, () => currentOwner);
+            var initialSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            source.Changed += () => initialSignal.TrySetResult();
+            client.Start();
+            await initialSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(source.TryRead(out var first, out var error), error);
             Assert.Equal([100u], first!.Items.Select(item => item.ItemId));
 
@@ -120,7 +136,12 @@ public sealed class FranthropyRetainerListingRefreshSourceTests
         try
         {
             await open.Store!.WriteAsync(Listings(otherOwner, 300, 1, [900]));
-            using var source = new FranthropyRetainerListingRefreshSource(pluginConfig, () => owner);
+            await using var client = CreateClient(pluginConfig, () => owner);
+            using var source = new FranthropyRetainerListingRefreshSource(client, () => owner);
+            var initialSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            source.Changed += () => initialSignal.TrySetResult();
+            client.Start();
+            await initialSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(source.TryRead(out _, out _));
 
             var changedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -161,4 +182,33 @@ public sealed class FranthropyRetainerListingRefreshSourceTests
                 new RetainerMarketListingsPayload(itemIds
                     .Select((itemId, slot) => new RetainerMarketListingObservation(slot, itemId, 1, 10, false))
                     .ToArray())));
+
+    private static ObservationEnvelope Inventory(
+        ObservationOwner owner,
+        ulong retainerId,
+        long sourceRevision,
+        uint itemId) =>
+        new(
+            new ObservationScope(
+                owner,
+                ObservationSubject.Retainer(retainerId, owner),
+                ObservationContainerKind.RetainerInventory),
+            new ObservationCapture(
+                sourceRevision,
+                new DateTimeOffset(2026, 7, 31, 12, 0, 0, TimeSpan.Zero).AddMinutes(sourceRevision),
+                new ObservationProvenance("TestHost", "instance", "1.0.0", "2026.07.31.0000.0000"),
+                ObservationEvidence.CompleteAvailable),
+            ObservationPayload.Create(
+                ObservationPayloadContracts.RetainerInventory,
+                ObservationPayloadContracts.Version,
+                new InventoryObservationPayload([10000], [10000], [new InventoryItemObservation(10000, 0, itemId, 1, false)])));
+
+    private static DalamudSharedObservationClient CreateClient(
+        string pluginConfig,
+        Func<ObservationOwner?> currentOwner) =>
+        new(new DalamudSharedObservationClientOptions
+        {
+            PluginConfigDirectory = pluginConfig,
+            CurrentOwner = currentOwner,
+        });
 }

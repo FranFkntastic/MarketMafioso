@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.MarketDiagnostics;
 
@@ -21,48 +19,6 @@ internal interface IRetainerListingRefreshSource
     bool RetryOnReadFailure => true;
     bool SurfaceReadFailure => false;
     bool TryRead(out RetainerListingRefreshSnapshot? snapshot, out string error);
-}
-
-internal sealed class QuartermasterRetainerListingRefreshSource(
-    QuartermasterIpcClient quartermaster,
-    IPlayerState playerState) : IRetainerListingRefreshSource
-{
-    public bool TryRead(out RetainerListingRefreshSnapshot? result, out string error)
-    {
-        result = null;
-        error = string.Empty;
-        var owner = new QuartermasterOwnerScope(
-            playerState.ContentId == 0 ? null : playerState.ContentId,
-            playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.RowId : null,
-            playerState.CharacterName,
-            playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
-        if (!owner.IsAvailable)
-        {
-            error = "The current character identity is unavailable.";
-            return false;
-        }
-
-        if (!quartermaster.TryGetSnapshot(out var snapshot, out error))
-            return false;
-        if (!owner.Matches(snapshot!.Owner))
-        {
-            error = "Quartermaster's snapshot belongs to a different character.";
-            return false;
-        }
-
-        if (snapshot.LatestRetainerListingCapture is not { } capture)
-        {
-            error = "Quartermaster has not published a retainer-listing capture yet.";
-            return false;
-        }
-        result = new RetainerListingRefreshSnapshot(
-            capture.Items
-                .Select(item => new RetainerListingRefreshCandidate(item.ItemId, item.ItemName))
-                .ToArray(),
-            capture.CaptureId,
-            capture.ComparisonAvailable);
-        return true;
-    }
 }
 
 internal sealed class RetainerListingRefreshCoordinator

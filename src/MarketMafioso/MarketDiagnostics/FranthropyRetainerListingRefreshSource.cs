@@ -5,43 +5,36 @@ using System.Linq;
 using System.Threading;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.Observations;
-using Franthropy.Observations.Storage;
 using Franthropy.Observations.V1;
 
 namespace MarketMafioso.MarketDiagnostics;
 
 internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingRefreshSource, IDisposable
 {
+    private readonly object gate = new();
+    private readonly DalamudSharedObservationClient client;
     private readonly Func<ObservationOwner?> currentOwner;
-    private readonly ObservationStoreOptions options;
-    private readonly ObservationDatabaseChangeMonitor monitor;
     private IReadOnlySet<uint> previousItems = new HashSet<uint>();
     private ObservationOwner? previousOwner;
+    private string? notifiedListingSignature;
     private bool hasSuccessfulBaseline;
     private int changeObserved;
     private bool disposed;
 
-    public FranthropyRetainerListingRefreshSource(string pluginConfigDirectory, IPlayerState playerState)
-        : this(pluginConfigDirectory, CreateOwnerProvider(playerState))
+    public FranthropyRetainerListingRefreshSource(
+        DalamudSharedObservationClient client,
+        IPlayerState playerState)
+        : this(client, CreateOwnerProvider(playerState))
     {
     }
 
     internal FranthropyRetainerListingRefreshSource(
-        string pluginConfigDirectory,
+        DalamudSharedObservationClient client,
         Func<ObservationOwner?> currentOwner)
     {
+        this.client = client ?? throw new ArgumentNullException(nameof(client));
         this.currentOwner = currentOwner ?? throw new ArgumentNullException(nameof(currentOwner));
-        var paths = SharedObservationPaths.FromPluginConfigDirectory(pluginConfigDirectory);
-        options = new ObservationStoreOptions
-        {
-            DatabasePath = paths.DatabasePath,
-            BackupDirectory = paths.BackupsDirectory,
-            MigrationLockPath = paths.MigrationLockPath,
-            ChangeSignalPath = paths.ChangeSignalPath,
-        };
-        monitor = new ObservationDatabaseChangeMonitor(options);
-        monitor.Changed += OnDatabaseChanged;
-        monitor.StartAsync().AsTask().GetAwaiter().GetResult();
+        client.RetainersChanged += OnRetainersChanged;
     }
 
     public event Action? Changed;
@@ -59,44 +52,26 @@ internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingR
             error = "The current character identity is unavailable.";
             return false;
         }
-        if (owner != previousOwner)
+
+        if (!client.TryGetRetainers(owner, out var current))
         {
-            previousOwner = owner;
-            previousItems = new HashSet<uint>();
-            hasSuccessfulBaseline = false;
-            Interlocked.Exchange(ref changeObserved, 0);
-        }
-        if (!string.IsNullOrWhiteSpace(monitor.LastNotificationError))
-        {
-            error = $"Shared listing change observation is unavailable: {monitor.LastNotificationError}";
+            error = "No current shared retainer observation exists for this character.";
             return false;
         }
 
-        var opened = SqliteObservationReader.OpenAsync(options).AsTask().GetAwaiter().GetResult();
-        if (!opened.IsReady)
+        var trustworthy = current!.Observations
+            .Where(observation =>
+                observation.Scope.Container == ObservationContainerKind.RetainerMarketListings &&
+                !observation.IsStale)
+            .ToArray();
+        if (trustworthy.Length == 0)
         {
-            error = opened.Message;
+            error = "No current trusted retainer-listing observation exists for this character.";
             return false;
         }
 
         try
         {
-            var read = opened.Reader!.ReadCurrentByOwnerAsync(
-                owner,
-                ObservationContainerKind.RetainerMarketListings).AsTask().GetAwaiter().GetResult();
-            if (read.Status != ObservationReadStatus.Found)
-            {
-                error = read.Message;
-                return false;
-            }
-
-            var trustworthy = read.Observations.Where(observation => !observation.IsStale).ToArray();
-            if (trustworthy.Length == 0)
-            {
-                error = "No current trusted retainer-listing observation exists for this character.";
-                return false;
-            }
-
             var revision = trustworthy.Max(observation => observation.Revision);
             var currentItems = trustworthy
                 .SelectMany(observation => observation.Payload.Deserialize<RetainerMarketListingsPayload>(
@@ -106,29 +81,37 @@ internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingR
                 .Select(listing => listing.ItemId)
                 .Distinct()
                 .ToHashSet();
-            var items = currentItems
-                .Concat(previousItems)
-                .Distinct()
-                .Order()
-                .Select(itemId => new RetainerListingRefreshCandidate(itemId, null))
-                .ToArray();
-            var observedChange = Interlocked.Exchange(ref changeObserved, 0) != 0;
-            snapshot = new RetainerListingRefreshSnapshot(
-                items,
-                $"franthropy:{revision}",
-                ComparisonAvailable: hasSuccessfulBaseline && observedChange);
-            previousItems = currentItems;
-            hasSuccessfulBaseline = true;
+
+            lock (gate)
+            {
+                if (owner != previousOwner)
+                {
+                    previousOwner = owner;
+                    previousItems = new HashSet<uint>();
+                    hasSuccessfulBaseline = false;
+                    Interlocked.Exchange(ref changeObserved, 0);
+                }
+
+                var items = currentItems
+                    .Concat(previousItems)
+                    .Distinct()
+                    .Order()
+                    .Select(itemId => new RetainerListingRefreshCandidate(itemId, null))
+                    .ToArray();
+                var observedChange = Interlocked.Exchange(ref changeObserved, 0) != 0;
+                snapshot = new RetainerListingRefreshSnapshot(
+                    items,
+                    $"franthropy:{revision}",
+                    ComparisonAvailable: hasSuccessfulBaseline && observedChange);
+                previousItems = currentItems;
+                hasSuccessfulBaseline = true;
+            }
             return true;
         }
         catch (Exception exception) when (exception is InvalidDataException or ObservationPayloadContractException)
         {
             error = exception.Message;
             return false;
-        }
-        finally
-        {
-            opened.Reader!.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
@@ -137,13 +120,20 @@ internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingR
         if (disposed)
             return;
         disposed = true;
-        monitor.Changed -= OnDatabaseChanged;
-        monitor.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        client.RetainersChanged -= OnRetainersChanged;
     }
 
-    private void OnDatabaseChanged(object? sender, ObservationDatabaseChanged change)
+    private void OnRetainersChanged(object? sender, SharedRetainerObservationSnapshot snapshot)
     {
-        Interlocked.Exchange(ref changeObserved, 1);
+        var signature = CreateListingSignature(snapshot);
+        lock (gate)
+        {
+            if (string.Equals(notifiedListingSignature, signature, StringComparison.Ordinal))
+                return;
+            notifiedListingSignature = signature;
+            Interlocked.Exchange(ref changeObserved, 1);
+        }
+
         var subscribers = Changed;
         if (subscribers is null)
             return;
@@ -153,6 +143,13 @@ internal sealed class FranthropyRetainerListingRefreshSource : IRetainerListingR
             catch { }
         }
     }
+
+    private static string CreateListingSignature(SharedRetainerObservationSnapshot snapshot) =>
+        $"{snapshot.Owner.LocalContentId:X16}:{snapshot.Owner.HomeWorldId}|" +
+        string.Join('|', snapshot.Observations
+            .Where(observation => observation.Scope.Container == ObservationContainerKind.RetainerMarketListings)
+            .OrderBy(observation => observation.Scope.Subject.Id)
+            .Select(observation => $"{observation.Scope.Subject.Id:X16}:{observation.Revision}:{observation.IsStale}"));
 
     private static Func<ObservationOwner?> CreateOwnerProvider(IPlayerState playerState)
     {
