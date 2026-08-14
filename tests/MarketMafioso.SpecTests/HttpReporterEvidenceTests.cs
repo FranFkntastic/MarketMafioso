@@ -1,4 +1,5 @@
 using MarketMafioso.Contracts.Inventory;
+using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.SpecTests;
 
@@ -137,6 +138,22 @@ public sealed class HttpReporterEvidenceTests
 
         Assert.Equal((uint)3, merged.Bags.Single(bag => bag.BagName == "RetainerPage1").Items[0].ItemId);
         Assert.Equal((uint)2, merged.Bags.Single(bag => bag.BagName == "RetainerPage2").Items[0].ItemId);
+    }
+
+    [Fact]
+    public void OwnerChange_RequiresANewAcknowledgedBaseline()
+    {
+        var acknowledged = new QuartermasterOwner(10, 40, "Alpha", "Maduin");
+
+        Assert.False(HttpReporter.IsDifferentKnownOwner(
+            acknowledged,
+            new QuartermasterOwner(10, 40, "Renamed Alpha", "Maduin")));
+        Assert.True(HttpReporter.IsDifferentKnownOwner(
+            acknowledged,
+            new QuartermasterOwner(11, 40, "Beta", "Maduin")));
+        Assert.True(HttpReporter.IsDifferentKnownOwner(
+            acknowledged,
+            new QuartermasterOwner(10, 41, "Alpha", "Marilith")));
     }
 
     private static InventoryBag Bag(string name, uint itemId) => new()

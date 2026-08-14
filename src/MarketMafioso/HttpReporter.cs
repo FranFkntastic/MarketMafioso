@@ -30,6 +30,8 @@ public class HttpReporter : IDisposable
     private int disposeStarted;
     private InventoryReport? lastAcknowledgedReport;
     private string? lastAcknowledgedSnapshotId;
+    private QuartermasterOwner? lastAcknowledgedOwner;
+    private QuartermasterOwner? lastCaptureOwner;
     private bool lastCaptureHasRetainerEvidence;
     private bool lastCaptureHasManagementEvidence;
 
@@ -155,8 +157,7 @@ public class HttpReporter : IDisposable
             {
                 LastStatus = "Receiver omitted snapshot ID";
                 log.Warning("[MarketMafioso] Inventory delta was accepted, but the receiver omitted the new snapshot ID; the next change will reconcile in full.");
-                lastAcknowledgedReport = null;
-                lastAcknowledgedSnapshotId = null;
+                ClearAcknowledgedSnapshot();
                 return;
             }
 
@@ -226,8 +227,7 @@ public class HttpReporter : IDisposable
         if (string.IsNullOrWhiteSpace(reportResponse.ReportId))
         {
             LastStatus = "Receiver omitted snapshot ID";
-            lastAcknowledgedReport = null;
-            lastAcknowledgedSnapshotId = null;
+            ClearAcknowledgedSnapshot();
             log.Warning("[MarketMafioso] Full inventory report was accepted, but the receiver omitted its snapshot ID; deltas remain disabled.");
             return;
         }
@@ -325,6 +325,19 @@ public class HttpReporter : IDisposable
             playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.RowId : null,
             playerState.CharacterName,
             playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
+        lastCaptureOwner = ownerScope.IsAvailable
+            ? new QuartermasterOwner(
+                ownerScope.LocalContentId!.Value,
+                ownerScope.HomeWorldId!.Value,
+                ownerScope.CharacterName ?? string.Empty,
+                ownerScope.HomeWorldName)
+            : null;
+        if (IsDifferentKnownOwner(lastAcknowledgedOwner, lastCaptureOwner))
+        {
+            log.Information(
+                "[MarketMafioso] Character identity changed; clearing the acknowledged inventory baseline before capturing the new owner.");
+            ClearAcknowledgedSnapshot();
+        }
         var charName = config.IncludeCharacterInfo ? ownerScope.CharacterName : null;
         var homeWorld = config.IncludeCharacterInfo ? ownerScope.HomeWorldName : null;
         var playerCapture = scanner.CapturePlayerInventory(config);
@@ -455,8 +468,21 @@ public class HttpReporter : IDisposable
     {
         lastAcknowledgedReport = report;
         lastAcknowledgedSnapshotId = response.ReportId;
+        lastAcknowledgedOwner = lastCaptureOwner;
         LastDashboardUrl = ResolveDashboardUrlForDisplay(response.DashboardUrl, config.ServerUrl);
         LastDashboardReportUrl = response.ResolveReportUrl(config.ServerUrl);
+    }
+
+    internal static bool IsDifferentKnownOwner(QuartermasterOwner? acknowledged, QuartermasterOwner? current) =>
+        acknowledged is not null &&
+        current is not null &&
+        (acknowledged.LocalContentId != current.LocalContentId || acknowledged.HomeWorldId != current.HomeWorldId);
+
+    private void ClearAcknowledgedSnapshot()
+    {
+        lastAcknowledgedReport = null;
+        lastAcknowledgedSnapshotId = null;
+        lastAcknowledgedOwner = null;
     }
 
     private void HandleFailure(
