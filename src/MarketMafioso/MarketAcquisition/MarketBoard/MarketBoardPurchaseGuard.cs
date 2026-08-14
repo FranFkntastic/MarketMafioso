@@ -13,7 +13,7 @@ namespace MarketMafioso.MarketAcquisition.MarketBoard;
 internal sealed unsafe class MarketBoardPurchaseGuard : IDisposable
 {
     private const string ItemSearchResultAddon = "ItemSearchResult";
-    private const string ApprovedGameVersion = "2026.08.05.0000.0000";
+    private const string ApprovedGameVersion = "2026.08.11.0000.0000";
     private const string PatchContractId = "mmf.market-board-purchase-send";
 
     private readonly IAddonLifecycle addonLifecycle;
