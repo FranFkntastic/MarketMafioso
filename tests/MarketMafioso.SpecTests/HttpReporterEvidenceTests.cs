@@ -1,4 +1,5 @@
 using MarketMafioso.Contracts.Inventory;
+using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.SpecTests;
 
@@ -67,6 +68,92 @@ public sealed class HttpReporterEvidenceTests
         Assert.True(HttpReporter.IsTransientReceiverStatus(System.Net.HttpStatusCode.ServiceUnavailable));
         Assert.False(HttpReporter.IsTransientReceiverStatus(System.Net.HttpStatusCode.BadRequest));
         Assert.False(HttpReporter.IsTransientReceiverStatus(System.Net.HttpStatusCode.InternalServerError));
+    }
+
+    [Fact]
+    public void PartialRetainerObservation_PreservesAcknowledgedFields()
+    {
+        var acknowledged = Retainer(10, 2) with
+        {
+            Gil = 123,
+            GilObservedAtUtc = "2026-08-14T12:00:00Z",
+            ListingsObservedAtUtc = "2026-08-14T12:00:00Z",
+            MarketListings = [new RetainerMarketListing { ItemId = 9, Quantity = 1 }],
+            Storage = new StorageSourceEvidence
+            {
+                RequestedSources = ["RetainerPage1"],
+                ObservedSources = ["RetainerPage1"],
+            },
+        };
+        var rosterOnly = new RetainerReport { RetainerId = 10, RetainerName = "Alpha" };
+
+        var merged = Assert.Single(HttpReporter.PreserveMissingRetainerFields([rosterOnly], [acknowledged]));
+
+        Assert.Equal((uint)2, merged.Bags[0].Items[0].ItemId);
+        Assert.Equal((ulong)123, merged.Gil);
+        Assert.Equal((uint)9, merged.MarketListings[0].ItemId);
+    }
+
+    [Fact]
+    public void ManagementAvailability_IsIndependentFromRetainerAvailability()
+    {
+        var management = new QuartermasterStowageReport { ProviderInstanceId = "rq" };
+        var acknowledged = new InventoryReport
+        {
+            Retainers = [Retainer(10, 2)],
+            RetainerManagement = management,
+        };
+        var current = new InventoryReport { Retainers = [Retainer(10, 4)] };
+
+        var merged = HttpReporter.PreserveUnavailableEvidence(
+            current,
+            acknowledged,
+            captureHasRetainerEvidence: true,
+            captureHasManagementEvidence: false);
+
+        Assert.Equal((uint)4, merged.Retainers[0].Bags[0].Items[0].ItemId);
+        Assert.Same(management, merged.RetainerManagement);
+    }
+
+    [Fact]
+    public void PartialStorageObservation_ReplacesObservedBagAndPreservesOthers()
+    {
+        var acknowledged = new RetainerReport
+        {
+            RetainerId = 10,
+            Bags = [Bag("RetainerPage1", 1), Bag("RetainerPage2", 2)],
+        };
+        var partial = new RetainerReport
+        {
+            RetainerId = 10,
+            Bags = [Bag("RetainerPage1", 3)],
+            Storage = new StorageSourceEvidence
+            {
+                RequestedSources = ["RetainerPage1", "RetainerPage2"],
+                ObservedSources = ["RetainerPage1"],
+            },
+        };
+
+        var merged = Assert.Single(HttpReporter.PreserveMissingRetainerFields([partial], [acknowledged]));
+
+        Assert.Equal((uint)3, merged.Bags.Single(bag => bag.BagName == "RetainerPage1").Items[0].ItemId);
+        Assert.Equal((uint)2, merged.Bags.Single(bag => bag.BagName == "RetainerPage2").Items[0].ItemId);
+    }
+
+    [Fact]
+    public void OwnerChange_RequiresANewAcknowledgedBaseline()
+    {
+        var acknowledged = new QuartermasterOwner(10, 40, "Alpha", "Maduin");
+
+        Assert.False(HttpReporter.IsDifferentKnownOwner(
+            acknowledged,
+            new QuartermasterOwner(10, 40, "Renamed Alpha", "Maduin")));
+        Assert.True(HttpReporter.IsDifferentKnownOwner(
+            acknowledged,
+            new QuartermasterOwner(11, 40, "Beta", "Maduin")));
+        Assert.True(HttpReporter.IsDifferentKnownOwner(
+            acknowledged,
+            new QuartermasterOwner(10, 41, "Alpha", "Marilith")));
     }
 
     private static InventoryBag Bag(string name, uint itemId) => new()

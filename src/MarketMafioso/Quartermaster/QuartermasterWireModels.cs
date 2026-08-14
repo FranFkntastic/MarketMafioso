@@ -92,6 +92,7 @@ public sealed record QuartermasterSnapshot(
     public ImmutableArray<string> PlayerRequestedSources { get; init; } = [];
     public ImmutableArray<string> PlayerObservedSources { get; init; } = [];
     public ImmutableArray<QuartermasterStowagePlanSnapshot> StowagePlans { get; init; } = [];
+    public bool HasStowageEvidence { get; init; }
     public QuartermasterRetainerListingCapture? LatestRetainerListingCapture { get; init; }
 }
 

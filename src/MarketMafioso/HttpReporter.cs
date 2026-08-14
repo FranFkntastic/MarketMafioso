@@ -30,7 +30,10 @@ public class HttpReporter : IDisposable
     private int disposeStarted;
     private InventoryReport? lastAcknowledgedReport;
     private string? lastAcknowledgedSnapshotId;
+    private QuartermasterOwner? lastAcknowledgedOwner;
+    private QuartermasterOwner? lastCaptureOwner;
     private bool lastCaptureHasRetainerEvidence;
+    private bool lastCaptureHasManagementEvidence;
 
     private static readonly JsonSerializerOptions SerialiserOptions = new()
     {
@@ -154,8 +157,7 @@ public class HttpReporter : IDisposable
             {
                 LastStatus = "Receiver omitted snapshot ID";
                 log.Warning("[MarketMafioso] Inventory delta was accepted, but the receiver omitted the new snapshot ID; the next change will reconcile in full.");
-                lastAcknowledgedReport = null;
-                lastAcknowledgedSnapshotId = null;
+                ClearAcknowledgedSnapshot();
                 return;
             }
 
@@ -225,8 +227,7 @@ public class HttpReporter : IDisposable
         if (string.IsNullOrWhiteSpace(reportResponse.ReportId))
         {
             LastStatus = "Receiver omitted snapshot ID";
-            lastAcknowledgedReport = null;
-            lastAcknowledgedSnapshotId = null;
+            ClearAcknowledgedSnapshot();
             log.Warning("[MarketMafioso] Full inventory report was accepted, but the receiver omitted its snapshot ID; deltas remain disabled.");
             return;
         }
@@ -249,7 +250,8 @@ public class HttpReporter : IDisposable
     internal static InventoryReport PreserveUnavailableEvidence(
         InventoryReport capture,
         InventoryReport? acknowledged,
-        bool captureHasRetainerEvidence)
+        bool captureHasRetainerEvidence,
+        bool captureHasManagementEvidence = false)
     {
         ArgumentNullException.ThrowIfNull(capture);
         if (acknowledged is null)
@@ -271,12 +273,10 @@ public class HttpReporter : IDisposable
 
         if (!captureHasRetainerEvidence)
         {
-            capture = capture with
-            {
-                Retainers = acknowledged.Retainers,
-                RetainerManagement = acknowledged.RetainerManagement,
-            };
+            capture = capture with { Retainers = acknowledged.Retainers };
         }
+        if (!captureHasManagementEvidence)
+            capture = capture with { RetainerManagement = acknowledged.RetainerManagement };
 
         return capture;
     }
@@ -288,7 +288,8 @@ public class HttpReporter : IDisposable
         var report = PreserveUnavailableEvidence(
             capture,
             lastAcknowledgedReport,
-            lastCaptureHasRetainerEvidence);
+            lastCaptureHasRetainerEvidence,
+            lastCaptureHasManagementEvidence);
         if (lastAcknowledgedReport is not null && playerEvidenceUnavailable)
         {
             log.Debug(
@@ -318,11 +319,25 @@ public class HttpReporter : IDisposable
     private InventoryReport BuildReport()
     {
         lastCaptureHasRetainerEvidence = false;
+        lastCaptureHasManagementEvidence = false;
         var ownerScope = new QuartermasterOwnerScope(
             playerState.ContentId == 0 ? null : playerState.ContentId,
             playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.RowId : null,
             playerState.CharacterName,
             playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
+        lastCaptureOwner = ownerScope.IsAvailable
+            ? new QuartermasterOwner(
+                ownerScope.LocalContentId!.Value,
+                ownerScope.HomeWorldId!.Value,
+                ownerScope.CharacterName ?? string.Empty,
+                ownerScope.HomeWorldName)
+            : null;
+        if (IsDifferentKnownOwner(lastAcknowledgedOwner, lastCaptureOwner))
+        {
+            log.Information(
+                "[MarketMafioso] Character identity changed; clearing the acknowledged inventory baseline before capturing the new owner.");
+            ClearAcknowledgedSnapshot();
+        }
         var charName = config.IncludeCharacterInfo ? ownerScope.CharacterName : null;
         var homeWorld = config.IncludeCharacterInfo ? ownerScope.HomeWorldName : null;
         var playerCapture = scanner.CapturePlayerInventory(config);
@@ -339,6 +354,7 @@ public class HttpReporter : IDisposable
                 out retainers))
         {
             lastCaptureHasRetainerEvidence = true;
+            retainers = PreserveMissingRetainerFields(retainers, lastAcknowledgedReport?.Retainers);
             LastRetainerSourceStatus = $"Franthropy supplied {retainers.Count} owner-scoped retainer(s).";
         }
         else
@@ -351,6 +367,7 @@ public class HttpReporter : IDisposable
             ownerScope.Matches(quartermasterSnapshot!.Owner))
         {
             quartermasterSnapshotForReport = quartermasterSnapshot;
+            lastCaptureHasManagementEvidence = quartermasterSnapshot.HasStowageEvidence;
         }
 
         var generatedAtUtc = DateTime.UtcNow.ToString("o");
@@ -451,8 +468,24 @@ public class HttpReporter : IDisposable
     {
         lastAcknowledgedReport = report;
         lastAcknowledgedSnapshotId = response.ReportId;
+        // A transient login/loading frame can lack stable owner identity while the report
+        // intentionally preserves the prior baseline. Keep that baseline bound to its known
+        // owner so the next available, different identity still forces reconciliation.
+        lastAcknowledgedOwner = lastCaptureOwner ?? lastAcknowledgedOwner;
         LastDashboardUrl = ResolveDashboardUrlForDisplay(response.DashboardUrl, config.ServerUrl);
         LastDashboardReportUrl = response.ResolveReportUrl(config.ServerUrl);
+    }
+
+    internal static bool IsDifferentKnownOwner(QuartermasterOwner? acknowledged, QuartermasterOwner? current) =>
+        acknowledged is not null &&
+        current is not null &&
+        (acknowledged.LocalContentId != current.LocalContentId || acknowledged.HomeWorldId != current.HomeWorldId);
+
+    private void ClearAcknowledgedSnapshot()
+    {
+        lastAcknowledgedReport = null;
+        lastAcknowledgedSnapshotId = null;
+        lastAcknowledgedOwner = null;
     }
 
     private void HandleFailure(
@@ -569,6 +602,40 @@ public class HttpReporter : IDisposable
             })
             .ToList();
     }
+
+    internal static List<RetainerReport> PreserveMissingRetainerFields(
+        IReadOnlyList<RetainerReport> current,
+        IReadOnlyList<RetainerReport>? acknowledged)
+    {
+        if (acknowledged is null || acknowledged.Count == 0)
+            return current.ToList();
+        var previous = acknowledged.ToDictionary(retainer => retainer.RetainerId);
+        return current.Select(retainer =>
+        {
+            if (!previous.TryGetValue(retainer.RetainerId, out var prior))
+                return retainer;
+            var observedSources = retainer.Storage.ObservedSources.ToHashSet(StringComparer.Ordinal);
+            var bags = retainer.Bags.ToDictionary(BagKey, StringComparer.Ordinal);
+            foreach (var priorBag in prior.Bags)
+            {
+                var source = priorBag.Location ?? priorBag.BagName;
+                if (!observedSources.Contains(source))
+                    bags.TryAdd(BagKey(priorBag), priorBag);
+            }
+            retainer = retainer with { Bags = bags.Values.OrderBy(bag => bag.BagName, StringComparer.Ordinal).ToList() };
+            if (retainer.GilObservedAtUtc is null)
+                retainer = retainer with { Gil = prior.Gil, GilObservedAtUtc = prior.GilObservedAtUtc };
+            if (retainer.ListingsObservedAtUtc is null)
+                retainer = retainer with
+                {
+                    MarketListings = prior.MarketListings,
+                    ListingsObservedAtUtc = prior.ListingsObservedAtUtc,
+                };
+            return retainer;
+        }).ToList();
+    }
+
+    private static string BagKey(InventoryBag bag) => $"{bag.BagName}\0{bag.Location}";
 
     public static QuartermasterStowageReport? BuildStowageReport(
         QuartermasterSnapshot snapshot,
