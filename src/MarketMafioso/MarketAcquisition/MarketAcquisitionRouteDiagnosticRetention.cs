@@ -126,7 +126,11 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
          File.Exists(Path.Combine(package.DirectoryPath, routeEventsFileName))) ||
         package.Manifest.FullTraceSegments.Any(segment =>
             !segment.FileName.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) &&
-            File.Exists(Path.Combine(package.DirectoryPath, segment.FileName)));
+            File.Exists(Path.Combine(package.DirectoryPath, segment.FileName))) ||
+        package.Manifest.StoredArtifacts.Any(artifact =>
+            artifact.ContentEncoding.Equals("gzip", StringComparison.OrdinalIgnoreCase) &&
+            artifact.FileName.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(Path.Combine(package.DirectoryPath, artifact.FileName[..^3])));
 
     private void CompactFinalizedMachineArtifacts(LoadedPackage package)
     {
@@ -152,6 +156,7 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
             {
                 manifest = ApplyCompressedArtifact(manifest, "routeEventsJsonl", compressor.Compress(routeEventsPath));
                 WriteManifest(package.ManifestPath, manifest);
+                File.Delete(routeEventsPath);
             }
         }
 
@@ -176,7 +181,10 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
             };
             manifest = ApplyCompressedArtifact(manifest with { FullTraceSegments = segments }, $"fullTrace:{segment.FirstSequence}", compressed);
             WriteManifest(package.ManifestPath, manifest);
+            File.Delete(segmentPath);
         }
+
+        RemoveVerifiedRawDuplicates(package.DirectoryPath, manifest);
     }
 
     private void ArchivePackage(LoadedPackage package)
@@ -188,6 +196,7 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
                 File.ReadAllText(package.ManifestPath),
                 JsonOptions) ?? throw new InvalidDataException($"Unable to reload manifest '{package.ManifestPath}'."),
         };
+        RemoveVerifiedRawDuplicates(package.DirectoryPath, package.Manifest);
         var manifest = package.Manifest with
         {
             SchemaVersion = MarketAcquisitionRouteDiagnosticManifest.CurrentSchemaVersion,
@@ -208,6 +217,7 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
             var compressed = compressor.Compress(path);
             manifest = ApplyCompressedArtifact(manifest, role, compressed);
             WriteManifest(package.ManifestPath, manifest);
+            File.Delete(path);
         }
 
         manifest = manifest with
@@ -216,6 +226,29 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
             RetentionReason = "Successful package is outside the configured hot-day and hot-run windows.",
         };
         WriteManifest(package.ManifestPath, manifest);
+    }
+
+    private void RemoveVerifiedRawDuplicates(
+        string packageDirectory,
+        MarketAcquisitionRouteDiagnosticManifest manifest)
+    {
+        foreach (var artifact in manifest.StoredArtifacts.Where(artifact =>
+                     artifact.ContentEncoding.Equals("gzip", StringComparison.OrdinalIgnoreCase) &&
+                     artifact.FileName.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)))
+        {
+            var sourcePath = Path.Combine(packageDirectory, artifact.FileName[..^3]);
+            if (!File.Exists(sourcePath))
+                continue;
+
+            var verified = compressor.Compress(sourcePath);
+            if (!verified.StoredFileName.Equals(artifact.FileName, StringComparison.OrdinalIgnoreCase) ||
+                !verified.RawSha256.Equals(artifact.RawSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException($"Raw duplicate '{sourcePath}' does not match its manifest artifact.");
+            }
+
+            File.Delete(sourcePath);
+        }
     }
 
     internal static MarketAcquisitionRouteDiagnosticManifest ApplyCompressedArtifact(

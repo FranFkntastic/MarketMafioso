@@ -29,7 +29,6 @@ public sealed class MarketAcquisitionGzipDiagnosticCompressor : IMarketAcquisiti
                 throw new IOException($"Existing compressed artifact '{targetPath}' does not match '{sourcePath}'.");
             }
 
-            File.Delete(sourcePath);
             return BuildResult(sourcePath, targetPath, sourceIdentity);
         }
 
@@ -51,7 +50,6 @@ public sealed class MarketAcquisitionGzipDiagnosticCompressor : IMarketAcquisiti
             }
 
             File.Move(temporaryPath, targetPath, overwrite: false);
-            File.Delete(sourcePath);
             return BuildResult(sourcePath, targetPath, sourceIdentity);
         }
         finally

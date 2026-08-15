@@ -541,6 +541,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                     .ToArray();
                 StoreArtifact($"fullTrace:{segment.FirstSequence.ToString(CultureInfo.InvariantCulture)}", compressed);
                 WriteManifest();
+                File.Delete(sourcePath);
             }
             catch (Exception exception)
             {
@@ -561,6 +562,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 routeEventsStoredFileName = compressed.StoredFileName;
             StoreArtifact(role, compressed);
             WriteManifest();
+            File.Delete(sourcePath);
         }
         catch (Exception exception)
         {

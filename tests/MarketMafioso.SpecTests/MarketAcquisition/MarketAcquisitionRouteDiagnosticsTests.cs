@@ -8,6 +8,20 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRouteDiagnosticsTests
 {
     [Fact]
+    public void Compressor_PreservesSourceUntilManifestOwnerCommitsTransition()
+    {
+        var root = CreateTempDirectory();
+        var source = Path.Combine(root, "events.jsonl");
+        File.WriteAllText(source, "{\"eventName\":\"proof\"}\n");
+
+        var compressed = new MarketAcquisitionGzipDiagnosticCompressor().Compress(source);
+
+        Assert.True(File.Exists(source));
+        Assert.True(File.Exists(Path.Combine(root, compressed.StoredFileName)));
+        Assert.Equal(File.ReadAllText(source), ReadText(Path.Combine(root, compressed.StoredFileName)));
+    }
+
+    [Fact]
     public void Complete_FinalizesMachineStreamsButKeepsHotShelfArtifactsReadable()
     {
         var root = CreateTempDirectory();
