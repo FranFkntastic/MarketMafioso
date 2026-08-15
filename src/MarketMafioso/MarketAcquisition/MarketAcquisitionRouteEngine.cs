@@ -658,12 +658,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             catch (Exception exception)
             {
                 return new(MarketPurchaseTerminalResolutionStatus.InvalidDisposition,
-                    $"Purchase reconciliation could not preserve the confirmed purchase: {exception.Message}");
+                    $"Purchase reconciliation could not preserve the reconciled purchase: {exception.Message}");
             }
 
             var applied = purchase.ResolvePurchaseEvidence(
                 intent.IntentId,
-                MarketPurchaseTerminalDisposition.AppliedExactlyOnce,
+                terminal is ConfirmedMarketPurchase
+                    ? MarketPurchaseTerminalDisposition.AppliedExactlyOnce
+                    : MarketPurchaseTerminalDisposition.ManuallyReconciled,
                 clock.UtcNow,
                 resolution.Trim());
             if (!applied.IsResolved)
