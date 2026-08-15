@@ -290,7 +290,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             ? MarketAcquisitionRouteDiagnostics.CreateEnabled(
                 diagnosticsDirectory,
                 DateTimeOffset.Now,
-                executionMode == MarketAcquisitionExecutionMode.DryRun ? "dry-run-recovery" : "route-recovery",
+                executionMode == MarketAcquisitionExecutionMode.DryRun ? "dry-run" : "route",
                 diagnosticsLevelRequested)
             : MarketAcquisitionRouteDiagnostics.Disabled;
         LastDiagnosticFilePath = diagnostics.FilePath;

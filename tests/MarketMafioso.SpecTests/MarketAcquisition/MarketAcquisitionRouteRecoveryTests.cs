@@ -24,6 +24,29 @@ public sealed class MarketAcquisitionRouteRecoveryTests
     }
 
     [Fact]
+    public void Recover_WithDiagnosticsEnabled_StartsAValidRoutePackage()
+    {
+        var diagnosticsDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "MarketMafioso.SpecTests",
+            Guid.NewGuid().ToString("N"));
+        using var runner = new MarketAcquisitionRouteRunner(diagnosticsDirectory);
+
+        Assert.True(runner.Start(CreatePlan("Siren"), enableDiagnostics: true).Success);
+        Assert.False(runner.FailRoute("Simulated mid-route failure.").Success);
+
+        var result = runner.Recover("Siren");
+
+        Assert.True(result.Success);
+        Assert.True(runner.IsRunning);
+        Assert.Equal("route.log", Path.GetFileName(runner.LastDiagnosticFilePath));
+        Assert.StartsWith(
+            "route-",
+            Path.GetFileName(Path.GetDirectoryName(runner.LastDiagnosticFilePath)),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PrepareForRecovery_RetainsCompletedStops()
     {
         var session = MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Siren", "Jenova"));
