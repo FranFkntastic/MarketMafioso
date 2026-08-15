@@ -7,6 +7,8 @@ namespace MarketMafioso.WorkshopPrep;
 
 public sealed class WorkshopAssemblyRunner : IDisposable
 {
+    private const int MaxStalledMaterialRequestRecoveries = 3;
+
     private readonly IFramework framework;
     private readonly IPluginLog log;
     private readonly IWorkshopAssemblyUiAutomation uiAutomation;
@@ -22,6 +24,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private uint? activeMaterialItemId;
     private uint? pendingProgressMaterialItemId;
     private uint? pendingProgressStepsComplete;
+    private int stalledMaterialRequestRecoveryCount;
     private WorkshopAssemblyRunnerState stateBeforePause = WorkshopAssemblyRunnerState.Idle;
 
     public WorkshopAssemblyRunner(
@@ -68,6 +71,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         activeMaterialItemId = null;
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        stalledMaterialRequestRecoveryCount = 0;
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
         continueAt = DateTimeOffset.MinValue;
         uiAutomation.ResetState();
@@ -275,7 +279,45 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return;
         }
 
+        if (result.HasPendingMaterialRequest &&
+            !result.ActionTaken &&
+            Now - stateStartedAt > WorkshopAssemblyTiming.AddonTimeout)
+        {
+            RecoverStalledMaterialRequest(entry, result);
+            return;
+        }
+
         HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.SubmittingMaterial, result);
+    }
+
+    private void RecoverStalledMaterialRequest(
+        WorkshopAssemblyQueueEntry entry,
+        WorkshopAssemblyActionResult stalledResult)
+    {
+        if (stalledMaterialRequestRecoveryCount >= MaxStalledMaterialRequestRecoveries)
+        {
+            throw new InvalidOperationException(
+                $"Workshop material request for {entry.ProjectName} remained stuck after {MaxStalledMaterialRequestRecoveries} recovery attempts. {stalledResult.Message}");
+        }
+
+        stalledMaterialRequestRecoveryCount++;
+        var recovery = uiAutomation.RecoverStalledMaterialRequest();
+        diagnostics.Record(
+            "request-recovery",
+            recovery.Message,
+            new Dictionary<string, string?>
+            {
+                ["attempt"] = stalledMaterialRequestRecoveryCount.ToString(),
+                ["maximumAttempts"] = MaxStalledMaterialRequestRecoveries.ToString(),
+                ["project"] = entry.ProjectName,
+                ["workshopItemId"] = entry.WorkshopItemId.ToString(),
+                ["materialItemId"] = stalledResult.ActiveMaterialItemId?.ToString(),
+                ["stalledMessage"] = stalledResult.Message,
+            });
+        activeMaterialItemId = null;
+        pendingProgressMaterialItemId = null;
+        pendingProgressStepsComplete = null;
+        SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, recovery.Message);
     }
 
     private void TickConfirmingContribution(WorkshopAssemblyQueueEntry entry)
@@ -300,6 +342,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     private void StartContributionLockout(WorkshopAssemblyActionResult result)
     {
+        stalledMaterialRequestRecoveryCount = 0;
         continueAt = Now + WorkshopAssemblyTiming.PostContributionLockout;
         diagnostics.Record(
             "lockout-start",
@@ -393,6 +436,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         onProjectRetrieved(entry);
         activeEntryCompletedQuantity++;
+        stalledMaterialRequestRecoveryCount = 0;
         activeMaterialItemId = null;
         if (activeEntryCompletedQuantity >= entry.Quantity)
         {
@@ -465,6 +509,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         details["requiresWorkshopReopen"] = result.RequiresWorkshopReopen.ToString();
         details["isContributionConfirmed"] = result.IsContributionConfirmed.ToString();
         details["isProjectComplete"] = result.IsProjectComplete.ToString();
+        details["hasPendingMaterialRequest"] = result.HasPendingMaterialRequest.ToString();
         details["activeMaterialItemId"] = result.ActiveMaterialItemId?.ToString();
         details["activeMaterialStepsComplete"] = result.ActiveMaterialStepsComplete?.ToString();
 

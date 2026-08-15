@@ -124,6 +124,83 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         Assert.Equal(2, ui.ResetCount);
     }
 
+    [Fact]
+    public void Stalled_native_request_is_cleared_and_reopened_without_inventing_progress()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(true, "Project is open."));
+        ui.SubmitMaterialResults.Enqueue(new(
+            false,
+            "Waiting for the Request window.",
+            HasPendingMaterialRequest: true,
+            ActiveMaterialItemId: 77));
+        ui.SubmitMaterialResults.Enqueue(new(
+            false,
+            "Waiting for the Request window.",
+            HasPendingMaterialRequest: true,
+            ActiveMaterialItemId: 77));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+
+        clock.Advance(WorkshopAssemblyTiming.AddonTimeout + TimeSpan.FromMilliseconds(1));
+        frameworkDriver.Tick(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForFabricationStation, runner.Progress.State);
+        Assert.Null(runner.Progress.ActiveMaterialItemId);
+        Assert.Equal(0, runner.Progress.CompletedProjects);
+        Assert.True(runner.IsRunning);
+        Assert.Equal(1, ui.RecoverStalledRequestCount);
+    }
+
+    [Fact]
+    public void Repeated_stalled_native_requests_fail_after_three_recoveries()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            ui.OpenProjectResults.Enqueue(new(true, "Project is open."));
+            for (var observation = 0; observation < 2; observation++)
+            {
+                ui.SubmitMaterialResults.Enqueue(new(
+                    false,
+                    "Waiting for the Request window.",
+                    HasPendingMaterialRequest: true,
+                    ActiveMaterialItemId: 77));
+            }
+        }
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            frameworkDriver.Tick(framework);
+            frameworkDriver.Tick(framework);
+            frameworkDriver.Tick(framework);
+            clock.Advance(WorkshopAssemblyTiming.AddonTimeout + TimeSpan.FromMilliseconds(1));
+            frameworkDriver.Tick(framework);
+        }
+
+        Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
+        Assert.Contains("after 3 recovery attempts", runner.Progress.Message);
+        Assert.Equal(3, ui.RecoverStalledRequestCount);
+        Assert.Equal(0, runner.Progress.CompletedProjects);
+    }
+
     private static WorkshopAssemblyRunner CreateRunner(
         IFramework framework,
         IWorkshopAssemblyUiAutomation ui,
@@ -148,6 +225,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         public Queue<WorkshopAssemblyActionResult> ProgressResults { get; } = [];
 
         public int ResetCount { get; private set; }
+        public int RecoverStalledRequestCount { get; private set; }
 
         public void ResetState() => ResetCount++;
 
@@ -162,6 +240,16 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry) =>
             SubmitMaterialResults.Dequeue();
+
+        public WorkshopAssemblyActionResult RecoverStalledMaterialRequest()
+        {
+            RecoverStalledRequestCount++;
+            return new(
+                true,
+                "Cleared stalled material request and reopening the station.",
+                ActionTaken: true,
+                RequiresWorkshopReopen: true);
+        }
 
         public WorkshopAssemblyActionResult TryConfirmContribution() => new(false, "No confirmation.");
 

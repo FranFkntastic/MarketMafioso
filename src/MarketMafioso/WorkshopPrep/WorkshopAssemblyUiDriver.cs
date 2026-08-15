@@ -240,10 +240,12 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     public unsafe WorkshopNativeRequestTurnInResult TryAdvanceMaterialRequest()
     {
         if (pendingContributionItemId == null)
-            return new(false, "No workshop material request is active.");
+            return new(false, "No workshop material request is active.", WorkshopRequestTurnInPhase.Idle, false, false, false, false);
 
         var request = gameGui.GetAddonByName<AddonRequest>(RequestAddon, 1);
         var contextMenu = gameGui.GetAddonByName<AddonContextIconMenu>(ContextIconMenuAddon, 1);
+        var requestPresent = request != null;
+        var contextMenuPresent = contextMenu != null;
         var requestReady = request != null && IsAddonReady(&request->AtkUnitBase);
         var contextMenuReady = contextMenu != null && IsAddonReady(&contextMenu->AtkUnitBase);
         var handOverEnabled = requestReady && request->HandOverButton != null && request->HandOverButton->IsEnabled;
@@ -301,8 +303,69 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
                     ["action"] = decision.Action.ToString(),
                 });
         }
+        else
+        {
+            Diagnostics.Record(
+                "request-turn-in-wait",
+                decision.Message,
+                new Dictionary<string, string?>
+                {
+                    ["itemId"] = pendingContributionItemId.Value.ToString(),
+                    ["phase"] = requestTurnIn.Phase.ToString(),
+                    ["requestPresent"] = requestPresent.ToString(),
+                    ["requestReady"] = requestReady.ToString(),
+                    ["requestEntryCount"] = requestReady ? request->EntryCount.ToString() : null,
+                    ["contextMenuPresent"] = contextMenuPresent.ToString(),
+                    ["contextMenuReady"] = contextMenuReady.ToString(),
+                    ["handOverEnabled"] = handOverEnabled.ToString(),
+                });
+        }
 
-        return new(decision.Action != WorkshopRequestTurnInAction.None, decision.Message);
+        return new(
+            decision.Action != WorkshopRequestTurnInAction.None,
+            decision.Message,
+            requestTurnIn.Phase,
+            requestPresent,
+            requestReady,
+            contextMenuPresent,
+            contextMenuReady);
+    }
+
+    public unsafe WorkshopMaterialRequestRecoveryResult RecoverStalledMaterialRequest()
+    {
+        var itemId = pendingContributionItemId;
+        var phase = requestTurnIn.Phase;
+        var request = gameGui.GetAddonByName<AddonRequest>(RequestAddon, 1);
+        var contextMenu = gameGui.GetAddonByName<AddonContextIconMenu>(ContextIconMenuAddon, 1);
+        var requestPresent = request != null;
+        var contextMenuPresent = contextMenu != null;
+        var requestReady = request != null && IsAddonReady(&request->AtkUnitBase);
+        var contextMenuReady = contextMenu != null && IsAddonReady(&contextMenu->AtkUnitBase);
+
+        if (contextMenu != null)
+            contextMenu->AtkUnitBase.Close(true);
+
+        if (request != null)
+            request->AtkUnitBase.Close(true);
+
+        ClearMaterialRequest();
+        var message = requestPresent || contextMenuPresent
+            ? $"Closed a stalled workshop material request for material {itemId}."
+            : $"Cleared a stalled workshop material request for material {itemId}; its addons had already closed.";
+        Diagnostics.Record(
+            "request-turn-in-recovery",
+            message,
+            new Dictionary<string, string?>
+            {
+                ["itemId"] = itemId?.ToString(),
+                ["phase"] = phase.ToString(),
+                ["requestPresent"] = requestPresent.ToString(),
+                ["requestReady"] = requestReady.ToString(),
+                ["contextMenuPresent"] = contextMenuPresent.ToString(),
+                ["contextMenuReady"] = contextMenuReady.ToString(),
+            });
+        log.Warning("[MarketMafioso] {Message}", message);
+        return new(message, phase, requestPresent, requestReady, contextMenuPresent, contextMenuReady);
     }
 
     public unsafe bool TrySelectString(Predicate<string> predicate)
@@ -562,7 +625,22 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
 
 }
 
-internal sealed record WorkshopNativeRequestTurnInResult(bool ActionTaken, string Message);
+internal sealed record WorkshopNativeRequestTurnInResult(
+    bool ActionTaken,
+    string Message,
+    WorkshopRequestTurnInPhase Phase,
+    bool RequestPresent,
+    bool RequestReady,
+    bool ContextMenuPresent,
+    bool ContextMenuReady);
+
+internal sealed record WorkshopMaterialRequestRecoveryResult(
+    string Message,
+    WorkshopRequestTurnInPhase Phase,
+    bool RequestPresent,
+    bool RequestReady,
+    bool ContextMenuPresent,
+    bool ContextMenuReady);
 
 internal enum WorkshopCutsceneSkipState
 {
