@@ -302,7 +302,8 @@ public class MainWindow : Window, IDisposable
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
                 "market-acquisition-report-dead-letter.json")),
             config.PluginInstanceId,
-            PluginBuildInfo.DisplayVersion);
+            PluginBuildInfo.DisplayVersion,
+            () => config.MarketAcquisitionExhaustiveResearchMode);
 
         SizeConstraints = new WindowSizeConstraints
         {

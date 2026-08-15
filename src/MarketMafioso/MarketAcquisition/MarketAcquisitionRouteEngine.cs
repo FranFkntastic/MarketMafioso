@@ -30,6 +30,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly MarketAcquisitionTravelFrameThrottle travelFrameThrottle;
     private readonly string reportPluginInstanceId;
     private readonly string? reportPluginVersion;
+    private readonly Func<bool> exhaustiveResearchModeProvider;
     private readonly MarketBoardListingReadAccumulator listingReadAccumulator = new();
     private readonly MarketBoardAutomationController purchaseAutomation = new();
     private readonly MarketAcquisitionRouteOperationExecutor operationExecutor = new();
@@ -67,7 +68,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         IShardAcquisitionCheckpointCoordinator? shardCheckpoints = null,
         IMarketAcquisitionReportOutbox? reportDeadLetter = null,
         string? reportPluginInstanceId = null,
-        string? reportPluginVersion = null)
+        string? reportPluginVersion = null,
+        Func<bool>? exhaustiveResearchModeProvider = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -86,6 +88,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         this.travelFrameThrottle = travelFrameThrottle ?? throw new ArgumentNullException(nameof(travelFrameThrottle));
         this.reportPluginInstanceId = reportPluginInstanceId ?? string.Empty;
         this.reportPluginVersion = reportPluginVersion;
+        this.exhaustiveResearchModeProvider = exhaustiveResearchModeProvider ?? (() => false);
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
         this.shardCheckpoints = shardCheckpoints;
     }
@@ -1282,6 +1285,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionRequestView activeLine,
         string currentWorld)
     {
+        if (!MarketAcquisitionResearchModePolicy.AllowsConclusivePrefixDeparture(operation.Context))
+            return false;
+
         var plan = runner.ActivePlan;
         var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
         if (plan == null || activeSubtask == null)
@@ -1319,7 +1325,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     ["expectedPages"] = prefixRead.BrowseExpectedPageCount.ToString(),
                     ["readableListings"] = prefixRead.ReadableListingCount.ToString(),
                     ["reportedListings"] = prefixRead.ReportedListingCount.ToString(),
-                    ["remainingBrowseDisposition"] = "DrainBeforeNextBrowse",
+                    ["remainingBrowseDisposition"] = "RouteMayAdvanceWithoutFullListingCoverage",
                 },
             },
             clock.UtcNow,
@@ -1376,6 +1382,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ["lineId"] = runner.ActiveStop?.ActiveItemSubtask?.LineId,
                 ["itemId"] = activeLine.ItemId.ToString(),
                 ["itemName"] = activeLine.ItemName,
+                [MarketAcquisitionResearchModePolicy.ContextKey] =
+                    MarketAcquisitionResearchModePolicy.Capture(exhaustiveResearchModeProvider()),
             },
         });
         runner.RecordRouteOperationSnapshot(operation);

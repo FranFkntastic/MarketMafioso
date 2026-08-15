@@ -28,7 +28,7 @@ internal sealed class MarketAcquisitionSettingsPages
             new("market.operation", "Market Acquisition / Operation", DrawOperation, 30, IsUnlocked,
                 ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases", "retainer listing refresh", "Universalis"]),
             new("market.diagnostics", "Market Acquisition / Diagnostics", DrawDiagnostics, 31, IsUnlocked,
-                ["route diagnostic packages", "route log", "observed listings", "purchase records", "archive", "retention", "hot shelf", "keep raw"]),
+                ["route diagnostic packages", "route log", "observed listings", "purchase records", "archive", "retention", "hot shelf", "keep raw", "exhaustive research", "early leaving"]),
         ];
     }
 
@@ -89,7 +89,7 @@ internal sealed class MarketAcquisitionSettingsPages
     {
         const string label = "Route diagnostics";
         const string description = "Summary records route decisions, purchases, timing, and failures. Full trace adds segmented replay evidence.";
-        if (!context.Matches(label, description, "Off", "Summary", "Full trace", "archive", "retention", "hot shelf", "keep raw"))
+        if (!context.Matches(label, description, "Off", "Summary", "Full trace", "archive", "retention", "hot shelf", "keep raw", "exhaustive research", "early leaving"))
             return;
 
         var current = config.MarketAcquisitionRouteDiagnostics;
@@ -107,6 +107,17 @@ internal sealed class MarketAcquisitionSettingsPages
             ImGui.EndCombo();
         }
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, description);
+        ImGui.Spacing();
+
+        var exhaustiveResearch = config.MarketAcquisitionExhaustiveResearchMode;
+        if (ImGui.Checkbox("Exhaustive research mode", ref exhaustiveResearch))
+        {
+            config.MarketAcquisitionExhaustiveResearchMode = exhaustiveResearch;
+            config.Save();
+        }
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            "Wait for the full browse and visible-listing continuation path before leaving each search. Routes take longer; turn this off for decision-ready acquisition speed.");
         ImGui.Spacing();
 
         var archiveCompleted = config.ArchiveCompletedMarketAcquisitionRouteDiagnostics;
