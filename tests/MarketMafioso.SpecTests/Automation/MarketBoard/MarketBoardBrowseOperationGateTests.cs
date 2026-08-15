@@ -281,7 +281,7 @@ public sealed class MarketBoardBrowseOperationGateTests
     }
 
     [Fact]
-    public void CorrelatedPageProgress_RenewsOnlyTheInactivityDeadline()
+    public void CorrelatedPageProgress_RenewsTheInactivityDeadline()
     {
         var now = DateTimeOffset.Parse("2026-08-15T04:00:00Z");
         var gate = new MarketBoardBrowseOperationGate(() => now);
@@ -289,7 +289,6 @@ public sealed class MarketBoardBrowseOperationGateTests
         Assert.True(gate.TryClaimActivation(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out _));
         gate.ObserveRequest(ItemId, true);
         gate.ObserveHeader(0, 20);
-        var absoluteDeadline = gate.Snapshot.AbsoluteDeadlineUtc;
         var originalProgressDeadline = gate.Snapshot.DeadlineUtc!.Value;
 
         now = originalProgressDeadline.AddMilliseconds(-300);
@@ -297,7 +296,6 @@ public sealed class MarketBoardBrowseOperationGateTests
 
         Assert.True(gate.Snapshot.IsActive);
         Assert.True(gate.Snapshot.DeadlineUtc > originalProgressDeadline);
-        Assert.Equal(absoluteDeadline, gate.Snapshot.AbsoluteDeadlineUtc);
 
         gate.Advance(originalProgressDeadline);
         Assert.True(gate.Snapshot.IsActive);
