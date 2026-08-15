@@ -9,6 +9,7 @@ public sealed record MarketBoardPurchaseCandidate
     public string ListingId { get; init; } = string.Empty;
     public string RetainerId { get; init; } = string.Empty;
     public string RetainerName { get; init; } = string.Empty;
+    public string RetainerNameSource { get; init; } = string.Empty;
     public uint UnitPrice { get; init; }
     public uint Quantity { get; init; }
     public bool IsHq { get; init; }
@@ -22,6 +23,7 @@ public sealed record MarketBoardPurchaseCandidate
             ListingId = listing.ListingId,
             RetainerId = listing.RetainerId,
             RetainerName = listing.RetainerName,
+            RetainerNameSource = listing.RetainerNameSource,
             UnitPrice = listing.UnitPrice,
             Quantity = listing.Quantity,
             IsHq = listing.IsHq,

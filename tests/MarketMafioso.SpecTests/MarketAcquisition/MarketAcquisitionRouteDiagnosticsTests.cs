@@ -1,10 +1,61 @@
 using System.Text.Json;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.Tests.MarketAcquisition;
 
 public sealed class MarketAcquisitionRouteDiagnosticsTests
 {
+    [Fact]
+    public void ObservedListingsCsv_PersistsRetainerNameAndProvenance()
+    {
+        var root = CreateTempDirectory();
+        using var diagnostics = MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            root,
+            DateTimeOffset.UtcNow,
+            "route",
+            MarketAcquisitionRouteDiagnosticsLevel.FullTrace);
+        diagnostics.RecordObservedListings(
+            "request:retainer-name",
+            "Bahamut",
+            "Gaia",
+            new MarketAcquisitionWorldItemSubtask
+            {
+                LineId = "line:1",
+                ItemId = 5059,
+                ItemName = "Cobalt Ingot",
+                WorldName = "Bahamut",
+            },
+            new MarketAcquisitionLiveCandidatePlan
+            {
+                Status = MarketAcquisitionLiveCandidateStatuses.Ready,
+                Rows =
+                [
+                    new MarketAcquisitionLiveCandidateRow
+                    {
+                        Decision = "WouldBuy",
+                        LiveListing = new MarketBoardLiveListing
+                        {
+                            ItemId = 5059,
+                            WorldName = "Bahamut",
+                            ListingId = "listing:1",
+                            RetainerId = "retainer:1",
+                            RetainerName = "Bulk Seller",
+                            RetainerNameSource = "PreparedListingExactIdentityMatch",
+                            UnitPrice = 659,
+                            Quantity = 99,
+                        },
+                    },
+                ],
+            });
+        diagnostics.Complete("Finished.");
+
+        var csv = File.ReadAllLines(diagnostics.ObservedListingsCsvPath!);
+        Assert.Contains("retainerNameSource", csv[0], StringComparison.Ordinal);
+        Assert.Contains("Bulk Seller", csv[1], StringComparison.Ordinal);
+        Assert.Contains("PreparedListingExactIdentityMatch", csv[1], StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Summary_ProjectsHighVolumeDetailsWhileFullTraceRetainsThem()
     {

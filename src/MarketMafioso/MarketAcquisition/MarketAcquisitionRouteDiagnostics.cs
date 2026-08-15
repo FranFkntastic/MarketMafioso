@@ -516,6 +516,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         "listingId",
         "retainerId",
         "retainerName",
+        "retainerNameSource",
         "unitPrice",
         "quantity",
         "totalGil",
@@ -591,6 +592,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             listing?.ListingId,
             listing?.RetainerId,
             listing?.RetainerName,
+            listing?.RetainerNameSource,
             listing?.UnitPrice.ToString(CultureInfo.InvariantCulture),
             listing?.Quantity.ToString(CultureInfo.InvariantCulture),
             listing == null

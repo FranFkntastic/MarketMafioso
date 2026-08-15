@@ -20,6 +20,7 @@ public sealed record MarketBoardLiveListing
     public string ListingId { get; init; } = string.Empty;
     public string RetainerId { get; init; } = string.Empty;
     public string RetainerName { get; init; } = string.Empty;
+    public string RetainerNameSource { get; init; } = string.Empty;
     public uint UnitPrice { get; init; }
     public uint Quantity { get; init; }
     public bool IsHq { get; init; }
