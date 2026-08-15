@@ -77,7 +77,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
             request,
             currentWorld,
             itemId,
-            liveListings,
+            EnrichRetainerNames(liveListings, FindPlannedListings(plan, currentWorld, itemId)),
             alreadyPurchasedQuantity,
             alreadySpentGil);
     }
@@ -98,7 +98,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
             request,
             currentWorld,
             readResult.ItemId,
-            readResult.Listings,
+            EnrichRetainerNames(readResult.Listings, FindPlannedListings(plan, currentWorld, readResult.ItemId)),
             alreadyPurchasedQuantity,
             alreadySpentGil,
             readResult);
@@ -140,7 +140,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
             request,
             currentWorld,
             itemId,
-            liveListings,
+            EnrichRetainerNames(liveListings, activeSubtask.Listings),
             alreadyPurchasedQuantity,
             alreadySpentGil);
     }
@@ -163,7 +163,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
             request,
             currentWorld,
             readResult.ItemId,
-            readResult.Listings,
+            EnrichRetainerNames(readResult.Listings, activeSubtask.Listings),
             alreadyPurchasedQuantity,
             alreadySpentGil,
             readResult);
@@ -297,6 +297,44 @@ public static class MarketAcquisitionLiveCandidatePlanner
             WouldSpendGil = selectedGil,
             Rows = rows,
         };
+    }
+
+    private static IEnumerable<MarketAcquisitionPlannedListing> FindPlannedListings(
+        MarketAcquisitionPlan plan,
+        string currentWorld,
+        uint itemId)
+    {
+        var batch = plan.WorldBatches.Single(
+            candidate => candidate.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase));
+        return batch.ItemSubtasks.Count > 0
+            ? batch.ItemSubtasks.Where(subtask => subtask.ItemId == itemId).SelectMany(subtask => subtask.Listings)
+            : batch.Listings.Where(listing => listing.ItemId == itemId);
+    }
+
+    private static IEnumerable<MarketBoardLiveListing> EnrichRetainerNames(
+        IEnumerable<MarketBoardLiveListing> liveListings,
+        IEnumerable<MarketAcquisitionPlannedListing> plannedListings)
+    {
+        var namesByIdentity = plannedListings
+            .Where(listing => !string.IsNullOrWhiteSpace(listing.RetainerName))
+            .GroupBy(listing => (listing.ListingId, listing.RetainerId))
+            .ToDictionary(group => group.Key, group => group.First().RetainerName);
+
+        foreach (var listing in liveListings)
+        {
+            if (!string.IsNullOrWhiteSpace(listing.RetainerName) ||
+                !namesByIdentity.TryGetValue((listing.ListingId, listing.RetainerId), out var retainerName))
+            {
+                yield return listing;
+                continue;
+            }
+
+            yield return listing with
+            {
+                RetainerName = retainerName,
+                RetainerNameSource = "PreparedListingExactIdentityMatch",
+            };
+        }
     }
 
     private static void Validate(

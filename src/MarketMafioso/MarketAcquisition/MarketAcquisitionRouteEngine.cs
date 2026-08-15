@@ -2425,6 +2425,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             details["candidateListingId"] = result.Candidate.ListingId;
             details["candidateRetainerId"] = result.Candidate.RetainerId;
             details["candidateRetainerName"] = result.Candidate.RetainerName;
+            details["candidateRetainerNameSource"] = result.Candidate.RetainerNameSource;
             details["candidateQuantity"] = result.Candidate.Quantity.ToString();
             details["candidateUnitPrice"] = result.Candidate.UnitPrice.ToString();
             details["candidateTotalGil"] = result.Candidate.TotalGil.ToString();
@@ -2459,6 +2460,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ["candidateListingId"] = candidate.ListingId,
                 ["candidateRetainerId"] = candidate.RetainerId,
                 ["candidateRetainerName"] = candidate.RetainerName,
+                ["candidateRetainerNameSource"] = candidate.RetainerNameSource,
                 ["candidateQuantity"] = candidate.Quantity.ToString(),
                 ["candidateUnitPrice"] = candidate.UnitPrice.ToString(),
                 ["candidateTotalGil"] = candidate.TotalGil.ToString(),

@@ -80,6 +80,58 @@ public sealed class MarketAcquisitionSortedPrefixPlannerTests
         Assert.False(conclusive);
     }
 
+    [Fact]
+    public void ExactPreparedListingMatch_EnrichesLiveRetainerNameForDiagnostics()
+    {
+        var fixture = CreateFixture();
+        var planned = new MarketMafioso.MarketAcquisition.MarketAcquisitionPlannedListing
+        {
+            LineId = fixture.Subtask.LineId,
+            ItemId = fixture.Subtask.ItemId,
+            ListingId = "listing:known",
+            RetainerId = "retainer:known",
+            RetainerName = "Bulk Seller",
+            Quantity = 99,
+            UnitPrice = 80,
+            TotalGil = 7_920,
+        };
+        var subtask = fixture.Subtask with { Listings = [planned] };
+        var plan = fixture.Plan with
+        {
+            WorldBatches =
+            [
+                fixture.Plan.WorldBatches.Single() with { ItemSubtasks = [subtask] },
+            ],
+        };
+        var read = PrefixRead(80) with
+        {
+            ReadState = MarketBoardListingReadState.FreshComplete,
+            Status = "Ready",
+            ReportedListingCount = 1,
+            Listings =
+            [
+                PrefixRead(80).Listings.Single() with
+                {
+                    ListingId = planned.ListingId,
+                    RetainerId = planned.RetainerId,
+                    Quantity = planned.Quantity,
+                },
+            ],
+        };
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            fixture.Request,
+            plan,
+            subtask,
+            "Siren",
+            read);
+
+        var listing = Assert.Single(candidatePlan.Rows).LiveListing;
+        Assert.NotNull(listing);
+        Assert.Equal("Bulk Seller", listing.RetainerName);
+        Assert.Equal("PreparedListingExactIdentityMatch", listing.RetainerNameSource);
+    }
+
     private static (MarketMafioso.MarketAcquisition.MarketAcquisitionRequestView Request,
         MarketMafioso.MarketAcquisition.MarketAcquisitionPlan Plan,
         MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask Subtask) CreateFixture()
