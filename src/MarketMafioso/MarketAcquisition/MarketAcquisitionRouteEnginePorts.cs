@@ -85,8 +85,7 @@ public sealed class UnsupportedMarketAcquisitionRouteTravelCleanup : IMarketAcqu
 
 public interface IMarketAcquisitionMarketBoardIo
 {
-    MarketBoardApproachResult OpenOrApproachMarketBoard();
-    MarketAcquisitionApproachCleanupResult StopOwnedApproach(MarketAcquisitionApproachLease lease);
+    bool IsMarketBoardReady();
     MarketBoardItemSearchResult SearchItem(
         uint itemId,
         string? itemName,

@@ -10,7 +10,6 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed class MarketAcquisitionRouteRunner : IDisposable
 {
-    private const string LocalMarketBoardCommand = "/li mb";
     private static readonly TimeSpan MarketBoardListingFreshnessWatchdog = TimeSpan.FromSeconds(15);
 
     private readonly string diagnosticsDirectory;
@@ -481,16 +480,32 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         if (!string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
             return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
 
-        if (currentWorldIsValid &&
-            activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
-        {
-            return RecordCurrentWorld(currentWorld!);
-        }
-
         if (!currentWorldIsValid)
             return RecordCurrentWorldUnavailable();
 
         return ExecutePendingTravelCommand(processCommand);
+    }
+
+    public MarketAcquisitionRouteActionResult RecordTravelCompletion(
+        MarketAcquisitionTravelCompletionResult completion)
+    {
+        ArgumentNullException.ThrowIfNull(completion);
+        if (!IsRunning)
+            return Fail($"Route is {State}; travel completion was not recorded.");
+
+        StatusMessage = completion.Message;
+        diagnostics.Record(
+            "travel-completion",
+            completion.Message,
+            new Dictionary<string, string?>
+            {
+                ["state"] = completion.State.ToString(),
+                ["targetWorldReached"] = completion.TargetWorldReached.ToString(),
+                ["busyStateAvailable"] = completion.BusyStateAvailable.ToString(),
+                ["lifestreamBusy"] = completion.LifestreamBusy.ToString(),
+                ["marketBoardReady"] = completion.MarketBoardReady.ToString(),
+            });
+        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
     public MarketAcquisitionRouteActionResult RecordCurrentWorldUnavailable()
@@ -693,63 +708,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return approachResult.ReadyToSearch || approachResult.ActionTaken
             ? MarketAcquisitionRouteActionResult.Ok(approachResult.Message)
             : MarketAcquisitionRouteActionResult.Fail(approachResult.Message);
-    }
-
-    public MarketAcquisitionRouteActionResult ExecuteMarketBoardTravelCommand(Func<string, bool> processCommand)
-    {
-        ArgumentNullException.ThrowIfNull(processCommand);
-
-        if (!IsRunning)
-            return Fail($"Route is {State}; market board travel command was not sent.");
-
-        var activeStop = ActiveStop;
-        if (activeStop == null)
-            return Complete("Route complete.");
-
-        if (!string.Equals(activeStop.Status, "Arrived", StringComparison.OrdinalIgnoreCase))
-            return Fail($"Cannot request market board travel while stop is {activeStop.Status}.");
-
-        if (activeStop.MarketBoardTravelCommandSent)
-        {
-            StatusMessage = "Waiting for Lifestream market board travel to finish.";
-            diagnostics.Record(
-                "market-board-travel-wait",
-                StatusMessage,
-                new Dictionary<string, string?>
-                {
-                    ["world"] = activeStop.WorldName,
-                    ["command"] = LocalMarketBoardCommand,
-                });
-            return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
-        }
-
-        if (!processCommand(LocalMarketBoardCommand))
-        {
-            StatusMessage = $"Lifestream command was not handled: {LocalMarketBoardCommand}";
-            diagnostics.Record(
-                "market-board-travel-command",
-                StatusMessage,
-                new Dictionary<string, string?>
-                {
-                    ["world"] = activeStop.WorldName,
-                    ["command"] = LocalMarketBoardCommand,
-                    ["success"] = false.ToString(),
-                });
-            return MarketAcquisitionRouteActionResult.Fail(StatusMessage);
-        }
-
-        activeStop.MarketBoardTravelCommandSent = true;
-        StatusMessage = "Sent /li mb. Waiting for Lifestream market board travel to finish.";
-        diagnostics.Record(
-            "market-board-travel-command",
-            StatusMessage,
-            new Dictionary<string, string?>
-            {
-                ["world"] = activeStop.WorldName,
-                ["command"] = LocalMarketBoardCommand,
-                ["success"] = true.ToString(),
-            });
-        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
     public void ClearSearchSubmission(string reason)

@@ -133,18 +133,7 @@ public sealed class DalamudMarketAcquisitionMarketBoardIo : IMarketAcquisitionMa
         this.browseRuntime = browseRuntime ?? throw new ArgumentNullException(nameof(browseRuntime));
     }
 
-    public MarketBoardApproachResult OpenOrApproachMarketBoard() => approachService.OpenOrApproach();
-    public MarketAcquisitionApproachCleanupResult StopOwnedApproach(MarketAcquisitionApproachLease lease)
-    {
-        ArgumentNullException.ThrowIfNull(lease);
-        var result = approachService.StopNavigation();
-        return new MarketAcquisitionApproachCleanupResult
-        {
-            Status = result.Success ? MarketAcquisitionTravelCleanupStatus.Cancelled : MarketAcquisitionTravelCleanupStatus.Failed,
-            Message = result.Message,
-            AdapterCapability = "GlobalPathStopOnly",
-        };
-    }
+    public bool IsMarketBoardReady() => approachService.IsMarketBoardReady();
     public MarketBoardItemSearchResult SearchItem(
         uint itemId,
         string? itemName,

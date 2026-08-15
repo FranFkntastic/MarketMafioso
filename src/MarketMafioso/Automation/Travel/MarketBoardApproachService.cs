@@ -77,6 +77,8 @@ public sealed class MarketBoardApproachService
         };
     }
 
+    public unsafe bool IsMarketBoardReady() => IsMarketBoardUiOpen();
+
     public VNavmeshStopResult StopNavigation()
     {
         var result = vnavmesh.Stop();

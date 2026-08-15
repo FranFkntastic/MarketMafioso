@@ -20,7 +20,28 @@ public sealed class MarketAcquisitionRouteRecoveryTests
         Assert.True(result.Success);
         Assert.True(runner.IsRunning);
         Assert.Equal("Siren", runner.ActiveStop?.WorldName);
-        Assert.Equal("Arrived", runner.ActiveStop?.Status);
+        Assert.Equal("Pending", runner.ActiveStop?.Status);
+    }
+
+    [Fact]
+    public void PendingStopOnCurrentWorld_StillDelegatesCompleteTripToLifestream()
+    {
+        using var runner = new MarketAcquisitionRouteRunner(Path.GetTempPath());
+        Assert.True(runner.Start(CreatePlan("Siren")).Success);
+        string? submittedCommand = null;
+
+        var result = runner.PreparePendingStopForCurrentWorld(
+            currentWorldIsValid: true,
+            currentWorld: "Siren",
+            command =>
+            {
+                submittedCommand = command;
+                return true;
+            });
+
+        Assert.True(result.Success);
+        Assert.Equal("/li Siren mb", submittedCommand);
+        Assert.Equal("TravelCommandSent", runner.ActiveStop?.Status);
     }
 
     [Fact]

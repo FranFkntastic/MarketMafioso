@@ -38,7 +38,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private MarketAcquisitionClaimView? claimedRequest;
     private MarketAcquisitionTravelLease? activeTravelLease;
     private MarketAcquisitionTravelLease? unresolvedTravelLease;
-    private MarketAcquisitionApproachLease? activeApproachLease;
     private bool travelInterruptedByCleanup;
     private long operationSequence;
     private readonly IExactAcquisitionRouteExecutionStateStore exactAcquisitionStateStore;
@@ -343,7 +342,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (exactAcquisitionAuthority is null)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reason));
 
-        CleanupOwnedApproach("exact-acquisition recovery");
         CleanupOwnedTravel("exact-acquisition recovery");
         CancelActiveOperation("Visible market rows changed; preparing exact-acquisition recovery.");
         if (runner.IsRunning || runner.IsPaused)
@@ -406,7 +404,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public MarketAcquisitionRouteActionResult Pause()
     {
         travelInterruptedByCleanup = activeTravelLease != null;
-        CleanupOwnedApproach("Pause");
         CleanupOwnedTravel("Pause");
         CancelActiveOperation("Route paused; active operation cancelled.");
         var result = runner.Pause();
@@ -463,7 +460,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         CaptureManualRecoverySafetyBlock();
         evidence.Flush();
         uiAutomation.TryCloseMarketBoardWindows();
-        CleanupOwnedApproach("Stop");
         CleanupOwnedTravel("Stop");
         CancelActiveOperation("Route stopped.");
         var result = runner.Stop();
@@ -501,7 +497,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blocked.Message));
         }
 
-        CleanupOwnedApproach("Recovery");
         CleanupOwnedTravel("Recovery");
         CancelActiveOperation("Recovering retained route progress.");
         claimedRequest = claimed;
@@ -538,7 +533,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
-        CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
@@ -577,7 +571,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
-        CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
@@ -607,7 +600,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public void Reset(string status)
     {
-        CleanupOwnedApproach("Reset");
         CleanupOwnedTravel("Reset");
         CancelActiveOperation(status);
         runner.Reset(status);
@@ -862,9 +854,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private void HandlePendingStop(MarketAcquisitionGuidedRouteStop activeStop)
     {
         var currentWorld = context.IsCurrentWorldAvailable ? context.GetCurrentWorldName() : null;
-        var requiresTravelPreparation = runner.MarketBoardCloseRequiredBeforeTravel ||
-            !context.IsCurrentWorldAvailable ||
-            !activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase);
+        // Every acquisition stop delegates the complete trip to `/li <world> mb`, including
+        // a stop on the current world. MMF owns market automation only after Lifestream is
+        // idle and has delivered the market-board UI.
+        const bool requiresTravelPreparation = true;
         MarketAcquisitionRouteOperationSnapshot? preparation = null;
         if (requiresTravelPreparation ||
             operationExecutor.ActiveSnapshot?.Kind == MarketAcquisitionRouteOperationKind.TravelPreparation)
@@ -906,54 +899,37 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return;
             }
 
-            if (activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            var preflight = CheckLifestreamCommandPreflight($"travel to {activeStop.WorldName} market board");
+            if (!preflight.CanSendCommand)
             {
                 ObserveTravelPreparationOperation(
                     preparation,
-                    MarketAcquisitionRouteOperationDisposition.Succeeded,
-                    $"Already on {activeStop.WorldName}; travel preparation complete.",
+                    MarketAcquisitionRouteOperationDisposition.Pending,
+                    preflight.Message,
                     new Dictionary<string, string?>
                     {
-                        ["preparationState"] = "TargetWorldReached",
+                        ["preparationState"] = "PreflightBlocked",
+                        ["preflightState"] = preflight.State.ToString(),
+                        ["busyStateAvailable"] = preflight.BusyStateAvailable.ToString(),
+                        ["lifestreamBusy"] = preflight.LifestreamBusy.ToString(),
+                        ["blockingAddons"] = string.Join(", ", preflight.BlockingAddons),
                     });
+                UpdateStatus(runner.RecordTravelPreflightBlocked(preflight));
+                state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+                return;
             }
-            else
-            {
-                var preflight = CheckLifestreamCommandPreflight($"travel to {activeStop.WorldName}");
-                if (!preflight.CanSendCommand)
-                {
-                    UpdateStatus(runner.RecordTravelPreflightBlocked(preflight));
-                    ObserveTravelPreparationOperation(
-                        preparation,
-                        MarketAcquisitionRouteOperationDisposition.Pending,
-                        preflight.Message,
-                        new Dictionary<string, string?>
-                        {
-                            ["preparationState"] = "PreflightBlocked",
-                            ["preflightState"] = preflight.State.ToString(),
-                            ["busyStateAvailable"] = preflight.BusyStateAvailable.ToString(),
-                            ["lifestreamBusy"] = preflight.LifestreamBusy.ToString(),
-                            ["blockingAddons"] = string.Join(", ", preflight.BlockingAddons),
-                        });
-                    state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
-                    return;
-                }
 
-                ObserveTravelPreparationOperation(
-                    preparation,
-                    MarketAcquisitionRouteOperationDisposition.Succeeded,
-                    $"Travel preflight passed for {activeStop.WorldName}.",
-                    new Dictionary<string, string?>
-                    {
-                        ["preparationState"] = "ReadyToTravel",
-                    });
-            }
+            ObserveTravelPreparationOperation(
+                preparation,
+                MarketAcquisitionRouteOperationDisposition.Succeeded,
+                $"Travel preflight passed for {activeStop.WorldName} market board.",
+                new Dictionary<string, string?>
+                {
+                    ["preparationState"] = "ReadyToTravel",
+                });
         }
 
-        var needsWorldTravel = !activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase);
-        var travelOperation = needsWorldTravel
-            ? EnsureWorldTravelArrivalOperation(activeStop, currentWorld)
-            : null;
+        var travelOperation = EnsureWorldTravelArrivalOperation(activeStop, currentWorld);
         if (travelOperation != null)
         {
             if (!travelFrameThrottle.TryAcquire(
@@ -1186,42 +1162,59 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void HandleWorldScopedStop(MarketAcquisitionGuidedRouteStop activeStop, string currentWorld)
     {
-        if (!activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(activeStop.Status, "TravelCommandSent", StringComparison.OrdinalIgnoreCase))
         {
-            if (operationExecutor.ActiveSnapshot is { Kind: MarketAcquisitionRouteOperationKind.Travel } travel)
+            var lifestreamStateAvailable = context.TryIsWorldTravelBusy(out var lifestreamBusy);
+            var completion = MarketAcquisitionTravelCompletion.Evaluate(
+                activeStop.WorldName,
+                currentWorld,
+                lifestreamStateAvailable,
+                lifestreamBusy,
+                marketBoard.IsMarketBoardReady());
+
+            if (completion.TargetWorldReached)
+                ReleaseTravelFrameThrottle("ArrivalConfirmed");
+
+            if (!completion.IsComplete)
+            {
+                if (operationExecutor.ActiveSnapshot is { Kind: MarketAcquisitionRouteOperationKind.Travel } pendingTravel)
+                {
+                    ObserveWorldTravelOperation(
+                        pendingTravel,
+                        MarketAcquisitionRouteOperationDisposition.Pending,
+                        completion.Message,
+                        new Dictionary<string, string?>
+                        {
+                            ["currentWorld"] = currentWorld,
+                            ["leaseId"] = activeTravelLease?.LeaseId,
+                            ["completionState"] = completion.State.ToString(),
+                            ["busyStateAvailable"] = completion.BusyStateAvailable.ToString(),
+                            ["lifestreamBusy"] = completion.LifestreamBusy.ToString(),
+                            ["marketBoardReady"] = completion.MarketBoardReady.ToString(),
+                        });
+                }
+                UpdateStatus(runner.RecordTravelCompletion(completion));
+                state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+                return;
+            }
+
+            if (operationExecutor.ActiveSnapshot is { Kind: MarketAcquisitionRouteOperationKind.Travel } travelArrival)
             {
                 ObserveWorldTravelOperation(
-                    travel,
-                    MarketAcquisitionRouteOperationDisposition.Pending,
-                    $"Waiting for Lifestream arrival on {activeStop.WorldName}; current world is {currentWorld}.",
+                    travelArrival,
+                    MarketAcquisitionRouteOperationDisposition.Succeeded,
+                    completion.Message,
                     new Dictionary<string, string?>
                     {
                         ["currentWorld"] = currentWorld,
                         ["leaseId"] = activeTravelLease?.LeaseId,
+                        ["leaseOwnership"] = activeTravelLease?.IsOwned.ToString(),
+                        ["marketBoardReady"] = completion.MarketBoardReady.ToString(),
                     });
+                activeTravelLease = null;
             }
             UpdateStatus(runner.RecordCurrentWorld(currentWorld));
-            return;
         }
-
-        ReleaseTravelFrameThrottle("ArrivalConfirmed");
-        if (operationExecutor.ActiveSnapshot is { Kind: MarketAcquisitionRouteOperationKind.Travel } travelArrival)
-        {
-            ObserveWorldTravelOperation(
-                travelArrival,
-                MarketAcquisitionRouteOperationDisposition.Succeeded,
-                $"Confirmed Lifestream arrival on {activeStop.WorldName}.",
-                new Dictionary<string, string?>
-                {
-                    ["currentWorld"] = currentWorld,
-                    ["leaseId"] = activeTravelLease?.LeaseId,
-                    ["leaseOwnership"] = activeTravelLease?.IsOwned.ToString(),
-                });
-            activeTravelLease = null;
-        }
-
-        if (string.Equals(activeStop.Status, "TravelCommandSent", StringComparison.OrdinalIgnoreCase))
-            UpdateStatus(runner.RecordCurrentWorld(currentWorld));
 
         if (runner.ActiveStop?.Status == "Arrived")
             HandleArrivedStop(currentWorld);
@@ -1232,49 +1225,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var claimed = claimedRequest ?? throw new InvalidOperationException("No dashboard request is accepted.");
         if (!runner.SearchSubmitted)
         {
-            var approachResult = marketBoard.OpenOrApproachMarketBoard();
-            if (approachResult.ActionKind == MarketBoardApproachActionKind.NavigationStarted)
+            if (!marketBoard.IsMarketBoardReady())
             {
-                activeApproachLease = new MarketAcquisitionApproachLease
-                {
-                    LeaseId = $"{state.ProgressNonce}:vnavmesh:{++operationSequence}",
-                    RouteRunId = state.ProgressNonce,
-                    OperationId = $"{state.ProgressNonce}:market-board-approach:{operationSequence}",
-                    Dependency = "VNavmesh",
-                };
-                runner.RecordRouteCleanup(
-                    "Route-owned vnavmesh approach started.",
-                    new Dictionary<string, string?>
-                    {
-                        ["routeRunId"] = activeApproachLease.RouteRunId,
-                        ["operationId"] = activeApproachLease.OperationId,
-                        ["leaseId"] = activeApproachLease.LeaseId,
-                        ["dependency"] = activeApproachLease.Dependency,
-                        ["adapterCapability"] = "GlobalPathStopOnly",
-                    });
-            }
-            else if (approachResult.ReadyToSearch)
-            {
-                activeApproachLease = null;
-            }
-            UpdateStatus(runner.RecordMarketBoardApproach(approachResult));
-            if (approachResult.MarketBoardTravelNeeded)
-            {
-                var preflight = CheckLifestreamCommandPreflight("market-board travel");
-                if (!preflight.CanSendCommand)
-                {
-                    UpdateStatus(runner.RecordTravelPreflightBlocked(preflight));
-                    state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
-                    return;
-                }
-
-                UpdateStatus(runner.ExecuteMarketBoardTravelCommand(uiAutomation.ProcessCommand));
-                state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(750);
-                return;
-            }
-
-            if (!approachResult.ReadyToSearch)
-            {
+                UpdateStatus(runner.RecordTravelCompletion(
+                    MarketAcquisitionTravelCompletion.Evaluate(
+                        currentWorld,
+                        currentWorld,
+                        lifestreamStateAvailable: true,
+                        lifestreamBusy: false,
+                        marketBoardReady: false)));
                 state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
                 return;
             }
@@ -2567,7 +2526,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private void ClearExecutionState(bool preserveExecutionMode = false)
     {
         var purchaseEvidenceState = purchase.PurchaseEvidenceState;
-        CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         travelInterruptedByCleanup = false;
         CancelActiveOperation("Route execution state reset.");
@@ -2595,7 +2553,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public void Dispose()
     {
         evidence.Flush();
-        CleanupOwnedApproach("Dispose");
         CleanupOwnedTravel("Dispose");
         travelFrameThrottle.Dispose();
         CancelActiveOperation("Route engine disposed.");
@@ -2633,7 +2590,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         CaptureManualRecoverySafetyBlock();
         evidence.Flush();
-        CleanupOwnedApproach("Failure");
         CleanupOwnedTravel("Failure");
         CancelActiveOperation($"Route failed; active operation cancelled. {message}");
         return runner.FailRoute(message, exception);
@@ -2655,42 +2611,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.ManualRecoveryBlockedReason = purchaseSession?.ConfirmationWasSubmitted != true
             ? null
             : $"The retained route cannot resume automatically because listing {purchaseSession.Candidate.ListingId} may have been purchased. Reconcile that purchase outcome before retrying it.";
-    }
-
-    private void CleanupOwnedApproach(string terminalReason)
-    {
-        var lease = activeApproachLease;
-        if (lease == null)
-            return;
-
-        activeApproachLease = null;
-        MarketAcquisitionApproachCleanupResult result;
-        try
-        {
-            result = marketBoard.StopOwnedApproach(lease);
-        }
-        catch (Exception ex)
-        {
-            result = new MarketAcquisitionApproachCleanupResult
-            {
-                Status = MarketAcquisitionTravelCleanupStatus.Failed,
-                Message = $"vnavmesh cleanup adapter threw {ex.GetType().Name}: {ex.Message}",
-                AdapterCapability = "AdapterException",
-            };
-        }
-
-        runner.RecordRouteCleanup(
-            result.Message,
-            new Dictionary<string, string?>
-            {
-                ["routeRunId"] = lease.RouteRunId,
-                ["operationId"] = lease.OperationId,
-                ["leaseId"] = lease.LeaseId,
-                ["dependency"] = lease.Dependency,
-                ["terminalReason"] = terminalReason,
-                ["cleanupStatus"] = result.Status.ToString(),
-                ["adapterCapability"] = result.AdapterCapability,
-            });
     }
 
     private void CleanupOwnedTravel(string terminalReason)
