@@ -32,6 +32,8 @@ public sealed record MarketBoardBrowseSnapshot
     public MarketBoardBrowsePhase Phase { get; init; } = MarketBoardBrowsePhase.Idle;
     public DateTimeOffset? StartedAtUtc { get; init; }
     public DateTimeOffset? DeadlineUtc { get; init; }
+    public DateTimeOffset? AbsoluteDeadlineUtc { get; init; }
+    public DateTimeOffset? LastProgressAtUtc { get; init; }
     public uint ItemId { get; init; }
     public bool ActivationClaimed { get; init; }
     public bool RequestObserved { get; init; }
@@ -93,6 +95,28 @@ internal interface IHeadlessMarketBoardBrowseRuntime : IMarketBoardBrowseRuntime
         out MarketBoardBrowseSnapshot snapshot);
 }
 
+internal static class MarketBoardBrowseTimeoutPolicy
+{
+    public static readonly TimeSpan InactivityTimeout = TimeSpan.FromSeconds(15);
+
+    // One activation window plus accepted request, header, ten bounded listing pages, and history.
+    // The inactivity deadline is the normal failure boundary; this remains an independent hard cap.
+    public static readonly TimeSpan MarketAcquisitionAbsoluteTimeout = TimeSpan.FromTicks(
+        InactivityTimeout.Ticks * 14);
+
+    public static TimeSpan GetInactivityTimeout(MarketBoardBrowseOwner owner) =>
+        owner == MarketBoardBrowseOwner.RemoteAccessProbe
+            ? TimeSpan.FromSeconds(120)
+            : InactivityTimeout;
+
+    public static TimeSpan GetAbsoluteTimeout(MarketBoardBrowseOwner owner) => owner switch
+    {
+        MarketBoardBrowseOwner.MarketAcquisition => MarketAcquisitionAbsoluteTimeout,
+        MarketBoardBrowseOwner.RemoteAccessProbe => TimeSpan.FromSeconds(120),
+        _ => InactivityTimeout,
+    };
+}
+
 internal sealed class MarketBoardBrowseOperationGate
 {
     private const uint RateLimitStatus = 0x70000002;
@@ -100,9 +124,15 @@ internal sealed class MarketBoardBrowseOperationGate
     private const int MaximumListings = 100;
 
     private readonly object sync = new();
+    private readonly Func<DateTimeOffset> getUtcNow;
     private long operationSequence;
     private MarketBoardBrowseSnapshot snapshot = MarketBoardBrowseSnapshot.Idle;
     private readonly HashSet<byte> continuationTokens = [];
+
+    public MarketBoardBrowseOperationGate(Func<DateTimeOffset>? getUtcNow = null)
+    {
+        this.getUtcNow = getUtcNow ?? (() => DateTimeOffset.UtcNow);
+    }
 
     public MarketBoardBrowseSnapshot Snapshot
     {
@@ -127,14 +157,17 @@ internal sealed class MarketBoardBrowseOperationGate
             }
 
             continuationTokens.Clear();
-            var nowUtc = DateTimeOffset.UtcNow;
+            var nowUtc = getUtcNow();
+            var inactivityTimeout = MarketBoardBrowseTimeoutPolicy.GetInactivityTimeout(owner);
             snapshot = new MarketBoardBrowseSnapshot
             {
                 OperationId = $"market-browse:{++operationSequence}",
                 Owner = owner,
                 Phase = MarketBoardBrowsePhase.Armed,
                 StartedAtUtc = nowUtc,
-                DeadlineUtc = nowUtc + GetTimeout(owner),
+                DeadlineUtc = nowUtc + inactivityTimeout,
+                AbsoluteDeadlineUtc = nowUtc + MarketBoardBrowseTimeoutPolicy.GetAbsoluteTimeout(owner),
+                LastProgressAtUtc = nowUtc,
                 ItemId = itemId,
                 Message = itemId == 0
                     ? "Armed for the next exact market-board RequestData call."
@@ -173,16 +206,36 @@ internal sealed class MarketBoardBrowseOperationGate
     {
         lock (sync)
         {
-            if (!snapshot.IsActive ||
-                snapshot.DeadlineUtc is not { } deadline ||
-                nowUtc < deadline)
+            if (!snapshot.IsActive)
             {
                 return;
             }
 
-            Fail(
-                "BrowseTimeout",
-                $"Market-board browse {snapshot.OperationId} timed out while in {snapshot.Phase}.");
+            if (snapshot.Owner != MarketBoardBrowseOwner.MarketAcquisition)
+            {
+                if (snapshot.DeadlineUtc is { } fixedDeadline && nowUtc >= fixedDeadline)
+                {
+                    Fail(
+                        "BrowseTimeout",
+                        $"Market-board browse {snapshot.OperationId} timed out while in {snapshot.Phase}.");
+                }
+                return;
+            }
+
+            if (snapshot.AbsoluteDeadlineUtc is { } absoluteDeadline && nowUtc >= absoluteDeadline)
+            {
+                Fail(
+                    "BrowseAbsoluteTimeout",
+                    $"Market-board browse {snapshot.OperationId} reached its absolute limit while in {snapshot.Phase} after {snapshot.PageCount}/{snapshot.ExpectedPageCount} page(s).");
+                return;
+            }
+
+            if (snapshot.DeadlineUtc is { } progressDeadline && nowUtc >= progressDeadline)
+            {
+                Fail(
+                    "BrowseStalled",
+                    $"Market-board browse {snapshot.OperationId} made no progress for {MarketBoardBrowseTimeoutPolicy.GetInactivityTimeout(snapshot.Owner!.Value).TotalSeconds:N0}s while in {snapshot.Phase} after {snapshot.PageCount}/{snapshot.ExpectedPageCount} page(s).");
+            }
         }
     }
 
@@ -265,6 +318,7 @@ internal sealed class MarketBoardBrowseOperationGate
                 Phase = MarketBoardBrowsePhase.AwaitingHeader,
                 Message = $"RequestData accepted item {itemId}; waiting for the semantic result header.",
             };
+            RecordProgress();
         }
     }
 
@@ -331,6 +385,7 @@ internal sealed class MarketBoardBrowseOperationGate
                     ? "The server returned an authoritative zero-listing header; waiting for matching standard history."
                     : $"The server accepted {listingCount} listings across {expectedPageCount} expected page(s).",
             };
+            RecordProgress();
             TryComplete();
         }
     }
@@ -465,6 +520,7 @@ internal sealed class MarketBoardBrowseOperationGate
                     ? $"Observed the terminal page for item {snapshot.ItemId}; waiting for matching standard history."
                     : $"Observed correlated page {nextPageNumber}/{snapshot.ExpectedPageCount} for item {snapshot.ItemId}.",
             };
+            RecordProgress();
             TryComplete();
         }
     }
@@ -511,6 +567,7 @@ internal sealed class MarketBoardBrowseOperationGate
                 HistoryEntryCount = entryCount,
                 Message = $"Observed matching standard history for item {itemId}; waiting for listing completion.",
             };
+            RecordProgress();
             TryComplete();
         }
     }
@@ -553,8 +610,20 @@ internal sealed class MarketBoardBrowseOperationGate
         };
     }
 
-    private static TimeSpan GetTimeout(MarketBoardBrowseOwner owner) =>
-        owner == MarketBoardBrowseOwner.RemoteAccessProbe
-            ? TimeSpan.FromSeconds(120)
-            : TimeSpan.FromSeconds(15);
+    private void RecordProgress()
+    {
+        if (snapshot.Owner is not { } owner)
+            return;
+
+        var nowUtc = getUtcNow();
+        var absoluteDeadline = snapshot.AbsoluteDeadlineUtc ??
+                               nowUtc + MarketBoardBrowseTimeoutPolicy.GetAbsoluteTimeout(owner);
+        var candidateDeadline = nowUtc + MarketBoardBrowseTimeoutPolicy.GetInactivityTimeout(owner);
+        snapshot = snapshot with
+        {
+            LastProgressAtUtc = nowUtc,
+            DeadlineUtc = candidateDeadline < absoluteDeadline ? candidateDeadline : absoluteDeadline,
+            AbsoluteDeadlineUtc = absoluteDeadline,
+        };
+    }
 }

@@ -255,14 +255,96 @@ public sealed class MarketBoardBrowseOperationGateTests
     }
 
     [Fact]
-    public void ActiveBrowse_TimesOutFailClosed()
+    public void ActiveBrowse_StallsFailClosedWithoutProgress()
     {
-        var gate = new MarketBoardBrowseOperationGate();
+        var now = DateTimeOffset.Parse("2026-08-15T04:00:00Z");
+        var gate = new MarketBoardBrowseOperationGate(() => now);
         Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var started));
 
-        gate.Advance(started.DeadlineUtc!.Value);
+        now = started.DeadlineUtc!.Value;
+        gate.Advance(now);
+
+        AssertFailure(gate, "BrowseStalled");
+    }
+
+    [Fact]
+    public void NonRouteOwner_PreservesItsFixedTimeoutContract()
+    {
+        var now = DateTimeOffset.Parse("2026-08-15T04:00:00Z");
+        var gate = new MarketBoardBrowseOperationGate(() => now);
+        Assert.True(gate.TryBegin(MarketBoardBrowseOwner.RetainerListingRefresh, ItemId, out var started));
+
+        now = started.DeadlineUtc!.Value;
+        gate.Advance(now);
 
         AssertFailure(gate, "BrowseTimeout");
+    }
+
+    [Fact]
+    public void CorrelatedPageProgress_RenewsOnlyTheInactivityDeadline()
+    {
+        var now = DateTimeOffset.Parse("2026-08-15T04:00:00Z");
+        var gate = new MarketBoardBrowseOperationGate(() => now);
+        Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var started));
+        Assert.True(gate.TryClaimActivation(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out _));
+        gate.ObserveRequest(ItemId, true);
+        gate.ObserveHeader(0, 20);
+        var absoluteDeadline = gate.Snapshot.AbsoluteDeadlineUtc;
+        var originalProgressDeadline = gate.Snapshot.DeadlineUtc!.Value;
+
+        now = originalProgressDeadline.AddMilliseconds(-300);
+        gate.ObservePage(10, 0, 7, 7, Items(10));
+
+        Assert.True(gate.Snapshot.IsActive);
+        Assert.True(gate.Snapshot.DeadlineUtc > originalProgressDeadline);
+        Assert.Equal(absoluteDeadline, gate.Snapshot.AbsoluteDeadlineUtc);
+
+        gate.Advance(originalProgressDeadline);
+        Assert.True(gate.Snapshot.IsActive);
+
+        now = gate.Snapshot.DeadlineUtc!.Value;
+        gate.Advance(now);
+        AssertFailure(gate, "BrowseStalled");
+    }
+
+    [Fact]
+    public void AlexanderSevenPageBrowse_CompletesWhenPagesKeepAdvancingPastOriginalDeadline()
+    {
+        var startedAt = DateTimeOffset.Parse("2026-08-15T04:04:55.4962064Z");
+        var now = startedAt;
+        var gate = new MarketBoardBrowseOperationGate(() => now);
+        Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var started));
+        Assert.True(gate.TryClaimActivation(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out _));
+
+        now = startedAt.AddSeconds(1.4);
+        gate.ObserveRequest(ItemId, true);
+        now = startedAt.AddSeconds(2.7);
+        gate.ObserveHeader(0, 66);
+        gate.ObserveHistory(ItemId, true, 20);
+
+        ObservePageAt(5.4, 10, 0, 10);
+        ObservePageAt(7.4, 20, 10, 10);
+        ObservePageAt(8.8, 30, 20, 10);
+        ObservePageAt(12.1, 40, 30, 10);
+        ObservePageAt(14.7, 50, 40, 10);
+
+        now = started.DeadlineUtc!.Value;
+        gate.Advance(now);
+        Assert.True(gate.Snapshot.IsActive);
+        Assert.Equal(5, gate.Snapshot.PageCount);
+
+        ObservePageAt(17.5, 60, 50, 10);
+        ObservePageAt(20.0, 0, 60, 6);
+
+        Assert.True(gate.Snapshot.IsComplete);
+        Assert.Equal(7, gate.Snapshot.PageCount);
+        Assert.Equal(66, gate.Snapshot.ListingCount);
+
+        void ObservePageAt(double seconds, byte continuationToken, byte firstMarker, int itemCount)
+        {
+            now = startedAt.AddSeconds(seconds);
+            gate.ObservePage(continuationToken, firstMarker, 36, 36, Items(itemCount));
+        }
     }
 
     [Fact]

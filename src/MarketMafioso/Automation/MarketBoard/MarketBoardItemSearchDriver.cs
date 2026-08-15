@@ -780,6 +780,9 @@ public sealed class MarketBoardItemSearchDriver
         details["terminalPageObserved"] = browse.TerminalPageObserved.ToString();
         details["historyObserved"] = browse.HistoryObserved.ToString();
         details["historyItemId"] = browse.HistoryItemId?.ToString(CultureInfo.InvariantCulture);
+        details["browseLastProgressAtUtc"] = browse.LastProgressAtUtc?.ToString("O", CultureInfo.InvariantCulture);
+        details["browseProgressDeadlineUtc"] = browse.DeadlineUtc?.ToString("O", CultureInfo.InvariantCulture);
+        details["browseAbsoluteDeadlineUtc"] = browse.AbsoluteDeadlineUtc?.ToString("O", CultureInfo.InvariantCulture);
         details["failureCode"] = browse.FailureCode;
 
         var status = browse.Phase switch
