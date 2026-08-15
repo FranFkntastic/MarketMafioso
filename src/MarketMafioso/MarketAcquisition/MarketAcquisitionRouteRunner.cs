@@ -579,9 +579,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             ["timeoutDisposition"] = snapshot.TimeoutDisposition.ToString(),
             ["attempt"] = snapshot.Attempt.ToString(CultureInfo.InvariantCulture),
             ["startedAtUtc"] = snapshot.StartedAtUtc.ToString("O", CultureInfo.InvariantCulture),
-            ["deadlineUtc"] = snapshot.DeadlineUtc.ToString("O", CultureInfo.InvariantCulture),
+            ["deadlineUtc"] = snapshot.DeadlineUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["startedAtMonotonicMilliseconds"] = snapshot.StartedAtMonotonicMilliseconds.ToString(CultureInfo.InvariantCulture),
-            ["deadlineMonotonicMilliseconds"] = snapshot.DeadlineMonotonicMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["deadlineMonotonicMilliseconds"] = snapshot.DeadlineMonotonicMilliseconds?.ToString(CultureInfo.InvariantCulture),
             ["updatedAtMonotonicMilliseconds"] = snapshot.UpdatedAtMonotonicMilliseconds.ToString(CultureInfo.InvariantCulture),
         };
         foreach (var pair in snapshot.Context)

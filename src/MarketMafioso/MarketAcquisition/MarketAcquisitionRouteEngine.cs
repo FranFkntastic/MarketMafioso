@@ -11,8 +11,6 @@ namespace MarketMafioso.MarketAcquisition;
 public sealed class MarketAcquisitionRouteEngine : IDisposable
 {
     private static readonly TimeSpan RouteMonitorInterval = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan MarketBoardItemSearchOperationTimeout =
-        MarketBoardBrowseTimeoutPolicy.MarketAcquisitionAbsoluteTimeout;
     private static readonly TimeSpan TravelPreparationOperationTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan SameDataCenterWorldTravelArrivalOperationTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan DataCenterTravelArrivalOperationTimeout = TimeSpan.FromMinutes(6);
@@ -1332,10 +1330,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             Kind = MarketAcquisitionRouteOperationKind.ItemSearch,
             StartedAtUtc = clock.UtcNow,
             StartedAtMonotonicMilliseconds = clock.MonotonicMilliseconds,
-            Timeout = MarketBoardItemSearchOperationTimeout,
+            Timeout = null,
             TimeoutDisposition = MarketAcquisitionRouteOperationDisposition.Failed,
-            TimeoutMessage =
-                $"Market board item search reached its absolute {MarketBoardItemSearchOperationTimeout.TotalSeconds:N0}s limit while waiting for listings for {FormatItem(activeLine)}.",
+            TimeoutMessage = "Market board item-search liveness is owned by its progress-aware browse gate.",
             Context = new Dictionary<string, string?>
             {
                 ["world"] = currentWorld,

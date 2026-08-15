@@ -47,7 +47,7 @@ public sealed record MarketAcquisitionRouteOperationStart
 
     public required long StartedAtMonotonicMilliseconds { get; init; }
 
-    public required TimeSpan Timeout { get; init; }
+    public required TimeSpan? Timeout { get; init; }
 
     public required MarketAcquisitionRouteOperationDisposition TimeoutDisposition { get; init; }
 
@@ -87,11 +87,11 @@ public sealed record MarketAcquisitionRouteOperationSnapshot
 
     public required DateTimeOffset StartedAtUtc { get; init; }
 
-    public required DateTimeOffset DeadlineUtc { get; init; }
+    public required DateTimeOffset? DeadlineUtc { get; init; }
 
     public required long StartedAtMonotonicMilliseconds { get; init; }
 
-    public required long DeadlineMonotonicMilliseconds { get; init; }
+    public required long? DeadlineMonotonicMilliseconds { get; init; }
 
     public required long UpdatedAtMonotonicMilliseconds { get; init; }
 

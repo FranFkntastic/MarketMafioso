@@ -32,7 +32,6 @@ public sealed record MarketBoardBrowseSnapshot
     public MarketBoardBrowsePhase Phase { get; init; } = MarketBoardBrowsePhase.Idle;
     public DateTimeOffset? StartedAtUtc { get; init; }
     public DateTimeOffset? DeadlineUtc { get; init; }
-    public DateTimeOffset? AbsoluteDeadlineUtc { get; init; }
     public DateTimeOffset? LastProgressAtUtc { get; init; }
     public uint ItemId { get; init; }
     public bool ActivationClaimed { get; init; }
@@ -99,22 +98,10 @@ internal static class MarketBoardBrowseTimeoutPolicy
 {
     public static readonly TimeSpan InactivityTimeout = TimeSpan.FromSeconds(15);
 
-    // One activation window plus accepted request, header, ten bounded listing pages, and history.
-    // The inactivity deadline is the normal failure boundary; this remains an independent hard cap.
-    public static readonly TimeSpan MarketAcquisitionAbsoluteTimeout = TimeSpan.FromTicks(
-        InactivityTimeout.Ticks * 14);
-
     public static TimeSpan GetInactivityTimeout(MarketBoardBrowseOwner owner) =>
         owner == MarketBoardBrowseOwner.RemoteAccessProbe
             ? TimeSpan.FromSeconds(120)
             : InactivityTimeout;
-
-    public static TimeSpan GetAbsoluteTimeout(MarketBoardBrowseOwner owner) => owner switch
-    {
-        MarketBoardBrowseOwner.MarketAcquisition => MarketAcquisitionAbsoluteTimeout,
-        MarketBoardBrowseOwner.RemoteAccessProbe => TimeSpan.FromSeconds(120),
-        _ => InactivityTimeout,
-    };
 }
 
 internal sealed class MarketBoardBrowseOperationGate
@@ -166,7 +153,6 @@ internal sealed class MarketBoardBrowseOperationGate
                 Phase = MarketBoardBrowsePhase.Armed,
                 StartedAtUtc = nowUtc,
                 DeadlineUtc = nowUtc + inactivityTimeout,
-                AbsoluteDeadlineUtc = nowUtc + MarketBoardBrowseTimeoutPolicy.GetAbsoluteTimeout(owner),
                 LastProgressAtUtc = nowUtc,
                 ItemId = itemId,
                 Message = itemId == 0
@@ -219,14 +205,6 @@ internal sealed class MarketBoardBrowseOperationGate
                         "BrowseTimeout",
                         $"Market-board browse {snapshot.OperationId} timed out while in {snapshot.Phase}.");
                 }
-                return;
-            }
-
-            if (snapshot.AbsoluteDeadlineUtc is { } absoluteDeadline && nowUtc >= absoluteDeadline)
-            {
-                Fail(
-                    "BrowseAbsoluteTimeout",
-                    $"Market-board browse {snapshot.OperationId} reached its absolute limit while in {snapshot.Phase} after {snapshot.PageCount}/{snapshot.ExpectedPageCount} page(s).");
                 return;
             }
 
@@ -616,14 +594,10 @@ internal sealed class MarketBoardBrowseOperationGate
             return;
 
         var nowUtc = getUtcNow();
-        var absoluteDeadline = snapshot.AbsoluteDeadlineUtc ??
-                               nowUtc + MarketBoardBrowseTimeoutPolicy.GetAbsoluteTimeout(owner);
-        var candidateDeadline = nowUtc + MarketBoardBrowseTimeoutPolicy.GetInactivityTimeout(owner);
         snapshot = snapshot with
         {
             LastProgressAtUtc = nowUtc,
-            DeadlineUtc = candidateDeadline < absoluteDeadline ? candidateDeadline : absoluteDeadline,
-            AbsoluteDeadlineUtc = absoluteDeadline,
+            DeadlineUtc = nowUtc + MarketBoardBrowseTimeoutPolicy.GetInactivityTimeout(owner),
         };
     }
 }

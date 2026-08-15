@@ -36,7 +36,7 @@ public sealed class MarketAcquisitionRouteOperationExecutor
         ArgumentException.ThrowIfNullOrWhiteSpace(operation.OperationId);
         if (!Enum.IsDefined(operation.Kind))
             throw new ArgumentOutOfRangeException(nameof(operation), operation.Kind, "Operation kind is invalid.");
-        if (operation.Timeout <= TimeSpan.Zero)
+        if (operation.Timeout is { } timeout && timeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(operation), operation.Timeout, "Operation timeout must be positive.");
         if (!IsValidTimeoutDisposition(operation.TimeoutDisposition))
             throw new ArgumentOutOfRangeException(nameof(operation), operation.TimeoutDisposition, "Operation timeout disposition is invalid.");
@@ -44,9 +44,15 @@ public sealed class MarketAcquisitionRouteOperationExecutor
         if (operation.Attempt < 1)
             throw new ArgumentOutOfRangeException(nameof(operation), operation.Attempt, "Operation attempt must be at least one.");
 
-        var timeoutMilliseconds = checked((long)Math.Ceiling(operation.Timeout.TotalMilliseconds));
-        var deadlineUtc = operation.StartedAtUtc.Add(operation.Timeout);
-        var deadlineMonotonicMilliseconds = checked(operation.StartedAtMonotonicMilliseconds + timeoutMilliseconds);
+        var timeoutMilliseconds = operation.Timeout is { } configuredTimeout
+            ? checked((long?)Math.Ceiling(configuredTimeout.TotalMilliseconds))
+            : null;
+        var deadlineUtc = operation.Timeout is { } utcTimeout
+            ? operation.StartedAtUtc.Add(utcTimeout)
+            : (DateTimeOffset?)null;
+        var deadlineMonotonicMilliseconds = timeoutMilliseconds is { } monotonicTimeout
+            ? checked(operation.StartedAtMonotonicMilliseconds + monotonicTimeout)
+            : (long?)null;
         var context = CopyDetails(operation.Context);
 
         lock (sync)
@@ -98,7 +104,8 @@ public sealed class MarketAcquisitionRouteOperationExecutor
             }
 
             EnsureMonotonicTimeDoesNotMoveBackward(activeSnapshot, observedAtMonotonicMilliseconds);
-            if (observedAtMonotonicMilliseconds >= activeSnapshot.DeadlineMonotonicMilliseconds)
+            if (activeSnapshot.DeadlineMonotonicMilliseconds is { } deadline &&
+                observedAtMonotonicMilliseconds >= deadline)
                 return CompleteTimedOutUnsafe(activeSnapshot, observedAtUtc, observedAtMonotonicMilliseconds);
 
             if (!Enum.IsDefined(observation.Disposition))
@@ -160,7 +167,8 @@ public sealed class MarketAcquisitionRouteOperationExecutor
                 return RejectedNoActiveOperation();
 
             EnsureMonotonicTimeDoesNotMoveBackward(activeSnapshot, observedAtMonotonicMilliseconds);
-            return observedAtMonotonicMilliseconds >= activeSnapshot.DeadlineMonotonicMilliseconds
+            return activeSnapshot.DeadlineMonotonicMilliseconds is { } deadline &&
+                   observedAtMonotonicMilliseconds >= deadline
                 ? CompleteTimedOutUnsafe(activeSnapshot, observedAtUtc, observedAtMonotonicMilliseconds)
                 : Accepted(activeSnapshot);
         }
