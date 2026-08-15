@@ -557,6 +557,82 @@ public sealed class MarketBoardBrowseOperationGateTests
     }
 
     [Fact]
+    public void CorrelatedLeadingPages_AreReadableBeforeBrowseCompletion()
+    {
+        var browse = new MarketBoardBrowseSnapshot
+        {
+            OperationId = "browse:prefix",
+            Owner = MarketBoardBrowseOwner.MarketAcquisition,
+            Phase = MarketBoardBrowsePhase.AwaitingPagesAndHistory,
+            ItemId = ItemId,
+            RequestObserved = true,
+            RequestAccepted = true,
+            HeaderObserved = true,
+            HeaderStatus = 0,
+            ExpectedListingCount = 25,
+            ExpectedPageCount = 3,
+            RequestId = 7,
+            PageCount = 1,
+            ListingCount = 2,
+            FirstPageObserved = true,
+        };
+        var listings = new[]
+        {
+            LiveListing("first", 120),
+            LiveListing("second", 130),
+        };
+
+        var result = MarketBoardListingReader.BuildPrefixReadResult(
+            ItemId,
+            "Siren",
+            listings,
+            reportedListingCount: 25,
+            listingCapacity: 100,
+            currentRequestId: 7,
+            nextRequestId: 8,
+            browse);
+
+        Assert.Equal("VerifiedListingPrefix", result.Status);
+        Assert.Equal(MarketBoardListingReadState.FreshPartial, result.ReadState);
+        Assert.Equal(2, result.ReadableListingCount);
+        Assert.Equal(23, result.UnreadListingCount);
+        Assert.False(result.IsBrowseVerified);
+    }
+
+    [Fact]
+    public void LeadingPageWithWrongNativeRequest_RemainsUnavailable()
+    {
+        var browse = new MarketBoardBrowseSnapshot
+        {
+            OperationId = "browse:prefix",
+            Owner = MarketBoardBrowseOwner.MarketAcquisition,
+            Phase = MarketBoardBrowsePhase.AwaitingPagesAndHistory,
+            ItemId = ItemId,
+            HeaderObserved = true,
+            HeaderStatus = 0,
+            ExpectedListingCount = 20,
+            ExpectedPageCount = 2,
+            RequestId = 7,
+            PageCount = 1,
+            ListingCount = 1,
+            FirstPageObserved = true,
+        };
+
+        var result = MarketBoardListingReader.BuildPrefixReadResult(
+            ItemId,
+            "Siren",
+            [LiveListing("first", 120)],
+            reportedListingCount: 20,
+            listingCapacity: 100,
+            currentRequestId: 8,
+            nextRequestId: 9,
+            browse);
+
+        Assert.Equal("UnverifiedListingPrefix", result.Status);
+        Assert.False(result.IsFresh);
+    }
+
+    [Fact]
     public void Accumulator_RejectsDifferentBrowseOperation()
     {
         var accumulator = new MarketBoardListingReadAccumulator();
@@ -592,6 +668,18 @@ public sealed class MarketBoardBrowseOperationGateTests
     }
 
     private static uint[] Items(int count) => Enumerable.Repeat(ItemId, count).ToArray();
+
+    private static MarketBoardLiveListing LiveListing(string listingId, uint unitPrice) =>
+        new()
+        {
+            ItemId = ItemId,
+            RawItemId = ItemId,
+            WorldName = "Siren",
+            ListingId = listingId,
+            RetainerId = $"retainer:{listingId}",
+            UnitPrice = unitPrice,
+            Quantity = 1,
+        };
 
     private static void AssertFailure(MarketBoardBrowseOperationGate gate, string failureCode)
     {

@@ -47,7 +47,15 @@ public sealed class MarketBoardListingReader
             };
         }
 
-        if (!browse.IsComplete)
+        var canReadVerifiedPrefix =
+            !browse.IsTerminal &&
+            browse.HeaderObserved &&
+            browse.HeaderStatus == 0 &&
+            browse.FirstPageObserved &&
+            browse.PageCount > 0 &&
+            browse.ListingCount > 0 &&
+            browse.RequestId.HasValue;
+        if (!browse.IsComplete && !canReadVerifiedPrefix)
         {
             return new MarketBoardReadResult
             {
@@ -91,14 +99,20 @@ public sealed class MarketBoardListingReader
         }
 
         var reportedListingCount = browse.ExpectedListingCount;
-        if (infoProxy->ListingCount != reportedListingCount)
+        var readableListingCount = browse.IsComplete
+            ? reportedListingCount
+            : browse.ListingCount;
+        if ((browse.IsComplete && infoProxy->ListingCount != reportedListingCount) ||
+            (!browse.IsComplete && infoProxy->ListingCount < readableListingCount))
         {
             return new MarketBoardReadResult
             {
                 Status = "ListingCacheCountMismatch",
                 Message =
-                    $"Verified browse {browse.OperationId} expects {reportedListingCount} listings, but the native cache reports {infoProxy->ListingCount}.",
-                ReadState = MarketBoardListingReadState.Unavailable,
+                    $"Verified browse {browse.OperationId} has delivered {readableListingCount}/{reportedListingCount} listings, but the native cache reports {infoProxy->ListingCount}.",
+                ReadState = browse.IsComplete
+                    ? MarketBoardListingReadState.Unavailable
+                    : MarketBoardListingReadState.Loading,
                 ItemId = itemId,
                 WorldName = currentWorld,
                 ReportedListingCount = reportedListingCount,
@@ -136,7 +150,7 @@ public sealed class MarketBoardListingReader
 
         var listings = new List<MarketBoardLiveListing>();
         var listingCapacity = infoProxy->Listings.Length;
-        var listingCount = Math.Min(reportedListingCount, listingCapacity);
+        var listingCount = Math.Min(readableListingCount, listingCapacity);
         foreach (var listing in infoProxy->Listings[..listingCount])
         {
             if (listing.ListingId == 0 ||
@@ -161,6 +175,19 @@ public sealed class MarketBoardListingReader
             });
         }
 
+        if (!browse.IsComplete)
+        {
+            return BuildPrefixReadResult(
+                itemId,
+                currentWorld,
+                listings,
+                reportedListingCount,
+                listingCapacity,
+                infoProxy->InfoProxyPageInterface.CurrentRequestId,
+                infoProxy->InfoProxyPageInterface.NextRequestId,
+                browse);
+        }
+
         return BuildReadResult(
             itemId,
             currentWorld,
@@ -170,6 +197,115 @@ public sealed class MarketBoardListingReader
             infoProxy->InfoProxyPageInterface.CurrentRequestId,
             infoProxy->InfoProxyPageInterface.NextRequestId,
             browse);
+    }
+
+    internal static MarketBoardReadResult BuildPrefixReadResult(
+        uint itemId,
+        string currentWorld,
+        IReadOnlyList<MarketBoardLiveListing> listings,
+        int reportedListingCount,
+        int listingCapacity,
+        byte currentRequestId,
+        byte nextRequestId,
+        MarketBoardBrowseSnapshot browse)
+    {
+        ArgumentNullException.ThrowIfNull(listings);
+        ArgumentNullException.ThrowIfNull(browse);
+
+        var prefixIsCorrelated =
+            !browse.IsFailed &&
+            browse.ItemId == itemId &&
+            browse.HeaderObserved &&
+            browse.HeaderStatus == 0 &&
+            browse.FirstPageObserved &&
+            browse.PageCount > 0 &&
+            browse.ListingCount > 0 &&
+            browse.RequestId == currentRequestId;
+        if (!prefixIsCorrelated)
+        {
+            return new MarketBoardReadResult
+            {
+                Status = "UnverifiedListingPrefix",
+                Message = "Native listing rows are not authoritative without a correlated leading page prefix.",
+                ReadState = MarketBoardListingReadState.Loading,
+                ItemId = itemId,
+                WorldName = currentWorld,
+                BrowseOperationId = browse.OperationId,
+                BrowseHeaderStatus = browse.HeaderStatus,
+                BrowseExpectedPageCount = browse.ExpectedPageCount,
+                BrowseObservedPageCount = browse.PageCount,
+                BrowseHistoryItemId = browse.HistoryItemId,
+            };
+        }
+
+        var realListings = listings
+            .Where(MarketBoardListingIntegrity.IsRealListing)
+            .ToArray();
+        if (realListings.Length != browse.ListingCount)
+        {
+            return new MarketBoardReadResult
+            {
+                Status = "ListingPrefixCacheIncomplete",
+                Message = $"Correlated pages delivered {browse.ListingCount} listings, but only {realListings.Length} complete native rows are readable yet.",
+                ReadState = MarketBoardListingReadState.Loading,
+                ItemId = itemId,
+                WorldName = currentWorld,
+                ReportedListingCount = reportedListingCount,
+                ListingCapacity = listingCapacity,
+                CurrentRequestId = currentRequestId,
+                NextRequestId = nextRequestId,
+                BrowseOperationId = browse.OperationId,
+                BrowseHeaderStatus = browse.HeaderStatus,
+                BrowseExpectedPageCount = browse.ExpectedPageCount,
+                BrowseObservedPageCount = browse.PageCount,
+                BrowseHistoryItemId = browse.HistoryItemId,
+            };
+        }
+
+        var rawItemIdMismatchCounts = BuildRawItemIdMismatchCounts(itemId, realListings);
+        if (rawItemIdMismatchCounts.Count > 0)
+        {
+            return new MarketBoardReadResult
+            {
+                Status = "ListingCacheSwitching",
+                Message = $"Market board listing prefix is still switching to item {itemId}; raw row item ids included {FormatRawItemIdMismatchCounts(rawItemIdMismatchCounts)}.",
+                ReadState = MarketBoardListingReadState.SwitchingItem,
+                ItemId = itemId,
+                WorldName = currentWorld,
+                ReportedListingCount = reportedListingCount,
+                ListingCapacity = listingCapacity,
+                CurrentRequestId = currentRequestId,
+                NextRequestId = nextRequestId,
+                RawItemIdMismatchCounts = rawItemIdMismatchCounts,
+                BrowseOperationId = browse.OperationId,
+                BrowseHeaderStatus = browse.HeaderStatus,
+                BrowseExpectedPageCount = browse.ExpectedPageCount,
+                BrowseObservedPageCount = browse.PageCount,
+                BrowseHistoryItemId = browse.HistoryItemId,
+            };
+        }
+
+        return new MarketBoardReadResult
+        {
+            Status = "VerifiedListingPrefix",
+            Message = $"Read {realListings.Length:N0}/{reportedListingCount:N0} correlated leading market listing(s) while the remaining pages drain.",
+            ReadState = MarketBoardListingReadState.FreshPartial,
+            ItemId = itemId,
+            WorldName = currentWorld,
+            ReportedListingCount = Math.Max(reportedListingCount, realListings.Length),
+            ListingCapacity = listingCapacity,
+            IsAtListingCapacity = listingCapacity > 0 && realListings.Length >= listingCapacity,
+            IsListingCountTruncated = realListings.Length < reportedListingCount,
+            CurrentRequestId = currentRequestId,
+            NextRequestId = nextRequestId,
+            RawItemIdMismatchCounts = rawItemIdMismatchCounts,
+            Listings = realListings,
+            BrowseOperationId = browse.OperationId,
+            BrowseHeaderStatus = browse.HeaderStatus,
+            BrowseExpectedPageCount = browse.ExpectedPageCount,
+            BrowseObservedPageCount = browse.PageCount,
+            BrowseHistoryItemId = browse.HistoryItemId,
+        };
     }
 
     internal static MarketBoardReadResult BuildReadResult(
