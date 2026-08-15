@@ -35,6 +35,9 @@ public class Configuration : IPluginConfiguration
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
     public MarketAcquisitionRouteDiagnosticsLevel MarketAcquisitionRouteDiagnostics { get; set; } =
         MarketAcquisitionRouteDiagnosticsLevel.Summary;
+    public bool ArchiveCompletedMarketAcquisitionRouteDiagnostics { get; set; } = true;
+    public int MarketAcquisitionRouteDiagnosticsHotDays { get; set; } = 14;
+    public int MarketAcquisitionRouteDiagnosticsHotRuns { get; set; } = 50;
     [Obsolete("Use MarketAcquisitionRouteDiagnostics. Retained only to deserialize older configurations.")]
     public bool CreateMarketAcquisitionRouteDiagnosticPackages { get; set; } = false;
     public bool ShouldSerializeCreateMarketAcquisitionRouteDiagnosticPackages() => false;

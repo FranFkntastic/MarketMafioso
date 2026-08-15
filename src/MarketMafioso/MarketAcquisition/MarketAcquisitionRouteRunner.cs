@@ -14,6 +14,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     private readonly string diagnosticsDirectory;
     private readonly UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier;
+    private readonly Func<MarketAcquisitionRouteDiagnosticRetentionPolicy> retentionPolicyProvider;
     private readonly Dictionary<FreshnessObservationKey, FreshnessObservation> freshnessObservations = [];
     private readonly HashSet<FreshnessObservationKey> verifiedFreshnessObservations = [];
     private readonly List<string> freshnessWarnings = [];
@@ -34,19 +35,21 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live;
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
-        : this(diagnosticsDirectory, null)
+        : this(diagnosticsDirectory, null, null)
     {
     }
 
     public MarketAcquisitionRouteRunner(
         string diagnosticsDirectory,
-        UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier)
+        UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier,
+        Func<MarketAcquisitionRouteDiagnosticRetentionPolicy>? retentionPolicyProvider = null)
     {
         if (string.IsNullOrWhiteSpace(diagnosticsDirectory))
             throw new ArgumentException("Diagnostics directory is required.", nameof(diagnosticsDirectory));
 
         this.diagnosticsDirectory = diagnosticsDirectory;
         this.universalisFreshnessVerifier = universalisFreshnessVerifier;
+        this.retentionPolicyProvider = retentionPolicyProvider ?? (() => new MarketAcquisitionRouteDiagnosticRetentionPolicy());
     }
 
     public string State { get; private set; } = "Idle";
@@ -131,7 +134,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 diagnosticsDirectory,
                 DateTimeOffset.Now,
                 executionMode == MarketAcquisitionExecutionMode.DryRun ? "dry-run" : "route",
-                diagnosticsLevelRequested)
+                diagnosticsLevelRequested,
+                retentionPolicyProvider())
             : MarketAcquisitionRouteDiagnostics.Disabled;
         LastDiagnosticFilePath = diagnostics.FilePath;
         LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
@@ -290,7 +294,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 diagnosticsDirectory,
                 DateTimeOffset.Now,
                 executionMode == MarketAcquisitionExecutionMode.DryRun ? "dry-run" : "route",
-                diagnosticsLevelRequested)
+                diagnosticsLevelRequested,
+                retentionPolicyProvider())
             : MarketAcquisitionRouteDiagnostics.Disabled;
         LastDiagnosticFilePath = diagnostics.FilePath;
         LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;

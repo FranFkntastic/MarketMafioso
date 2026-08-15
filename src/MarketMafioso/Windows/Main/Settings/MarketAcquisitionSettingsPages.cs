@@ -28,7 +28,7 @@ internal sealed class MarketAcquisitionSettingsPages
             new("market.operation", "Market Acquisition / Operation", DrawOperation, 30, IsUnlocked,
                 ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases", "retainer listing refresh", "Universalis"]),
             new("market.diagnostics", "Market Acquisition / Diagnostics", DrawDiagnostics, 31, IsUnlocked,
-                ["route diagnostic packages", "route log", "observed listings", "purchase records"]),
+                ["route diagnostic packages", "route log", "observed listings", "purchase records", "archive", "retention", "hot shelf", "keep raw"]),
         ];
     }
 
@@ -89,7 +89,7 @@ internal sealed class MarketAcquisitionSettingsPages
     {
         const string label = "Route diagnostics";
         const string description = "Summary records route decisions, purchases, timing, and failures. Full trace adds segmented replay evidence.";
-        if (!context.Matches(label, description, "Off", "Summary", "Full trace"))
+        if (!context.Matches(label, description, "Off", "Summary", "Full trace", "archive", "retention", "hot shelf", "keep raw"))
             return;
 
         var current = config.MarketAcquisitionRouteDiagnostics;
@@ -107,6 +107,36 @@ internal sealed class MarketAcquisitionSettingsPages
             ImGui.EndCombo();
         }
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, description);
+        ImGui.Spacing();
+
+        var archiveCompleted = config.ArchiveCompletedMarketAcquisitionRouteDiagnostics;
+        if (ImGui.Checkbox("Archive older successful diagnostics", ref archiveCompleted))
+        {
+            config.ArchiveCompletedMarketAcquisitionRouteDiagnostics = archiveCompleted;
+            config.Save();
+        }
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            "Recent human logs and market CSVs stay directly readable. Machine streams compress when a capture closes; only older successful packages become fully compressed.");
+
+        var hotDays = config.MarketAcquisitionRouteDiagnosticsHotDays;
+        ImGui.SetNextItemWidth(120f);
+        if (ImGui.InputInt("Keep raw for at least this many days", ref hotDays))
+        {
+            config.MarketAcquisitionRouteDiagnosticsHotDays = Math.Clamp(hotDays, 1, 3_650);
+            config.Save();
+        }
+
+        var hotRuns = config.MarketAcquisitionRouteDiagnosticsHotRuns;
+        ImGui.SetNextItemWidth(120f);
+        if (ImGui.InputInt("Always keep this many successful runs raw", ref hotRuns))
+        {
+            config.MarketAcquisitionRouteDiagnosticsHotRuns = Math.Clamp(hotRuns, 0, 10_000);
+            config.Save();
+        }
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            $"Create an empty '{MarketAcquisitionRouteDiagnosticRetention.KeepRawMarkerFileName}' file inside any package to keep it on the hot shelf.");
         ImGui.Spacing();
     }
 
