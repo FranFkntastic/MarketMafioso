@@ -235,6 +235,14 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var result = uiAutomation.TryOpenProject(entry);
         activeMaterialItemId = result.ActiveMaterialItemId;
         RecordActionResult("open-project", entry, result);
+        if (result.RequiresWorkshopReopen)
+        {
+            activeMaterialItemId = null;
+            continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
+            SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, result.Message);
+            return;
+        }
+
         if (result.Success)
         {
             SetState(WorkshopAssemblyRunnerState.SubmittingMaterial, result.Message);
