@@ -22,7 +22,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action stopRoute;
     private readonly Action restartRoute;
     private readonly Action reprepareRoute;
-    private readonly Action<bool> reconcileTerminalPurchase;
+    private readonly Func<bool, MarketPurchaseTerminalResolutionResult> reconcileTerminalPurchase;
     private readonly Action retryExactAcquisitionRecovery;
     private readonly Action returnToExactAcquisitionAdvisor;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary;
@@ -43,7 +43,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action stopRoute,
         Action restartRoute,
         Action reprepareRoute,
-        Action<bool> reconcileTerminalPurchase,
+        Func<bool, MarketPurchaseTerminalResolutionResult> reconcileTerminalPurchase,
         Action retryExactAcquisitionRecovery,
         Action returnToExactAcquisitionAdvisor,
         Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary,
@@ -139,30 +139,27 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         if (terminal is ConfirmedMarketPurchase)
         {
             if (ImGuiUi.PrimaryButton("Apply Confirmed Purchase##MarketAcquisitionApplyConfirmedPurchase", true))
-                reconcileTerminalPurchase(true);
-            RegisterLastControl(
+                _ = reconcileTerminalPurchase(true);
+            RegisterLastReconciliationControl(
                 "acquisition.route.purchase-recovery.apply-confirmed",
                 "Apply the server-confirmed purchase and unlock retained route recovery",
-                true,
-                () => reconcileTerminalPurchase(true));
+                purchaseOccurred: true);
             return true;
         }
 
         if (ImGuiUi.PrimaryButton("Purchase Happened##MarketAcquisitionReconcilePurchased", true))
-            reconcileTerminalPurchase(true);
-        RegisterLastControl(
+            _ = reconcileTerminalPurchase(true);
+        RegisterLastReconciliationControl(
             "acquisition.route.purchase-recovery.purchased",
             "Record the indeterminate purchase and unlock retained route recovery",
-            true,
-            () => reconcileTerminalPurchase(true));
+            purchaseOccurred: true);
         ImGui.SameLine();
         if (ImGuiUi.Button("Purchase Failed##MarketAcquisitionReconcileFailed", true))
-            reconcileTerminalPurchase(false);
-        RegisterLastControl(
+            _ = reconcileTerminalPurchase(false);
+        RegisterLastReconciliationControl(
             "acquisition.route.purchase-recovery.failed",
             "Record that the indeterminate purchase did not occur and unlock retained route recovery",
-            true,
-            () => reconcileTerminalPurchase(false));
+            purchaseOccurred: false);
         return true;
     }
 
@@ -460,4 +457,21 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
     private void RegisterLastControl(string id, string label, bool enabled, Action invoke) =>
         reviewRegistry.RegisterLastButton(id, label, enabled, invoke);
+
+    private void RegisterLastReconciliationControl(string id, string label, bool purchaseOccurred) =>
+        reviewRegistry.RegisterLastAction(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            enabled: true,
+            selected: false,
+            value: null,
+            arguments: null,
+            _ =>
+            {
+                var result = reconcileTerminalPurchase(purchaseOccurred);
+                return result.IsResolved
+                    ? AgentBridgeUiActionResult.Ok(result.Message, receipt: result)
+                    : AgentBridgeUiActionResult.Fail(result.Message, result);
+            });
 }
