@@ -80,6 +80,35 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
     }
 
     [Fact]
+    public void Project_action_requiring_reopen_returns_to_station_recovery_immediately()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(
+            false,
+            "Advanced workshop project phase.",
+            ActionTaken: true,
+            RequiresWorkshopReopen: true));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+        Assert.Equal(WorkshopAssemblyRunnerState.OpeningProject, runner.Progress.State);
+
+        frameworkDriver.Tick(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForFabricationStation, runner.Progress.State);
+        Assert.Equal("Advanced workshop project phase.", runner.Progress.Message);
+        Assert.Null(runner.Progress.ActiveMaterialItemId);
+        Assert.Equal(0, runner.Progress.CompletedProjects);
+        Assert.True(runner.IsRunning);
+    }
+
+    [Fact]
     public void Stale_post_contribution_progress_reopens_station_instead_of_failing_run()
     {
         var clock = new ManualTimeProvider();
