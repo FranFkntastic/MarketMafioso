@@ -30,15 +30,10 @@ public sealed class MarketAcquisitionGuidedRouteSession
         if (stop == null)
             return MarketAcquisitionGuidedRouteResult.Fail("The retained route has no remaining stop to recover.");
 
-        var alreadyAtStop =
-            !string.IsNullOrWhiteSpace(currentWorld) &&
-            stop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase);
-        stop.Status = alreadyAtStop ? "Arrived" : "Pending";
+        stop.Status = "Pending";
         stop.MarketBoardTravelCommandSent = false;
         return MarketAcquisitionGuidedRouteResult.Ok(
-            alreadyAtStop
-                ? $"Recovered the retained route on {stop.WorldName}; live market evidence will be reacquired before continuing."
-                : $"Recovered the retained route at {stop.WorldName}; travel will resume from the current world.");
+            $"Recovered the retained route at {stop.WorldName}; travel will resume through Lifestream's complete market-board trip.");
     }
 
     public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId)
