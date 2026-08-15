@@ -262,7 +262,13 @@ public class MainWindow : Window, IDisposable
             new ConfigurationShardAcquisitionCheckpointStateStore(config, config.Save));
         var marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
             marketAcquisitionRouteDiagnosticsDirectory,
-            universalisFreshnessVerifier.VerifyAsync);
+            universalisFreshnessVerifier.VerifyAsync,
+            () => new MarketAcquisitionRouteDiagnosticRetentionPolicy
+            {
+                EnableColdArchive = config.ArchiveCompletedMarketAcquisitionRouteDiagnostics,
+                HotRetentionDays = config.MarketAcquisitionRouteDiagnosticsHotDays,
+                HotRetentionRunCount = config.MarketAcquisitionRouteDiagnosticsHotRuns,
+            });
         exactAcquisitionRouteStateStore = new ConfigurationExactAcquisitionRouteExecutionStateStore(config);
         routeEngine = new MarketAcquisitionRouteEngine(
             marketAcquisitionRouteRunner,

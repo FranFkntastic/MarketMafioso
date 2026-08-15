@@ -24,6 +24,8 @@ public sealed record MarketAcquisitionRouteDiagnosticEvent
 
 public sealed record MarketAcquisitionRouteDiagnosticManifest
 {
+    public const int CurrentSchemaVersion = 2;
+
     public required int SchemaVersion { get; init; }
 
     public required string RunId { get; init; }
@@ -47,6 +49,22 @@ public sealed record MarketAcquisitionRouteDiagnosticManifest
     public required IReadOnlyList<string> CaptureCapabilities { get; init; }
 
     public IReadOnlyList<MarketAcquisitionRouteDiagnosticTraceSegment> FullTraceSegments { get; init; } = [];
+
+    public DateTimeOffset? FinalizedAtUtc { get; init; }
+
+    public string? TerminalEventName { get; init; }
+
+    public string StorageState { get; init; } = "Active";
+
+    public string? RetentionReason { get; init; }
+
+    public IReadOnlyList<string> MaintenanceWarnings { get; init; } = [];
+
+    public IReadOnlyList<string> Worlds { get; init; } = [];
+
+    public IReadOnlyList<uint> ItemIds { get; init; } = [];
+
+    public IReadOnlyList<MarketAcquisitionRouteDiagnosticStoredArtifact> StoredArtifacts { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionRouteDiagnosticTraceSegment
@@ -60,4 +78,21 @@ public sealed record MarketAcquisitionRouteDiagnosticTraceSegment
     public required long ByteLength { get; init; }
 
     public required string Sha256 { get; init; }
+
+    public string ContentEncoding { get; init; } = "identity";
+
+    public long? StoredByteLength { get; init; }
+
+    public string? StoredSha256 { get; init; }
+}
+
+public sealed record MarketAcquisitionRouteDiagnosticStoredArtifact
+{
+    public required string Role { get; init; }
+    public required string FileName { get; init; }
+    public string ContentEncoding { get; init; } = "identity";
+    public required long RawByteLength { get; init; }
+    public required string RawSha256 { get; init; }
+    public required long StoredByteLength { get; init; }
+    public required string StoredSha256 { get; init; }
 }

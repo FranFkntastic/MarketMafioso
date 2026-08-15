@@ -51,6 +51,19 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
     private readonly string packageKind;
     private readonly string runId;
     private readonly MarketAcquisitionRouteDiagnosticsLevel level;
+    private readonly HashSet<string> observedWorlds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<uint> observedItemIds = [];
+    private readonly List<string> maintenanceWarnings = [];
+    private string diagnosticsRootDirectory = string.Empty;
+    private MarketAcquisitionRouteDiagnosticRetentionPolicy retentionPolicy = new();
+    private IMarketAcquisitionDiagnosticCompressor compressor = new MarketAcquisitionGzipDiagnosticCompressor();
+    private string? routeEventsStoredFileName;
+    private IReadOnlyList<MarketAcquisitionRouteDiagnosticTraceSegment> finalizedTraceSegments = [];
+    private IReadOnlyList<MarketAcquisitionRouteDiagnosticStoredArtifact> storedArtifacts = [];
+    private DateTimeOffset? finalizedAtUtc;
+    private string? terminalEventName;
+    private string storageState = "Active";
+    private string? retentionReason;
     private string captureStatus = "Active";
     private long nextSummaryEventSequence;
     private long nextFullTraceEventSequence;
@@ -114,14 +127,16 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         string directory,
         DateTimeOffset startedAt,
         string packageKind,
-        MarketAcquisitionRouteDiagnosticsLevel level = MarketAcquisitionRouteDiagnosticsLevel.FullTrace)
+        MarketAcquisitionRouteDiagnosticsLevel level = MarketAcquisitionRouteDiagnosticsLevel.FullTrace,
+        MarketAcquisitionRouteDiagnosticRetentionPolicy? retentionPolicy = null,
+        IMarketAcquisitionDiagnosticCompressor? compressor = null)
     {
         if (!packageKind.Equals("route", StringComparison.OrdinalIgnoreCase) &&
             !packageKind.Equals("dry-run", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Package kind must be route or dry-run.", nameof(packageKind));
         if (level == MarketAcquisitionRouteDiagnosticsLevel.Off)
             return Disabled;
-        return CreatePackage(directory, startedAt, packageKind, level);
+        return CreatePackage(directory, startedAt, packageKind, level, retentionPolicy, compressor);
     }
 
     public static MarketAcquisitionRouteDiagnostics CreateInputCapture(string directory, DateTimeOffset startedAt)
@@ -133,7 +148,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         string directory,
         DateTimeOffset startedAt,
         string filePrefix,
-        MarketAcquisitionRouteDiagnosticsLevel level)
+        MarketAcquisitionRouteDiagnosticsLevel level,
+        MarketAcquisitionRouteDiagnosticRetentionPolicy? retentionPolicy = null,
+        IMarketAcquisitionDiagnosticCompressor? compressor = null)
     {
         var createCompanionCsvs =
             level == MarketAcquisitionRouteDiagnosticsLevel.FullTrace &&
@@ -196,6 +213,10 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 filePrefix,
                 Path.GetFileName(packageDirectory),
                 level);
+            diagnostics.diagnosticsRootDirectory = directory;
+            diagnostics.retentionPolicy = (retentionPolicy ?? new MarketAcquisitionRouteDiagnosticRetentionPolicy()).Normalize();
+            diagnostics.compressor = compressor ?? new MarketAcquisitionGzipDiagnosticCompressor();
+            diagnostics.routeEventsStoredFileName = Path.GetFileName(routeEventsJsonlPath);
 
             diagnostics.WriteManifest();
             diagnostics.RecordRouteEvent(
@@ -270,6 +291,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             if (IsTerminalEvent(eventName))
             {
                 captureStatus = "Finalizing";
+                terminalEventName = eventName;
                 WriteManifest();
             }
         }
@@ -321,6 +343,10 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         {
             if (disposed)
                 return;
+
+            observedWorlds.Add(currentWorld);
+            if (activeSubtask?.ItemId > 0)
+                observedItemIds.Add(activeSubtask.ItemId);
 
             RecordUnsafe(
                 "observed-listings",
@@ -475,9 +501,112 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             finally
             {
                 captureStatus = terminalCapture ? "Complete" : "Incomplete";
+                finalizedAtUtc = DateTimeOffset.UtcNow;
+                storageState = terminalCapture ? "Hot" : "Incomplete";
+                retentionReason = terminalCapture
+                    ? "Finalized machine streams are compressed; human log and analytical CSVs remain on the hot shelf."
+                    : "Capture did not reach a terminal event and remains raw.";
+                finalizedTraceSegments = fullTraceWriter?.Segments.ToArray() ?? [];
+                if (terminalCapture)
+                    FinalizeMachineArtifacts();
                 WriteManifest();
                 disposed = true;
+                MaintainRetentionCatalog();
             }
+        }
+    }
+
+    private void FinalizeMachineArtifacts()
+    {
+        TryCompressArtifact("routeEventsJsonl", RouteEventsJsonlPath);
+        foreach (var segment in finalizedTraceSegments.ToArray())
+        {
+            if (PackageDirectoryPath == null)
+                break;
+
+            var sourcePath = Path.Combine(PackageDirectoryPath, segment.FileName);
+            try
+            {
+                var compressed = compressor.Compress(sourcePath);
+                finalizedTraceSegments = finalizedTraceSegments
+                    .Select(candidate => candidate.FileName.Equals(segment.FileName, StringComparison.Ordinal)
+                        ? candidate with
+                        {
+                            FileName = compressed.StoredFileName,
+                            ContentEncoding = compressed.ContentEncoding,
+                            StoredByteLength = compressed.StoredByteLength,
+                            StoredSha256 = compressed.StoredSha256,
+                        }
+                        : candidate)
+                    .ToArray();
+                StoreArtifact($"fullTrace:{segment.FirstSequence.ToString(CultureInfo.InvariantCulture)}", compressed);
+                WriteManifest();
+            }
+            catch (Exception exception)
+            {
+                maintenanceWarnings.Add($"Unable to compress {segment.FileName}: {exception.Message}");
+            }
+        }
+    }
+
+    private void TryCompressArtifact(string role, string? sourcePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+            return;
+
+        try
+        {
+            var compressed = compressor.Compress(sourcePath);
+            if (role.Equals("routeEventsJsonl", StringComparison.Ordinal))
+                routeEventsStoredFileName = compressed.StoredFileName;
+            StoreArtifact(role, compressed);
+            WriteManifest();
+        }
+        catch (Exception exception)
+        {
+            maintenanceWarnings.Add($"Unable to compress {Path.GetFileName(sourcePath)}: {exception.Message}");
+        }
+    }
+
+    private void StoreArtifact(string role, MarketAcquisitionDiagnosticCompressedFile compressed)
+    {
+        storedArtifacts = storedArtifacts
+            .Where(artifact => !artifact.Role.Equals(role, StringComparison.Ordinal))
+            .Append(new MarketAcquisitionRouteDiagnosticStoredArtifact
+            {
+                Role = role,
+                FileName = compressed.StoredFileName,
+                ContentEncoding = compressed.ContentEncoding,
+                RawByteLength = compressed.RawByteLength,
+                RawSha256 = compressed.RawSha256,
+                StoredByteLength = compressed.StoredByteLength,
+                StoredSha256 = compressed.StoredSha256,
+            })
+            .OrderBy(artifact => artifact.Role, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private void MaintainRetentionCatalog()
+    {
+        if (string.IsNullOrWhiteSpace(diagnosticsRootDirectory))
+            return;
+
+        try
+        {
+            var result = new MarketAcquisitionRouteDiagnosticRetention(compressor).Maintain(
+                diagnosticsRootDirectory,
+                retentionPolicy,
+                DateTimeOffset.UtcNow);
+            if (result.Warnings.Count > 0)
+            {
+                maintenanceWarnings.AddRange(result.Warnings);
+                WriteManifest();
+            }
+        }
+        catch (Exception exception)
+        {
+            maintenanceWarnings.Add($"Unable to maintain diagnostic retention catalog: {exception.Message}");
+            WriteManifest();
         }
     }
 
@@ -689,7 +818,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         var assembly = typeof(Plugin).Assembly;
         var manifest = new MarketAcquisitionRouteDiagnosticManifest
         {
-            SchemaVersion = MarketAcquisitionRouteDiagnosticEvent.CurrentSchemaVersion,
+            SchemaVersion = MarketAcquisitionRouteDiagnosticManifest.CurrentSchemaVersion,
             RunId = runId,
             PackageKind = packageKind,
             DiagnosticsLevel = level.ToString(),
@@ -702,7 +831,17 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 ?.InformationalVersion,
             Artifacts = BuildArtifacts(),
             CaptureCapabilities = BuildCaptureCapabilities(),
-            FullTraceSegments = fullTraceWriter?.Segments ?? [],
+            FullTraceSegments = finalizedTraceSegments.Count > 0
+                ? finalizedTraceSegments
+                : fullTraceWriter?.Segments ?? [],
+            FinalizedAtUtc = finalizedAtUtc,
+            TerminalEventName = terminalEventName,
+            StorageState = storageState,
+            RetentionReason = retentionReason,
+            MaintenanceWarnings = maintenanceWarnings.ToArray(),
+            Worlds = observedWorlds.OrderBy(world => world, StringComparer.OrdinalIgnoreCase).ToArray(),
+            ItemIds = observedItemIds.OrderBy(itemId => itemId).ToArray(),
+            StoredArtifacts = storedArtifacts,
         };
 
         AtomicJsonFile.Write(ManifestPath, manifest, JsonOptions);
@@ -727,6 +866,10 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             capabilities.Add("segmented-full-trace-jsonl-v1");
             capabilities.Add("full-trace-authoritative-v1");
         }
+        if (storedArtifacts.Any(artifact => artifact.ContentEncoding.Equals("gzip", StringComparison.OrdinalIgnoreCase)))
+            capabilities.Add("gzip-finalized-artifacts-v1");
+        capabilities.Add("hot-cold-retention-v1");
+        capabilities.Add("diagnostic-catalog-v1");
 
         return capabilities;
     }
@@ -736,7 +879,8 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         var artifacts = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
             ["manifest"] = Path.GetFileName(ManifestPath) ?? throw new InvalidOperationException("Manifest path is invalid."),
-            ["routeEventsJsonl"] = Path.GetFileName(RouteEventsJsonlPath) ?? throw new InvalidOperationException("Route event path is invalid."),
+            ["routeEventsJsonl"] = routeEventsStoredFileName ??
+                Path.GetFileName(RouteEventsJsonlPath) ?? throw new InvalidOperationException("Route event path is invalid."),
         };
 
         if (FilePath != null)
@@ -746,7 +890,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         if (PurchaseRecordsCsvPath != null)
             artifacts["purchaseRecordsCsv"] = Path.GetFileName(PurchaseRecordsCsvPath);
         if (fullTraceWriter != null)
-            artifacts["fullTraceSegments"] = "trace-*.jsonl";
+            artifacts["fullTraceSegments"] = finalizedTraceSegments.Any(segment => segment.ContentEncoding.Equals("gzip", StringComparison.OrdinalIgnoreCase))
+                ? "trace-*.jsonl.gz"
+                : "trace-*.jsonl";
 
         return artifacts;
     }
