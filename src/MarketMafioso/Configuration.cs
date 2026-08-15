@@ -35,6 +35,7 @@ public class Configuration : IPluginConfiguration
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
     public MarketAcquisitionRouteDiagnosticsLevel MarketAcquisitionRouteDiagnostics { get; set; } =
         MarketAcquisitionRouteDiagnosticsLevel.Summary;
+    public bool MarketAcquisitionExhaustiveResearchMode { get; set; } = false;
     public bool ArchiveCompletedMarketAcquisitionRouteDiagnostics { get; set; } = true;
     public int MarketAcquisitionRouteDiagnosticsHotDays { get; set; } = 14;
     public int MarketAcquisitionRouteDiagnosticsHotRuns { get; set; } = 50;

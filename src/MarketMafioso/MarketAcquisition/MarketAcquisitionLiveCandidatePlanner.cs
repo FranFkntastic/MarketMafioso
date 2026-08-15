@@ -54,7 +54,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
         {
             Status = MarketAcquisitionLiveCandidateStatuses.NoSafeListings,
             Message =
-                $"The verified cheapest-first prefix crossed the {request.MaxUnitPrice:N0} gil ceiling at {previousPrice:N0} gil after {prefixRead.Listings.Count:N0}/{prefixRead.ReportedListingCount:N0} listings; remaining pages cannot contain an eligible price and will drain in the background.",
+                $"The verified cheapest-first prefix crossed the {request.MaxUnitPrice:N0} gil ceiling at {previousPrice:N0} gil after {prefixRead.Listings.Count:N0}/{prefixRead.ReportedListingCount:N0} listings; remaining pages cannot contain an eligible price, so the route may leave without waiting for full listing coverage.",
         };
         return true;
     }
