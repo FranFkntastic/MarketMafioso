@@ -6,6 +6,59 @@ namespace MarketMafioso.MarketAcquisition;
 
 public static class MarketAcquisitionLiveCandidatePlanner
 {
+    public static bool TryBuildConclusiveSortedPrefixPlan(
+        MarketAcquisitionRequestView request,
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionWorldItemSubtask activeSubtask,
+        string currentWorld,
+        MarketBoardReadResult prefixRead,
+        uint alreadyPurchasedQuantity,
+        uint alreadySpentGil,
+        out MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        ArgumentNullException.ThrowIfNull(prefixRead);
+
+        candidatePlan = new MarketAcquisitionLiveCandidatePlan();
+        if (prefixRead.ReadState != MarketBoardListingReadState.FreshPartial ||
+            !prefixRead.Status.Equals("VerifiedListingPrefix", StringComparison.Ordinal) ||
+            prefixRead.Listings.Count == 0 ||
+            prefixRead.Listings.Count >= prefixRead.ReportedListingCount)
+        {
+            return false;
+        }
+
+        var previousPrice = 0u;
+        foreach (var listing in prefixRead.Listings)
+        {
+            if (listing.UnitPrice < previousPrice)
+                return false;
+
+            previousPrice = listing.UnitPrice;
+        }
+
+        if (previousPrice <= request.MaxUnitPrice)
+            return false;
+
+        var partialPlan = BuildCandidatePlan(
+            request,
+            plan,
+            activeSubtask,
+            currentWorld,
+            prefixRead,
+            alreadyPurchasedQuantity,
+            alreadySpentGil);
+        if (partialPlan.WouldBuyQuantity > 0)
+            return false;
+
+        candidatePlan = partialPlan with
+        {
+            Status = MarketAcquisitionLiveCandidateStatuses.NoSafeListings,
+            Message =
+                $"The verified cheapest-first prefix crossed the {request.MaxUnitPrice:N0} gil ceiling at {previousPrice:N0} gil after {prefixRead.Listings.Count:N0}/{prefixRead.ReportedListingCount:N0} listings; remaining pages cannot contain an eligible price and will drain in the background.",
+        };
+        return true;
+    }
+
     public static MarketAcquisitionLiveCandidatePlan BuildCandidatePlan(
         MarketAcquisitionRequestView request,
         MarketAcquisitionPlan plan,

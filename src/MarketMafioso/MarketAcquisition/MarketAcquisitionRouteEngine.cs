@@ -1295,6 +1295,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var operationResult = ObserveItemSearchOperation(operation, searchResult);
             if (operationResult.Disposition == MarketAcquisitionRouteOperationDisposition.Pending)
             {
+                if (TryRecordConclusiveListingPrefix(operation, claimed, activeLine, currentWorld))
+                    return;
+
                 state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
                 return;
             }
@@ -1310,6 +1313,79 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         UpdateStatus(runner.BeginProbe($"Arrived on {currentWorld}. Reading live listings for {FormatItem(GetActiveRouteLine(claimed))}."));
         state.ProbeRunning = true;
         ProbeLiveMarketBoard();
+    }
+
+    private bool TryRecordConclusiveListingPrefix(
+        MarketAcquisitionRouteOperationSnapshot operation,
+        MarketAcquisitionClaimView claimed,
+        MarketAcquisitionRequestView activeLine,
+        string currentWorld)
+    {
+        var plan = runner.ActivePlan;
+        var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
+        if (plan == null || activeSubtask == null)
+            return false;
+
+        var prefixRead = marketBoard.ReadCurrentListings(currentWorld);
+        if (prefixRead.ReadState != MarketBoardListingReadState.FreshPartial)
+            return false;
+
+        var totals = ResolveActiveRouteLinePurchaseTotals(activeSubtask);
+        if (!MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+                activeLine,
+                plan,
+                activeSubtask,
+                currentWorld,
+                prefixRead,
+                totals.PurchasedQuantity,
+                totals.SpentGil,
+                out var prefixPlan))
+        {
+            return false;
+        }
+
+        var operationResult = operationExecutor.Observe(
+            new MarketAcquisitionRouteOperationObservation
+            {
+                OperationId = operation.OperationId,
+                Disposition = MarketAcquisitionRouteOperationDisposition.Succeeded,
+                Message = prefixPlan.Message,
+                Details = new Dictionary<string, string?>
+                {
+                    ["decisionSource"] = "VerifiedCheapestFirstPrefix",
+                    ["browseOperationId"] = prefixRead.BrowseOperationId,
+                    ["observedPages"] = prefixRead.BrowseObservedPageCount.ToString(),
+                    ["expectedPages"] = prefixRead.BrowseExpectedPageCount.ToString(),
+                    ["readableListings"] = prefixRead.ReadableListingCount.ToString(),
+                    ["reportedListings"] = prefixRead.ReportedListingCount.ToString(),
+                    ["remainingBrowseDisposition"] = "DrainBeforeNextBrowse",
+                },
+            },
+            clock.UtcNow,
+            clock.MonotonicMilliseconds);
+        if (!operationResult.Accepted || operationResult.Snapshot == null)
+            throw new InvalidOperationException(operationResult.Message);
+
+        runner.RecordRouteOperationSnapshot(operationResult.Snapshot);
+        UpdateStatus(runner.BeginProbe($"Arrived on {currentWorld}. The verified cheapest listings already exceed the configured ceiling for {FormatItem(activeLine)}."));
+        state.MarketBoardReadResult = prefixRead;
+        state.MarketBoardReconciliation = null;
+        state.LiveCandidatePlan = prefixPlan;
+
+        var probeResult = runner.RecordProbe(currentWorld, prefixPlan);
+        if (!probeResult.Success)
+        {
+            UpdateStatus(FailRoute(probeResult.Message));
+            return true;
+        }
+
+        evidence.RecordProbeVisit(currentWorld, activeLine, activeSubtask, prefixPlan, claimed.Id, state.ProgressNonce);
+        ClearMarketBoardAutomationState();
+        ReportRouteProgress();
+        EvaluateExactAcquisitionRouteCompletion();
+        state.AcquisitionStatus = probeResult.Message;
+        state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
+        return true;
     }
 
     private MarketAcquisitionRouteOperationSnapshot EnsureItemSearchOperation(
