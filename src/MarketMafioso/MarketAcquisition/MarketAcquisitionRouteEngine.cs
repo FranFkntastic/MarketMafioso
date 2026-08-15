@@ -11,7 +11,7 @@ namespace MarketMafioso.MarketAcquisition;
 public sealed class MarketAcquisitionRouteEngine : IDisposable
 {
     private static readonly TimeSpan RouteMonitorInterval = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan MarketBoardItemSearchOperationTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan MarketBoardItemSearchOperationTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan TravelPreparationOperationTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan SameDataCenterWorldTravelArrivalOperationTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan DataCenterTravelArrivalOperationTimeout = TimeSpan.FromMinutes(6);
