@@ -62,6 +62,7 @@ public sealed record WorkshopAssemblyActionResult(
     bool RequiresWorkshopReopen = false,
     bool IsProjectComplete = false,
     bool IsContributionConfirmed = false,
+    bool HasPendingMaterialRequest = false,
     uint? ActiveMaterialItemId = null,
     uint? ActiveMaterialStepsComplete = null);
 

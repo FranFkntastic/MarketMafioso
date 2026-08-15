@@ -215,6 +215,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     ? turnIn.Message
                     : $"{turnIn.Message} {DescribeUiState()}",
                 ActionTaken: turnIn.ActionTaken,
+                HasPendingMaterialRequest: true,
                 ActiveMaterialItemId: pendingContributionItemId);
         }
 
@@ -290,6 +291,20 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
 
         return new(false, $"No unfinished queued material was found for {entry.ProjectName}. {DescribeUiState()}");
+    }
+
+    public WorkshopAssemblyActionResult RecoverStalledMaterialRequest()
+    {
+        var itemId = pendingContributionItemId;
+        var recovery = uiDriver.RecoverStalledMaterialRequest();
+        pendingContributionItemId = null;
+        pendingConfirmationKind = WorkshopAssemblyPendingConfirmationKind.None;
+        return new(
+            true,
+            $"{recovery.Message} Reopening the fabrication station to reread authoritative workshop progress.",
+            ActionTaken: recovery.RequestPresent || recovery.ContextMenuPresent,
+            RequiresWorkshopReopen: true,
+            ActiveMaterialItemId: itemId);
     }
 
     public WorkshopAssemblyActionResult TryConfirmContribution()

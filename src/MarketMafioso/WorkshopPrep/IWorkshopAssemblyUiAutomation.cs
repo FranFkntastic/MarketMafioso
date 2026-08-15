@@ -18,6 +18,8 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
 
     WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry);
 
+    WorkshopAssemblyActionResult RecoverStalledMaterialRequest();
+
     WorkshopAssemblyActionResult TryConfirmContribution();
 
     WorkshopAssemblyActionResult TryWaitForContributionProgress(
