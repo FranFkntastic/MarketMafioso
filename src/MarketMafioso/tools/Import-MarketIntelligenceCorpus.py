@@ -9,12 +9,21 @@ import gzip
 import hashlib
 import json
 import re
+import ssl
 import time
 import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
+
+
+TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where()) if certifi else ssl.create_default_context()
 
 
 def parse_args():
@@ -162,7 +171,7 @@ def post(endpoint, api_key, relative, body):
     request = urllib.request.Request(url, data=data, method="POST", headers=headers)
     for attempt in range(4):
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with urllib.request.urlopen(request, timeout=60, context=TLS_CONTEXT) as response:
                 return response.read()
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
