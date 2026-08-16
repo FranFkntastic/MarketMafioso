@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text.Json;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Contracts.MarketIntelligence;
 using MarketMafioso.MarketAcquisition;
 
@@ -6,6 +8,58 @@ namespace MarketMafioso.SpecTests.MarketAcquisition;
 
 public sealed class MarketIntelligencePassiveReporterTests
 {
+    [Fact]
+    public async Task ClaimlessRouteUsesAuthenticatedDirectEvidenceWithoutHostedLifecycle()
+    {
+        Assert.Equal(
+            MarketAcquisitionObservationDelivery.DirectEvidence,
+            MarketAcquisitionObservationDeliveryPolicy.Resolve(
+                hostedReportingAvailable: true,
+                claimToken: string.Empty,
+                directEvidenceAvailable: true));
+        Assert.Equal(
+            MarketAcquisitionObservationDelivery.HostedLifecycle,
+            MarketAcquisitionObservationDeliveryPolicy.Resolve(
+                hostedReportingAvailable: true,
+                claimToken: "claim-token",
+                directEvidenceAvailable: true));
+
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-intelligence-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var configuration = new Configuration
+            {
+                ServerUrl = "https://example.test/api/inventory",
+                ApiKey = "test-key",
+                PluginInstanceId = "test-instance",
+            };
+            var handler = new RecordingHandler();
+            using var http = new HttpClient(handler);
+            using var reporter = new MarketIntelligencePassiveReporter(configuration, http, directory, _ => { });
+            reporter.EnqueueRouteObservation(RouteObservation());
+
+            await WaitUntilAsync(() => handler.Requests.Count == 1 && reporter.Pending.Count == 0);
+            var request = Assert.Single(handler.Requests);
+            Assert.Equal("/api/market-intelligence/evidence", request.Path);
+            Assert.Equal("test-key", request.ApiKey);
+            var evidence = JsonSerializer.Deserialize<MarketEvidenceUploadRequest>(
+                request.Body,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(evidence);
+            Assert.Equal("local:plan-one:route-run-one:7", evidence.OccurrenceId);
+            Assert.Equal(MarketEvidenceSources.MarketAcquisition, evidence.SourceKind);
+            Assert.Equal(MarketEvidenceCoverage.Complete, evidence.Coverage);
+            Assert.Equal("Local Seller", Assert.Single(evidence.Listings).RetainerName);
+            Assert.Contains("\"requestId\":\"local:plan-one\"", evidence.ProvenanceJson);
+            Assert.Contains("\"lineId\":\"local:line-one\"", evidence.ProvenanceJson);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task HostedOutagePreservesOneOccurrenceAndRestartRetriesIt()
     {
@@ -54,6 +108,39 @@ public sealed class MarketIntelligencePassiveReporterTests
         Listings = [new() { ListingId = "1", RetainerId = "2", RetainerName = "Retainer One", Quantity = 99, UnitPrice = 500 }],
     };
 
+    private static MarketAcquisitionMarketObservationReport RouteObservation() => new(
+        "local:plan-one",
+        string.Empty,
+        "route-run-one",
+        7,
+        "local:line-one",
+        5530,
+        "Coke",
+        "Primal",
+        "Ultros",
+        DateTimeOffset.UnixEpoch,
+        new MarketBoardReadResult
+        {
+            ReadState = MarketBoardListingReadState.FreshComplete,
+            ItemId = 5530,
+            WorldName = "Ultros",
+            ReportedListingCount = 1,
+            ListingCapacity = 100,
+            Listings =
+            [
+                new MarketBoardLiveListing
+                {
+                    ItemId = 5530,
+                    WorldName = "Ultros",
+                    ListingId = "listing-local",
+                    RetainerId = "retainer-local",
+                    RetainerName = "Local Seller",
+                    Quantity = 99,
+                    UnitPrice = 150,
+                },
+            ],
+        });
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTimeOffset.UtcNow.AddSeconds(3);
@@ -69,4 +156,29 @@ public sealed class MarketIntelligencePassiveReporterTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("{}") });
     }
+
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        private readonly object sync = new();
+        private readonly List<RecordedRequest> requests = [];
+
+        public IReadOnlyList<RecordedRequest> Requests
+        {
+            get { lock (sync) return requests.ToArray(); }
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var recorded = new RecordedRequest(
+                request.RequestUri!.AbsolutePath,
+                request.Headers.GetValues("X-Api-Key").Single(),
+                await request.Content!.ReadAsStringAsync(cancellationToken));
+            lock (sync) requests.Add(recorded);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+        }
+    }
+
+    private sealed record RecordedRequest(string Path, string ApiKey, string Body);
 }

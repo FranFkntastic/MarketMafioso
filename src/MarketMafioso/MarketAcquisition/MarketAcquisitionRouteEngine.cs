@@ -26,6 +26,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly IMarketAcquisitionPurchaseIo purchase;
     private readonly IMarketAcquisitionRouteEvidenceRecorder evidence;
     private readonly MarketAcquisitionRouteReportDispatcher reportDispatcher;
+    private readonly IMarketAcquisitionIntelligenceReporter? intelligenceReporter;
     private readonly IMarketAcquisitionRouteClock clock;
     private readonly MarketAcquisitionTravelFrameThrottle travelFrameThrottle;
     private readonly string reportPluginInstanceId;
@@ -69,7 +70,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         IMarketAcquisitionReportOutbox? reportDeadLetter = null,
         string? reportPluginInstanceId = null,
         string? reportPluginVersion = null,
-        Func<bool>? exhaustiveResearchModeProvider = null)
+        Func<bool>? exhaustiveResearchModeProvider = null,
+        IMarketAcquisitionIntelligenceReporter? intelligenceReporter = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -89,6 +91,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         this.reportPluginInstanceId = reportPluginInstanceId ?? string.Empty;
         this.reportPluginVersion = reportPluginVersion;
         this.exhaustiveResearchModeProvider = exhaustiveResearchModeProvider ?? (() => false);
+        this.intelligenceReporter = intelligenceReporter;
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
         this.shardCheckpoints = shardCheckpoints;
     }
@@ -2295,9 +2298,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         string worldName,
         MarketBoardReadResult readResult)
     {
-        if (!reportDispatcher.CanReport || string.IsNullOrWhiteSpace(claimed.ClaimToken))
-            return;
-
         var lineId = !string.IsNullOrWhiteSpace(activeSubtask?.LineId)
             ? activeSubtask.LineId
             : GetActiveRouteLineId(claimed);
@@ -2306,7 +2306,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var dataCenter = !string.IsNullOrWhiteSpace(activeSubtask?.DataCenter)
             ? activeSubtask.DataCenter
             : MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName);
-        reportDispatcher.EnqueueMarketObservation(new MarketAcquisitionMarketObservationReport(
+        var report = new MarketAcquisitionMarketObservationReport(
             claimed.Id,
             claimed.ClaimToken,
             state.ProgressNonce,
@@ -2317,7 +2317,20 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             dataCenter,
             worldName,
             clock.UtcNow,
-            readResult));
+            readResult);
+
+        switch (MarketAcquisitionObservationDeliveryPolicy.Resolve(
+                    reportDispatcher.CanReport,
+                    claimed.ClaimToken,
+                    intelligenceReporter != null))
+        {
+            case MarketAcquisitionObservationDelivery.HostedLifecycle:
+                reportDispatcher.EnqueueMarketObservation(report);
+                break;
+            case MarketAcquisitionObservationDelivery.DirectEvidence:
+                intelligenceReporter!.EnqueueRouteObservation(report);
+                break;
+        }
     }
 
     private void BeginHostedReportingSession(MarketAcquisitionClaimView request)

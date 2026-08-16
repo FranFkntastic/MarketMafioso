@@ -159,6 +159,31 @@ public interface IMarketAcquisitionRouteReporter
     Task ReportMarketObservationAsync(MarketAcquisitionMarketObservationReport report, CancellationToken cancellationToken);
 }
 
+public interface IMarketAcquisitionIntelligenceReporter
+{
+    void EnqueueRouteObservation(MarketAcquisitionMarketObservationReport report);
+}
+
+internal enum MarketAcquisitionObservationDelivery
+{
+    None,
+    HostedLifecycle,
+    DirectEvidence,
+}
+
+internal static class MarketAcquisitionObservationDeliveryPolicy
+{
+    public static MarketAcquisitionObservationDelivery Resolve(
+        bool hostedReportingAvailable,
+        string? claimToken,
+        bool directEvidenceAvailable) =>
+        !string.IsNullOrWhiteSpace(claimToken) && hostedReportingAvailable
+            ? MarketAcquisitionObservationDelivery.HostedLifecycle
+            : string.IsNullOrWhiteSpace(claimToken) && directEvidenceAvailable
+                ? MarketAcquisitionObservationDelivery.DirectEvidence
+                : MarketAcquisitionObservationDelivery.None;
+}
+
 public interface IMarketAcquisitionRouteEvidenceRecorder
 {
     void RecordProbeVisit(

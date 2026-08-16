@@ -18,13 +18,37 @@ public sealed class MarketIntelligenceContractTests
             host.Configuration["MarketMafioso:RequireDashboardAuth"] = "true";
             host.Configuration["MarketMafioso:DashboardBootstrapUsername"] = "admin";
             host.Configuration["MarketMafioso:DashboardBootstrapPassword"] = "secret-password";
+            host.Configuration["MarketMafioso:ClientApiKey"] = "ingest-key";
         });
         using var client = application.CreateClient();
+        var acquisitionCredential = await application.Services
+            .GetRequiredService<WorkshopHostCredentialStore>()
+            .CreateAsync(
+                1,
+                "Primary acquisition",
+                WorkshopHostCredentialPurposes.CraftArchitect,
+                CancellationToken.None);
 
-        var ingest = await client.PostAsJsonAsync("/api/market-intelligence/evidence", Book("http-ingest", DateTimeOffset.UtcNow));
+        using var ingestRequest = new HttpRequestMessage(HttpMethod.Post, "/api/market-intelligence/evidence")
+        {
+            Content = JsonContent.Create(Book("http-ingest", DateTimeOffset.UtcNow)),
+        };
+        ingestRequest.Headers.Add("X-Api-Key", acquisitionCredential.Secret);
+        var ingest = await client.SendAsync(ingestRequest);
+        using var invalidKeyRequest = new HttpRequestMessage(HttpMethod.Post, "/api/market-intelligence/evidence")
+        {
+            Content = JsonContent.Create(Book("invalid-key-ingest", DateTimeOffset.UtcNow)),
+        };
+        invalidKeyRequest.Headers.Add("X-Api-Key", "wrong-key");
+        var invalidKeyIngest = await client.SendAsync(invalidKeyRequest);
+        var anonymousIngest = await client.PostAsJsonAsync(
+            "/api/market-intelligence/evidence",
+            Book("anonymous-ingest", DateTimeOffset.UtcNow));
         var ledger = await client.GetAsync("/api/market-intelligence/ledger");
 
         Assert.Equal(HttpStatusCode.OK, ingest.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, invalidKeyIngest.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousIngest.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, ledger.StatusCode);
     }
 

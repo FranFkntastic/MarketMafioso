@@ -312,7 +312,8 @@ public class MainWindow : Window, IDisposable
                 "market-acquisition-report-dead-letter.json")),
             config.PluginInstanceId,
             PluginBuildInfo.DisplayVersion,
-            () => config.MarketAcquisitionExhaustiveResearchMode);
+            () => config.MarketAcquisitionExhaustiveResearchMode,
+            marketIntelligencePassiveReporter);
 
         SizeConstraints = new WindowSizeConstraints
         {
