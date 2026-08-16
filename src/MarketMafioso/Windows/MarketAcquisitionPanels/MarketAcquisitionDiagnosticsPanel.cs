@@ -262,6 +262,8 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
 
     public void DrawPostRunDiagnosticSummary(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
+        DrawCompletionOutcome(snapshot.CompletionOutcome);
+
         var runSummary = snapshot.LastRunSummary;
         if (runSummary != null)
         {
@@ -309,6 +311,28 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
                 MarketMafiosoUiTheme.Error,
                 $"Post-run diagnostics: {summary.Warnings.Count:N0} warning(s). Open Diagnostics for details.");
         }
+    }
+
+    private static void DrawCompletionOutcome(MarketAcquisitionRouteCompletionOutcome? outcome)
+    {
+        if (outcome == null)
+            return;
+
+        var text = outcome.Kind switch
+        {
+            MarketAcquisitionRouteCompletionKinds.TargetSatisfied =>
+                $"Completion: target satisfied - {outcome.TargetPurchasedQuantity:N0}/{outcome.TargetRequestedQuantity:N0} target item(s).",
+            MarketAcquisitionRouteCompletionKinds.ScopeExhaustedBelowTarget =>
+                $"Completion: route scope exhausted - {outcome.TargetPurchasedQuantity:N0}/{outcome.TargetRequestedQuantity:N0} target item(s); {outcome.TargetRemainingQuantity:N0} remain under the configured constraints.",
+            MarketAcquisitionRouteCompletionKinds.EvidenceRefreshCompleted =>
+                "Completion: market evidence refreshed across the configured route scope.",
+            _ => "Completion: configured route scope exhausted.",
+        };
+        ImGui.TextColored(
+            outcome.Kind == MarketAcquisitionRouteCompletionKinds.TargetSatisfied
+                ? MarketMafiosoUiTheme.Success
+                : MarketMafiosoUiTheme.Muted,
+            text);
     }
 
     private void DrawUiStateCapture()

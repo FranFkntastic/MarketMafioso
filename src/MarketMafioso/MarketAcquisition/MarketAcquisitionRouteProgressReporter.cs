@@ -19,7 +19,6 @@ public static class MarketAcquisitionRouteProgressReporter
         (routeState.Equals("Running", StringComparison.OrdinalIgnoreCase) ||
          routeState.Equals("Paused", StringComparison.OrdinalIgnoreCase) ||
          routeState.Equals("Completed", StringComparison.OrdinalIgnoreCase) ||
-         routeState.Equals("Incomplete", StringComparison.OrdinalIgnoreCase) ||
          routeState.Equals("Failed", StringComparison.OrdinalIgnoreCase));
 
     public static string CreateIdempotencyKey(
@@ -33,8 +32,7 @@ public static class MarketAcquisitionRouteProgressReporter
         if (runnerState.Equals("Completed", StringComparison.OrdinalIgnoreCase))
             return CompleteAction;
 
-        return runnerState.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
-               runnerState.Equals("Incomplete", StringComparison.OrdinalIgnoreCase)
+        return runnerState.Equals("Failed", StringComparison.OrdinalIgnoreCase)
             ? FailAction
             : ProgressAction;
     }

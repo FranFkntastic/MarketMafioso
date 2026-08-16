@@ -164,6 +164,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         LastObservedListingsCsvPath = runner.LastObservedListingsCsvPath,
         LastPurchaseRecordsCsvPath = runner.LastPurchaseRecordsCsvPath,
         LastRunSummary = runner.LastRunSummary,
+        CompletionOutcome = runner.CompletionOutcome,
         LatestWorldCompletionSummary = runner.LatestWorldCompletionSummary,
         LastRunDiagnosticSummary = runner.LastRunDiagnosticSummary,
         ExactAcquisitionExecution = exactAcquisitionAuthority?.State,
@@ -397,7 +398,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             plan,
             enableDiagnostics,
             includeOpportunisticChecks: false,
-            diagnosticsLevel: enableDiagnostics ? diagnosticsLevel : MarketAcquisitionRouteDiagnosticsLevel.Off);
+            diagnosticsLevel: enableDiagnostics ? diagnosticsLevel : MarketAcquisitionRouteDiagnosticsLevel.Off,
+            evaluateTargetFulfillment: false);
         state.AcquisitionStatus = result.Success
             ? $"Evidence refresh started. {result.Message}"
             : result.Message;
