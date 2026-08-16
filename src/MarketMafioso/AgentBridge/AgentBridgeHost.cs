@@ -106,6 +106,7 @@ public sealed class AgentBridgeHost : IDisposable
             new("encrypted-capture"), new("capture-transactions"), new("plugin-lifecycle"),
             new("market-actor-capability-probe"),
             new("controlled-market-actor-listing"),
+            new("controlled-market-actor-browse"),
         ],
         provider.GetReviewSurfaces(),
         provider.GetCaptureSurfaces(),
@@ -128,6 +129,7 @@ public sealed class AgentBridgeHost : IDisposable
         router.Register("probe-market-actor-names", ProbeMarketActorNamesAsync);
         router.Register("begin-controlled-market-actor-listing", BeginControlledMarketActorListingAsync);
         router.Register("remove-controlled-market-actor-listing", RemoveControlledMarketActorListingAsync);
+        router.Register("begin-controlled-market-actor-browse", BeginControlledMarketActorBrowseAsync);
         router.Register("capture-proof", CaptureProofAsync);
         router.Register("get-proof", GetProof);
         router.Register("begin-capture-presentation", BeginCapturePresentationAsync);
@@ -163,6 +165,15 @@ public sealed class AgentBridgeHost : IDisposable
     {
         AgentBridgeControlledMarketListingTruth? receipt = null;
         await DispatchAsync(() => receipt = provider.RemoveControlledMarketActorListing(), token).ConfigureAwait(false);
+        return AgentBridgeResponse.Ok(receipt!.Message, receipt);
+    }
+
+    private async ValueTask<AgentBridgeResponse> BeginControlledMarketActorBrowseAsync(AgentBridgeRequest request, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(request.Target))
+            return AgentBridgeResponse.Fail("An exact item name is required.");
+        AgentBridgeControlledMarketBrowseTruth? receipt = null;
+        await DispatchAsync(() => receipt = provider.BeginControlledMarketActorBrowse(request.Target), token).ConfigureAwait(false);
         return AgentBridgeResponse.Ok(receipt!.Message, receipt);
     }
 

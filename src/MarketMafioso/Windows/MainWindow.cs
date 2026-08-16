@@ -61,6 +61,7 @@ public class MainWindow : Window, IDisposable
     private int marketActorNameRequestedCount;
     private readonly RemoteSummoningBellProbe remoteSummoningBellProbe;
     private readonly ControlledMarketActorListingProbe controlledMarketActorListingProbe;
+    private readonly ControlledMarketActorBrowseProbe controlledMarketActorBrowseProbe;
 
     public MarketListingOverlayWindow MarketListingOverlay { get; }
     private readonly IDataManager dataManager;
@@ -270,6 +271,16 @@ public class MainWindow : Window, IDisposable
             Plugin.SigScanner,
             Plugin.PluginInterface,
             Plugin.GameInventory);
+        controlledMarketActorBrowseProbe = new ControlledMarketActorBrowseProbe(
+            config,
+            Plugin.DataManager,
+            Plugin.CommandManager.ProcessCommand,
+            marketBoardApproachService.IsMarketBoardReady,
+            (itemId, itemName) => marketBoardAcquisition.SearchItem(
+                itemId,
+                itemName,
+                MarketBoardItemSearchIntent.RequireFreshBrowse),
+            marketBoardListingReader.ReadCurrentListings);
         MarketListingOverlay = new MarketListingOverlayWindow(marketBoardAcquisition, AgentReviewRegistry);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
@@ -729,6 +740,7 @@ public class MainWindow : Window, IDisposable
             },
             MarketActors = CreateMarketActorCapabilityTruth(ReadCurrentMarketActorBook()),
             ControlledMarketActorListing = CreateControlledMarketActorListingTruth(controlledMarketActorListingProbe.Snapshot()),
+            ControlledMarketActorBrowse = CreateControlledMarketActorBrowseTruth(controlledMarketActorBrowseProbe.Snapshot()),
             RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
             {
                 Active = remoteBellProbe.Active,
@@ -868,6 +880,12 @@ public class MainWindow : Window, IDisposable
     public AgentBridgeControlledMarketListingTruth RemoveControlledMarketActorListing() =>
         CreateControlledMarketActorListingTruth(controlledMarketActorListingProbe.BeginRemoval(IsControlledListingBlockedByAutomation()));
 
+    public AgentBridgeControlledMarketBrowseTruth BeginControlledMarketActorBrowse(string itemName) =>
+        CreateControlledMarketActorBrowseTruth(controlledMarketActorBrowseProbe.Begin(
+            itemName,
+            playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : string.Empty,
+            IsControlledListingBlockedByAutomation()));
+
     private bool IsControlledListingBlockedByAutomation() =>
         acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive || tradeQueueRunner.Snapshot.IsActive || workshopAssemblyRunner.IsRunning;
 
@@ -883,6 +901,20 @@ public class MainWindow : Window, IDisposable
         IsHq = source.IsHq,
         UnitPrice = source.UnitPrice,
         ListingSlot = source.ListingSlot,
+        UpdatedAtUtc = source.UpdatedAtUtc,
+    };
+
+    private static AgentBridgeControlledMarketBrowseTruth CreateControlledMarketActorBrowseTruth(ControlledMarketActorBrowseProbeView source) => new()
+    {
+        State = source.State,
+        Message = source.Message,
+        Active = source.Active,
+        ItemName = source.ItemName,
+        ItemId = source.ItemId,
+        WorldName = source.WorldName,
+        BrowseOperationId = source.BrowseOperationId,
+        ListingCount = source.ListingCount,
+        ArtisanObservedCount = source.ArtisanObservedCount,
         UpdatedAtUtc = source.UpdatedAtUtc,
     };
 
@@ -963,6 +995,8 @@ public class MainWindow : Window, IDisposable
 
         if (!IsMarketAcquisitionUnlocked())
             return;
+
+        controlledMarketActorBrowseProbe.Tick();
 
         _ = acquisitionWorkspace.RenewLeaseIfDueAsync();
         if (acquisitionWorkspace.ConsumeLeaseLossSignal())

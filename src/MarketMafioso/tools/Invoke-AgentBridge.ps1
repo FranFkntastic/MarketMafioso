@@ -21,6 +21,7 @@ param(
         "probe-market-actor-names",
         "begin-controlled-market-actor-listing",
         "remove-controlled-market-actor-listing",
+        "begin-controlled-market-actor-browse",
         "open-character-ui",
         "close-character-ui",
         "close-blocking-select-string-ui",
