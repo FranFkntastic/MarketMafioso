@@ -169,7 +169,11 @@ public sealed class MarketBoardListingReader
                 ListingId = listing.ListingId.ToString(),
                 RetainerId = listing.RetainerId.ToString(),
                 RetainerName = string.Empty,
-                SellerOwnerContentId = listing.ContentId,
+                // Current-build live control proved ContentId is the observing player, not the
+                // owner of the listing's retainer. Keep seller ownership unknown until a source
+                // with controlled semantics exists; treating this value as ownership poisons
+                // every concentration and relationship derived from it.
+                SellerOwnerContentId = null,
                 ArtisanContentId = listing.ArtisanId,
                 UnitPrice = listing.UnitPrice,
                 Quantity = listing.Quantity,

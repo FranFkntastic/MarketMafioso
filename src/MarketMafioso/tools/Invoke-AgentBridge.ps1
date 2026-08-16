@@ -18,6 +18,7 @@ param(
         "capture-proof",
         "select-main-tab",
         "capture-input-state",
+        "probe-market-actor-names",
         "open-character-ui",
         "close-character-ui",
         "close-blocking-select-string-ui",

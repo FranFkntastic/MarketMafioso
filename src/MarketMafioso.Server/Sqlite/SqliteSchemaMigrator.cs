@@ -76,6 +76,7 @@ public sealed class SqliteSchemaMigrator
         await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "source_build", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "capture_mode", "TEXT NULL", cancellationToken);
 
+        var invalidActorRepair = await RepairInvalidLocalSellerOwnerSemanticsAsync(connection, transaction, cancellationToken);
         var characterRepair = await RepairIncompleteCharacterIdentitiesAsync(connection, transaction, cancellationToken);
         await CreateNormalizedCharacterIdentityIndexAsync(connection, transaction, cancellationToken);
         await SeedInventoryCurrentHeadsAsync(connection, transaction, cancellationToken);
@@ -86,6 +87,8 @@ public sealed class SqliteSchemaMigrator
 
         if (characterRepair.Repaired > 0)
             log.LogInformation("Reconciled {CharacterCount} incomplete character identities.", characterRepair.Repaired);
+        if (invalidActorRepair > 0)
+            log.LogWarning("Quarantined seller-owner relationships from {ObservationCount} local evidence observations whose ContentId identified the observer.", invalidActorRepair);
         if (characterRepair.Preserved > 0)
         {
             log.LogWarning(
@@ -93,6 +96,83 @@ public sealed class SqliteSchemaMigrator
                 characterRepair.Preserved);
         }
         log.LogInformation("SQLite schema is ready at {DatabasePath}.", connectionFactory.DatabasePath);
+    }
+
+    private static async Task<int> RepairInvalidLocalSellerOwnerSemanticsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using (var alreadyApplied = connection.CreateCommand())
+        {
+            alreadyApplied.Transaction = transaction;
+            alreadyApplied.CommandText = "SELECT COUNT(*) FROM schema_migrations WHERE version = 2";
+            if ((long)(await alreadyApplied.ExecuteScalarAsync(cancellationToken))! > 0)
+                return 0;
+        }
+
+        int affected;
+        await using (var count = connection.CreateCommand())
+        {
+            count.Transaction = transaction;
+            count.CommandText = """
+                SELECT COUNT(*)
+                FROM market_evidence_observations
+                WHERE source_version = '2'
+                  AND source_kind IN ('MarketAcquisition', 'PassiveMarketBoard');
+                """;
+            affected = Convert.ToInt32(await count.ExecuteScalarAsync(cancellationToken));
+        }
+
+        await using var repair = connection.CreateCommand();
+        repair.Transaction = transaction;
+        repair.CommandText = """
+            CREATE TEMP TABLE invalid_local_seller_actors(actor_key TEXT PRIMARY KEY);
+            INSERT OR IGNORE INTO invalid_local_seller_actors(actor_key)
+            SELECT DISTINCT e.actor_key
+            FROM market_actor_listing_evidence e
+            JOIN market_evidence_observations o ON o.observation_id = e.observation_id
+            WHERE e.role = 'SellerOwner'
+              AND o.source_version = '2'
+              AND o.source_kind IN ('MarketAcquisition', 'PassiveMarketBoard');
+
+            DELETE FROM market_actor_listing_evidence
+            WHERE role = 'SellerOwner'
+              AND observation_id IN (
+                  SELECT observation_id
+                  FROM market_evidence_observations
+                  WHERE source_version = '2'
+                    AND source_kind IN ('MarketAcquisition', 'PassiveMarketBoard'));
+
+            UPDATE market_actor_listing_evidence
+            SET is_self_crafted_sale = 0
+            WHERE observation_id IN (
+                SELECT observation_id
+                FROM market_evidence_observations
+                WHERE source_version = '2'
+                  AND source_kind IN ('MarketAcquisition', 'PassiveMarketBoard'));
+
+            DELETE FROM market_actors
+            WHERE actor_key IN (SELECT actor_key FROM invalid_local_seller_actors)
+              AND NOT EXISTS (
+                  SELECT 1 FROM market_actor_listing_evidence e
+                  WHERE e.account_id = market_actors.account_id
+                    AND e.actor_key = market_actors.actor_key);
+
+            UPDATE market_intelligence_outbox
+            SET status = 'Pending', completed_at_utc = NULL, last_error = NULL
+            WHERE observation_id IN (
+                SELECT observation_id
+                FROM market_evidence_observations
+                WHERE source_version = '2'
+                  AND source_kind IN ('MarketAcquisition', 'PassiveMarketBoard'));
+
+            DROP TABLE invalid_local_seller_actors;
+            INSERT INTO schema_migrations(version, applied_at_utc)
+            VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            """;
+        await repair.ExecuteNonQueryAsync(cancellationToken);
+        return affected;
     }
 
     private async Task BackfillCurrentSemanticHashesAsync(CancellationToken cancellationToken)
