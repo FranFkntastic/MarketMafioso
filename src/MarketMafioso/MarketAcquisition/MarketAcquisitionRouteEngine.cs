@@ -185,7 +185,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ArgumentNullException.ThrowIfNull(claimed);
         if (!TryPreflightRouteAction(out var evidenceBlockReason))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
-        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
+        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
 
         claimedRequest = claimed;
@@ -386,7 +386,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ArgumentNullException.ThrowIfNull(claimed);
         if (!TryPreflightRouteAction(out var evidenceBlockReason))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
-        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
+        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
 
         claimedRequest = claimed;

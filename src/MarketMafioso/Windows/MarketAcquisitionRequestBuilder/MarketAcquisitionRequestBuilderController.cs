@@ -290,11 +290,21 @@ public sealed class MarketAcquisitionRequestBuilderController
             return false;
         }
 
-        Document = ExactAcquisitionWorkbenchAuthorityService.Finalize(Document);
-        Status = Document.ExactAcquisitionAuthority?.Transfer.DryRunOnly == true
+        var finalized = ExactAcquisitionWorkbenchAuthorityService.Finalize(Document);
+        try
+        {
+            persistDocument(finalized);
+        }
+        catch (Exception exception)
+        {
+            Status = $"Finalization could not be saved: {exception.Message} The Workbench remains unfinalized; retry Finalize.";
+            return false;
+        }
+
+        Document = finalized;
+        Status = finalized.ExactAcquisitionAuthority?.Transfer.DryRunOnly == true
             ? "Diagnostic External plan contract confirmed for this Workbench revision; dry-run execution only."
             : "External plan execution contract confirmed for this Workbench revision.";
-        SaveDocument();
         return true;
     }
 
@@ -767,8 +777,17 @@ public sealed class MarketAcquisitionRequestBuilderController
         ArgumentNullException.ThrowIfNull(config);
         return document =>
         {
+            var previous = config.ActiveMarketAcquisitionRequestDocument;
             MarketAcquisitionRequestDocumentPersistence.Save(config, document);
-            config.Save();
+            try
+            {
+                config.Save();
+            }
+            catch
+            {
+                config.ActiveMarketAcquisitionRequestDocument = previous;
+                throw;
+            }
         };
     }
 }
