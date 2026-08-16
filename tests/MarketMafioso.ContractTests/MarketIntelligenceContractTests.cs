@@ -266,7 +266,7 @@ public sealed class MarketIntelligenceContractTests
         Assert.Contains(detail.Observations, x => x.Coverage == MarketEvidenceCoverage.AggregateOnly);
         Assert.DoesNotContain(row.Findings, x => x.Kind is "BulkShelfDominance" or "ReplacementDepth" or "SellerPersistence");
         var registry = await client.GetFromJsonAsync<MarketEvidenceSourceRegistryView>("/api/market-intelligence/sources");
-        Assert.Equal("market-evidence-sources-v2", registry?.RegistryVersion);
+        Assert.Equal("market-evidence-sources-v3", registry?.RegistryVersion);
         Assert.Equal(5, registry?.Sources.Count);
     }
 

@@ -4,7 +4,7 @@ namespace MarketMafioso.Server.MarketIntelligence;
 
 internal static class MarketEvidenceSourceRegistry
 {
-    public const string Version = "market-evidence-sources-v2";
+    public const string Version = "market-evidence-sources-v3";
     private static readonly IReadOnlyDictionary<string, MarketEvidenceSourceView> Definitions =
         new Dictionary<string, MarketEvidenceSourceView>(StringComparer.Ordinal)
         {

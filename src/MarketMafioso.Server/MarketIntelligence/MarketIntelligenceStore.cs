@@ -10,7 +10,7 @@ namespace MarketMafioso.Server.MarketIntelligence;
 
 public sealed class MarketIntelligenceStore
 {
-    public const string ClassifierVersion = "market-intelligence-v2";
+    public const string ClassifierVersion = "market-intelligence-v3";
     public const string ActorKeyScheme = "account-content-id-hmac-sha256-v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly HashSet<string> SupportedCoverage =
