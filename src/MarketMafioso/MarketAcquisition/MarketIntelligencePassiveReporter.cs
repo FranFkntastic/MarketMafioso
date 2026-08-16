@@ -4,15 +4,17 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MarketMafioso.Contracts.MarketIntelligence;
 
 namespace MarketMafioso.MarketAcquisition;
 
-internal sealed class MarketIntelligencePassiveReporter : IDisposable
+internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionIntelligenceReporter, IDisposable
 {
-    private const string ReportType = "passive-market-evidence.v1";
+    private const string ReportType = "market-evidence.v1";
+    private const string LegacyPassiveReportType = "passive-market-evidence.v1";
     private readonly Configuration configuration;
     private readonly HttpClient http;
     private readonly IMarketAcquisitionReportOutbox outbox;
@@ -34,8 +36,60 @@ internal sealed class MarketIntelligencePassiveReporter : IDisposable
     public void Enqueue(MarketEvidenceUploadRequest evidence)
     {
         if (string.IsNullOrWhiteSpace(evidence.OccurrenceId)) return;
-        outbox.Put($"passive|{evidence.OccurrenceId}", ReportType, evidence.OccurrenceId, evidence);
+        outbox.Put($"evidence|{evidence.SourceKind}|{evidence.OccurrenceId}", ReportType, evidence.OccurrenceId, evidence);
         _ = FlushAsync(lifetime.Token);
+    }
+
+    public void EnqueueRouteObservation(MarketAcquisitionMarketObservationReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        var coverage = report.ReadResult.ReadState switch
+        {
+            MarketBoardListingReadState.FreshComplete when report.ReadResult.Listings.Count == 0 => MarketEvidenceCoverage.Empty,
+            MarketBoardListingReadState.FreshComplete when !report.ReadResult.IsListingCountTruncated &&
+                                                        !(report.HasIncompleteCoverage ?? report.ReadResult.HasIncompleteCoverage) => MarketEvidenceCoverage.Complete,
+            MarketBoardListingReadState.FreshPartial => MarketEvidenceCoverage.Partial,
+            _ => MarketEvidenceCoverage.Unavailable,
+        };
+        var occurrenceId = $"{report.RequestId}:{report.AttemptId}:{report.Sequence}";
+        Enqueue(new MarketEvidenceUploadRequest
+        {
+            IdempotencyKey = $"acquisition:{configuration.PluginInstanceId}:{report.AttemptId}:observation:{report.Sequence}",
+            OccurrenceId = occurrenceId,
+            SourceKind = MarketEvidenceSources.MarketAcquisition,
+            SourceVersion = "1",
+            SourceInstanceId = configuration.PluginInstanceId,
+            SourceBuild = PluginBuildInfo.DisplayVersion,
+            CaptureMode = MarketAcquisitionResearchModePolicy.Capture(configuration.MarketAcquisitionExhaustiveResearchMode),
+            ItemId = report.ItemId,
+            ItemName = report.ItemName,
+            DataCenter = report.DataCenter,
+            WorldName = report.WorldName,
+            ObservedAtUtc = report.ObservedAtUtc,
+            Coverage = coverage,
+            ReportedListingCount = Math.Max(report.ReadResult.ReportedListingCount, report.ReadResult.Listings.Count),
+            ListingCapacity = report.ReadResult.ListingCapacity,
+            IsTruncated = report.ReadResult.IsListingCountTruncated ||
+                          (report.HasIncompleteCoverage ?? report.ReadResult.HasIncompleteCoverage),
+            ProvenanceJson = JsonSerializer.Serialize(new
+            {
+                requestId = report.RequestId,
+                lineId = report.LineId,
+                attemptId = report.AttemptId,
+                sequence = report.Sequence,
+                sourceBuild = PluginBuildInfo.DisplayVersion,
+                captureMode = MarketAcquisitionResearchModePolicy.Capture(configuration.MarketAcquisitionExhaustiveResearchMode),
+            }),
+            Listings = report.ReadResult.Listings.Select(listing => new MarketEvidenceListing
+            {
+                ListingId = listing.ListingId.ToString(),
+                RetainerId = listing.RetainerId.ToString(),
+                RetainerName = listing.RetainerName,
+                Quantity = listing.Quantity,
+                UnitPrice = listing.UnitPrice,
+                IsHq = listing.IsHq,
+            }).ToArray(),
+        });
     }
 
     internal IReadOnlyList<MarketAcquisitionReportOutboxEntry> Pending => outbox.Snapshot();
@@ -55,7 +109,7 @@ internal sealed class MarketIntelligencePassiveReporter : IDisposable
         if (!entered) return;
         try
         {
-            foreach (var entry in outbox.Snapshot().Where(x => x.ReportType == ReportType))
+            foreach (var entry in outbox.Snapshot().Where(x => x.ReportType is ReportType or LegacyPassiveReportType))
             {
                 try
                 {

@@ -30,10 +30,12 @@ internal static class MarketIntelligenceEndpoints
     {
         try
         {
-            var accountId = await accounts.ResolveAccountIdAsync(httpRequest.Headers["X-Api-Key"].SingleOrDefault(), token) ?? 1;
+            var accountId = await accounts.ResolveAccountIdAsync(httpRequest.Headers["X-Api-Key"].SingleOrDefault(), token);
+            if (accountId is null)
+                return Results.Unauthorized();
             if (deferProjection == true && request.SourceKind != MarketEvidenceSources.LegacyRouteImport)
                 return Results.BadRequest(new { error = "Only the historical importer may defer projection." });
-            return Results.Ok(await store.IngestAsync(accountId, request, token, projectImmediately: deferProjection != true));
+            return Results.Ok(await store.IngestAsync(accountId.Value, request, token, projectImmediately: deferProjection != true));
         }
         catch (MarketEvidenceIdempotencyConflictException exception)
         {
@@ -54,8 +56,10 @@ internal static class MarketIntelligenceEndpoints
     {
         try
         {
-            var accountId = await accounts.ResolveAccountIdAsync(request.Headers["X-Api-Key"].SingleOrDefault(), token) ?? 1;
-            await store.RecordImportReceiptAsync(accountId, receipt, token);
+            var accountId = await accounts.ResolveAccountIdAsync(request.Headers["X-Api-Key"].SingleOrDefault(), token);
+            if (accountId is null)
+                return Results.Unauthorized();
+            await store.RecordImportReceiptAsync(accountId.Value, receipt, token);
             return Results.NoContent();
         }
         catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
@@ -67,8 +71,10 @@ internal static class MarketIntelligenceEndpoints
         MarketIntelligenceStore store,
         CancellationToken token)
     {
-        var accountId = await accounts.ResolveAccountIdAsync(request.Headers["X-Api-Key"].SingleOrDefault(), token) ?? 1;
-        return Results.Ok(new { revision = await store.ProjectDeferredAccountAsync(accountId, token) });
+        var accountId = await accounts.ResolveAccountIdAsync(request.Headers["X-Api-Key"].SingleOrDefault(), token);
+        return accountId is null
+            ? Results.Unauthorized()
+            : Results.Ok(new { revision = await store.ProjectDeferredAccountAsync(accountId.Value, token) });
     }
 
     private static async Task<IResult> GetLedger(
