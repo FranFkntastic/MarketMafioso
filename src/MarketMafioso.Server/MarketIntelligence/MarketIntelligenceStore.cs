@@ -10,7 +10,7 @@ namespace MarketMafioso.Server.MarketIntelligence;
 
 public sealed class MarketIntelligenceStore
 {
-    public const string ClassifierVersion = "market-intelligence-v2";
+    public const string ClassifierVersion = "market-intelligence-v3";
     public const string ActorKeyScheme = "account-content-id-hmac-sha256-v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly HashSet<string> SupportedCoverage =
@@ -52,7 +52,7 @@ public sealed class MarketIntelligenceStore
         {
             var actorKeyMaterial = await GetOrCreateActorKeyMaterialAsync(connection, transaction, accountId, cancellationToken);
             var canonicalListings = canonicalUploadListings
-                .Select(listing => NormalizeListing(actorKeyMaterial, listing))
+                .Select(listing => NormalizeListing(actorKeyMaterial, request, listing))
                 .ToArray();
             var listingsJson = JsonSerializer.Serialize(canonicalListings, JsonOptions);
             payloadHash = Sha256(listingsJson);
@@ -179,20 +179,40 @@ public sealed class MarketIntelligenceStore
         };
     }
 
-    private static MarketEvidenceListing NormalizeListing(byte[] actorKeyMaterial, MarketEvidenceUploadListing listing) => new()
+    private static MarketEvidenceListing NormalizeListing(
+        byte[] actorKeyMaterial,
+        MarketEvidenceUploadRequest request,
+        MarketEvidenceUploadListing listing) => new()
     {
         ListingId = listing.ListingId.Trim(),
         RetainerId = listing.RetainerId.Trim(),
         RetainerName = NormalizeOptional(listing.RetainerName),
         RetainerNameSource = NormalizeOptional(listing.RetainerNameSource),
-        SellerOwnerActorKey = ActorKey(actorKeyMaterial, listing.SellerOwnerContentId),
-        SellerOwnerIdentityState = IdentityState(listing.SellerOwnerContentId),
+        SellerOwnerActorKey = ActorKey(actorKeyMaterial, TrustedSellerOwnerContentId(request, listing)),
+        SellerOwnerIdentityState = IdentityState(TrustedSellerOwnerContentId(request, listing)),
         ArtisanActorKey = ActorKey(actorKeyMaterial, listing.ArtisanContentId),
         ArtisanIdentityState = IdentityState(listing.ArtisanContentId),
         Quantity = listing.Quantity,
         UnitPrice = listing.UnitPrice,
         IsHq = listing.IsHq,
     };
+
+    private static ulong? TrustedSellerOwnerContentId(
+        MarketEvidenceUploadRequest request,
+        MarketEvidenceUploadListing listing) =>
+        IsControlledSellerOwnerSemantics(request.SourceKind, request.SourceVersion)
+            ? listing.SellerOwnerContentId
+            : IsLocalMarketSource(request.SourceKind) ? null : listing.SellerOwnerContentId;
+
+    private static bool IsInvalidLocalSellerOwnerSemantics(string sourceKind, string sourceVersion) =>
+        sourceVersion.Equals("2", StringComparison.Ordinal) &&
+        IsLocalMarketSource(sourceKind);
+
+    private static bool IsControlledSellerOwnerSemantics(string sourceKind, string sourceVersion) =>
+        IsLocalMarketSource(sourceKind) && sourceVersion.StartsWith("controlled-", StringComparison.Ordinal);
+
+    private static bool IsLocalMarketSource(string sourceKind) =>
+        sourceKind is MarketEvidenceSources.MarketAcquisition or MarketEvidenceSources.PassiveMarketBoard;
 
     private static string? ActorKey(byte[] actorKeyMaterial, ulong? contentId)
     {
@@ -790,7 +810,7 @@ public sealed class MarketIntelligenceStore
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT o.observation_id, o.source_kind, o.item_id, o.item_name, o.data_center, o.world_name,
+            SELECT o.observation_id, o.source_kind, o.source_version, o.item_id, o.item_name, o.data_center, o.world_name,
                    o.observed_at_utc, o.coverage, o.reported_listing_count, o.listing_capacity,
                    o.is_truncated, o.aggregate_json, p.listings_json
             FROM market_evidence_observations o
@@ -803,16 +823,31 @@ public sealed class MarketIntelligenceStore
         while (await reader.ReadAsync(cancellationToken))
         {
             result.Add(new Evidence(
-                reader.GetString(0), reader.GetString(1), checked((uint)reader.GetInt64(2)),
-                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.GetString(5),
-                DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture), reader.GetString(7),
-                reader.IsDBNull(8) ? null : reader.GetInt32(8), reader.IsDBNull(9) ? null : reader.GetInt32(9),
-                reader.IsDBNull(10) ? null : reader.GetInt64(10) != 0,
-                reader.IsDBNull(11) ? null : JsonSerializer.Deserialize<MarketEvidenceAggregate>(reader.GetString(11), JsonOptions),
-                JsonSerializer.Deserialize<MarketEvidenceListing[]>(reader.GetString(12), JsonOptions) ?? []));
+                reader.GetString(0), reader.GetString(1), reader.GetString(2), checked((uint)reader.GetInt64(3)),
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetString(5), reader.GetString(6),
+                DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture), reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetInt32(9), reader.IsDBNull(10) ? null : reader.GetInt32(10),
+                reader.IsDBNull(11) ? null : reader.GetInt64(11) != 0,
+                reader.IsDBNull(12) ? null : JsonSerializer.Deserialize<MarketEvidenceAggregate>(reader.GetString(12), JsonOptions),
+                SanitizeStoredListings(
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    JsonSerializer.Deserialize<MarketEvidenceListing[]>(reader.GetString(13), JsonOptions) ?? [])));
         }
         return result;
     }
+
+    private static IReadOnlyList<MarketEvidenceListing> SanitizeStoredListings(
+        string sourceKind,
+        string sourceVersion,
+        IReadOnlyList<MarketEvidenceListing> listings) =>
+        IsInvalidLocalSellerOwnerSemantics(sourceKind, sourceVersion)
+            ? listings.Select(listing => listing with
+            {
+                SellerOwnerActorKey = null,
+                SellerOwnerIdentityState = MarketActorIdentityStates.NotCaptured,
+            }).ToArray()
+            : listings;
 
     private static MarketIntelligenceMarketRow BuildRow(
         IGrouping<(uint ItemId, string World), Evidence> group,
@@ -1015,10 +1050,15 @@ public sealed class MarketIntelligenceStore
             throw new ArgumentException("Detailed listings require an ID, positive quantity, and positive unit price.");
         if (request.SchemaVersion == 1 && request.Listings.Any(x => x.SellerOwnerContentId.HasValue || x.ArtisanContentId.HasValue || !string.IsNullOrWhiteSpace(x.RetainerNameSource)))
             throw new ArgumentException("Market evidence schema version 1 cannot assert actor identity or name provenance.");
-        if (request.Listings.Any(x => x.SellerOwnerContentId.HasValue) &&
-            !MarketEvidenceSourceRegistry.Has(source, "SellerOwnerContentIds") &&
-            !MarketEvidenceSourceRegistry.Has(source, "SellerOwnerContentIdsWhenCorrelated"))
-            throw new ArgumentException($"{request.SourceKind} cannot submit seller-owner content identities.");
+        if (request.Listings.Any(x => x.SellerOwnerContentId.HasValue))
+        {
+            var acceptsLegacyQuarantine = IsInvalidLocalSellerOwnerSemantics(request.SourceKind, request.SourceVersion);
+            if (!acceptsLegacyQuarantine &&
+                !IsControlledSellerOwnerSemantics(request.SourceKind, request.SourceVersion) &&
+                !MarketEvidenceSourceRegistry.Has(source, "SellerOwnerContentIds") &&
+                !MarketEvidenceSourceRegistry.Has(source, "SellerOwnerContentIdsWhenCorrelated"))
+                throw new ArgumentException($"{request.SourceKind} cannot submit seller-owner content identities.");
+        }
         if (request.Listings.Any(x => x.ArtisanContentId.HasValue) &&
             !MarketEvidenceSourceRegistry.Has(source, "ArtisanContentIds") &&
             !MarketEvidenceSourceRegistry.Has(source, "ArtisanContentIdsWhenCorrelated"))
@@ -1049,7 +1089,7 @@ public sealed class MarketIntelligenceStore
     private static object Db(object? value) => value ?? DBNull.Value;
 
     private sealed record Evidence(
-        string ObservationId, string SourceKind, uint ItemId, string? ItemName, string DataCenter,
+        string ObservationId, string SourceKind, string SourceVersion, uint ItemId, string? ItemName, string DataCenter,
         string WorldName, DateTimeOffset ObservedAtUtc, string Coverage, int? ReportedListingCount,
         int? ListingCapacity, bool? IsTruncated, MarketEvidenceAggregate? Aggregate,
         IReadOnlyList<MarketEvidenceListing> Listings);

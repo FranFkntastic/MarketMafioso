@@ -4,14 +4,14 @@ namespace MarketMafioso.Server.MarketIntelligence;
 
 internal static class MarketEvidenceSourceRegistry
 {
-    public const string Version = "market-evidence-sources-v2";
+    public const string Version = "market-evidence-sources-v3";
     private static readonly IReadOnlyDictionary<string, MarketEvidenceSourceView> Definitions =
         new Dictionary<string, MarketEvidenceSourceView>(StringComparer.Ordinal)
         {
             [MarketEvidenceSources.MarketAcquisition] = Source(MarketEvidenceSources.MarketAcquisition,
-                "DetailedListings", "StableListingIds", "WorldScopedSellerIds", "SellerNames", "SellerNameProvenance", "SellerOwnerContentIds", "ArtisanContentIds", "OrderedPriceBook", "DeclaredCapacity", "CompleteReadEvidence"),
+                "DetailedListings", "StableListingIds", "WorldScopedSellerIds", "SellerNames", "SellerNameProvenance", "ArtisanContentIds", "OrderedPriceBook", "DeclaredCapacity", "CompleteReadEvidence"),
             [MarketEvidenceSources.PassiveMarketBoard] = Source(MarketEvidenceSources.PassiveMarketBoard,
-                "DetailedListings", "StableListingIds", "WorldScopedSellerIds", "SellerNames", "SellerNameProvenance", "SellerOwnerContentIdsWhenCorrelated", "ArtisanContentIdsWhenCorrelated", "OrderedPriceBook", "DeclaredCapacity", "CompleteReadEvidence"),
+                "DetailedListings", "StableListingIds", "WorldScopedSellerIds", "SellerNames", "SellerNameProvenance", "ArtisanContentIdsWhenCorrelated", "OrderedPriceBook", "DeclaredCapacity", "CompleteReadEvidence"),
             [MarketEvidenceSources.LegacyRouteImport] = Source(MarketEvidenceSources.LegacyRouteImport,
                 "DetailedListings", "StableListingIds", "WorldScopedSellerIds", "SellerNamesWhenCaptured", "OrderedPriceBook", "DeclaredCapacityWhenCaptured", "CompleteReadEvidenceWhenCaptured"),
             [MarketEvidenceSources.Universalis] = Source(MarketEvidenceSources.Universalis,

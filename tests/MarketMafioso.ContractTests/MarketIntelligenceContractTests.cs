@@ -266,7 +266,7 @@ public sealed class MarketIntelligenceContractTests
         Assert.Contains(detail.Observations, x => x.Coverage == MarketEvidenceCoverage.AggregateOnly);
         Assert.DoesNotContain(row.Findings, x => x.Kind is "BulkShelfDominance" or "ReplacementDepth" or "SellerPersistence");
         var registry = await client.GetFromJsonAsync<MarketEvidenceSourceRegistryView>("/api/market-intelligence/sources");
-        Assert.Equal("market-evidence-sources-v2", registry?.RegistryVersion);
+        Assert.Equal("market-evidence-sources-v3", registry?.RegistryVersion);
         Assert.Equal(5, registry?.Sources.Count);
     }
 
@@ -389,6 +389,39 @@ public sealed class MarketIntelligenceContractTests
         Assert.Equal(.1, row.ArtisanIdentityCoverage, 3);
         Assert.DoesNotContain(row.Findings, finding => finding.Kind is
             "SellerOwnerConcentration" or "ProducerConcentration" or "MultiRetainerOwner" or "SelfCraftedSupply");
+    }
+
+    [Fact]
+    public async Task LocalObserverContentIdsAreQuarantinedFromSellerOwnerEvidence()
+    {
+        var configuration = ServerTestHost.CreateConfiguration();
+        await using var application = ServerTestHost.Create(configuration);
+        var store = application.Services.GetRequiredService<MarketIntelligenceStore>();
+        var legacyClientBook = ActorBook("observer-content-id", DateTimeOffset.UtcNow) with
+        {
+            SourceVersion = "2",
+        };
+
+        await store.IngestAsync(1, legacyClientBook, CancellationToken.None);
+        await store.ProjectPendingAsync(CancellationToken.None);
+
+        var row = Assert.Single((await store.GetLedgerAsync([1], CancellationToken.None)).Rows);
+        var listing = Assert.Single((await store.GetDetailAsync([1], 5060, "Diabolos", CancellationToken.None))!.Observations).Listings[0];
+        Assert.Equal(0, row.DistinctSellerOwners);
+        Assert.Equal(0, row.SellerOwnerIdentityCoverage);
+        Assert.Equal(2, row.DistinctArtisans);
+        Assert.Equal(1, row.ArtisanIdentityCoverage);
+        Assert.Null(listing.SellerOwnerActorKey);
+        Assert.Equal(MarketActorIdentityStates.NotCaptured, listing.SellerOwnerIdentityState);
+        Assert.DoesNotContain(row.Findings, finding => finding.Kind is
+            "SellerOwnerConcentration" or "MultiRetainerOwner" or "SelfCraftedSupply");
+
+        await Assert.ThrowsAsync<ArgumentException>(() => store.IngestAsync(1, legacyClientBook with
+        {
+            IdempotencyKey = "observer-content-id-v3",
+            OccurrenceId = "observer-content-id-v3",
+            SourceVersion = "3",
+        }, CancellationToken.None));
     }
 
     [Fact]

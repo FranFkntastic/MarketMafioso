@@ -51,9 +51,10 @@ public sealed class MarketIntelligencePassiveReporterTests
             Assert.Equal(MarketEvidenceSources.MarketAcquisition, evidence.SourceKind);
             Assert.Equal(MarketEvidenceCoverage.Complete, evidence.Coverage);
             Assert.Equal(2, evidence.SchemaVersion);
+            Assert.Equal("3", evidence.SourceVersion);
             var listing = Assert.Single(evidence.Listings);
             Assert.Equal("Local Seller", listing.RetainerName);
-            Assert.Equal((ulong)100, listing.SellerOwnerContentId);
+            Assert.Null(listing.SellerOwnerContentId);
             Assert.Equal((ulong)200, listing.ArtisanContentId);
             Assert.Contains("\"requestId\":\"local:plan-one\"", evidence.ProvenanceJson);
             Assert.Contains("\"lineId\":\"local:line-one\"", evidence.ProvenanceJson);
