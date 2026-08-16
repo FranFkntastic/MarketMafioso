@@ -19,6 +19,8 @@ param(
         "select-main-tab",
         "capture-input-state",
         "probe-market-actor-names",
+        "begin-controlled-market-actor-listing",
+        "remove-controlled-market-actor-listing",
         "open-character-ui",
         "close-character-ui",
         "close-blocking-select-string-ui",

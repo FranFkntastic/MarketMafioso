@@ -105,6 +105,7 @@ public sealed class AgentBridgeHost : IDisposable
             new("snapshot"), new("reviewed-actions"), new("proofs"),
             new("encrypted-capture"), new("capture-transactions"), new("plugin-lifecycle"),
             new("market-actor-capability-probe"),
+            new("controlled-market-actor-listing"),
         ],
         provider.GetReviewSurfaces(),
         provider.GetCaptureSurfaces(),
@@ -125,6 +126,8 @@ public sealed class AgentBridgeHost : IDisposable
         router.Register("capture-input-state", async (_, token) => await RunAsync(provider.CaptureInputState, token, "Market-board input state capture requested.").ConfigureAwait(false));
         router.Register("stop-route", async (_, token) => await RunAsync(provider.StopRoute, token, "Route stop requested.").ConfigureAwait(false));
         router.Register("probe-market-actor-names", ProbeMarketActorNamesAsync);
+        router.Register("begin-controlled-market-actor-listing", BeginControlledMarketActorListingAsync);
+        router.Register("remove-controlled-market-actor-listing", RemoveControlledMarketActorListingAsync);
         router.Register("capture-proof", CaptureProofAsync);
         router.Register("get-proof", GetProof);
         router.Register("begin-capture-presentation", BeginCapturePresentationAsync);
@@ -145,6 +148,22 @@ public sealed class AgentBridgeHost : IDisposable
         AgentBridgeMarketActorCapabilityTruth? receipt = null;
         await DispatchAsync(() => receipt = provider.ProbeMarketActorNames(), token).ConfigureAwait(false);
         return AgentBridgeResponse.Ok("Requested names for up to 24 actors from the current correlated market book.", receipt);
+    }
+
+    private async ValueTask<AgentBridgeResponse> BeginControlledMarketActorListingAsync(AgentBridgeRequest request, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(request.Target))
+            return AgentBridgeResponse.Fail("An exact item name is required.");
+        AgentBridgeControlledMarketListingTruth? receipt = null;
+        await DispatchAsync(() => receipt = provider.BeginControlledMarketActorListing(request.Target), token).ConfigureAwait(false);
+        return AgentBridgeResponse.Ok(receipt!.Message, receipt);
+    }
+
+    private async ValueTask<AgentBridgeResponse> RemoveControlledMarketActorListingAsync(AgentBridgeRequest _, CancellationToken token)
+    {
+        AgentBridgeControlledMarketListingTruth? receipt = null;
+        await DispatchAsync(() => receipt = provider.RemoveControlledMarketActorListing(), token).ConfigureAwait(false);
+        return AgentBridgeResponse.Ok(receipt!.Message, receipt);
     }
 
     private AgentBridgeResponse GetControl(AgentBridgeRequest request)
