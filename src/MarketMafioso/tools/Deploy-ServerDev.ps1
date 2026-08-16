@@ -65,35 +65,6 @@ function Get-HttpStatusCode {
     }
 }
 
-function Get-LatestWorkflowRun {
-    param(
-        [Parameter(Mandatory = $true)]
-        [DateTimeOffset]$StartedAfter
-    )
-
-    $json = & gh run list `
-        --workflow $workflow `
-        --branch $Ref `
-        --limit 10 `
-        --json databaseId,headBranch,headSha,status,conclusion,createdAt,event,displayTitle
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to list GitHub workflow runs."
-    }
-
-    $runs = $json | ConvertFrom-Json
-    $matchingRuns = @($runs | Where-Object {
-            $_.event -eq "workflow_dispatch" -and
-            [DateTimeOffset]::Parse($_.createdAt) -ge $StartedAfter
-        })
-
-    if ($matchingRuns.Count -eq 0) {
-        return $null
-    }
-
-    return $matchingRuns | Sort-Object -Property createdAt -Descending | Select-Object -First 1
-}
-
 function Invoke-PublicSmoke {
     Write-Host "Running public server smoke checks..."
 
@@ -222,37 +193,35 @@ Assert-CommandAvailable -Name "gh"
 
 Push-Location $repoRoot
 try {
-    $startedAfter = [DateTimeOffset]::Now.AddSeconds(-10)
     $resolvedSha = (& git rev-parse $Ref).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedSha)) {
         throw "Unable to resolve git ref '$Ref'."
     }
 
     Write-Host "Triggering MarketMafioso dev server deploy for $Ref@$($resolvedSha.Substring(0, 7))"
-    Invoke-Gh -Arguments @("workflow", "run", $workflow, "--ref", $Ref)
+    $dispatchOutput = @(Invoke-Gh -Arguments @("workflow", "run", $workflow, "--ref", $Ref))
+    $runUrl = $dispatchOutput |
+        Where-Object { $_ -match '/actions/runs/(?<RunId>[0-9]+)' } |
+        Select-Object -Last 1
+    if ([string]::IsNullOrWhiteSpace($runUrl)) {
+        throw "GitHub did not return the exact workflow run URL for the deployment dispatch."
+    }
+    $runId = [regex]::Match($runUrl, '/actions/runs/(?<RunId>[0-9]+)').Groups['RunId'].Value
+    Write-Host "Triggered exact workflow run $runId ($runUrl)"
 
     if ($NoWait) {
         Write-Host "Deploy triggered. Not waiting because -NoWait was supplied."
         return
     }
 
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    $run = $null
-    while ((Get-Date) -lt $deadline) {
-        $run = Get-LatestWorkflowRun -StartedAfter $startedAfter
-        if ($null -ne $run) {
-            break
-        }
-
-        Start-Sleep -Seconds 3
+    $run = (Invoke-Gh -Arguments @("run", "view", $runId, "--json", "databaseId,displayTitle,headSha")) | ConvertFrom-Json
+    if (-not [string]::Equals([string]$run.headSha, $resolvedSha, [StringComparison]::OrdinalIgnoreCase)) {
+        Invoke-Gh -Arguments @("run", "cancel", $runId)
+        throw "Dispatched workflow run $runId targets '$($run.headSha)', not requested '$resolvedSha'; the run was cancelled."
     }
 
-    if ($null -eq $run) {
-        throw "Timed out waiting for a new $workflow run for '$Ref'."
-    }
-
-    Write-Host "Watching GitHub Actions run $($run.databaseId) ($($run.displayTitle))"
-    Invoke-Gh -Arguments @("run", "watch", [string]$run.databaseId, "--exit-status")
+    Write-Host "Watching GitHub Actions run $runId ($($run.displayTitle))"
+    Invoke-Gh -Arguments @("run", "watch", $runId, "--exit-status")
 
     if (-not $SkipSmoke) {
         Invoke-PublicSmoke
