@@ -306,6 +306,8 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.AgentCaptureInputState,
                 mainWindow.AgentStopRoute,
                 mainWindow.ProbeMarketActorNames,
+                mainWindow.BeginControlledMarketActorListing,
+                mainWindow.RemoveControlledMarketActorListing,
                 () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
                 mainWindow.AgentReviewRegistry),
             agentBridgeProofStore,
