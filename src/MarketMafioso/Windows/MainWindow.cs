@@ -2356,9 +2356,10 @@ public class MainWindow : Window, IDisposable
         var playerInventory = scanner.CountWorkshopUsableInventory();
         var owner = GetCurrentQuartermasterOwnerScope();
         var retainers = new List<MarketMafioso.Contracts.Inventory.RetainerReport>();
+        var hasDirectRetainerEvidence = false;
         if (owner.LocalContentId is > 0 && owner.HomeWorldId is > 0)
         {
-            retainerReports.TryGetReports(
+            hasDirectRetainerEvidence = retainerReports.TryGetReports(
                 new Franthropy.Observations.V1.ObservationOwner(owner.LocalContentId.Value, owner.HomeWorldId.Value),
                 owner.CharacterName,
                 owner.HomeWorldName,
@@ -2367,10 +2368,16 @@ public class MainWindow : Window, IDisposable
                 scanner.ResolveItemMetadata,
                 out retainers);
         }
-        return WorkshopMaterialAvailabilityService.BuildAvailabilityFromRetainers(
+        Quartermaster.QuartermasterSnapshot? quartermasterSnapshot = null;
+        if (!hasDirectRetainerEvidence)
+            quartermaster.TryGetSnapshot(out quartermasterSnapshot, out _);
+        return WorkshopMaterialAvailabilityService.BuildAvailabilityWithFallback(
             requirements,
             playerInventory,
-            retainers);
+            hasDirectRetainerEvidence,
+            retainers,
+            quartermasterSnapshot,
+            owner);
     }
 
     private Vector4 GetWorkshopStatusColor()
