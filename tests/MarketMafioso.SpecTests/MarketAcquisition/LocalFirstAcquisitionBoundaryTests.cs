@@ -56,6 +56,37 @@ public sealed class LocalFirstAcquisitionBoundaryTests
     }
 
     [Fact]
+    public async Task RecommendedTarget_ExpandsToRegionSweepWhenRemoteListingCapCannotCoverTarget()
+    {
+        var document = CreateDocument() with
+        {
+            Lines = [CreateDocument().Lines[0] with { TargetQuantity = 10 }],
+        };
+        var request = MarketAcquisitionRequestDocumentMapper.BuildLocalExecutionRequest(
+            document,
+            "Wei Ning",
+            "Siren",
+            DateTimeOffset.UnixEpoch);
+        var service = new MarketAcquisitionPlanPreparationService(
+            new StaticListingSource(),
+            new MarketAcquisitionWorldVisitCatalog(new Configuration()));
+
+        var result = await service.PrepareAsync(
+            new MarketAcquisitionPlanPreparationRequest
+            {
+                Claim = request,
+                CurrentWorld = "Siren",
+                PreparedAtUtc = DateTimeOffset.UnixEpoch.AddHours(1),
+                RecentWorldTtl = TimeSpan.FromHours(24),
+            },
+            CancellationToken.None);
+
+        Assert.Equal("AllWorldSweep", result.Plan.WorldMode);
+        Assert.Equal(32, result.Plan.WorldBatches.Count);
+        Assert.Contains("expanded to every world", result.StatusMessage);
+    }
+
+    [Fact]
     public void Finalization_DoesNotRequireHostedSynchronizationOrClaim()
     {
         var presentation = MarketAcquisitionWorkbenchFinalizationPresenter.Build(new(
