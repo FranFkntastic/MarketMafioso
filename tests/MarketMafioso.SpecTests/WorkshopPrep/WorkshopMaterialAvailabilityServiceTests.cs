@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MarketMafioso.Contracts.Inventory;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.SpecTests.Windows;
 using MarketMafioso.WorkshopPrep;
@@ -13,6 +14,79 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         VerifyStowageCapabilityGuard();
         WindowPlacementRecoveryTests.VerifyContract();
     }
+
+    [Fact]
+    public void Unavailable_direct_observation_uses_owner_matched_quartermaster_stock()
+    {
+        var owner = new QuartermasterOwnerScope(100, 40, "Wei Ning", "Maduin");
+        var availability = WorkshopMaterialAvailabilityService.BuildAvailabilityWithFallback(
+            [new WorkshopMaterialRequirement(500, "Cobalt Rivets", 0, 10)],
+            new Dictionary<uint, int> { [500] = 2 },
+            hasDirectRetainerEvidence: false,
+            directRetainers: [],
+            quartermasterSnapshot: Snapshot(100, 40, 500, 7),
+            owner);
+
+        var line = Assert.Single(availability);
+        Assert.Equal(2, line.PlayerInventory);
+        Assert.Equal(7, line.QuartermasterStock);
+        Assert.Equal(1, line.TotalMissing);
+    }
+
+    [Fact]
+    public void Available_empty_direct_observation_does_not_resurrect_fallback_stock()
+    {
+        var owner = new QuartermasterOwnerScope(100, 40, "Wei Ning", "Maduin");
+        var availability = WorkshopMaterialAvailabilityService.BuildAvailabilityWithFallback(
+            [new WorkshopMaterialRequirement(500, "Cobalt Rivets", 0, 10)],
+            new Dictionary<uint, int> { [500] = 2 },
+            hasDirectRetainerEvidence: true,
+            directRetainers: [],
+            quartermasterSnapshot: Snapshot(100, 40, 500, 7),
+            owner);
+
+        var line = Assert.Single(availability);
+        Assert.Equal(0, line.QuartermasterStock);
+        Assert.Equal(8, line.TotalMissing);
+    }
+
+    [Fact]
+    public void Unavailable_direct_observation_rejects_another_owners_fallback()
+    {
+        var owner = new QuartermasterOwnerScope(100, 40, "Wei Ning", "Maduin");
+        var availability = WorkshopMaterialAvailabilityService.BuildAvailabilityWithFallback(
+            [new WorkshopMaterialRequirement(500, "Cobalt Rivets", 0, 10)],
+            new Dictionary<uint, int> { [500] = 2 },
+            hasDirectRetainerEvidence: false,
+            directRetainers: [],
+            quartermasterSnapshot: Snapshot(101, 40, 500, 7),
+            owner);
+
+        var line = Assert.Single(availability);
+        Assert.Equal(0, line.QuartermasterStock);
+        Assert.Equal(8, line.TotalMissing);
+    }
+
+    private static QuartermasterSnapshot Snapshot(
+        ulong localContentId,
+        uint homeWorldId,
+        uint itemId,
+        uint quantity) =>
+        new(
+            "quartermaster-primary",
+            12,
+            DateTimeOffset.UtcNow,
+            new QuartermasterOwner(localContentId, homeWorldId, "Wei Ning", "Maduin"),
+            [new QuartermasterRetainerSnapshot(
+                200,
+                "Inventory Retainer",
+                DateTimeOffset.UtcNow,
+                0,
+                [new QuartermasterBagSnapshot(
+                    "RetainerInventory1",
+                    null,
+                    [new QuartermasterItemSnapshot(itemId, null, null, quantity, false, 0, null, 0, null, null)])],
+                [])]);
 
     private static void VerifyStowageCapabilityGuard()
     {

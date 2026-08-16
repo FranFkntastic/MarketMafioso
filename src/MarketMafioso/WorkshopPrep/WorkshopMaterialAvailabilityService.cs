@@ -8,6 +8,39 @@ namespace MarketMafioso.WorkshopPrep;
 
 public static class WorkshopMaterialAvailabilityService
 {
+    public static IReadOnlyList<WorkshopMaterialAvailability> BuildAvailabilityWithFallback(
+        IReadOnlyList<WorkshopMaterialRequirement> requirements,
+        IReadOnlyDictionary<uint, int> playerInventory,
+        bool hasDirectRetainerEvidence,
+        IReadOnlyList<RetainerReport> directRetainers,
+        QuartermasterSnapshot? quartermasterSnapshot,
+        QuartermasterOwnerScope ownerScope)
+    {
+        ArgumentNullException.ThrowIfNull(directRetainers);
+        ArgumentNullException.ThrowIfNull(ownerScope);
+
+        if (hasDirectRetainerEvidence)
+            return BuildAvailabilityFromRetainers(requirements, playerInventory, directRetainers);
+
+        var fallbackRetainers = quartermasterSnapshot is not null && ownerScope.Matches(quartermasterSnapshot.Owner)
+            ? quartermasterSnapshot.Retainers
+            : [];
+        return BuildAvailability(
+            requirements,
+            playerInventory,
+            itemId => fallbackRetainers
+                .Select(retainer => new QuartermasterRetainerCandidate(
+                    retainer.RetainerId,
+                    retainer.RetainerName,
+                    retainer.ObservedAtUtc,
+                    retainer.Bags.SelectMany(bag => bag.Items)
+                        .Where(item => item.ItemId == itemId)
+                        .Sum(item => checked((int)item.Quantity))))
+                .Where(candidate => candidate.Quantity > 0)
+                .OrderByDescending(candidate => candidate.Quantity)
+                .ToList());
+    }
+
     public static IReadOnlyList<WorkshopMaterialAvailability> BuildAvailabilityFromRetainers(
         IReadOnlyList<WorkshopMaterialRequirement> requirements,
         IReadOnlyDictionary<uint, int> playerInventory,
@@ -17,6 +50,27 @@ public static class WorkshopMaterialAvailabilityService
         ArgumentNullException.ThrowIfNull(playerInventory);
         ArgumentNullException.ThrowIfNull(retainers);
 
+        return BuildAvailability(
+            requirements,
+            playerInventory,
+            itemId => retainers
+                .Select(retainer => new QuartermasterRetainerCandidate(
+                    retainer.RetainerId,
+                    retainer.RetainerName,
+                    DateTime.TryParse(retainer.LastUpdated, out var observedAt) ? observedAt.ToUniversalTime() : DateTime.MinValue,
+                    retainer.Bags.SelectMany(bag => bag.Items)
+                        .Where(item => item.ItemId == itemId)
+                        .Sum(item => checked((int)item.Quantity))))
+                .Where(candidate => candidate.Quantity > 0)
+                .OrderByDescending(candidate => candidate.Quantity)
+                .ToList());
+    }
+
+    private static IReadOnlyList<WorkshopMaterialAvailability> BuildAvailability(
+        IReadOnlyList<WorkshopMaterialRequirement> requirements,
+        IReadOnlyDictionary<uint, int> playerInventory,
+        Func<uint, IReadOnlyList<QuartermasterRetainerCandidate>> getRetainerStock)
+    {
         return requirements
             .GroupBy(requirement => requirement.ItemId)
             .Select(group =>
@@ -24,17 +78,7 @@ public static class WorkshopMaterialAvailabilityService
                 var first = group.First();
                 var required = group.Sum(requirement => requirement.Quantity);
                 var playerCount = playerInventory.GetValueOrDefault(first.ItemId);
-                var retainerStock = retainers
-                    .Select(retainer => new QuartermasterRetainerCandidate(
-                        retainer.RetainerId,
-                        retainer.RetainerName,
-                        DateTime.TryParse(retainer.LastUpdated, out var observedAt) ? observedAt.ToUniversalTime() : DateTime.MinValue,
-                        retainer.Bags.SelectMany(bag => bag.Items)
-                            .Where(item => item.ItemId == first.ItemId)
-                            .Sum(item => checked((int)item.Quantity))))
-                    .Where(candidate => candidate.Quantity > 0)
-                    .OrderByDescending(candidate => candidate.Quantity)
-                    .ToList();
+                var retainerStock = getRetainerStock(first.ItemId);
                 var retainerCount = retainerStock.Sum(candidate => candidate.Quantity);
                 var shortage = Math.Max(0, required - playerCount);
                 return new WorkshopMaterialAvailability(
