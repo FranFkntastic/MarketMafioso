@@ -1,6 +1,7 @@
 using System.Net;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 namespace MarketMafioso.SpecTests.MarketAcquisition;
@@ -300,6 +301,41 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Equal(7017u, Assert.Single(controller.Document.Lines).ItemId);
         Assert.Equal(0, attempts);
         Assert.False(controller.IsHostedSyncEnabled);
+    }
+
+    [Fact]
+    public void Finalize_PersistenceFailureLeavesAuthorityUnfinalizedAndRetryable()
+    {
+        var attempts = 0;
+        MarketAcquisitionRequestDocument? persisted = null;
+        var staged = ExactAcquisitionWorkbenchAuthorityService.Stage(
+            MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Siren"),
+            ExactAcquisitionWorkbenchAuthorityTests.Transfer());
+        var controller = new MarketAcquisitionRequestBuilderController(
+            staged,
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderSyncOutcome(value, "synced")),
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(value, null, "refreshed")),
+            (_, _) => { },
+            value =>
+            {
+                attempts++;
+                if (attempts == 1)
+                    throw new UnauthorizedAccessException("Access is denied.");
+
+                persisted = value;
+            });
+
+        Assert.False(controller.FinalizeExactAcquisitionAuthority());
+
+        Assert.Null(controller.Document.ExactAcquisitionAuthority!.FinalizedContract);
+        Assert.Contains("remains unfinalized", controller.Status);
+        Assert.Contains("retry Finalize", controller.Status);
+
+        Assert.True(controller.FinalizeExactAcquisitionAuthority());
+
+        Assert.NotNull(controller.Document.ExactAcquisitionAuthority!.FinalizedContract);
+        Assert.Equal(controller.Document, persisted);
+        Assert.Equal(2, attempts);
     }
 
     [Fact]
