@@ -5,6 +5,8 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using MarketMafioso.Contracts.MarketIntelligence;
@@ -13,8 +15,10 @@ namespace MarketMafioso.MarketAcquisition;
 
 internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionIntelligenceReporter, IDisposable
 {
-    private const string ReportType = "market-evidence.v1";
+    private const string ReportType = "market-evidence.v2";
+    private const string PreviousReportType = "market-evidence.v1";
     private const string LegacyPassiveReportType = "passive-market-evidence.v1";
+    private const string ActorNameReportType = "market-actor-name.v1";
     private readonly Configuration configuration;
     private readonly HttpClient http;
     private readonly IMarketAcquisitionReportOutbox outbox;
@@ -40,6 +44,23 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
         _ = FlushAsync(lifetime.Token);
     }
 
+    public void EnqueueActorName(ulong contentId, string name, string resolutionMethod, DateTimeOffset observedAtUtc)
+    {
+        if (contentId == 0 || string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(resolutionMethod)) return;
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{contentId}|{name.Trim()}|{resolutionMethod.Trim()}|{observedAtUtc.ToUniversalTime():O}")));
+        var request = new MarketActorNameObservationUploadRequest
+        {
+            IdempotencyKey = $"{configuration.PluginInstanceId}:actor-name:{fingerprint}",
+            ContentId = contentId,
+            Name = name.Trim(),
+            ResolutionMethod = resolutionMethod.Trim(),
+            ObservedAtUtc = observedAtUtc,
+        };
+        outbox.Put($"actor-name|{fingerprint}", ActorNameReportType, fingerprint, request);
+        _ = FlushAsync(lifetime.Token);
+    }
+
     public void EnqueueRouteObservation(MarketAcquisitionMarketObservationReport report)
     {
         ArgumentNullException.ThrowIfNull(report);
@@ -54,10 +75,11 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
         var occurrenceId = $"{report.RequestId}:{report.AttemptId}:{report.Sequence}";
         Enqueue(new MarketEvidenceUploadRequest
         {
+            SchemaVersion = 2,
             IdempotencyKey = $"acquisition:{configuration.PluginInstanceId}:{report.AttemptId}:observation:{report.Sequence}",
             OccurrenceId = occurrenceId,
             SourceKind = MarketEvidenceSources.MarketAcquisition,
-            SourceVersion = "1",
+            SourceVersion = "2",
             SourceInstanceId = configuration.PluginInstanceId,
             SourceBuild = PluginBuildInfo.DisplayVersion,
             CaptureMode = MarketAcquisitionResearchModePolicy.Capture(configuration.MarketAcquisitionExhaustiveResearchMode),
@@ -80,11 +102,14 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
                 sourceBuild = PluginBuildInfo.DisplayVersion,
                 captureMode = MarketAcquisitionResearchModePolicy.Capture(configuration.MarketAcquisitionExhaustiveResearchMode),
             }),
-            Listings = report.ReadResult.Listings.Select(listing => new MarketEvidenceListing
+            Listings = report.ReadResult.Listings.Select(listing => new MarketEvidenceUploadListing
             {
                 ListingId = listing.ListingId.ToString(),
                 RetainerId = listing.RetainerId.ToString(),
                 RetainerName = listing.RetainerName,
+                RetainerNameSource = listing.RetainerNameSource,
+                SellerOwnerContentId = listing.SellerOwnerContentId,
+                ArtisanContentId = listing.ArtisanContentId,
                 Quantity = listing.Quantity,
                 UnitPrice = listing.UnitPrice,
                 IsHq = listing.IsHq,
@@ -109,12 +134,15 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
         if (!entered) return;
         try
         {
-            foreach (var entry in outbox.Snapshot().Where(x => x.ReportType is ReportType or LegacyPassiveReportType))
+            foreach (var entry in outbox.Snapshot().Where(x => x.ReportType is ReportType or PreviousReportType or LegacyPassiveReportType or ActorNameReportType))
             {
                 try
                 {
-                    var body = outbox.Deserialize<MarketEvidenceUploadRequest>(entry);
-                    using var request = new HttpRequestMessage(HttpMethod.Post, ResolveEndpoint(configuration.ServerUrl)) { Content = JsonContent.Create(body) };
+                    var isActorName = entry.ReportType == ActorNameReportType;
+                    var body = isActorName
+                        ? (object)outbox.Deserialize<MarketActorNameObservationUploadRequest>(entry)
+                        : outbox.Deserialize<MarketEvidenceUploadRequest>(entry);
+                    using var request = new HttpRequestMessage(HttpMethod.Post, isActorName ? ResolveActorNameEndpoint(configuration.ServerUrl) : ResolveEndpoint(configuration.ServerUrl)) { Content = JsonContent.Create(body) };
                     request.Headers.Add("X-Api-Key", WorkshopHostApiKeyRouting.ResolveAcquisitionKey(configuration));
                     using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
                     response.EnsureSuccessStatusCode();
@@ -135,6 +163,9 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
             ? acquisition[..^"/acquisition".Length] + "/market-intelligence/evidence"
             : throw new InvalidOperationException("The configured receiver URL produced an unexpected acquisition endpoint.");
     }
+
+    private static string ResolveActorNameEndpoint(string serverUrl) =>
+        ResolveEndpoint(serverUrl).Replace("/market-intelligence/evidence", "/market-intelligence/actors/names", StringComparison.OrdinalIgnoreCase);
 
     public void Dispose()
     {

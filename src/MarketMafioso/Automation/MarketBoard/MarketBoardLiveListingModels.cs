@@ -21,6 +21,8 @@ public sealed record MarketBoardLiveListing
     public string RetainerId { get; init; } = string.Empty;
     public string RetainerName { get; init; } = string.Empty;
     public string RetainerNameSource { get; init; } = string.Empty;
+    public ulong? SellerOwnerContentId { get; init; }
+    public ulong? ArtisanContentId { get; init; }
     public uint UnitPrice { get; init; }
     public uint Quantity { get; init; }
     public bool IsHq { get; init; }

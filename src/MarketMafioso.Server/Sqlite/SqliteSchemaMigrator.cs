@@ -778,6 +778,53 @@ public sealed class SqliteSchemaMigrator
             PRIMARY KEY(account_id, source_path_hash)
         );
 
+        CREATE TABLE IF NOT EXISTS market_actor_key_scopes (
+            account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+            key_scheme TEXT NOT NULL,
+            key_material BLOB NOT NULL,
+            created_at_utc TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS market_actors (
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            actor_key TEXT NOT NULL,
+            key_scheme TEXT NOT NULL,
+            first_observed_at_utc TEXT NOT NULL,
+            last_observed_at_utc TEXT NOT NULL,
+            PRIMARY KEY(account_id, actor_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_actor_listing_evidence (
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            observation_id TEXT NOT NULL REFERENCES market_evidence_observations(observation_id) ON DELETE CASCADE,
+            listing_id TEXT NOT NULL,
+            actor_key TEXT NOT NULL,
+            role TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            item_name TEXT NULL,
+            world_name TEXT NOT NULL,
+            retainer_id TEXT NOT NULL,
+            retainer_name TEXT NULL,
+            observed_at_utc TEXT NOT NULL,
+            is_self_crafted_sale INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(account_id, observation_id, listing_id, actor_key, role),
+            FOREIGN KEY(account_id, actor_key) REFERENCES market_actors(account_id, actor_key) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS market_actor_name_observations (
+            name_observation_id TEXT PRIMARY KEY,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            actor_key TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            name TEXT NOT NULL,
+            resolution_method TEXT NOT NULL,
+            observed_at_utc TEXT NOT NULL,
+            received_at_utc TEXT NOT NULL,
+            source_observation_id TEXT NULL REFERENCES market_evidence_observations(observation_id) ON DELETE SET NULL,
+            UNIQUE(account_id, idempotency_key),
+            FOREIGN KEY(account_id, actor_key) REFERENCES market_actors(account_id, actor_key) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_snapshots_account_received_at ON snapshots(account_id, received_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_character_received_at ON snapshots(character_id, received_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_inventory_owners_snapshot ON inventory_owners(snapshot_id, sort_order);
@@ -811,6 +858,12 @@ public sealed class SqliteSchemaMigrator
             ON market_evidence_observations(account_id, source_kind, occurrence_id);
         CREATE INDEX IF NOT EXISTS idx_market_intelligence_outbox_pending
             ON market_intelligence_outbox(status, account_id, id);
+        CREATE INDEX IF NOT EXISTS idx_market_actor_listing_actor_time
+            ON market_actor_listing_evidence(account_id, actor_key, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_actor_listing_market_time
+            ON market_actor_listing_evidence(account_id, world_name, item_id, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_actor_names_actor_time
+            ON market_actor_name_observations(account_id, actor_key, observed_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events(occurred_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_category ON diagnostic_events(category, occurred_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_severity ON diagnostic_events(severity, occurred_at_utc DESC);

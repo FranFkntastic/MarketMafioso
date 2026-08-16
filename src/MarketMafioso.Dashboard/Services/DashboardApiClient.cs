@@ -407,6 +407,16 @@ public sealed class DashboardApiClient
         return await response.Content.ReadFromJsonAsync<MarketIntelligenceMarketDetailView>(JsonOptions, cancellationToken);
     }
 
+    public async Task<MarketActorDetailView?> GetMarketActorDetailAsync(
+        string actorKey,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.GetAsync($"api/market-intelligence/actors/{Uri.EscapeDataString(actorKey)}", cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        EnsureAuthorizedSuccess(response);
+        return await response.Content.ReadFromJsonAsync<MarketActorDetailView>(JsonOptions, cancellationToken);
+    }
+
     public async Task UpdateMarketIntelligenceAnnotationAsync(
         string worldName,
         uint itemId,

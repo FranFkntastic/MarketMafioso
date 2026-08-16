@@ -2351,6 +2351,11 @@ body,
 .intel-detail summary { cursor:pointer; font-size:12px; }
 .intel-observation { font-size:11px; padding:6px 0; }
 .intel-observation div { display:flex; justify-content:space-between; }
+.intel-actor { align-items:center; background:var(--mmf-surface-raised); border:1px solid var(--mmf-border); border-radius:4px; color:var(--mmf-text); cursor:pointer; display:flex; font-size:11px; justify-content:space-between; margin-top:4px; padding:5px 7px; text-align:left; width:100%; }
+.intel-actor:hover { border-color:var(--mmf-info); }
+.intel-actor span { color:var(--mmf-text-muted); }
+.intel-actor-detail { background:var(--mmf-surface-raised); border:1px solid var(--mmf-border); border-radius:5px; padding:9px; }
+.intel-actor-detail small { color:var(--mmf-text-muted); display:block; margin-top:4px; }
 .intel-empty, .intel-error { color:var(--mmf-text-muted); padding:36px; text-align:center; }
 .intel-error { color:var(--mmf-danger); }
 

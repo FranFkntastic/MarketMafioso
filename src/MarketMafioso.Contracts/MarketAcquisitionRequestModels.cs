@@ -557,6 +557,15 @@ public sealed record MarketAcquisitionMarketObservationListing
     [JsonPropertyName("retainerName")]
     public string RetainerName { get; init; } = string.Empty;
 
+    [JsonPropertyName("retainerNameSource")]
+    public string? RetainerNameSource { get; init; }
+
+    [JsonPropertyName("sellerOwnerContentId")]
+    public ulong? SellerOwnerContentId { get; init; }
+
+    [JsonPropertyName("artisanContentId")]
+    public ulong? ArtisanContentId { get; init; }
+
     [JsonPropertyName("quantity")]
     public uint Quantity { get; init; }
 

@@ -104,6 +104,7 @@ public sealed class AgentBridgeHost : IDisposable
         [
             new("snapshot"), new("reviewed-actions"), new("proofs"),
             new("encrypted-capture"), new("capture-transactions"), new("plugin-lifecycle"),
+            new("market-actor-capability-probe"),
         ],
         provider.GetReviewSurfaces(),
         provider.GetCaptureSurfaces(),
@@ -123,6 +124,7 @@ public sealed class AgentBridgeHost : IDisposable
         router.Register("select-main-tab", SelectMainTabAsync);
         router.Register("capture-input-state", async (_, token) => await RunAsync(provider.CaptureInputState, token, "Market-board input state capture requested.").ConfigureAwait(false));
         router.Register("stop-route", async (_, token) => await RunAsync(provider.StopRoute, token, "Route stop requested.").ConfigureAwait(false));
+        router.Register("probe-market-actor-names", ProbeMarketActorNamesAsync);
         router.Register("capture-proof", CaptureProofAsync);
         router.Register("get-proof", GetProof);
         router.Register("begin-capture-presentation", BeginCapturePresentationAsync);
@@ -136,6 +138,13 @@ public sealed class AgentBridgeHost : IDisposable
         AgentBridgeProofReceipt? receipt = null;
         await DispatchAsync(() => receipt = AgentBridgeProofFactory.Create(provider.CreateSnapshot(), Interlocked.Increment(ref revision), null), token).ConfigureAwait(false);
         return AgentBridgeResponse.Ok("Snapshot captured.", receipt);
+    }
+
+    private async ValueTask<AgentBridgeResponse> ProbeMarketActorNamesAsync(AgentBridgeRequest _, CancellationToken token)
+    {
+        AgentBridgeMarketActorCapabilityTruth? receipt = null;
+        await DispatchAsync(() => receipt = provider.ProbeMarketActorNames(), token).ConfigureAwait(false);
+        return AgentBridgeResponse.Ok("Requested names for up to 24 actors from the current correlated market book.", receipt);
     }
 
     private AgentBridgeResponse GetControl(AgentBridgeRequest request)
