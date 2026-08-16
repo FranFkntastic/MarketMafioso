@@ -491,6 +491,15 @@ public sealed record MarketAcquisitionMarketObservationRequest
     [JsonPropertyName("schemaVersion")]
     public int SchemaVersion { get; init; } = 1;
 
+    [JsonPropertyName("sourceInstanceId")]
+    public string? SourceInstanceId { get; init; }
+
+    [JsonPropertyName("sourceBuild")]
+    public string? SourceBuild { get; init; }
+
+    [JsonPropertyName("captureMode")]
+    public string? CaptureMode { get; init; }
+
     [JsonPropertyName("claimToken")]
     public string ClaimToken { get; init; } = string.Empty;
 

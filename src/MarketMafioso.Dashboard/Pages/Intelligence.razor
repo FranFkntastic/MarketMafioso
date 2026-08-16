@@ -1,0 +1,93 @@
+@page "/intelligence"
+@implements IAsyncDisposable
+@using MarketMafioso.Contracts.MarketIntelligence
+@using Microsoft.JSInterop
+@inject DashboardApiClient Api
+@inject IJSRuntime JS
+
+<PageTitle>Market intelligence</PageTitle>
+
+<div class="intel-page">
+    <header class="intel-header">
+        <div><h1>Market intelligence</h1><p>Observed market books, grouped once by item and world. Open a row for the underlying evidence.</p></div>
+        <div class="intel-summary"><span>@_ledger.Rows.Count markets</span><span>@_ledger.Rows.Sum(x => x.ObservationCount) observations</span><span>@(_ledger.UpdatedAtUtc?.ToLocalTime().ToString("MMM d, h:mm tt") ?? "No evidence yet")</span></div>
+    </header>
+    <div class="intel-toolbar">
+        <input @bind="_search" @bind:event="oninput" placeholder="Filter item, world, data center, source, or finding" />
+        <select @bind="_coverage"><option value="">All evidence states</option><option>Complete</option><option>Partial</option><option value="LegacyMissing">Legacy coverage unknown</option><option>Empty</option><option>Unavailable</option><option>AggregateOnly</option></select>
+        <label><input type="checkbox" @bind="_findingsOnly" /> Findings only</label>
+    </div>
+
+    @if (_error is not null) { <div class="intel-error">@_error</div> }
+    else if (_loading) { <div class="intel-empty">Loading observed markets…</div> }
+    else
+    {
+        <div class="intel-workbench @(_selected is null ? "" : "has-detail")">
+            <div class="intel-table-wrap">
+                <table class="intel-table">
+                    <thead><tr><th>Item</th><th>World</th><th>Observed</th><th>Latest book</th><th>Prices</th><th>Sellers</th><th>Full stacks</th><th>Top two sellers</th><th>Largest price shelf</th><th>Since prior book</th><th>Evidence</th></tr></thead>
+                    <tbody>
+                    @foreach (var row in VisibleRows)
+                    {
+                        <tr class="@(ReferenceEquals(row, _selected) ? "selected" : "")" @onclick="() => SelectAsync(row)">
+                            <td><strong>@row.ItemName</strong><small>#@row.ItemId</small></td>
+                            <td><strong>@row.WorldName</strong><small>@row.DataCenter</small></td>
+                            <td>@row.ObservationCount books<small>@row.DistinctDays day(s), @row.FirstObservedAtUtc.ToLocalTime().ToString("MMM d")–@row.LastObservedAtUtc.ToLocalTime().ToString("MMM d")</small></td>
+                            <td>@row.VisibleListings listings<small>@row.VisibleQuantity.ToString("N0") units · @row.LatestCoverage</small></td>
+                            <td>@PriceRange(row)</td><td>@row.DistinctSellers</td><td>@Percent(row.FullStackShare)</td><td>@Percent(row.TopTwoSellerShare)</td>
+                            <td>@Percent(row.DominantPriceShelfShare)<small>@(row.DominantPriceShelf?.ToString("N0") ?? "—") gil</small></td>
+                            <td>@Signed(row.VisibleQuantityChange) units<small>+@row.AddedListings / -@row.RemovedListings listings</small></td>
+                            <td>@(row.Findings.Count == 0 ? "Measured" : $"{row.Findings.Count} finding(s)")<small>@string.Join(", ", row.SourceKinds)</small></td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+                @if (!VisibleRows.Any()) { <div class="intel-empty">No observed market matches these filters.</div> }
+            </div>
+            @if (_selected is not null)
+            {
+                <aside class="intel-detail">
+                    <button class="intel-close" @onclick="CloseDetail">×</button><h2>@_selected.ItemName</h2><p>@_selected.WorldName · @_selected.DataCenter</p>
+                    <h3>What stands out</h3>
+                    @if (_selected.Findings.Count == 0) { <p>No classifier currently calls this market unusual. Its measurements and source history are still retained.</p> }
+                    else { @foreach (var finding in _selected.Findings) { <div class="intel-finding"><strong>@FriendlyFinding(finding.Kind)</strong><p>@finding.Summary</p><small>Based on @finding.ObservationIds.Count source observation(s)</small></div> } }
+                    <h3>Notes</h3><textarea @bind="_note" placeholder="Add a human interpretation or follow-up…"></textarea>
+                    <label class="intel-reviewed"><input type="checkbox" @bind="_reviewed" /> Reviewed</label><button class="intel-save" @onclick="SaveAnnotationAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save note")</button>
+                    <h3>Observation history</h3>
+                    @if (_detail is null) { <p>Loading evidence…</p> }
+                    else { @foreach (var observation in _detail.Observations) { <details class="@(SupportsFinding(observation.ObservationId) ? "supports-finding" : "")"><summary>@observation.ObservedAtUtc.ToLocalTime().ToString("MMM d, yyyy h:mm:ss tt") · @observation.SourceKind · @observation.Coverage</summary><div class="intel-observation"><p>@observation.Listings.Count listing rows · @(observation.CaptureMode ?? "unspecified capture") · build @(observation.SourceBuild ?? "unknown") · payload @ShortHash(observation.PayloadHash) · observation @ShortHash(observation.ObservationId)</p>@foreach (var seller in SellerSummary(observation).Take(8)) { <div><span>@seller.Name</span><span>@seller.Count listings</span></div> }</div></details> } }
+                </aside>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private MarketIntelligenceLedgerView _ledger = new();
+    private MarketIntelligenceMarketRow? _selected;
+    private MarketIntelligenceMarketDetailView? _detail;
+    private DotNetObjectReference<Intelligence>? _dotNetRef;
+    private string _search = string.Empty, _coverage = string.Empty;
+    private string? _error, _note;
+    private bool _reviewed, _findingsOnly, _loading = true, _saving;
+    private IEnumerable<MarketIntelligenceMarketRow> VisibleRows => _ledger.Rows.Where(row => (!_findingsOnly || row.Findings.Count > 0) && (_coverage.Length == 0 || row.LatestCoverage.Equals(_coverage, StringComparison.OrdinalIgnoreCase)) && SearchMatches(row));
+
+    protected override async Task OnInitializedAsync() { await ReloadAsync(); _dotNetRef = DotNetObjectReference.Create(this); await JS.InvokeVoidAsync("marketMafiosoEvents.start", "api/market-intelligence/events/stream", _dotNetRef); }
+    private async Task ReloadAsync() { try { _ledger = await Api.GetMarketIntelligenceLedgerAsync(); _error = null; } catch (Exception ex) { _error = $"Market evidence could not be loaded: {ex.Message}"; } finally { _loading = false; } }
+    private async Task SelectAsync(MarketIntelligenceMarketRow row) { _selected = row; _detail = null; _note = row.Note; _reviewed = row.Reviewed; _detail = await Api.GetMarketIntelligenceDetailAsync(row.WorldName, row.ItemId); }
+    private void CloseDetail() { _selected = null; _detail = null; }
+    private async Task SaveAnnotationAsync() { if (_selected is null) return; _saving = true; try { await Api.UpdateMarketIntelligenceAnnotationAsync(_selected.WorldName, _selected.ItemId, new() { Note = _note, Reviewed = _reviewed }); var changed = _selected with { Note = _note, Reviewed = _reviewed }; _ledger = _ledger with { Rows = _ledger.Rows.Select(x => x.ItemId == changed.ItemId && x.WorldName == changed.WorldName ? changed : x).ToArray() }; _selected = changed; } finally { _saving = false; } }
+    [JSInvokable] public Task OnEventStreamOpenAsync() => Task.CompletedTask;
+    [JSInvokable] public Task OnEventStreamErrorAsync(string message) => Task.CompletedTask;
+    [JSInvokable] public async Task OnIntelligenceRevisionAsync(string revision) { if (long.TryParse(revision, out var value) && value != _ledger.Revision) { await ReloadAsync(); await InvokeAsync(StateHasChanged); } }
+    public async ValueTask DisposeAsync() { await JS.InvokeVoidAsync("marketMafiosoEvents.stop"); _dotNetRef?.Dispose(); }
+    private static string SearchText(MarketIntelligenceMarketRow row) => $"{row.ItemName} {row.ItemId} {row.WorldName} {row.DataCenter} {string.Join(' ', row.SourceKinds)} {string.Join(' ', row.Findings.Select(x => x.Kind))}";
+    private bool SearchMatches(MarketIntelligenceMarketRow row) { var text = SearchText(row); return _search.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).All(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)); }
+    private static string Percent(double value) => value.ToString("P0");
+    private static string Signed(long value) => value > 0 ? $"+{value:N0}" : value.ToString("N0");
+    private static string PriceRange(MarketIntelligenceMarketRow row) => row.LowestUnitPrice is null ? "—" : row.LowestUnitPrice == row.HighestUnitPrice ? $"{row.LowestUnitPrice:N0}" : $"{row.LowestUnitPrice:N0}–{row.HighestUnitPrice:N0}";
+    private static string ShortHash(string hash) => hash[..Math.Min(10, hash.Length)];
+    private bool SupportsFinding(string observationId) => _selected?.Findings.Any(x => x.ObservationIds.Contains(observationId, StringComparer.Ordinal)) == true;
+    private static string FriendlyFinding(string kind) => kind switch { "DeepDominantShelf" => "Deep price shelf", "BulkShelfDominance" => "Bulk supply concentration", "RepeatedBulkShelfDominance" => "Repeated bulk concentration", "ReplacementDepth" => "Visible supply replacement", "SellerPersistence" => "Recurring sellers", "PriceShelfCliff" => "Price gap", "VisibleDepthLowerBound" => "Visible depth is capped", _ => kind };
+    private static IEnumerable<(string Name, int Count)> SellerSummary(MarketIntelligenceObservationView observation) => observation.Listings.GroupBy(x => string.IsNullOrWhiteSpace(x.RetainerName) ? $"Seller {x.RetainerId}" : x.RetainerName).Select(x => (x.Key, x.Count())).OrderByDescending(x => x.Item2).ThenBy(x => x.Key);
+}

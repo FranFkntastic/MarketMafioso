@@ -117,9 +117,9 @@ public sealed class MarketAcquisitionRouteRequestReporterTests
         Assert.Contains("\"reportedListingCount\":1", body);
         Assert.Contains("\"listingCapacity\":100", body);
         Assert.Contains("\"isTruncated\":false", body);
-        Assert.Contains("\"listings\":[]", body);
-        Assert.DoesNotContain("listing-1", body);
-        Assert.DoesNotContain("Seller", body);
+        Assert.Contains("\"listingId\":\"listing-1\"", body);
+        Assert.Contains("\"retainerId\":\"retainer-1\"", body);
+        Assert.Contains("\"retainerName\":\"Seller\"", body);
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

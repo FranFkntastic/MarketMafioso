@@ -63,8 +63,6 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         this.deadLetterOutbox = deadLetterOutbox ?? new VolatileMarketAcquisitionReportOutbox();
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         CompactDuplicateRouteProgress();
-        DiscardPersistedRawMarketObservations();
-        DiscardDeadLetteredRawMarketObservations();
         quarantinedEntryCount = this.deadLetterOutbox.Snapshot().Count;
         LoadPendingOutboxEntries();
         QueuePendingRequestHeads();
@@ -157,7 +155,6 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         var durableReport = report with
         {
             HasIncompleteCoverage = report.HasIncompleteCoverage ?? report.ReadResult.HasIncompleteCoverage,
-            ReadResult = report.ReadResult with { Listings = [] },
         };
         TrackAndQueue(Persist(
             $"observation|{report.RequestId}|{report.AttemptId}|{report.Sequence}",
@@ -245,59 +242,6 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
 
         if (duplicateIds.Count > 0)
             outbox.RemoveMany(duplicateIds);
-    }
-
-    private void DiscardPersistedRawMarketObservations()
-    {
-        var staleListingSnapshots = new List<string>();
-        foreach (var entry in outbox.Snapshot()
-                     .Where(candidate => candidate.ReportType.Equals(MarketObservationType, StringComparison.Ordinal)))
-        {
-            try
-            {
-                var report = outbox.Deserialize<MarketAcquisitionMarketObservationReport>(entry);
-                if (report.ReadResult.Listings.Count > 0)
-                    staleListingSnapshots.Add(entry.Id);
-            }
-            catch
-            {
-                // Preserve unreadable legacy evidence for the normal quarantine path.
-            }
-        }
-
-        if (staleListingSnapshots.Count > 0)
-            outbox.RemoveMany(staleListingSnapshots);
-    }
-
-    private void DiscardDeadLetteredRawMarketObservations()
-    {
-        var staleListingSnapshots = new List<string>();
-        foreach (var entry in deadLetterOutbox.Snapshot()
-                     .Where(candidate => candidate.ReportType.Equals(MarketObservationType, StringComparison.Ordinal)))
-        {
-            try
-            {
-                var deadLetter = deadLetterOutbox.Deserialize<DeadLetteredReport>(entry);
-                if (ContainsRawListingRows(deadLetter.Entry.PayloadJson))
-                    staleListingSnapshots.Add(entry.Id);
-            }
-            catch
-            {
-                // Preserve unreadable legacy evidence rather than guessing at its contents.
-            }
-        }
-
-        if (staleListingSnapshots.Count > 0)
-            deadLetterOutbox.RemoveMany(staleListingSnapshots);
-    }
-
-    private static bool ContainsRawListingRows(string payloadJson)
-    {
-        using var document = JsonDocument.Parse(payloadJson);
-        return document.RootElement.TryGetProperty("readResult", out var readResult) &&
-               readResult.TryGetProperty("listings", out var listings) &&
-               listings.ValueKind == JsonValueKind.Array &&
-               listings.GetArrayLength() > 0;
     }
 
     private void ForgetPendingRouteEntry(MarketAcquisitionReportOutboxEntry entry)

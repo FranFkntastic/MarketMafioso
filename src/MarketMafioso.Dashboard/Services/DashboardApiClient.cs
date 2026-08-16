@@ -4,6 +4,7 @@ using System.Text.Json;
 using MarketMafioso.Contracts;
 using MarketMafioso.Dashboard.Models;
 using MarketMafioso.Contracts.Inventory;
+using MarketMafioso.Contracts.MarketIntelligence;
 
 namespace MarketMafioso.Dashboard.Services;
 
@@ -387,6 +388,37 @@ public sealed class DashboardApiClient
         return await response.Content.ReadFromJsonAsync<MarketDiagnosticListingDetailView>(
             JsonOptions,
             cancellationToken);
+    }
+
+    public Task<MarketIntelligenceLedgerView> GetMarketIntelligenceLedgerAsync(
+        CancellationToken cancellationToken = default) =>
+        GetJsonAsync("api/market-intelligence/ledger", new MarketIntelligenceLedgerView(), cancellationToken);
+
+    public async Task<MarketIntelligenceMarketDetailView?> GetMarketIntelligenceDetailAsync(
+        string worldName,
+        uint itemId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.GetAsync(
+            $"api/market-intelligence/markets/{Uri.EscapeDataString(worldName)}/{itemId}",
+            cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        EnsureAuthorizedSuccess(response);
+        return await response.Content.ReadFromJsonAsync<MarketIntelligenceMarketDetailView>(JsonOptions, cancellationToken);
+    }
+
+    public async Task UpdateMarketIntelligenceAnnotationAsync(
+        string worldName,
+        uint itemId,
+        MarketIntelligenceAnnotationUpdate update,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PutAsJsonAsync(
+            $"api/market-intelligence/markets/{Uri.EscapeDataString(worldName)}/{itemId}/annotation",
+            update,
+            JsonOptions,
+            cancellationToken);
+        EnsureAuthorizedSuccess(response);
     }
 
     private async Task<T> GetJsonAsync<T>(string path, T fallback, CancellationToken cancellationToken)

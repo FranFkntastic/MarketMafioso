@@ -65,7 +65,7 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
     }
 
     [Fact]
-    public void MarketObservation_IsCompactedBeforeEnteringOutbox()
+    public void MarketObservation_PreservesListingEvidenceInOutbox()
     {
         var outbox = new VolatileMarketAcquisitionReportOutbox();
         using var dispatcher = CreateDispatcher(outbox, new DisabledReporter());
@@ -88,8 +88,8 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
                 [
                     new MarketBoardLiveListing
                     {
-                        ListingId = "listing-never-persisted",
-                        RetainerName = "seller-never-persisted",
+                        ListingId = "listing-persisted",
+                        RetainerName = "seller-persisted",
                         Quantity = 3,
                         UnitPrice = 50,
                     },
@@ -98,14 +98,14 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
 
         var entry = Assert.Single(outbox.Snapshot());
         var durable = outbox.Deserialize<MarketAcquisitionMarketObservationReport>(entry);
-        Assert.Empty(durable.ReadResult.Listings);
+        Assert.Single(durable.ReadResult.Listings);
         Assert.False(durable.HasIncompleteCoverage);
-        Assert.DoesNotContain("listing-never-persisted", entry.PayloadJson);
-        Assert.DoesNotContain("seller-never-persisted", entry.PayloadJson);
+        Assert.Contains("listing-persisted", entry.PayloadJson);
+        Assert.Contains("seller-persisted", entry.PayloadJson);
     }
 
     [Fact]
-    public void LegacyMarketObservation_WithRawRowsIsDiscardedBeforeReplay()
+    public void PendingMarketObservation_WithRawRowsSurvivesRestartForReplay()
     {
         var outbox = new VolatileMarketAcquisitionReportOutbox();
         outbox.Put(
@@ -116,11 +116,11 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
 
         using var dispatcher = CreateDispatcher(outbox, new DisabledReporter());
 
-        Assert.Empty(outbox.Snapshot());
+        Assert.Single(outbox.Snapshot());
     }
 
     [Fact]
-    public void LegacyFileOutboxObservation_WithRawRowsIsDiscardedOnStartup()
+    public void FileOutboxObservation_WithRawRowsSurvivesStartup()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"mmf-outbox-{Guid.NewGuid():N}");
         var path = Path.Combine(directory, "route-reports.jsonl");
@@ -139,7 +139,8 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
             }
 
             var reloaded = new FileMarketAcquisitionReportOutbox(path);
-            Assert.Empty(reloaded.Snapshot());
+            var restored = Assert.Single(reloaded.Snapshot());
+            Assert.Contains("seller", restored.PayloadJson, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -148,7 +149,7 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
     }
 
     [Fact]
-    public void DeadLetterObservation_WithRawRowsIsDiscardedOnStartup()
+    public void DeadLetterObservation_WithRawRowsRemainsAvailableForDiagnosis()
     {
         var outbox = new VolatileMarketAcquisitionReportOutbox();
         var deadLetter = new VolatileMarketAcquisitionReportOutbox();
@@ -173,8 +174,8 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
 
         using var dispatcher = CreateDispatcher(outbox, new DisabledReporter(), deadLetter: deadLetter);
 
-        Assert.Empty(deadLetter.Snapshot());
-        Assert.Equal(0, dispatcher.GetBacklogSnapshot().QuarantinedEntryCount);
+        Assert.Single(deadLetter.Snapshot());
+        Assert.Equal(1, dispatcher.GetBacklogSnapshot().QuarantinedEntryCount);
     }
 
     private static MarketAcquisitionMarketObservationReport CreateObservationWithListing() =>

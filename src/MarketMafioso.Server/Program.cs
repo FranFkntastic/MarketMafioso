@@ -4,6 +4,7 @@ using MarketMafioso.Server.Dashboard;
 using MarketMafioso.Server.Endpoints;
 using MarketMafioso.Server.Migration;
 using MarketMafioso.Server.MarketDiagnostics;
+using MarketMafioso.Server.MarketIntelligence;
 using MarketMafioso.Server.Sqlite;
 using MarketMafioso.Server.WorkshopHost;
 using Microsoft.Data.Sqlite;
@@ -33,6 +34,8 @@ builder.Services.AddSingleton<MarketDiagnosticStore>();
 builder.Services.AddSingleton<UniversalisMarketDiagnosticClient>();
 builder.Services.AddSingleton<MarketDiagnosticAlertSink>();
 builder.Services.AddSingleton<MarketDiagnosticCollector>();
+builder.Services.AddSingleton<MarketIntelligenceStore>();
+builder.Services.AddHostedService<MarketIntelligenceProjectionWorker>();
 if (builder.Configuration.GetValue<bool>("MarketMafioso:MarketDiagnostics:Enabled"))
     builder.Services.AddHostedService<MarketDiagnosticBackgroundService>();
 builder.Services.AddHttpClient<IWorkshopHostCraftQuoteService, CraftArchitectWorkshopHostCraftQuoteService>(
@@ -124,6 +127,7 @@ app.MapMarketAcquisitionEndpoints();
 app.MapMarketAcquisitionWorkOrderEndpoints();
 app.MapDiagnosticEndpoints();
 app.MapMarketDiagnosticEndpoints();
+app.MapMarketIntelligenceEndpoints();
 
 app.MapDashboardDataEndpoints(enableMarketAcquisition);
 app.MapDashboardClientCredentialEndpoints();
