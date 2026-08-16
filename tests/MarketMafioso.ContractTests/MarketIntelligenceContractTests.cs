@@ -350,6 +350,13 @@ public sealed class MarketIntelligenceContractTests
             var storedJson = Assert.IsType<string>(await payload.ExecuteScalarAsync());
             Assert.DoesNotContain("contentId", storedJson, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("actor-a1-", storedJson, StringComparison.Ordinal);
+
+            await using var keyScope = connection.CreateCommand();
+            keyScope.CommandText = "SELECT key_scheme, length(key_material) FROM market_actor_key_scopes WHERE account_id = 1";
+            await using var keyReader = await keyScope.ExecuteReaderAsync();
+            Assert.True(await keyReader.ReadAsync());
+            Assert.Equal(MarketIntelligenceStore.ActorKeyScheme, keyReader.GetString(0));
+            Assert.Equal(32, keyReader.GetInt32(1));
         }
 
         var rebuilt = await store.RebuildAccountAsync(1, "market-intelligence-v2-rebuild", false, CancellationToken.None);

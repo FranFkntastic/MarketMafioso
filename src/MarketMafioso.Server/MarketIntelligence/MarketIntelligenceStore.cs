@@ -11,7 +11,7 @@ namespace MarketMafioso.Server.MarketIntelligence;
 public sealed class MarketIntelligenceStore
 {
     public const string ClassifierVersion = "market-intelligence-v2";
-    public const string ActorKeyScheme = "account-content-id-sha256-v1";
+    public const string ActorKeyScheme = "account-content-id-hmac-sha256-v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly HashSet<string> SupportedCoverage =
     [
@@ -42,18 +42,21 @@ public sealed class MarketIntelligenceStore
             .ThenBy(x => x.UnitPrice)
             .ThenBy(x => x.Quantity)
             .ToArray();
-        var canonicalListings = canonicalUploadListings
-            .Select(listing => NormalizeListing(accountId, listing))
-            .ToArray();
-        var listingsJson = JsonSerializer.Serialize(canonicalListings, JsonOptions);
-        var payloadHash = Sha256(listingsJson);
         var requestHash = Sha256(JsonSerializer.Serialize(request with { IdempotencyKey = string.Empty, Listings = canonicalUploadListings }, JsonOptions));
         var now = DateTimeOffset.UtcNow;
         string observationId;
+        string payloadHash;
 
         await using (var connection = await connectionFactory.OpenConnectionAsync(cancellationToken))
         await using (var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken))
         {
+            var actorKeyMaterial = await GetOrCreateActorKeyMaterialAsync(connection, transaction, accountId, cancellationToken);
+            var canonicalListings = canonicalUploadListings
+                .Select(listing => NormalizeListing(actorKeyMaterial, listing))
+                .ToArray();
+            var listingsJson = JsonSerializer.Serialize(canonicalListings, JsonOptions);
+            payloadHash = Sha256(listingsJson);
+
             await using (var existing = connection.CreateCommand())
             {
                 existing.Transaction = transaction;
@@ -176,26 +179,55 @@ public sealed class MarketIntelligenceStore
         };
     }
 
-    private static MarketEvidenceListing NormalizeListing(long accountId, MarketEvidenceUploadListing listing) => new()
+    private static MarketEvidenceListing NormalizeListing(byte[] actorKeyMaterial, MarketEvidenceUploadListing listing) => new()
     {
         ListingId = listing.ListingId.Trim(),
         RetainerId = listing.RetainerId.Trim(),
         RetainerName = NormalizeOptional(listing.RetainerName),
         RetainerNameSource = NormalizeOptional(listing.RetainerNameSource),
-        SellerOwnerActorKey = ActorKey(accountId, listing.SellerOwnerContentId),
+        SellerOwnerActorKey = ActorKey(actorKeyMaterial, listing.SellerOwnerContentId),
         SellerOwnerIdentityState = IdentityState(listing.SellerOwnerContentId),
-        ArtisanActorKey = ActorKey(accountId, listing.ArtisanContentId),
+        ArtisanActorKey = ActorKey(actorKeyMaterial, listing.ArtisanContentId),
         ArtisanIdentityState = IdentityState(listing.ArtisanContentId),
         Quantity = listing.Quantity,
         UnitPrice = listing.UnitPrice,
         IsHq = listing.IsHq,
     };
 
-    private static string? ActorKey(long accountId, ulong? contentId)
+    private static string? ActorKey(byte[] actorKeyMaterial, ulong? contentId)
     {
         if (contentId is not > 0) return null;
-        var hash = Sha256($"market-actor|{ActorKeyScheme}|{accountId.ToString(CultureInfo.InvariantCulture)}|{contentId.Value.ToString(CultureInfo.InvariantCulture)}");
+        var input = Encoding.UTF8.GetBytes($"market-actor|{ActorKeyScheme}|{contentId.Value.ToString(CultureInfo.InvariantCulture)}");
+        var hash = Convert.ToHexString(HMACSHA256.HashData(actorKeyMaterial, input));
         return $"actor-a1-{hash[..24]}";
+    }
+
+    private static async Task<byte[]> GetOrCreateActorKeyMaterialAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        CancellationToken cancellationToken)
+    {
+        var proposed = RandomNumberGenerator.GetBytes(32);
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = "INSERT OR IGNORE INTO market_actor_key_scopes(account_id, key_scheme, key_material, created_at_utc) VALUES($accountId, $scheme, $material, $now)";
+            insert.Parameters.AddWithValue("$accountId", accountId);
+            insert.Parameters.AddWithValue("$scheme", ActorKeyScheme);
+            insert.Parameters.AddWithValue("$material", proposed);
+            insert.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var select = connection.CreateCommand();
+        select.Transaction = transaction;
+        select.CommandText = "SELECT key_scheme, key_material FROM market_actor_key_scopes WHERE account_id = $accountId";
+        select.Parameters.AddWithValue("$accountId", accountId);
+        await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken) || !reader.GetString(0).Equals(ActorKeyScheme, StringComparison.Ordinal))
+            throw new InvalidOperationException("The market actor key scope is unavailable or uses an unsupported scheme.");
+        return (byte[])reader[1];
     }
 
     private static string IdentityState(ulong? contentId) => contentId switch
@@ -458,11 +490,12 @@ public sealed class MarketIntelligenceStore
         if (request.ObservedAtUtc == default) throw new ArgumentException("Actor name observation time is required.");
         if (request.ObservedAtUtc > DateTimeOffset.UtcNow.AddMinutes(10)) throw new ArgumentException("Actor name observation time is implausibly far in the future.");
 
-        var actorKey = ActorKey(accountId, request.ContentId)!;
         var normalizedSourceObservationId = NormalizeOptional(request.SourceObservationId);
         var now = DateTimeOffset.UtcNow;
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var actorKeyMaterial = await GetOrCreateActorKeyMaterialAsync(connection, transaction, accountId, cancellationToken);
+        var actorKey = ActorKey(actorKeyMaterial, request.ContentId)!;
 
         await using (var existing = connection.CreateCommand())
         {

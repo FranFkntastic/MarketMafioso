@@ -778,6 +778,13 @@ public sealed class SqliteSchemaMigrator
             PRIMARY KEY(account_id, source_path_hash)
         );
 
+        CREATE TABLE IF NOT EXISTS market_actor_key_scopes (
+            account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+            key_scheme TEXT NOT NULL,
+            key_material BLOB NOT NULL,
+            created_at_utc TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS market_actors (
             account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
             actor_key TEXT NOT NULL,
