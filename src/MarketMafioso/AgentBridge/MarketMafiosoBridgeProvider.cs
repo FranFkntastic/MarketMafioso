@@ -18,6 +18,7 @@ public interface IMarketMafiosoBridgeProvider
     AgentBridgeMarketActorCapabilityTruth ProbeMarketActorNames();
     AgentBridgeControlledMarketListingTruth BeginControlledMarketActorListing(string itemName);
     AgentBridgeControlledMarketListingTruth RemoveControlledMarketActorListing();
+    AgentBridgeControlledMarketBrowseTruth BeginControlledMarketActorBrowse(string itemName);
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> GetCaptureSurfaces();
     IReadOnlyList<AgentBridgeActionDescriptor> GetActions();
@@ -67,6 +68,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<AgentBridgeMarketActorCapabilityTruth> probeMarketActorNames;
     private readonly Func<string, AgentBridgeControlledMarketListingTruth> beginControlledMarketActorListing;
     private readonly Func<AgentBridgeControlledMarketListingTruth> removeControlledMarketActorListing;
+    private readonly Func<string, AgentBridgeControlledMarketBrowseTruth> beginControlledMarketActorBrowse;
     private readonly Func<bool> isMarketAcquisitionUnlocked;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
@@ -82,6 +84,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<AgentBridgeMarketActorCapabilityTruth> probeMarketActorNames,
         Func<string, AgentBridgeControlledMarketListingTruth> beginControlledMarketActorListing,
         Func<AgentBridgeControlledMarketListingTruth> removeControlledMarketActorListing,
+        Func<string, AgentBridgeControlledMarketBrowseTruth> beginControlledMarketActorBrowse,
         Func<bool> isMarketAcquisitionUnlocked,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
@@ -96,6 +99,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.probeMarketActorNames = probeMarketActorNames;
         this.beginControlledMarketActorListing = beginControlledMarketActorListing;
         this.removeControlledMarketActorListing = removeControlledMarketActorListing;
+        this.beginControlledMarketActorBrowse = beginControlledMarketActorBrowse;
         this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked;
         this.reviewRegistry = reviewRegistry;
     }
@@ -111,6 +115,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public AgentBridgeMarketActorCapabilityTruth ProbeMarketActorNames() => probeMarketActorNames();
     public AgentBridgeControlledMarketListingTruth BeginControlledMarketActorListing(string itemName) => beginControlledMarketActorListing(itemName);
     public AgentBridgeControlledMarketListingTruth RemoveControlledMarketActorListing() => removeControlledMarketActorListing();
+    public AgentBridgeControlledMarketBrowseTruth BeginControlledMarketActorBrowse(string itemName) => beginControlledMarketActorBrowse(itemName);
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => isMarketAcquisitionUnlocked()
         ? PublicReviewSurfaces.Concat(AcquisitionSurfaces).OrderBy(surface => surface.Order).ToArray()
         : PublicReviewSurfaces;

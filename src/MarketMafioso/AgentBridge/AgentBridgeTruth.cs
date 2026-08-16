@@ -32,6 +32,7 @@ public sealed record AgentBridgeTruth
     public required AgentBridgeRemoteMarketTruth RemoteMarket { get; init; }
     public AgentBridgeMarketActorCapabilityTruth? MarketActors { get; init; }
     public AgentBridgeControlledMarketListingTruth? ControlledMarketActorListing { get; init; }
+    public AgentBridgeControlledMarketBrowseTruth? ControlledMarketActorBrowse { get; init; }
     public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
 }
@@ -48,6 +49,20 @@ public sealed record AgentBridgeControlledMarketListingTruth
     public bool? IsHq { get; init; }
     public uint? UnitPrice { get; init; }
     public int? ListingSlot { get; init; }
+    public required DateTimeOffset UpdatedAtUtc { get; init; }
+}
+
+public sealed record AgentBridgeControlledMarketBrowseTruth
+{
+    public required string State { get; init; }
+    public required string Message { get; init; }
+    public required bool Active { get; init; }
+    public string? ItemName { get; init; }
+    public uint? ItemId { get; init; }
+    public string? WorldName { get; init; }
+    public string? BrowseOperationId { get; init; }
+    public int? ListingCount { get; init; }
+    public int? ArtisanObservedCount { get; init; }
     public required DateTimeOffset UpdatedAtUtc { get; init; }
 }
 

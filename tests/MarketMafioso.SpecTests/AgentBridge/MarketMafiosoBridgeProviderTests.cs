@@ -75,6 +75,7 @@ public sealed class MarketMafiosoBridgeProviderTests
             CreateActorTruth,
             _ => CreateControlledListingTruth(),
             CreateControlledListingTruth,
+            _ => CreateControlledBrowseTruth(),
             () => marketAcquisitionUnlocked,
             new AgentBridgeUiReviewRegistry());
 
@@ -94,6 +95,14 @@ public sealed class MarketMafiosoBridgeProviderTests
     {
         State = "Idle",
         Message = "No fixture.",
+        Active = false,
+        UpdatedAtUtc = DateTimeOffset.UnixEpoch,
+    };
+
+    private static AgentBridgeControlledMarketBrowseTruth CreateControlledBrowseTruth() => new()
+    {
+        State = "Idle",
+        Message = "No browse.",
         Active = false,
         UpdatedAtUtc = DateTimeOffset.UnixEpoch,
     };
