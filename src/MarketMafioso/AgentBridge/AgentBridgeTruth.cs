@@ -231,6 +231,10 @@ public sealed record AgentBridgeRouteTruth
     public required string? ActiveOperationDisposition { get; init; }
     public required int StopCount { get; init; }
     public required int CompletedOrProbedStopCount { get; init; }
+    public string? CompletionKind { get; init; }
+    public uint? TargetRequestedQuantity { get; init; }
+    public uint? TargetPurchasedQuantity { get; init; }
+    public uint? TargetRemainingQuantity { get; init; }
     public string? ExecutionMode { get; init; }
     public bool TravelFrameThrottleActive { get; init; }
     public int TravelFrameThrottleMaximumFramesPerSecond { get; init; }

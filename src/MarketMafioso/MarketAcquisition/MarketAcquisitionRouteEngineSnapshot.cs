@@ -38,6 +38,7 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public string? LastObservedListingsCsvPath { get; init; }
     public string? LastPurchaseRecordsCsvPath { get; init; }
     public MarketAcquisitionRouteRunSummary? LastRunSummary { get; init; }
+    public MarketAcquisitionRouteCompletionOutcome? CompletionOutcome { get; init; }
     public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; init; }
     public MarketAcquisitionRunDiagnosticSummary LastRunDiagnosticSummary { get; init; } = new();
     public ExactAcquisitionRouteExecutionState? ExactAcquisitionExecution { get; init; }

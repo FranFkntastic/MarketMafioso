@@ -33,6 +33,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private string? lastWorldSummarySignature;
     private string? currentRequestId;
     private MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live;
+    private bool evaluateTargetFulfillmentRequested = true;
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
         : this(diagnosticsDirectory, null, null)
@@ -63,6 +64,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public string? LastPurchaseRecordsCsvPath { get; private set; }
 
     public MarketAcquisitionRouteRunSummary? LastRunSummary { get; private set; }
+
+    public MarketAcquisitionRouteCompletionOutcome? CompletionOutcome { get; private set; }
 
     public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; private set; }
 
@@ -118,7 +121,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         bool enableDiagnostics = false,
         bool includeOpportunisticChecks = false,
         MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live,
-        MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace)
+        MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace,
+        bool evaluateTargetFulfillment = true)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
@@ -129,6 +133,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             : MarketAcquisitionRouteDiagnosticsLevel.Off;
         includeOpportunisticChecksRequested = includeOpportunisticChecks;
         this.executionMode = executionMode;
+        evaluateTargetFulfillmentRequested = evaluateTargetFulfillment;
         diagnostics = diagnosticsRequested
             ? MarketAcquisitionRouteDiagnostics.CreateEnabled(
                 diagnosticsDirectory,
@@ -141,6 +146,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
         LastPurchaseRecordsCsvPath = diagnostics.PurchaseRecordsCsvPath;
         LastRunSummary = null;
+        CompletionOutcome = null;
         ActivePlan = plan;
         session = MarketAcquisitionGuidedRouteSession.Start(plan, includeOpportunisticChecks);
         currentRequestId = plan.RequestId;
@@ -183,7 +189,13 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         ArgumentNullException.ThrowIfNull(plan);
 
         diagnostics.Record("route-restart", "Restarting market acquisition route.");
-        return Start(plan, diagnosticsRequested, includeOpportunisticChecksRequested, executionMode, diagnosticsLevelRequested);
+        return Start(
+            plan,
+            diagnosticsRequested,
+            includeOpportunisticChecksRequested,
+            executionMode,
+            diagnosticsLevelRequested,
+            evaluateTargetFulfillmentRequested);
     }
 
     public MarketAcquisitionRouteActionResult ReprepareAndRestart(
@@ -211,7 +223,13 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["skippedWorlds"] = string.Join(", ", reprepare.SkippedWorlds),
                 ["remainingWorldCount"] = reprepare.Plan.WorldBatches.Count.ToString(),
             });
-        var startResult = Start(reprepare.Plan, diagnosticsRequested, includeOpportunisticChecksRequested, executionMode, diagnosticsLevelRequested);
+        var startResult = Start(
+            reprepare.Plan,
+            diagnosticsRequested,
+            includeOpportunisticChecksRequested,
+            executionMode,
+            diagnosticsLevelRequested,
+            evaluateTargetFulfillmentRequested);
         if (!startResult.Success)
             return startResult;
 
@@ -301,6 +319,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
         LastPurchaseRecordsCsvPath = diagnostics.PurchaseRecordsCsvPath;
         LastRunSummary = null;
+        CompletionOutcome = null;
         State = "Running";
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
@@ -357,6 +376,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         LastObservedListingsCsvPath = null;
         LastPurchaseRecordsCsvPath = null;
         LastRunSummary = null;
+        CompletionOutcome = null;
         LatestWorldCompletionSummary = null;
         lastWorldSummarySignature = null;
         freshnessObservations.Clear();
@@ -1223,26 +1243,43 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         RefreshLastRunSummary();
-        var targetShortfall = BuildTargetShortfallMessage();
-        if (targetShortfall is not null)
-        {
-            StatusMessage = targetShortfall;
-            State = "Incomplete";
-            diagnostics.Fail(targetShortfall);
-            return MarketAcquisitionRouteActionResult.Ok(targetShortfall);
-        }
-
+        CompletionOutcome = BuildCompletionOutcome();
         StatusMessage = message;
         State = "Completed";
+        diagnostics.Record(
+            "completion-outcome",
+            $"Route completion classified as {CompletionOutcome.Kind}.",
+            new Dictionary<string, string?>
+            {
+                ["kind"] = CompletionOutcome.Kind,
+                ["targetRequestedQuantity"] = CompletionOutcome.TargetRequestedQuantity.ToString(CultureInfo.InvariantCulture),
+                ["targetPurchasedQuantity"] = CompletionOutcome.TargetPurchasedQuantity.ToString(CultureInfo.InvariantCulture),
+                ["targetRemainingQuantity"] = CompletionOutcome.TargetRemainingQuantity.ToString(CultureInfo.InvariantCulture),
+            });
         if (universalisFreshnessVerifier == null)
             FinalizeCompletedDiagnostics();
         return MarketAcquisitionRouteActionResult.Ok(message);
     }
 
-    private string? BuildTargetShortfallMessage()
+    private MarketAcquisitionRouteCompletionOutcome BuildCompletionOutcome()
     {
-        if (ActivePlan is null || session is null || executionMode != MarketAcquisitionExecutionMode.Live)
-            return null;
+        if (!evaluateTargetFulfillmentRequested)
+        {
+            return new MarketAcquisitionRouteCompletionOutcome(
+                MarketAcquisitionRouteCompletionKinds.EvidenceRefreshCompleted,
+                0,
+                0,
+                0);
+        }
+
+        if (ActivePlan is null || session is null)
+        {
+            return new MarketAcquisitionRouteCompletionOutcome(
+                MarketAcquisitionRouteCompletionKinds.ScopeExhausted,
+                0,
+                0,
+                0);
+        }
 
         var targetLines = ActivePlan.Lines
             .Where(line => line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase) &&
@@ -1253,12 +1290,25 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 PurchasedQuantity = session.GetLinePurchaseTotals(line.LineId).PurchasedQuantity,
             })
             .ToArray();
-        if (targetLines.Length == 0 || targetLines.All(line => line.PurchasedQuantity >= line.RequestedQuantity))
-            return null;
+        if (targetLines.Length == 0)
+        {
+            return new MarketAcquisitionRouteCompletionOutcome(
+                MarketAcquisitionRouteCompletionKinds.ScopeExhausted,
+                0,
+                0,
+                0);
+        }
 
         var requested = targetLines.Aggregate(0u, (total, line) => checked(total + line.RequestedQuantity));
         var purchased = targetLines.Aggregate(0u, (total, line) => checked(total + Math.Min(line.PurchasedQuantity, line.RequestedQuantity)));
-        return $"Route exhausted its available worlds before satisfying the target. Purchased {purchased:N0}/{requested:N0} target item(s); {requested - purchased:N0} remain.";
+        var remaining = requested - purchased;
+        return new MarketAcquisitionRouteCompletionOutcome(
+            remaining == 0
+                ? MarketAcquisitionRouteCompletionKinds.TargetSatisfied
+                : MarketAcquisitionRouteCompletionKinds.ScopeExhaustedBelowTarget,
+            requested,
+            purchased,
+            remaining);
     }
 
     private void FinalizeCompletedDiagnostics()
