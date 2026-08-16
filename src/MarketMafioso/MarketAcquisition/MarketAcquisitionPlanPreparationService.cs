@@ -127,9 +127,38 @@ public sealed class MarketAcquisitionPlanPreparationService
             preparedAtUtc,
             request.CurrentWorld,
             sweepWorldExclusions);
+        var recommendedTargetExpanded = ShouldExpandRecommendedTarget(claimed, plan);
+        var recommendedTargetLines = plan.Lines
+            .Where(line => line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var recommendedPlannedQuantity = recommendedTargetLines.Aggregate(
+            0u,
+            (total, line) => checked(total + Math.Min(line.PlannedQuantity, line.RequestedQuantity)));
+        var recommendedRequestedQuantity = recommendedTargetLines.Aggregate(
+            0u,
+            (total, line) => checked(total + line.RequestedQuantity));
+        if (recommendedTargetExpanded)
+        {
+            plan = MarketAcquisitionPlanner.BuildPlan(
+                claimed with
+                {
+                    WorldMode = "AllWorldSweep",
+                    SweepScope = "Region",
+                    SweepDataCenters = [],
+                },
+                listings,
+                preparedAtUtc,
+                request.CurrentWorld,
+                sweepWorldExclusions);
+        }
         var statusMessage = plan.Status == "Ready"
             ? BuildPreparedPlanStatus(plan, recentSkippedWorldCount, freshEvidenceWorldCount)
             : BuildNoSupportedListingsStatus(plan);
+        if (recommendedTargetExpanded)
+        {
+            statusMessage +=
+                $" Recommended evidence covered only {recommendedPlannedQuantity:N0}/{recommendedRequestedQuantity:N0} target item(s), so the route expanded to every world in {claimed.Region}.";
+        }
 
         return new MarketAcquisitionPlanPreparationResult
         {
@@ -249,6 +278,14 @@ public sealed class MarketAcquisitionPlanPreparationService
 
         return status;
     }
+
+    private static bool ShouldExpandRecommendedTarget(
+        MarketAcquisitionClaimView claimed,
+        MarketAcquisitionPlan plan) =>
+        claimed.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase) &&
+        plan.Lines.Any(line =>
+            line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase) &&
+            line.PlannedQuantity < line.RequestedQuantity);
 }
 
 public sealed record MarketAcquisitionPlanPreparationRequest

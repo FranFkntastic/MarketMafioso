@@ -1218,16 +1218,47 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     private MarketAcquisitionRouteActionResult Complete(string message)
     {
-        StatusMessage = message;
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         RefreshLastRunSummary();
+        var targetShortfall = BuildTargetShortfallMessage();
+        if (targetShortfall is not null)
+        {
+            StatusMessage = targetShortfall;
+            State = "Incomplete";
+            diagnostics.Fail(targetShortfall);
+            return MarketAcquisitionRouteActionResult.Ok(targetShortfall);
+        }
+
+        StatusMessage = message;
         State = "Completed";
         if (universalisFreshnessVerifier == null)
             FinalizeCompletedDiagnostics();
         return MarketAcquisitionRouteActionResult.Ok(message);
+    }
+
+    private string? BuildTargetShortfallMessage()
+    {
+        if (ActivePlan is null || session is null || executionMode != MarketAcquisitionExecutionMode.Live)
+            return null;
+
+        var targetLines = ActivePlan.Lines
+            .Where(line => line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase) &&
+                           line.RequestedQuantity > 0)
+            .Select(line => new
+            {
+                line.RequestedQuantity,
+                PurchasedQuantity = session.GetLinePurchaseTotals(line.LineId).PurchasedQuantity,
+            })
+            .ToArray();
+        if (targetLines.Length == 0 || targetLines.All(line => line.PurchasedQuantity >= line.RequestedQuantity))
+            return null;
+
+        var requested = targetLines.Aggregate(0u, (total, line) => checked(total + line.RequestedQuantity));
+        var purchased = targetLines.Aggregate(0u, (total, line) => checked(total + Math.Min(line.PurchasedQuantity, line.RequestedQuantity)));
+        return $"Route exhausted its available worlds before satisfying the target. Purchased {purchased:N0}/{requested:N0} target item(s); {requested - purchased:N0} remain.";
     }
 
     private void FinalizeCompletedDiagnostics()
