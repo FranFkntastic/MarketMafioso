@@ -13,6 +13,8 @@ namespace MarketMafioso;
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
+    private readonly object saveSync = new();
+
     private TradeQueueTimingOptions? tradeQueueTiming = new();
     private TradeQueuePolicyOptions? tradeQueuePolicy = new();
 
@@ -128,7 +130,11 @@ public class Configuration : IPluginConfiguration
     [JsonProperty("Squire")]
     public Newtonsoft.Json.Linq.JObject? LegacySquireConfiguration { get; set; }
 
-    public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
+    public void Save()
+    {
+        lock (saveSync)
+            Plugin.PluginInterface.SavePluginConfig(this);
+    }
 }
 
 [Serializable]
