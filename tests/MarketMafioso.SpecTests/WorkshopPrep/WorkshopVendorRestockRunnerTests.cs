@@ -335,6 +335,102 @@ public sealed class WorkshopVendorRestockRunnerTests
     }
 
     [Fact]
+    public void Persisted_indeterminate_armed_purchase_migrates_and_reconciles_without_resubmission()
+    {
+        var offer = GilVendorBuyOfferSnapshot.From(Offer(1));
+        var config = new Configuration
+        {
+            ActiveWorkshopVendorRestockState = new()
+            {
+                LocalContentId = 10,
+                HomeWorldId = 20,
+                CharacterName = "Tester",
+                QueueSignature = "QUEUE",
+                AutomaticallyBuyVendorMaterials = true,
+                Phase = WorkshopVendorRestockPhase.Indeterminate,
+                Message = "Legacy indeterminate receipt.",
+                StartedAtUtc = DateTime.UtcNow.AddMinutes(-1),
+                UpdatedAtUtc = DateTime.UtcNow,
+                Lines =
+                [
+                    new()
+                    {
+                        ItemId = 1,
+                        ItemName = "Item 1",
+                        RequiredQuantity = 2,
+                        ApprovedVendorQuantity = 2,
+                        UnitPriceGil = 10,
+                        ApprovedGilCeiling = 20,
+                        Offer = offer,
+                    },
+                ],
+                Stops = [new() { NpcId = 100, ShopId = 50, TerritoryId = 129, NpcName = "Vendor 100", ItemIds = [1] }],
+            },
+            ActiveWorkshopVendorBuyRun = new()
+            {
+                RunId = "persisted-run",
+                ContextSignature = "10|20|QUEUE",
+                MaximumApprovedGil = 20,
+                Phase = GilVendorBuyPhase.Indeterminate,
+                Message = "Observed item delta 0 and exact gil delta.",
+                StartedAtUtc = DateTime.UtcNow.AddMinutes(-1),
+                UpdatedAtUtc = DateTime.UtcNow,
+                Lines =
+                [
+                    new()
+                    {
+                        ItemId = 1,
+                        ItemName = "Item 1",
+                        ApprovedQuantity = 2,
+                        TargetTotalQuantity = 2,
+                        UnitPriceGil = 10,
+                        ApprovedGilCeiling = 20,
+                        Offer = offer,
+                    },
+                ],
+                Stops = [new() { NpcId = 100, ShopId = 50, TerritoryId = 129, NpcName = "Vendor 100", ItemIds = [1] }],
+                ArmedPurchase = new()
+                {
+                    ItemId = 1,
+                    Quantity = 2,
+                    ExpectedGil = 20,
+                    ShopRowIndex = 0,
+                    BeforeItemCount = 0,
+                    BeforeGil = 1_000,
+                    ArmedAtUtc = DateTime.UtcNow.AddMinutes(-1),
+                },
+                Receipts =
+                [
+                    new()
+                    {
+                        ItemId = 9,
+                        Quantity = 3,
+                        SpentGil = 30,
+                        BeforeItemCount = 0,
+                        AfterItemCount = 3,
+                        BeforeGil = 1_030,
+                        AfterGil = 1_000,
+                        VerifiedAtUtc = DateTime.UtcNow.AddMinutes(-2),
+                    },
+                ],
+            },
+        };
+        var runtime = new FakeRuntime { Config = config, Gil = 980 };
+        runtime.Counts[1] = 2;
+        using var runner = new WorkshopVendorRestockRunner(config, runtime, new FakeQuartermaster(), () => { });
+
+        Assert.True(runner.IsRunning);
+        Assert.Equal(WorkshopVendorRestockPhase.ReconcileReceipt, runner.ActiveRun!.Phase);
+        runner.Tick("QUEUE", Owner);
+
+        Assert.Equal(WorkshopVendorRestockPhase.Completed, runner.ActiveRun!.Phase);
+        Assert.Equal(2, config.ActiveWorkshopVendorBuyRun!.Receipts.Count);
+        Assert.Equal(9u, config.ActiveWorkshopVendorBuyRun.Receipts[0].ItemId);
+        Assert.Null(config.ActiveWorkshopVendorBuyRun.ArmedPurchase);
+        Assert.Equal(0, runtime.SubmitCalls);
+    }
+
+    [Fact]
     public void Legacy_conversion_save_failure_retains_old_authority_and_later_retry_converts_once()
     {
         var config = LegacyArmedConfiguration();

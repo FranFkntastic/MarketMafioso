@@ -19,6 +19,7 @@ public enum WorkshopVendorRestockPhase
     Stopped,
     Failed,
     Indeterminate,
+    ReconcileReceipt,
 }
 
 // C1 compatibility schema. New runs serialize WorkshopVendorRestockState plus
