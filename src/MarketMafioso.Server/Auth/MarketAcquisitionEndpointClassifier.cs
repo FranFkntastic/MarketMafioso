@@ -19,6 +19,10 @@ internal static class MarketAcquisitionEndpointClassifier
 
     public static bool RequiresPluginCredential(HttpRequest request)
     {
+        if (HttpMethods.IsPost(request.Method) &&
+            request.Path.StartsWithSegments("/api/market-intelligence", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         if (IsCreate(request))
             return HasApiKey(request) ||
                    (!request.HasFormContentType &&

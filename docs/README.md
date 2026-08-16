@@ -6,6 +6,7 @@ This directory contains public setup and operator documentation.
 
 - [Installing MarketMafioso](installation.md) - plugin install flow, when Workshop Host is needed, and Windows self-host setup.
 - [Workshop Host](workshop-host.md) - product boundary for the optional self-hosted backend tier.
+- [Market intelligence](market-intelligence.md) - durable market evidence, projections, viewer, and historical import.
 - [Self-Hosting Workshop Host](self-hosting.md) - Docker and direct-host setup for the packaged backend.
 
 ## Operator References

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Numerics;
 using System.Threading.Tasks;
+using MarketMafioso.Contracts.MarketIntelligence;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
@@ -28,6 +29,7 @@ using MarketMafioso.Diagnostics;
 using MarketMafioso.MarketDiagnostics;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Retainers;
+using Franthropy.Dalamud.Automation.MarketBoard;
 using Franthropy.Dalamud.Automation.Vendors;
 using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using Franthropy.Dalamud.Travel;
@@ -58,6 +60,7 @@ public class MainWindow : Window, IDisposable
     public MarketListingOverlayWindow MarketListingOverlay { get; }
     private readonly IDataManager dataManager;
     private readonly HttpClient acquisitionHttpClient = new();
+    private readonly MarketIntelligencePassiveReporter marketIntelligencePassiveReporter;
     private readonly HttpClient craftQuoteHttpClient = new();
     private readonly MarketAcquisitionRequestWorkspace acquisitionWorkspace;
     private readonly MarketBoardApproachService marketBoardApproachService;
@@ -173,6 +176,11 @@ public class MainWindow : Window, IDisposable
                 capturePresentationPreviousSize = null;
             });
         var acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
+        marketIntelligencePassiveReporter = new MarketIntelligencePassiveReporter(
+            config,
+            acquisitionHttpClient,
+            Plugin.PluginInterface.GetPluginConfigDirectory(),
+            ex => log.Warning(ex, "[MarketMafioso] Passive market evidence remains queued for retry."));
         var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         var marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
@@ -227,7 +235,8 @@ public class MainWindow : Window, IDisposable
                     previousOperationId),
             marketBoardBrowseRuntime,
             Plugin.PluginInterface,
-            Plugin.PluginInterface.GetPluginConfigDirectory());
+            Plugin.PluginInterface.GetPluginConfigDirectory(),
+            ReportPassiveMarketObservation);
         remoteSummoningBellProbe = new RemoteSummoningBellProbe(
             config,
             Plugin.ClientState,
@@ -2449,6 +2458,52 @@ public class MainWindow : Window, IDisposable
 
     private bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
 
+    private void ReportPassiveMarketObservation(MarketBoardListingRevision revision)
+    {
+        if (string.IsNullOrWhiteSpace(revision.VerifiedBrowseOperationId) ||
+            !playerState.CurrentWorld.IsValid)
+            return;
+
+        try
+        {
+            var worldName = playerState.CurrentWorld.Value.Name.ToString();
+            marketIntelligencePassiveReporter.Enqueue(new MarketEvidenceUploadRequest
+            {
+                IdempotencyKey = $"{config.PluginInstanceId}:passive:{revision.VerifiedBrowseOperationId}",
+                OccurrenceId = revision.VerifiedBrowseOperationId,
+                SourceKind = MarketEvidenceSources.PassiveMarketBoard,
+                SourceVersion = "1",
+                SourceInstanceId = config.PluginInstanceId,
+                SourceBuild = typeof(MainWindow).Assembly.GetName().Version?.ToString(),
+                CaptureMode = "PassiveBrowse",
+                ItemId = revision.Source.ItemId,
+                ItemName = scanner.ResolveItemName(revision.Source.ItemId),
+                DataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName),
+                WorldName = worldName,
+                ObservedAtUtc = DateTimeOffset.UtcNow,
+                Coverage = revision.Listings.Count == 0
+                    ? MarketEvidenceCoverage.Empty
+                    : revision.IsComplete ? MarketEvidenceCoverage.Complete : MarketEvidenceCoverage.Partial,
+                ReportedListingCount = revision.Source.ListingCount,
+                ListingCapacity = 100,
+                IsTruncated = !revision.IsComplete,
+                Listings = revision.Listings.Select(listing => new MarketEvidenceListing
+                {
+                    ListingId = listing.ListingId.ToString(),
+                    RetainerId = listing.RetainerId.ToString(),
+                    RetainerName = listing.RetainerName,
+                    Quantity = listing.Quantity,
+                    UnitPrice = listing.UnitPrice,
+                    IsHq = listing.IsHighQuality,
+                }).ToArray(),
+            });
+        }
+        catch (Exception exception)
+        {
+            log.Warning(exception, "[MarketMafioso] Passive market evidence could not be queued.");
+        }
+    }
+
     public void Dispose()
     {
         AgentCaptureTransactions.CancelActive();
@@ -2459,6 +2514,7 @@ public class MainWindow : Window, IDisposable
         acquisitionWorkspace.Dispose();
         routeEngine.Dispose();
         marketBoardAcquisition.Dispose();
+        marketIntelligencePassiveReporter.Dispose();
         remoteSummoningBellProbe.Dispose();
         marketPurchasePacketObserver.Dispose();
         acquisitionHttpClient.Dispose();

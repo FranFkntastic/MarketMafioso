@@ -367,6 +367,9 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
         };
         await client.PostMarketObservationAsync(config.ServerUrl, WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config), report.RequestId, new MarketAcquisitionMarketObservationRequest
         {
+            SourceInstanceId = config.PluginInstanceId,
+            SourceBuild = typeof(MarketAcquisitionRouteRequestReporter).Assembly.GetName().Version?.ToString(),
+            CaptureMode = MarketAcquisitionResearchModePolicy.Capture(config.MarketAcquisitionExhaustiveResearchMode),
             ClaimToken = report.ClaimToken,
             IdempotencyKey = $"{config.PluginInstanceId}:{report.AttemptId}:observation:{report.Sequence}",
             AttemptId = report.AttemptId,
@@ -382,9 +385,15 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
             IsTruncated = report.ReadResult.IsListingCountTruncated ||
                           (report.HasIncompleteCoverage ?? report.ReadResult.HasIncompleteCoverage),
             ObservedAtUtc = report.ObservedAtUtc,
-            // Coverage proves route liveness. Purchase audits carry the exact
-            // listing selected; ordinary reads do not need a durable row copy.
-            Listings = [],
+            Listings = report.ReadResult.Listings.Select(listing => new MarketAcquisitionMarketObservationListing
+            {
+                ListingId = listing.ListingId,
+                RetainerId = listing.RetainerId,
+                RetainerName = listing.RetainerName,
+                Quantity = listing.Quantity,
+                UnitPrice = listing.UnitPrice,
+                IsHq = listing.IsHq,
+            }).ToArray(),
         }, cancellationToken).ConfigureAwait(false);
     }
 }

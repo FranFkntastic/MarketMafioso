@@ -13,6 +13,7 @@ internal static class DashboardHosting
         if (enableMarketAcquisition)
             app.MapGet("/acquisition", ServeBlazorIndex);
         app.MapGet("/inventory", ServeBlazorIndex);
+        app.MapGet("/intelligence", ServeBlazorIndex);
         app.MapGet("/overview", ServeBlazorIndex);
         app.MapGet("/settings", ServeBlazorIndex);
     }

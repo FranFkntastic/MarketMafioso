@@ -52,6 +52,7 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
     private readonly MarketListingPresentationSession presentationSession = new();
     private readonly MarketListingBrowseCoordinator browseCoordinator;
     private readonly MarketListingPurchaseCoordinator purchaseCoordinator;
+    private readonly Action<MarketBoardListingRevision>? reportPassiveObservation;
 
     private PendingMarketListingPurchaseVerification? pendingPurchaseVerification;
     private ulong[] pendingSelectionRestoreIds = [];
@@ -94,7 +95,8 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
         Func<uint, string?, MarketBoardItemSearchIntent, string?, MarketBoardItemSearchResult> searchDriver,
         IMarketBoardBrowseRuntime browseRuntime,
         Dalamud.Plugin.IDalamudPluginInterface pluginInterface,
-        string pluginConfigDirectory)
+        string pluginConfigDirectory,
+        Action<MarketBoardListingRevision>? reportPassiveObservation = null)
     {
         this.configuration = configuration;
         this.clientState = clientState;
@@ -105,6 +107,7 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
         this.log = log;
         this.resolveItemName = resolveItemName;
         this.browseRuntime = browseRuntime ?? throw new ArgumentNullException(nameof(browseRuntime));
+        this.reportPassiveObservation = reportPassiveObservation;
         cmbContext = new CmbMarketContextClient(pluginInterface, log);
         var evidenceDirectory = Path.Combine(pluginConfigDirectory, "market-listing-purchases");
         purchaseGuard = new MarketBoardPurchaseGuard(
@@ -278,6 +281,8 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
         listingSnapshot = revision.Listings
             .Select(ToListingView)
             .ToArray();
+        if (transition.Transition == MarketBoardListingTransition.AdoptedObservation)
+            reportPassiveObservation?.Invoke(revision);
         presentationSession.ObserveSnapshot(clientState.TerritoryType);
         if (listingSnapshot.Length == 0)
         {

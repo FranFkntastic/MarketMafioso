@@ -1,4 +1,7 @@
 using System.Text.Json;
+using MarketMafioso.Contracts.MarketIntelligence;
+using MarketMafioso.Server.Auth;
+using MarketMafioso.Server.MarketIntelligence;
 
 namespace MarketMafioso.Server.Endpoints;
 
@@ -416,15 +419,66 @@ internal static class MarketAcquisitionEndpoints
     }
 
     private static async Task<IResult> RecordMarketObservation(
+        HttpRequest httpRequest,
         string id,
         MarketAcquisitionMarketObservationRequest observationRequest,
         MarketAcquisitionRequestStore store,
+        MarketIntelligenceStore intelligence,
+        IngestKeyAccountResolver accounts,
         CancellationToken token)
     {
         try
         {
             var observation = await store.RecordMarketObservationAsync(id, observationRequest, token);
-            return observation == null ? Results.NotFound() : Results.Ok(observation);
+            if (observation is null)
+                return Results.NotFound();
+
+            var accountId = await accounts.ResolveAccountIdAsync(httpRequest.Headers["X-Api-Key"].SingleOrDefault(), token) ?? 1;
+            var coverage = observationRequest.ReadState switch
+            {
+                "Complete" when observationRequest.Listings.Count == 0 => MarketEvidenceCoverage.Empty,
+                "Complete" when !observationRequest.IsTruncated => MarketEvidenceCoverage.Complete,
+                "Partial" => MarketEvidenceCoverage.Partial,
+                _ => MarketEvidenceCoverage.Unavailable,
+            };
+            await intelligence.IngestAsync(accountId, new MarketEvidenceUploadRequest
+            {
+                IdempotencyKey = $"acquisition:{observationRequest.IdempotencyKey}",
+                OccurrenceId = $"{id}:{observationRequest.AttemptId}:{observationRequest.Sequence}",
+                SourceKind = MarketEvidenceSources.MarketAcquisition,
+                SourceVersion = observationRequest.SchemaVersion.ToString(),
+                SourceInstanceId = observationRequest.SourceInstanceId,
+                SourceBuild = observationRequest.SourceBuild,
+                CaptureMode = observationRequest.CaptureMode,
+                ItemId = observationRequest.ItemId,
+                ItemName = observationRequest.ItemName,
+                DataCenter = observationRequest.DataCenter,
+                WorldName = observationRequest.WorldName,
+                ObservedAtUtc = observationRequest.ObservedAtUtc,
+                Coverage = coverage,
+                ReportedListingCount = observationRequest.ReportedListingCount,
+                ListingCapacity = observationRequest.ListingCapacity,
+                IsTruncated = observationRequest.IsTruncated,
+                ProvenanceJson = JsonSerializer.Serialize(new
+                {
+                    requestId = id,
+                    observationRequest.LineId,
+                    observationRequest.AttemptId,
+                    observationRequest.Sequence,
+                    observationRequest.SourceBuild,
+                    observationRequest.CaptureMode,
+                }),
+                Listings = observationRequest.Listings.Select(listing => new MarketEvidenceListing
+                {
+                    ListingId = listing.ListingId,
+                    RetainerId = listing.RetainerId,
+                    RetainerName = listing.RetainerName,
+                    Quantity = listing.Quantity,
+                    UnitPrice = listing.UnitPrice,
+                    IsHq = listing.IsHq,
+                }).ToArray(),
+            }, token);
+            return Results.Ok(observation);
         }
         catch (UnauthorizedAccessException)
         {

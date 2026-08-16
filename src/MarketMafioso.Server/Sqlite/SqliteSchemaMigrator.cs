@@ -72,6 +72,9 @@ public sealed class SqliteSchemaMigrator
         await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "latest_event_at_utc", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "candidate_count", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "character_name", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "aggregate_json", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "source_build", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "capture_mode", "TEXT NULL", cancellationToken);
 
         var characterRepair = await RepairIncompleteCharacterIdentitiesAsync(connection, transaction, cancellationToken);
         await CreateNormalizedCharacterIdentityIndexAsync(connection, transaction, cancellationToken);
@@ -678,6 +681,103 @@ public sealed class SqliteSchemaMigrator
             source_age_seconds INTEGER NULL
         );
 
+        CREATE TABLE IF NOT EXISTS market_evidence_payloads (
+            payload_hash TEXT PRIMARY KEY,
+            listing_count INTEGER NOT NULL,
+            listings_json TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS market_evidence_observations (
+            observation_id TEXT PRIMARY KEY,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            idempotency_key TEXT NOT NULL,
+            occurrence_id TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_version TEXT NOT NULL,
+            source_instance_id TEXT NULL,
+            source_build TEXT NULL,
+            capture_mode TEXT NULL,
+            item_id INTEGER NOT NULL,
+            item_name TEXT NULL,
+            data_center TEXT NOT NULL,
+            world_name TEXT NOT NULL,
+            observed_at_utc TEXT NOT NULL,
+            received_at_utc TEXT NOT NULL,
+            coverage TEXT NOT NULL,
+            reported_listing_count INTEGER NULL,
+            listing_capacity INTEGER NULL,
+            is_truncated INTEGER NULL,
+            source_freshness TEXT NULL,
+            payload_hash TEXT NOT NULL REFERENCES market_evidence_payloads(payload_hash),
+            request_hash TEXT NOT NULL,
+            aggregate_json TEXT NULL,
+            provenance_json TEXT NULL,
+            UNIQUE(account_id, idempotency_key),
+            UNIQUE(account_id, source_kind, occurrence_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_intelligence_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            observation_id TEXT NOT NULL REFERENCES market_evidence_observations(observation_id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'Pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT NULL,
+            created_at_utc TEXT NOT NULL,
+            completed_at_utc TEXT NULL,
+            UNIQUE(observation_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_intelligence_projection_generations (
+            generation_id TEXT PRIMARY KEY,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            classifier_version TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL,
+            published_at_utc TEXT NULL,
+            error TEXT NULL,
+            UNIQUE(account_id, revision)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_intelligence_market_rows (
+            generation_id TEXT NOT NULL REFERENCES market_intelligence_projection_generations(generation_id) ON DELETE CASCADE,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            item_id INTEGER NOT NULL,
+            world_name TEXT NOT NULL,
+            row_json TEXT NOT NULL,
+            PRIMARY KEY(generation_id, item_id, world_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_intelligence_current_projection (
+            account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+            generation_id TEXT NOT NULL REFERENCES market_intelligence_projection_generations(generation_id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL,
+            updated_at_utc TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS market_intelligence_annotations (
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            item_id INTEGER NOT NULL,
+            world_name TEXT NOT NULL,
+            note TEXT NULL,
+            reviewed INTEGER NOT NULL DEFAULT 0,
+            updated_at_utc TEXT NOT NULL,
+            PRIMARY KEY(account_id, item_id, world_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_intelligence_import_receipts (
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            source_path_hash TEXT NOT NULL,
+            source_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            imported_observations INTEGER NOT NULL DEFAULT 0,
+            error TEXT NULL,
+            updated_at_utc TEXT NOT NULL,
+            PRIMARY KEY(account_id, source_path_hash)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_snapshots_account_received_at ON snapshots(account_id, received_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_character_received_at ON snapshots(character_id, received_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_inventory_owners_snapshot ON inventory_owners(snapshot_id, sort_order);
@@ -703,6 +803,14 @@ public sealed class SqliteSchemaMigrator
             ON market_region_observations(account_id, region, observed_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_market_region_observations_item
             ON market_region_observations(account_id, item_id, is_hq, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_evidence_market_time
+            ON market_evidence_observations(account_id, world_name, item_id, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_evidence_occurrence
+            ON market_evidence_observations(account_id, source_kind, occurrence_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_market_evidence_source_occurrence_unique
+            ON market_evidence_observations(account_id, source_kind, occurrence_id);
+        CREATE INDEX IF NOT EXISTS idx_market_intelligence_outbox_pending
+            ON market_intelligence_outbox(status, account_id, id);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events(occurred_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_category ON diagnostic_events(category, occurred_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_severity ON diagnostic_events(severity, occurred_at_utc DESC);
