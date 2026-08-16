@@ -599,6 +599,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         GilVendorBuyPhase.Completed => WorkshopVendorRestockPhase.Completed,
         GilVendorBuyPhase.Stopped => WorkshopVendorRestockPhase.Stopped,
         GilVendorBuyPhase.Failed => WorkshopVendorRestockPhase.Failed,
+        GilVendorBuyPhase.ReconcileReceipt => WorkshopVendorRestockPhase.ReconcileReceipt,
         _ => WorkshopVendorRestockPhase.Indeterminate,
     };
 
@@ -613,6 +614,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         WorkshopVendorRestockPhase.Stopped => GilVendorBuyPhase.Stopped,
         WorkshopVendorRestockPhase.Failed => GilVendorBuyPhase.Failed,
         WorkshopVendorRestockPhase.Indeterminate => GilVendorBuyPhase.Indeterminate,
+        WorkshopVendorRestockPhase.ReconcileReceipt => GilVendorBuyPhase.ReconcileReceipt,
         _ => GilVendorBuyPhase.RefreshPreconditions,
     };
 
