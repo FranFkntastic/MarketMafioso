@@ -15,6 +15,7 @@ public interface IMarketMafiosoBridgeProvider
     bool TrySelectMainTab(string tabName);
     void CaptureInputState();
     void StopRoute();
+    AgentBridgeMarketActorCapabilityTruth ProbeMarketActorNames();
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> GetCaptureSurfaces();
     IReadOnlyList<AgentBridgeActionDescriptor> GetActions();
@@ -61,6 +62,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<string, bool> trySelectMainTab;
     private readonly Action captureInputState;
     private readonly Action stopRoute;
+    private readonly Func<AgentBridgeMarketActorCapabilityTruth> probeMarketActorNames;
     private readonly Func<bool> isMarketAcquisitionUnlocked;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
@@ -73,6 +75,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<string, bool> trySelectMainTab,
         Action captureInputState,
         Action stopRoute,
+        Func<AgentBridgeMarketActorCapabilityTruth> probeMarketActorNames,
         Func<bool> isMarketAcquisitionUnlocked,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
@@ -84,6 +87,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.trySelectMainTab = trySelectMainTab;
         this.captureInputState = captureInputState;
         this.stopRoute = stopRoute;
+        this.probeMarketActorNames = probeMarketActorNames;
         this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked;
         this.reviewRegistry = reviewRegistry;
     }
@@ -96,6 +100,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool TrySelectMainTab(string tabName) => trySelectMainTab(tabName);
     public void CaptureInputState() => captureInputState();
     public void StopRoute() => stopRoute();
+    public AgentBridgeMarketActorCapabilityTruth ProbeMarketActorNames() => probeMarketActorNames();
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => isMarketAcquisitionUnlocked()
         ? PublicReviewSurfaces.Concat(AcquisitionSurfaces).OrderBy(surface => surface.Order).ToArray()
         : PublicReviewSurfaces;

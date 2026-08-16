@@ -30,8 +30,40 @@ public sealed record AgentBridgeTruth
     public AgentBridgeWorkshopAssemblyTruth? WorkshopAssembly { get; init; }
     public required AgentBridgeTradeQueueTruth TradeQueue { get; init; }
     public required AgentBridgeRemoteMarketTruth RemoteMarket { get; init; }
+    public AgentBridgeMarketActorCapabilityTruth? MarketActors { get; init; }
     public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+}
+
+public sealed record AgentBridgeMarketActorCapabilityTruth
+{
+    public required string ReadState { get; init; }
+    public string? BrowseOperationId { get; init; }
+    public uint? ItemId { get; init; }
+    public string? WorldName { get; init; }
+    public required ulong CurrentCharacterContentId { get; init; }
+    public required int ListingCount { get; init; }
+    public required int SellerOwnerObservedCount { get; init; }
+    public required int ArtisanObservedCount { get; init; }
+    public required int SelfCraftedCount { get; init; }
+    public required int NameResolvedCount { get; init; }
+    public required int NameRequestedCount { get; init; }
+    public IReadOnlyList<AgentBridgeMarketActorListingTruth> Listings { get; init; } = [];
+}
+
+public sealed record AgentBridgeMarketActorListingTruth
+{
+    public required string ListingId { get; init; }
+    public required string RetainerId { get; init; }
+    public string? RetainerName { get; init; }
+    public ulong? SellerOwnerContentId { get; init; }
+    public ulong? ArtisanContentId { get; init; }
+    public string? SellerOwnerName { get; init; }
+    public string? ArtisanName { get; init; }
+    public required bool SellerOwnerMatchesCurrentCharacter { get; init; }
+    public required bool ArtisanMatchesCurrentCharacter { get; init; }
+    public required bool IsSelfCraftedSale { get; init; }
+    public required bool IsHq { get; init; }
 }
 
 public sealed record AgentBridgeWorkshopAssemblyTruth

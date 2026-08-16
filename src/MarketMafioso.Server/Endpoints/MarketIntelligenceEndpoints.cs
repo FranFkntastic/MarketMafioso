@@ -11,13 +11,33 @@ internal static class MarketIntelligenceEndpoints
     public static void MapMarketIntelligenceEndpoints(this WebApplication app)
     {
         app.MapPost("/api/market-intelligence/evidence", IngestEvidence);
+        app.MapPost("/api/market-intelligence/actors/names", RecordActorName);
         app.MapPost("/api/market-intelligence/import-receipts", RecordImportReceipt);
         app.MapPost("/api/market-intelligence/rebuild", Rebuild);
         app.MapGet("/api/market-intelligence/ledger", GetLedger);
         app.MapGet("/api/market-intelligence/sources", () => Results.Ok(MarketEvidenceSourceRegistry.View));
         app.MapGet("/api/market-intelligence/markets/{worldName}/{itemId}", GetMarketDetail);
+        app.MapGet("/api/market-intelligence/actors/{actorKey}", GetActorDetail);
         app.MapPut("/api/market-intelligence/markets/{worldName}/{itemId}/annotation", UpdateAnnotation);
         app.MapGet("/api/market-intelligence/events/stream", StreamEvents);
+    }
+
+    private static async Task<IResult> RecordActorName(
+        HttpRequest httpRequest,
+        MarketActorNameObservationUploadRequest request,
+        IngestKeyAccountResolver accounts,
+        MarketIntelligenceStore store,
+        CancellationToken token)
+    {
+        try
+        {
+            var accountId = await accounts.ResolveAccountIdAsync(httpRequest.Headers["X-Api-Key"].SingleOrDefault(), token);
+            return accountId is null
+                ? Results.Unauthorized()
+                : Results.Ok(await store.RecordActorNameAsync(accountId.Value, request, token));
+        }
+        catch (MarketEvidenceIdempotencyConflictException exception) { return Results.Conflict(new { error = exception.Message }); }
+        catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
     }
 
     private static async Task<IResult> IngestEvidence(
@@ -93,6 +113,17 @@ internal static class MarketIntelligenceEndpoints
         CancellationToken token)
     {
         var detail = await store.GetDetailAsync(await GetAccountIdsAsync(context, connections, token), itemId, worldName, token);
+        return detail is null ? Results.NotFound() : Results.Ok(detail);
+    }
+
+    private static async Task<IResult> GetActorDetail(
+        HttpContext context,
+        string actorKey,
+        SqliteConnectionFactory connections,
+        MarketIntelligenceStore store,
+        CancellationToken token)
+    {
+        var detail = await store.GetActorDetailAsync(await GetAccountIdsAsync(context, connections, token), actorKey, token);
         return detail is null ? Results.NotFound() : Results.Ok(detail);
     }
 

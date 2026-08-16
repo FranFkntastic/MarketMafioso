@@ -44,11 +44,28 @@ public sealed class MarketIntelligenceContractTests
         var anonymousIngest = await client.PostAsJsonAsync(
             "/api/market-intelligence/evidence",
             Book("anonymous-ingest", DateTimeOffset.UtcNow));
+        var actorName = new MarketActorNameObservationUploadRequest
+        {
+            IdempotencyKey = "http-actor-name",
+            ContentId = 100,
+            Name = "Controlled Actor",
+            ResolutionMethod = "ControlledFixture",
+            ObservedAtUtc = DateTimeOffset.UtcNow,
+        };
+        using var actorNameRequest = new HttpRequestMessage(HttpMethod.Post, "/api/market-intelligence/actors/names")
+        {
+            Content = JsonContent.Create(actorName),
+        };
+        actorNameRequest.Headers.Add("X-Api-Key", acquisitionCredential.Secret);
+        var actorNameIngest = await client.SendAsync(actorNameRequest);
+        var anonymousActorName = await client.PostAsJsonAsync("/api/market-intelligence/actors/names", actorName);
         var ledger = await client.GetAsync("/api/market-intelligence/ledger");
 
         Assert.Equal(HttpStatusCode.OK, ingest.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, actorNameIngest.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, invalidKeyIngest.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymousIngest.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousActorName.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, ledger.StatusCode);
     }
 
@@ -249,8 +266,145 @@ public sealed class MarketIntelligenceContractTests
         Assert.Contains(detail.Observations, x => x.Coverage == MarketEvidenceCoverage.AggregateOnly);
         Assert.DoesNotContain(row.Findings, x => x.Kind is "BulkShelfDominance" or "ReplacementDepth" or "SellerPersistence");
         var registry = await client.GetFromJsonAsync<MarketEvidenceSourceRegistryView>("/api/market-intelligence/sources");
-        Assert.Equal("market-evidence-sources-v1", registry?.RegistryVersion);
+        Assert.Equal("market-evidence-sources-v2", registry?.RegistryVersion);
         Assert.Equal(5, registry?.Sources.Count);
+    }
+
+    [Fact]
+    public async Task ActorEvidenceIsOpaqueRebuildableAndAccountScoped()
+    {
+        var configuration = ServerTestHost.CreateConfiguration();
+        await using var application = ServerTestHost.Create(configuration);
+        using var client = application.CreateClient();
+        var store = application.Services.GetRequiredService<MarketIntelligenceStore>();
+        await AddAccountAsync(configuration.DatabasePath, 2);
+
+        var firstReceipt = await store.IngestAsync(1, ActorBook("actors-one", DateTimeOffset.UtcNow), CancellationToken.None);
+        await store.IngestAsync(2, ActorBook("actors-two", DateTimeOffset.UtcNow) with
+        {
+            IdempotencyKey = "actors-two",
+            OccurrenceId = "actors-two",
+        }, CancellationToken.None);
+        await store.ProjectPendingAsync(CancellationToken.None);
+
+        var row = Assert.Single((await store.GetLedgerAsync([1], CancellationToken.None)).Rows);
+        Assert.Equal(2, row.DistinctSellerOwners);
+        Assert.Equal(2, row.DistinctArtisans);
+        Assert.Equal(1, row.SellerOwnerIdentityCoverage);
+        Assert.Equal(1, row.ArtisanIdentityCoverage);
+        Assert.Equal(1, row.MultiRetainerOwnerCount);
+        Assert.Equal(.8, row.SelfCraftedListingShare, 3);
+        Assert.Contains(row.Findings, finding => finding.Kind == "SellerOwnerConcentration");
+        Assert.Contains(row.Findings, finding => finding.Kind == "ProducerConcentration");
+        Assert.Contains(row.Findings, finding => finding.Kind == "MultiRetainerOwner");
+        Assert.Contains(row.Findings, finding => finding.Kind == "SelfCraftedSupply");
+
+        var detail = await store.GetDetailAsync([1], 5060, "Diabolos", CancellationToken.None);
+        var listing = Assert.Single(detail!.Observations).Listings[0];
+        Assert.StartsWith("actor-a1-", listing.SellerOwnerActorKey);
+        Assert.Equal(MarketActorIdentityStates.Observed, listing.SellerOwnerIdentityState);
+        Assert.Equal(MarketActorIdentityStates.Observed, listing.ArtisanIdentityState);
+
+        var name = new MarketActorNameObservationUploadRequest
+        {
+            IdempotencyKey = "known-wei-name",
+            ContentId = 100,
+            Name = "Known Maker",
+            ResolutionMethod = "ControlledFixture",
+            ObservedAtUtc = DateTimeOffset.UtcNow,
+            SourceObservationId = firstReceipt.ObservationId,
+        };
+        var nameReceipt = await store.RecordActorNameAsync(1, name, CancellationToken.None);
+        var retry = await store.RecordActorNameAsync(1, name, CancellationToken.None);
+        Assert.True(retry.Duplicate);
+        var laterNameReceipt = await store.RecordActorNameAsync(1, name with
+        {
+            IdempotencyKey = "known-wei-name-later",
+            ObservedAtUtc = name.ObservedAtUtc.AddMinutes(1),
+        }, CancellationToken.None);
+        Assert.False(laterNameReceipt.Duplicate);
+        await Assert.ThrowsAsync<ArgumentException>(() => store.RecordActorNameAsync(2, name with
+        {
+            IdempotencyKey = "foreign-source-name",
+        }, CancellationToken.None));
+        var actor = await store.GetActorDetailAsync([1], nameReceipt.ActorKey, CancellationToken.None);
+        Assert.Equal("Known Maker", actor!.Actor.CurrentName);
+        Assert.Equal(2, actor.Names.Count);
+        Assert.Equal(2, actor.Actor.RetainerCount);
+        Assert.NotEmpty(actor.Listings);
+        Assert.Null(await store.GetActorDetailAsync([2], nameReceipt.ActorKey, CancellationToken.None));
+
+        var accountTwoDetail = await store.GetDetailAsync([2], 5060, "Diabolos", CancellationToken.None);
+        Assert.NotEqual(listing.SellerOwnerActorKey, accountTwoDetail!.Observations[0].Listings[0].SellerOwnerActorKey);
+        var response = await client.GetAsync($"/api/market-intelligence/markets/Diabolos/5060");
+        var json = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("sellerOwnerContentId", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("artisanContentId", json, StringComparison.OrdinalIgnoreCase);
+
+        await using (var connection = new SqliteConnection($"Data Source={configuration.DatabasePath}"))
+        {
+            await connection.OpenAsync();
+            await using var payload = connection.CreateCommand();
+            payload.CommandText = "SELECT listings_json FROM market_evidence_payloads WHERE payload_hash = $hash";
+            payload.Parameters.AddWithValue("$hash", firstReceipt.PayloadHash);
+            var storedJson = Assert.IsType<string>(await payload.ExecuteScalarAsync());
+            Assert.DoesNotContain("contentId", storedJson, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("actor-a1-", storedJson, StringComparison.Ordinal);
+        }
+
+        var rebuilt = await store.RebuildAccountAsync(1, "market-intelligence-v2-rebuild", false, CancellationToken.None);
+        Assert.True(rebuilt > 0);
+        Assert.Equal(2, Assert.Single((await store.GetLedgerAsync([1], CancellationToken.None)).Rows).DistinctSellerOwners);
+    }
+
+    [Fact]
+    public async Task ActorFindingsRefuseIncompleteIdentityEvidence()
+    {
+        var configuration = ServerTestHost.CreateConfiguration();
+        await using var application = ServerTestHost.Create(configuration);
+        var store = application.Services.GetRequiredService<MarketIntelligenceStore>();
+        var sparse = ActorBook("actors-sparse", DateTimeOffset.UtcNow) with
+        {
+            ItemId = 5061,
+            ItemName = "Sparse Identity Fixture",
+            Listings = ActorBook("unused", DateTimeOffset.UtcNow).Listings
+                .Select((listing, index) => index == 0
+                    ? listing
+                    : listing with { SellerOwnerContentId = null, ArtisanContentId = null })
+                .ToArray(),
+        };
+
+        await store.IngestAsync(1, sparse, CancellationToken.None);
+        await store.ProjectPendingAsync(CancellationToken.None);
+
+        var row = Assert.Single((await store.GetLedgerAsync([1], CancellationToken.None)).Rows);
+        Assert.Equal(.1, row.SellerOwnerIdentityCoverage, 3);
+        Assert.Equal(.1, row.ArtisanIdentityCoverage, 3);
+        Assert.DoesNotContain(row.Findings, finding => finding.Kind is
+            "SellerOwnerConcentration" or "ProducerConcentration" or "MultiRetainerOwner" or "SelfCraftedSupply");
+    }
+
+    [Fact]
+    public async Task EvidenceSchemaAndSourceCapabilitiesRejectUnsupportedActorClaims()
+    {
+        var configuration = ServerTestHost.CreateConfiguration();
+        await using var application = ServerTestHost.Create(configuration);
+        var store = application.Services.GetRequiredService<MarketIntelligenceStore>();
+        var actorBook = ActorBook("actors-invalid", DateTimeOffset.UtcNow);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => store.IngestAsync(1, actorBook with
+        {
+            SchemaVersion = 1,
+        }, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.IngestAsync(1, actorBook with
+        {
+            SourceKind = MarketEvidenceSources.LegacyRouteImport,
+            Listings = actorBook.Listings.Select(listing => listing with
+            {
+                SellerOwnerContentId = null,
+                ArtisanContentId = null,
+            }).ToArray(),
+        }, CancellationToken.None));
     }
 
     private static MarketEvidenceUploadRequest Book(string id, DateTimeOffset observedAt) => new()
@@ -268,7 +422,7 @@ public sealed class MarketIntelligenceContractTests
         ReportedListingCount = 100,
         ListingCapacity = 100,
         IsTruncated = false,
-        Listings = Enumerable.Range(1, 100).Select(index => new MarketEvidenceListing
+        Listings = Enumerable.Range(1, 100).Select(index => new MarketEvidenceUploadListing
         {
             ListingId = $"listing-{index}",
             RetainerId = $"seller-{SellerOrdinal(index)}",
@@ -276,6 +430,36 @@ public sealed class MarketIntelligenceContractTests
             Quantity = index == 100 ? 1u : 99u,
             UnitPrice = index == 100 ? 5_999u : 6_000u,
             IsHq = index != 100,
+        }).ToArray(),
+    };
+
+    private static MarketEvidenceUploadRequest ActorBook(string id, DateTimeOffset observedAt) => new()
+    {
+        SchemaVersion = 2,
+        IdempotencyKey = id,
+        OccurrenceId = id,
+        SourceKind = MarketEvidenceSources.MarketAcquisition,
+        SourceVersion = "controlled-v2",
+        ItemId = 5060,
+        ItemName = "Darksteel Ingot",
+        DataCenter = "Crystal",
+        WorldName = "Diabolos",
+        ObservedAtUtc = observedAt,
+        Coverage = MarketEvidenceCoverage.Complete,
+        ReportedListingCount = 10,
+        ListingCapacity = 100,
+        IsTruncated = false,
+        Listings = Enumerable.Range(1, 10).Select(index => new MarketEvidenceUploadListing
+        {
+            ListingId = $"actor-listing-{index}",
+            RetainerId = index <= 4 ? "retainer-a" : index <= 8 ? "retainer-b" : "retainer-c",
+            RetainerName = index <= 4 ? "Known A" : index <= 8 ? "Known B" : "Known C",
+            RetainerNameSource = "ControlledFixture",
+            SellerOwnerContentId = index <= 8 ? 100UL : 200UL,
+            ArtisanContentId = index <= 8 ? 100UL : 300UL,
+            Quantity = 99,
+            UnitPrice = 6000,
+            IsHq = index % 2 == 0,
         }).ToArray(),
     };
 

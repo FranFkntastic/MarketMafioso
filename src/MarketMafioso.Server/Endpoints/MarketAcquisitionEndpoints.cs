@@ -443,6 +443,7 @@ internal static class MarketAcquisitionEndpoints
             };
             await intelligence.IngestAsync(accountId, new MarketEvidenceUploadRequest
             {
+                SchemaVersion = observationRequest.SchemaVersion >= 2 ? 2 : 1,
                 IdempotencyKey = $"acquisition:{observationRequest.IdempotencyKey}",
                 OccurrenceId = $"{id}:{observationRequest.AttemptId}:{observationRequest.Sequence}",
                 SourceKind = MarketEvidenceSources.MarketAcquisition,
@@ -468,11 +469,14 @@ internal static class MarketAcquisitionEndpoints
                     observationRequest.SourceBuild,
                     observationRequest.CaptureMode,
                 }),
-                Listings = observationRequest.Listings.Select(listing => new MarketEvidenceListing
+                Listings = observationRequest.Listings.Select(listing => new MarketEvidenceUploadListing
                 {
                     ListingId = listing.ListingId,
                     RetainerId = listing.RetainerId,
                     RetainerName = listing.RetainerName,
+                    RetainerNameSource = listing.RetainerNameSource,
+                    SellerOwnerContentId = listing.SellerOwnerContentId,
+                    ArtisanContentId = listing.ArtisanContentId,
                     Quantity = listing.Quantity,
                     UnitPrice = listing.UnitPrice,
                     IsHq = listing.IsHq,

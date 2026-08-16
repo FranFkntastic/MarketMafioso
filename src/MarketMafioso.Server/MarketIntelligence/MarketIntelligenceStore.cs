@@ -10,7 +10,8 @@ namespace MarketMafioso.Server.MarketIntelligence;
 
 public sealed class MarketIntelligenceStore
 {
-    public const string ClassifierVersion = "market-intelligence-v1";
+    public const string ClassifierVersion = "market-intelligence-v2";
+    public const string ActorKeyScheme = "account-content-id-sha256-v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly HashSet<string> SupportedCoverage =
     [
@@ -36,14 +37,17 @@ public sealed class MarketIntelligenceStore
         bool projectImmediately = true)
     {
         Validate(request);
-        var canonicalListings = request.Listings
+        var canonicalUploadListings = request.Listings
             .OrderBy(x => x.ListingId, StringComparer.Ordinal)
             .ThenBy(x => x.UnitPrice)
             .ThenBy(x => x.Quantity)
             .ToArray();
+        var canonicalListings = canonicalUploadListings
+            .Select(listing => NormalizeListing(accountId, listing))
+            .ToArray();
         var listingsJson = JsonSerializer.Serialize(canonicalListings, JsonOptions);
         var payloadHash = Sha256(listingsJson);
-        var requestHash = Sha256(JsonSerializer.Serialize(request with { IdempotencyKey = string.Empty, Listings = canonicalListings }, JsonOptions));
+        var requestHash = Sha256(JsonSerializer.Serialize(request with { IdempotencyKey = string.Empty, Listings = canonicalUploadListings }, JsonOptions));
         var now = DateTimeOffset.UtcNow;
         string observationId;
 
@@ -139,6 +143,15 @@ public sealed class MarketIntelligenceStore
                 await observation.ExecuteNonQueryAsync(cancellationToken);
             }
 
+            await PersistActorListingEvidenceAsync(
+                connection,
+                transaction,
+                accountId,
+                observationId,
+                request,
+                canonicalListings,
+                cancellationToken);
+
             await using (var outbox = connection.CreateCommand())
             {
                 outbox.Transaction = transaction;
@@ -161,6 +174,107 @@ public sealed class MarketIntelligenceStore
             Duplicate = false,
             ProjectionRevision = revision,
         };
+    }
+
+    private static MarketEvidenceListing NormalizeListing(long accountId, MarketEvidenceUploadListing listing) => new()
+    {
+        ListingId = listing.ListingId.Trim(),
+        RetainerId = listing.RetainerId.Trim(),
+        RetainerName = NormalizeOptional(listing.RetainerName),
+        RetainerNameSource = NormalizeOptional(listing.RetainerNameSource),
+        SellerOwnerActorKey = ActorKey(accountId, listing.SellerOwnerContentId),
+        SellerOwnerIdentityState = IdentityState(listing.SellerOwnerContentId),
+        ArtisanActorKey = ActorKey(accountId, listing.ArtisanContentId),
+        ArtisanIdentityState = IdentityState(listing.ArtisanContentId),
+        Quantity = listing.Quantity,
+        UnitPrice = listing.UnitPrice,
+        IsHq = listing.IsHq,
+    };
+
+    private static string? ActorKey(long accountId, ulong? contentId)
+    {
+        if (contentId is not > 0) return null;
+        var hash = Sha256($"market-actor|{ActorKeyScheme}|{accountId.ToString(CultureInfo.InvariantCulture)}|{contentId.Value.ToString(CultureInfo.InvariantCulture)}");
+        return $"actor-a1-{hash[..24]}";
+    }
+
+    private static string IdentityState(ulong? contentId) => contentId switch
+    {
+        null => MarketActorIdentityStates.NotCaptured,
+        0 => MarketActorIdentityStates.Absent,
+        _ => MarketActorIdentityStates.Observed,
+    };
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static async Task PersistActorListingEvidenceAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        string observationId,
+        MarketEvidenceUploadRequest request,
+        IReadOnlyList<MarketEvidenceListing> listings,
+        CancellationToken cancellationToken)
+    {
+        foreach (var listing in listings)
+        {
+            var selfCrafted = listing.SellerOwnerActorKey is not null &&
+                              listing.SellerOwnerActorKey.Equals(listing.ArtisanActorKey, StringComparison.Ordinal);
+            foreach (var actor in ActorRoles(listing))
+            {
+                await using (var upsertActor = connection.CreateCommand())
+                {
+                    upsertActor.Transaction = transaction;
+                    upsertActor.CommandText = """
+                        INSERT INTO market_actors(account_id, actor_key, key_scheme, first_observed_at_utc, last_observed_at_utc)
+                        VALUES($accountId, $actorKey, $scheme, $observedAt, $observedAt)
+                        ON CONFLICT(account_id, actor_key) DO UPDATE SET
+                            first_observed_at_utc = MIN(first_observed_at_utc, excluded.first_observed_at_utc),
+                            last_observed_at_utc = MAX(last_observed_at_utc, excluded.last_observed_at_utc)
+                        """;
+                    upsertActor.Parameters.AddWithValue("$accountId", accountId);
+                    upsertActor.Parameters.AddWithValue("$actorKey", actor.ActorKey);
+                    upsertActor.Parameters.AddWithValue("$scheme", ActorKeyScheme);
+                    upsertActor.Parameters.AddWithValue("$observedAt", request.ObservedAtUtc.ToString("O"));
+                    await upsertActor.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                await using var evidence = connection.CreateCommand();
+                evidence.Transaction = transaction;
+                evidence.CommandText = """
+                    INSERT INTO market_actor_listing_evidence(
+                        account_id, observation_id, listing_id, actor_key, role,
+                        item_id, item_name, world_name, retainer_id, retainer_name,
+                        observed_at_utc, is_self_crafted_sale)
+                    VALUES(
+                        $accountId, $observationId, $listingId, $actorKey, $role,
+                        $itemId, $itemName, $worldName, $retainerId, $retainerName,
+                        $observedAt, $selfCrafted)
+                    """;
+                evidence.Parameters.AddWithValue("$accountId", accountId);
+                evidence.Parameters.AddWithValue("$observationId", observationId);
+                evidence.Parameters.AddWithValue("$listingId", listing.ListingId);
+                evidence.Parameters.AddWithValue("$actorKey", actor.ActorKey);
+                evidence.Parameters.AddWithValue("$role", actor.Role);
+                evidence.Parameters.AddWithValue("$itemId", checked((long)request.ItemId));
+                evidence.Parameters.AddWithValue("$itemName", Db(request.ItemName));
+                evidence.Parameters.AddWithValue("$worldName", request.WorldName.Trim());
+                evidence.Parameters.AddWithValue("$retainerId", listing.RetainerId);
+                evidence.Parameters.AddWithValue("$retainerName", Db(listing.RetainerName));
+                evidence.Parameters.AddWithValue("$observedAt", request.ObservedAtUtc.ToString("O"));
+                evidence.Parameters.AddWithValue("$selfCrafted", selfCrafted ? 1 : 0);
+                await evidence.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+    }
+
+    private static IEnumerable<(string ActorKey, string Role)> ActorRoles(MarketEvidenceListing listing)
+    {
+        if (listing.SellerOwnerActorKey is not null)
+            yield return (listing.SellerOwnerActorKey, MarketActorRoles.SellerOwner);
+        if (listing.ArtisanActorKey is not null)
+            yield return (listing.ArtisanActorKey, MarketActorRoles.Artisan);
     }
 
     public async Task<int> ProjectPendingAsync(CancellationToken cancellationToken)
@@ -329,6 +443,175 @@ public sealed class MarketIntelligenceStore
         command.Parameters.AddWithValue("$reviewed", update.Reviewed ? 1 : 0);
         command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<MarketActorNameObservationReceipt> RecordActorNameAsync(
+        long accountId,
+        MarketActorNameObservationUploadRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.SchemaVersion != 1) throw new ArgumentException("Actor name observation schema version must be 1.");
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey)) throw new ArgumentException("Actor name observation idempotency key is required.");
+        if (request.ContentId == 0) throw new ArgumentException("Actor name observation content id must be nonzero.");
+        if (string.IsNullOrWhiteSpace(request.Name) || request.Name.Trim().Length > 64) throw new ArgumentException("Actor name must contain at most 64 characters.");
+        if (string.IsNullOrWhiteSpace(request.ResolutionMethod) || request.ResolutionMethod.Trim().Length > 64) throw new ArgumentException("Actor name resolution method is required.");
+        if (request.ObservedAtUtc == default) throw new ArgumentException("Actor name observation time is required.");
+        if (request.ObservedAtUtc > DateTimeOffset.UtcNow.AddMinutes(10)) throw new ArgumentException("Actor name observation time is implausibly far in the future.");
+
+        var actorKey = ActorKey(accountId, request.ContentId)!;
+        var normalizedSourceObservationId = NormalizeOptional(request.SourceObservationId);
+        var now = DateTimeOffset.UtcNow;
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var existing = connection.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText = "SELECT name_observation_id, actor_key, name, resolution_method, observed_at_utc, source_observation_id FROM market_actor_name_observations WHERE account_id = $accountId AND idempotency_key = $key";
+            existing.Parameters.AddWithValue("$accountId", accountId);
+            existing.Parameters.AddWithValue("$key", request.IdempotencyKey.Trim());
+            await using var reader = await existing.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                if (!reader.GetString(1).Equals(actorKey, StringComparison.Ordinal) ||
+                    !reader.GetString(2).Equals(request.Name.Trim(), StringComparison.Ordinal) ||
+                    !reader.GetString(3).Equals(request.ResolutionMethod.Trim(), StringComparison.Ordinal) ||
+                    !reader.GetString(4).Equals(request.ObservedAtUtc.ToString("O"), StringComparison.Ordinal) ||
+                    !string.Equals(reader.IsDBNull(5) ? null : reader.GetString(5), normalizedSourceObservationId, StringComparison.Ordinal))
+                    throw new MarketEvidenceIdempotencyConflictException();
+                var existingId = reader.GetString(0);
+                await transaction.CommitAsync(cancellationToken);
+                return new() { ActorKey = actorKey, NameObservationId = existingId, Duplicate = true };
+            }
+        }
+
+        if (normalizedSourceObservationId is not null)
+        {
+            await using var source = connection.CreateCommand();
+            source.Transaction = transaction;
+            source.CommandText = "SELECT COUNT(*) FROM market_evidence_observations WHERE account_id = $accountId AND observation_id = $observationId";
+            source.Parameters.AddWithValue("$accountId", accountId);
+            source.Parameters.AddWithValue("$observationId", normalizedSourceObservationId);
+            if ((long)(await source.ExecuteScalarAsync(cancellationToken))! == 0)
+                throw new ArgumentException("Actor name source observation is unavailable for this account.");
+        }
+
+        await using (var actor = connection.CreateCommand())
+        {
+            actor.Transaction = transaction;
+            actor.CommandText = """
+                INSERT INTO market_actors(account_id, actor_key, key_scheme, first_observed_at_utc, last_observed_at_utc)
+                VALUES($accountId, $actorKey, $scheme, $observedAt, $observedAt)
+                ON CONFLICT(account_id, actor_key) DO UPDATE SET
+                    first_observed_at_utc = MIN(first_observed_at_utc, excluded.first_observed_at_utc),
+                    last_observed_at_utc = MAX(last_observed_at_utc, excluded.last_observed_at_utc)
+                """;
+            actor.Parameters.AddWithValue("$accountId", accountId);
+            actor.Parameters.AddWithValue("$actorKey", actorKey);
+            actor.Parameters.AddWithValue("$scheme", ActorKeyScheme);
+            actor.Parameters.AddWithValue("$observedAt", request.ObservedAtUtc.ToString("O"));
+            await actor.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var nameObservationId = $"man-{now:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..35];
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                INSERT INTO market_actor_name_observations(
+                    name_observation_id, account_id, actor_key, idempotency_key, name,
+                    resolution_method, observed_at_utc, received_at_utc, source_observation_id)
+                VALUES($id, $accountId, $actorKey, $key, $name, $method, $observedAt, $receivedAt, $sourceObservationId)
+                """;
+            insert.Parameters.AddWithValue("$id", nameObservationId);
+            insert.Parameters.AddWithValue("$accountId", accountId);
+            insert.Parameters.AddWithValue("$actorKey", actorKey);
+            insert.Parameters.AddWithValue("$key", request.IdempotencyKey.Trim());
+            insert.Parameters.AddWithValue("$name", request.Name.Trim());
+            insert.Parameters.AddWithValue("$method", request.ResolutionMethod.Trim());
+            insert.Parameters.AddWithValue("$observedAt", request.ObservedAtUtc.ToString("O"));
+            insert.Parameters.AddWithValue("$receivedAt", now.ToString("O"));
+            insert.Parameters.AddWithValue("$sourceObservationId", Db(normalizedSourceObservationId));
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new() { ActorKey = actorKey, NameObservationId = nameObservationId, Duplicate = false };
+    }
+
+    public async Task<MarketActorDetailView?> GetActorDetailAsync(
+        IReadOnlyList<long> accountIds,
+        string actorKey,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(actorKey)) return null;
+        foreach (var accountId in accountIds.Distinct())
+        {
+            await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+            await using var actor = connection.CreateCommand();
+            actor.CommandText = """
+                SELECT first_observed_at_utc, last_observed_at_utc,
+                       (SELECT name FROM market_actor_name_observations n WHERE n.account_id = a.account_id AND n.actor_key = a.actor_key ORDER BY observed_at_utc DESC, received_at_utc DESC LIMIT 1),
+                       (SELECT COUNT(DISTINCT observation_id) FROM market_actor_listing_evidence e WHERE e.account_id = a.account_id AND e.actor_key = a.actor_key),
+                       (SELECT COUNT(DISTINCT observation_id || '|' || listing_id) FROM market_actor_listing_evidence e WHERE e.account_id = a.account_id AND e.actor_key = a.actor_key),
+                       (SELECT COUNT(DISTINCT world_name || '|' || retainer_id) FROM market_actor_listing_evidence e WHERE e.account_id = a.account_id AND e.actor_key = a.actor_key AND role = 'SellerOwner'),
+                       (SELECT COUNT(DISTINCT observation_id || '|' || listing_id) FROM market_actor_listing_evidence e WHERE e.account_id = a.account_id AND e.actor_key = a.actor_key AND role = 'Artisan'),
+                       (SELECT COUNT(DISTINCT observation_id || '|' || listing_id) FROM market_actor_listing_evidence e WHERE e.account_id = a.account_id AND e.actor_key = a.actor_key AND role = 'SellerOwner'),
+                       (SELECT COUNT(DISTINCT observation_id || '|' || listing_id) FROM market_actor_listing_evidence e WHERE e.account_id = a.account_id AND e.actor_key = a.actor_key AND is_self_crafted_sale = 1)
+                FROM market_actors a WHERE account_id = $accountId AND actor_key = $actorKey
+                """;
+            actor.Parameters.AddWithValue("$accountId", accountId);
+            actor.Parameters.AddWithValue("$actorKey", actorKey.Trim());
+            await using var actorReader = await actor.ExecuteReaderAsync(cancellationToken);
+            if (!await actorReader.ReadAsync(cancellationToken)) continue;
+            var summary = new MarketActorSummaryView
+            {
+                ActorKey = actorKey.Trim(),
+                FirstObservedAtUtc = DateTimeOffset.Parse(actorReader.GetString(0), CultureInfo.InvariantCulture),
+                LastObservedAtUtc = DateTimeOffset.Parse(actorReader.GetString(1), CultureInfo.InvariantCulture),
+                CurrentName = actorReader.IsDBNull(2) ? null : actorReader.GetString(2),
+                ObservationCount = actorReader.GetInt32(3),
+                ListingCount = actorReader.GetInt32(4),
+                RetainerCount = actorReader.GetInt32(5),
+                CraftedListingCount = actorReader.GetInt32(6),
+                SoldListingCount = actorReader.GetInt32(7),
+                SelfCraftedListingCount = actorReader.GetInt32(8),
+            };
+            await actorReader.DisposeAsync();
+
+            var names = new List<MarketActorNameObservationView>();
+            await using (var namesCommand = connection.CreateCommand())
+            {
+                namesCommand.CommandText = "SELECT name, resolution_method, observed_at_utc, source_observation_id FROM market_actor_name_observations WHERE account_id = $accountId AND actor_key = $actorKey ORDER BY observed_at_utc DESC, received_at_utc DESC";
+                namesCommand.Parameters.AddWithValue("$accountId", accountId);
+                namesCommand.Parameters.AddWithValue("$actorKey", actorKey.Trim());
+                await using var reader = await namesCommand.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken)) names.Add(new()
+                {
+                    Name = reader.GetString(0), ResolutionMethod = reader.GetString(1),
+                    ObservedAtUtc = DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture),
+                    SourceObservationId = reader.IsDBNull(3) ? null : reader.GetString(3),
+                });
+            }
+
+            var listings = new List<MarketActorListingEvidenceView>();
+            await using (var listingsCommand = connection.CreateCommand())
+            {
+                listingsCommand.CommandText = "SELECT observation_id, listing_id, role, item_id, item_name, world_name, retainer_id, retainer_name, observed_at_utc, is_self_crafted_sale FROM market_actor_listing_evidence WHERE account_id = $accountId AND actor_key = $actorKey ORDER BY observed_at_utc DESC, observation_id DESC, listing_id";
+                listingsCommand.Parameters.AddWithValue("$accountId", accountId);
+                listingsCommand.Parameters.AddWithValue("$actorKey", actorKey.Trim());
+                await using var reader = await listingsCommand.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken)) listings.Add(new()
+                {
+                    ObservationId = reader.GetString(0), ListingId = reader.GetString(1), Role = reader.GetString(2),
+                    ItemId = checked((uint)reader.GetInt64(3)), ItemName = reader.IsDBNull(4) ? $"Item {reader.GetInt64(3)}" : reader.GetString(4),
+                    WorldName = reader.GetString(5), RetainerId = reader.GetString(6), RetainerName = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    ObservedAtUtc = DateTimeOffset.Parse(reader.GetString(8), CultureInfo.InvariantCulture), IsSelfCraftedSale = reader.GetInt64(9) != 0,
+                });
+            }
+            return new() { Actor = summary, Names = names, Listings = listings };
+        }
+        return null;
     }
 
     public async Task RecordImportReceiptAsync(
@@ -529,6 +812,14 @@ public sealed class MarketIntelligenceStore
             if (removed > 0 && added > 0 && IsComplete(previous) && IsComplete(latestBook))
                 findings.Add(Finding("ReplacementDepth", classifierVersion, [previous.ObservationId, latestBook.ObservationId], $"Between the last two complete books, {removed} listings left and {added} newly visible listings replaced depth."));
         }
+        if (IsComplete(latestBook) && metrics.SellerOwnerIdentityCoverage >= .80 && metrics.TopTwoSellerOwnerShare >= .35)
+            findings.Add(Finding("SellerOwnerConcentration", classifierVersion, [latestBook.ObservationId], $"The two largest known seller owners account for {metrics.TopTwoSellerOwnerShare:P0} of visible listings, with owner identity present on {metrics.SellerOwnerIdentityCoverage:P0}."));
+        if (IsComplete(latestBook) && metrics.ArtisanIdentityCoverage >= .80 && metrics.TopTwoArtisanShare >= .35)
+            findings.Add(Finding("ProducerConcentration", classifierVersion, [latestBook.ObservationId], $"The two largest known makers account for {metrics.TopTwoArtisanShare:P0} of visible listings, with maker identity present on {metrics.ArtisanIdentityCoverage:P0}."));
+        if (IsComplete(latestBook) && metrics.SellerOwnerIdentityCoverage >= .80 && metrics.MultiRetainerOwnerCount > 0)
+            findings.Add(Finding("MultiRetainerOwner", classifierVersion, [latestBook.ObservationId], $"{metrics.MultiRetainerOwnerCount} known seller owner{Plural(metrics.MultiRetainerOwnerCount)} supply this book through multiple retainers."));
+        if (IsComplete(latestBook) && metrics.SellerOwnerIdentityCoverage >= .80 && metrics.ArtisanIdentityCoverage >= .80 && metrics.SelfCraftedListingShare >= .50)
+            findings.Add(Finding("SelfCraftedSupply", classifierVersion, [latestBook.ObservationId], $"Known seller-owner and maker identities match on {metrics.SelfCraftedListingShare:P0} of visible listings."));
         var sellerEvidence = bulk.Length >= 2
             ? bulk.Select(x => x.Evidence)
             : ordered.Where(IsComplete);
@@ -541,6 +832,27 @@ public sealed class MarketIntelligenceStore
             foreach (var set in completeSellerSets.Skip(1)) persistent.IntersectWith(set);
             if (persistent.Count > 0)
                 findings.Add(Finding("SellerPersistence", classifierVersion, sellerEvidence.Select(x => x.ObservationId), $"{persistent.Count} world-scoped seller ID{Plural(persistent.Count)} recur across every qualifying observed book."));
+        }
+        var producerBooks = ordered.Where(IsComplete)
+            .Select(x => (Evidence: x, Metrics: Measure(x.Listings, x.Aggregate)))
+            .Where(x => x.Metrics.ArtisanIdentityCoverage >= .80)
+            .ToArray();
+        if (producerBooks.Length >= 2)
+        {
+            var persistent = producerBooks[0].Evidence.Listings.Select(x => x.ArtisanActorKey).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            foreach (var book in producerBooks.Skip(1))
+                persistent.IntersectWith(book.Evidence.Listings.Select(x => x.ArtisanActorKey).OfType<string>());
+            if (persistent.Count > 0)
+                findings.Add(Finding("ProducerPersistence", classifierVersion, producerBooks.Select(x => x.Evidence.ObservationId), $"{persistent.Count} protected maker identit{(persistent.Count == 1 ? "y" : "ies")} recur across every identity-complete book."));
+        }
+        if (previous is not null && IsComplete(previous) && IsComplete(latestBook) &&
+            Measure(previous.Listings, previous.Aggregate).ArtisanIdentityCoverage >= .80 && metrics.ArtisanIdentityCoverage >= .80)
+        {
+            var removedProducers = previous.Listings.Where(x => !latestIds.Contains(x.ListingId)).Select(x => x.ArtisanActorKey).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            var addedProducers = latestBook.Listings.Where(x => !previousIds.Contains(x.ListingId)).Select(x => x.ArtisanActorKey).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            removedProducers.IntersectWith(addedProducers);
+            if (removedProducers.Count > 0)
+                findings.Add(Finding("ProducerReplacement", classifierVersion, [previous.ObservationId, latestBook.ObservationId], $"{removedProducers.Count} maker identit{(removedProducers.Count == 1 ? "y" : "ies")} appear on newly visible listings after their earlier listings left the complete book."));
         }
         var prices = latestBook.Listings.Select(x => x.UnitPrice).Distinct().Order().ToArray();
         if (prices.Length > 1)
@@ -570,6 +882,14 @@ public sealed class MarketIntelligenceStore
             LowestUnitPrice = metrics.LowestPrice,
             HighestUnitPrice = metrics.HighestPrice,
             DistinctSellers = metrics.SellerCount,
+            DistinctSellerOwners = metrics.SellerOwnerCount,
+            DistinctArtisans = metrics.ArtisanCount,
+            SellerOwnerIdentityCoverage = metrics.SellerOwnerIdentityCoverage,
+            ArtisanIdentityCoverage = metrics.ArtisanIdentityCoverage,
+            TopTwoSellerOwnerShare = metrics.TopTwoSellerOwnerShare,
+            TopTwoArtisanShare = metrics.TopTwoArtisanShare,
+            SelfCraftedListingShare = metrics.SelfCraftedListingShare,
+            MultiRetainerOwnerCount = metrics.MultiRetainerOwnerCount,
             FullStackShare = metrics.FullStackShare,
             TopTwoSellerShare = metrics.TopTwoSellerShare,
             DominantPriceShelfShare = metrics.DominantShelfShare,
@@ -591,6 +911,14 @@ public sealed class MarketIntelligenceStore
                 aggregate.HighestUnitPrice);
         var sellerCounts = listings.Where(x => x.RetainerId.Length > 0)
             .GroupBy(x => x.RetainerId, StringComparer.Ordinal).Select(x => x.Count()).OrderDescending().ToArray();
+        var sellerOwnerCounts = listings.Where(x => x.SellerOwnerActorKey is not null)
+            .GroupBy(x => x.SellerOwnerActorKey!, StringComparer.Ordinal).Select(x => x.Count()).OrderDescending().ToArray();
+        var artisanCounts = listings.Where(x => x.ArtisanActorKey is not null)
+            .GroupBy(x => x.ArtisanActorKey!, StringComparer.Ordinal).Select(x => x.Count()).OrderDescending().ToArray();
+        var multiRetainerOwners = listings.Where(x => x.SellerOwnerActorKey is not null && x.RetainerId.Length > 0)
+            .GroupBy(x => x.SellerOwnerActorKey!, StringComparer.Ordinal)
+            .Count(group => group.Select(x => x.RetainerId).Distinct(StringComparer.Ordinal).Count() > 1);
+        var selfCrafted = listings.Count(x => x.SellerOwnerActorKey is not null && x.SellerOwnerActorKey.Equals(x.ArtisanActorKey, StringComparison.Ordinal));
         var shelves = listings.GroupBy(x => x.UnitPrice)
             .Select(x => (Price: x.Key, Quantity: x.Sum(y => (long)y.Quantity))).OrderByDescending(x => x.Quantity).ThenBy(x => x.Price).ToArray();
         var quantity = listings.Sum(x => (long)x.Quantity);
@@ -603,7 +931,15 @@ public sealed class MarketIntelligenceStore
             listings.Count(x => x.Quantity == 99) / (double)listings.Count,
             sellerCounts.Take(2).Sum() / (double)listings.Count,
             quantity == 0 ? 0 : shelves[0].Quantity / (double)quantity,
-            shelves[0].Price);
+            shelves[0].Price,
+            sellerOwnerCounts.Length,
+            artisanCounts.Length,
+            sellerOwnerCounts.Sum() / (double)listings.Count,
+            artisanCounts.Sum() / (double)listings.Count,
+            sellerOwnerCounts.Take(2).Sum() / (double)listings.Count,
+            artisanCounts.Take(2).Sum() / (double)listings.Count,
+            selfCrafted / (double)listings.Count,
+            multiRetainerOwners);
     }
 
     private async Task<long> GetRevisionAsync(long accountId, CancellationToken cancellationToken)
@@ -617,7 +953,7 @@ public sealed class MarketIntelligenceStore
 
     private static void Validate(MarketEvidenceUploadRequest request)
     {
-        if (request.SchemaVersion != 1) throw new ArgumentException("Only market evidence schema version 1 is supported.");
+        if (request.SchemaVersion is not (1 or 2)) throw new ArgumentException("Only market evidence schema versions 1 and 2 are supported.");
         if (string.IsNullOrWhiteSpace(request.IdempotencyKey)) throw new ArgumentException("Idempotency key is required.");
         if (string.IsNullOrWhiteSpace(request.OccurrenceId)) throw new ArgumentException("Occurrence ID is required.");
         if (!MarketEvidenceSourceRegistry.TryGet(request.SourceKind, out var source)) throw new ArgumentException("Unsupported market evidence source kind.");
@@ -644,6 +980,19 @@ public sealed class MarketIntelligenceStore
             throw new ArgumentException("Listing IDs must be unique within an observation.");
         if (request.Listings.Any(x => string.IsNullOrWhiteSpace(x.ListingId) || x.Quantity == 0 || x.UnitPrice == 0))
             throw new ArgumentException("Detailed listings require an ID, positive quantity, and positive unit price.");
+        if (request.SchemaVersion == 1 && request.Listings.Any(x => x.SellerOwnerContentId.HasValue || x.ArtisanContentId.HasValue || !string.IsNullOrWhiteSpace(x.RetainerNameSource)))
+            throw new ArgumentException("Market evidence schema version 1 cannot assert actor identity or name provenance.");
+        if (request.Listings.Any(x => x.SellerOwnerContentId.HasValue) &&
+            !MarketEvidenceSourceRegistry.Has(source, "SellerOwnerContentIds") &&
+            !MarketEvidenceSourceRegistry.Has(source, "SellerOwnerContentIdsWhenCorrelated"))
+            throw new ArgumentException($"{request.SourceKind} cannot submit seller-owner content identities.");
+        if (request.Listings.Any(x => x.ArtisanContentId.HasValue) &&
+            !MarketEvidenceSourceRegistry.Has(source, "ArtisanContentIds") &&
+            !MarketEvidenceSourceRegistry.Has(source, "ArtisanContentIdsWhenCorrelated"))
+            throw new ArgumentException($"{request.SourceKind} cannot submit artisan content identities.");
+        if (request.Listings.Any(x => !string.IsNullOrWhiteSpace(x.RetainerNameSource)) &&
+            !MarketEvidenceSourceRegistry.Has(source, "SellerNameProvenance"))
+            throw new ArgumentException($"{request.SourceKind} cannot submit seller-name provenance.");
         if (request.Aggregate?.VisibleQuantity < 0 || request.Aggregate?.VisibleListingCount < 0)
             throw new ArgumentException("Aggregate listing measurements cannot be negative.");
     }
@@ -674,7 +1023,11 @@ public sealed class MarketIntelligenceStore
     private sealed record Metrics(
         int ListingCount = 0, long Quantity = 0, uint? LowestPrice = null, uint? HighestPrice = null,
         int SellerCount = 0, double FullStackShare = 0, double TopTwoSellerShare = 0,
-        double DominantShelfShare = 0, uint? DominantShelf = null);
+        double DominantShelfShare = 0, uint? DominantShelf = null,
+        int SellerOwnerCount = 0, int ArtisanCount = 0,
+        double SellerOwnerIdentityCoverage = 0, double ArtisanIdentityCoverage = 0,
+        double TopTwoSellerOwnerShare = 0, double TopTwoArtisanShare = 0,
+        double SelfCraftedListingShare = 0, int MultiRetainerOwnerCount = 0);
 }
 
 public sealed class MarketEvidenceIdempotencyConflictException : Exception

@@ -72,8 +72,21 @@ public sealed class MarketMafiosoBridgeProviderTests
             _ => true,
             () => { },
             () => { },
+            CreateActorTruth,
             () => marketAcquisitionUnlocked,
             new AgentBridgeUiReviewRegistry());
+
+    private static AgentBridgeMarketActorCapabilityTruth CreateActorTruth() => new()
+    {
+        ReadState = "Unavailable",
+        CurrentCharacterContentId = 0,
+        ListingCount = 0,
+        SellerOwnerObservedCount = 0,
+        ArtisanObservedCount = 0,
+        SelfCraftedCount = 0,
+        NameResolvedCount = 0,
+        NameRequestedCount = 0,
+    };
 
     private static AgentBridgeTruth CreateTruth() => new()
     {

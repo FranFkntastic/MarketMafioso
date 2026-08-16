@@ -169,6 +169,8 @@ public sealed class MarketBoardListingReader
                 ListingId = listing.ListingId.ToString(),
                 RetainerId = listing.RetainerId.ToString(),
                 RetainerName = string.Empty,
+                SellerOwnerContentId = listing.ContentId,
+                ArtisanContentId = listing.ArtisanId,
                 UnitPrice = listing.UnitPrice,
                 Quantity = listing.Quantity,
                 IsHq = listing.IsHqItem,

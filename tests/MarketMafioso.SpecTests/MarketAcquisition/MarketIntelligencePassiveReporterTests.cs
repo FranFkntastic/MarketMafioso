@@ -50,9 +50,20 @@ public sealed class MarketIntelligencePassiveReporterTests
             Assert.Equal("local:plan-one:route-run-one:7", evidence.OccurrenceId);
             Assert.Equal(MarketEvidenceSources.MarketAcquisition, evidence.SourceKind);
             Assert.Equal(MarketEvidenceCoverage.Complete, evidence.Coverage);
-            Assert.Equal("Local Seller", Assert.Single(evidence.Listings).RetainerName);
+            Assert.Equal(2, evidence.SchemaVersion);
+            var listing = Assert.Single(evidence.Listings);
+            Assert.Equal("Local Seller", listing.RetainerName);
+            Assert.Equal((ulong)100, listing.SellerOwnerContentId);
+            Assert.Equal((ulong)200, listing.ArtisanContentId);
             Assert.Contains("\"requestId\":\"local:plan-one\"", evidence.ProvenanceJson);
             Assert.Contains("\"lineId\":\"local:line-one\"", evidence.ProvenanceJson);
+
+            reporter.EnqueueActorName(200, "Known Maker", "ControlledFixture", DateTimeOffset.UnixEpoch);
+            await WaitUntilAsync(() => handler.Requests.Count == 2 && reporter.Pending.Count == 0);
+            var nameRequest = handler.Requests.Single(item => item.Path.EndsWith("/actors/names", StringComparison.Ordinal));
+            var name = JsonSerializer.Deserialize<MarketActorNameObservationUploadRequest>(nameRequest.Body, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.Equal((ulong)200, name!.ContentId);
+            Assert.Equal("Known Maker", name.Name);
         }
         finally
         {
@@ -135,6 +146,9 @@ public sealed class MarketIntelligencePassiveReporterTests
                     ListingId = "listing-local",
                     RetainerId = "retainer-local",
                     RetainerName = "Local Seller",
+                    RetainerNameSource = "ControlledFixture",
+                    SellerOwnerContentId = 100,
+                    ArtisanContentId = 200,
                     Quantity = 99,
                     UnitPrice = 150,
                 },

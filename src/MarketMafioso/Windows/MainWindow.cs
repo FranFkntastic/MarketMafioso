@@ -38,6 +38,7 @@ using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
+using FFXIVClientStructs.FFXIV.Client.Game;
 
 namespace MarketMafioso.Windows;
 
@@ -55,6 +56,9 @@ public class MainWindow : Window, IDisposable
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
     private readonly MarketBoardAcquisitionController marketBoardAcquisition;
+    private readonly MarketBoardListingReader marketBoardListingReader;
+    private readonly Dictionary<ulong, string> marketActorResolvedNames = [];
+    private int marketActorNameRequestedCount;
     private readonly RemoteSummoningBellProbe remoteSummoningBellProbe;
 
     public MarketListingOverlayWindow MarketListingOverlay { get; }
@@ -198,7 +202,7 @@ public class MainWindow : Window, IDisposable
             config.Save,
             ex => log.Warning(ex, "[MarketMafioso] Market acquisition request action failed."));
         var universalisFreshnessVerifier = new UniversalisMarketFreshnessVerifier(acquisitionHttpClient);
-        var marketBoardListingReader = new MarketBoardListingReader(marketBoardBrowseRuntime);
+        marketBoardListingReader = new MarketBoardListingReader(marketBoardBrowseRuntime);
         var marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(
             Plugin.GameGui,
             marketBoardBrowseRuntime);
@@ -710,6 +714,7 @@ public class MainWindow : Window, IDisposable
                 MarketContextSource = listingView.MarketContext?.Source,
                 MarketContextSummary = listingView.MarketContextSummary,
             },
+            MarketActors = CreateMarketActorCapabilityTruth(ReadCurrentMarketActorBook()),
             RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
             {
                 Active = remoteBellProbe.Active,
@@ -811,6 +816,90 @@ public class MainWindow : Window, IDisposable
                 ReportLastQuarantineStatus = snapshot.ReportBacklog.LastQuarantineStatus,
                 ReportLastQuarantineAtUtc = snapshot.ReportBacklog.LastQuarantineAtUtc,
             },
+        };
+    }
+
+    public unsafe AgentBridgeMarketActorCapabilityTruth ProbeMarketActorNames()
+    {
+        var read = ReadCurrentMarketActorBook();
+        var cache = NameCache.Instance();
+        if (cache != null)
+        {
+            foreach (var contentId in read.Listings
+                         .SelectMany(listing => new[] { listing.ArtisanContentId, listing.SellerOwnerContentId })
+                         .Where(contentId => contentId is > 0)
+                         .Select(contentId => contentId!.Value)
+                         .Distinct()
+                         .Take(24))
+            {
+                marketActorNameRequestedCount++;
+                var name = cache->GetNameByContentId(contentId).ToString();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    marketActorResolvedNames[contentId] = name.Trim();
+                    marketIntelligencePassiveReporter.EnqueueActorName(
+                        contentId,
+                        name,
+                        "GameNameCache.ControlledProbe",
+                        DateTimeOffset.UtcNow);
+                }
+            }
+        }
+        return CreateMarketActorCapabilityTruth(read);
+    }
+
+    private MarketBoardReadResult ReadCurrentMarketActorBook()
+    {
+        if (!playerState.CurrentWorld.IsValid)
+            return new() { Status = "WorldUnavailable", Message = "Current world is unavailable.", ReadState = MarketBoardListingReadState.Unavailable };
+        return marketBoardListingReader.ReadCurrentListings(playerState.CurrentWorld.Value.Name.ToString());
+    }
+
+    private AgentBridgeMarketActorCapabilityTruth CreateMarketActorCapabilityTruth(MarketBoardReadResult read)
+    {
+        var currentContentId = playerState.ContentId;
+        var rows = read.Listings.Select(listing =>
+        {
+            marketActorResolvedNames.TryGetValue(listing.SellerOwnerContentId ?? 0, out var sellerName);
+            marketActorResolvedNames.TryGetValue(listing.ArtisanContentId ?? 0, out var artisanName);
+            return new AgentBridgeMarketActorListingTruth
+            {
+                ListingId = listing.ListingId,
+                RetainerId = listing.RetainerId,
+                RetainerName = string.IsNullOrWhiteSpace(listing.RetainerName) ? null : listing.RetainerName,
+                SellerOwnerContentId = listing.SellerOwnerContentId,
+                ArtisanContentId = listing.ArtisanContentId,
+                SellerOwnerName = sellerName,
+                ArtisanName = artisanName,
+                SellerOwnerMatchesCurrentCharacter = currentContentId != 0 && listing.SellerOwnerContentId == currentContentId,
+                ArtisanMatchesCurrentCharacter = currentContentId != 0 && listing.ArtisanContentId == currentContentId,
+                IsSelfCraftedSale = listing.SellerOwnerContentId is > 0 && listing.SellerOwnerContentId == listing.ArtisanContentId,
+                IsHq = listing.IsHq,
+            };
+        }).ToArray();
+        return new()
+        {
+            ReadState = $"{read.Status}/{read.ReadState}",
+            BrowseOperationId = string.IsNullOrWhiteSpace(read.BrowseOperationId) ? null : read.BrowseOperationId,
+            ItemId = read.ItemId == 0 ? null : read.ItemId,
+            WorldName = string.IsNullOrWhiteSpace(read.WorldName) ? null : read.WorldName,
+            CurrentCharacterContentId = currentContentId,
+            ListingCount = rows.Length,
+            SellerOwnerObservedCount = rows.Count(row => row.SellerOwnerContentId is > 0),
+            ArtisanObservedCount = rows.Count(row => row.ArtisanContentId is > 0),
+            SelfCraftedCount = rows.Count(row => row.IsSelfCraftedSale),
+            NameResolvedCount = rows
+                .SelectMany(row => new[]
+                {
+                    (row.SellerOwnerContentId, row.SellerOwnerName),
+                    (row.ArtisanContentId, row.ArtisanName),
+                })
+                .Where(actor => actor.Item1 is > 0 && !string.IsNullOrWhiteSpace(actor.Item2))
+                .Select(actor => actor.Item1!.Value)
+                .Distinct()
+                .Count(),
+            NameRequestedCount = marketActorNameRequestedCount,
+            Listings = rows,
         };
     }
 
@@ -2472,12 +2561,18 @@ public class MainWindow : Window, IDisposable
         try
         {
             var worldName = playerState.CurrentWorld.Value.Name.ToString();
+            var nativeRead = marketBoardListingReader.ReadCurrentListings(worldName);
+            var nativeByListingId = nativeRead.IsFresh &&
+                                    string.Equals(nativeRead.BrowseOperationId, revision.VerifiedBrowseOperationId, StringComparison.Ordinal)
+                ? nativeRead.Listings.ToDictionary(listing => listing.ListingId, StringComparer.Ordinal)
+                : new Dictionary<string, MarketBoardLiveListing>(StringComparer.Ordinal);
             marketIntelligencePassiveReporter.Enqueue(new MarketEvidenceUploadRequest
             {
+                SchemaVersion = 2,
                 IdempotencyKey = $"{config.PluginInstanceId}:passive:{revision.VerifiedBrowseOperationId}",
                 OccurrenceId = revision.VerifiedBrowseOperationId,
                 SourceKind = MarketEvidenceSources.PassiveMarketBoard,
-                SourceVersion = "1",
+                SourceVersion = "2",
                 SourceInstanceId = config.PluginInstanceId,
                 SourceBuild = typeof(MainWindow).Assembly.GetName().Version?.ToString(),
                 CaptureMode = "PassiveBrowse",
@@ -2492,14 +2587,21 @@ public class MainWindow : Window, IDisposable
                 ReportedListingCount = revision.Source.ListingCount,
                 ListingCapacity = 100,
                 IsTruncated = !revision.IsComplete,
-                Listings = revision.Listings.Select(listing => new MarketEvidenceListing
+                Listings = revision.Listings.Select(listing =>
                 {
-                    ListingId = listing.ListingId.ToString(),
-                    RetainerId = listing.RetainerId.ToString(),
-                    RetainerName = listing.RetainerName,
-                    Quantity = listing.Quantity,
-                    UnitPrice = listing.UnitPrice,
-                    IsHq = listing.IsHighQuality,
+                    nativeByListingId.TryGetValue(listing.ListingId.ToString(), out var native);
+                    return new MarketEvidenceUploadListing
+                    {
+                        ListingId = listing.ListingId.ToString(),
+                        RetainerId = listing.RetainerId.ToString(),
+                        RetainerName = listing.RetainerName,
+                        RetainerNameSource = string.IsNullOrWhiteSpace(listing.RetainerName) ? null : "DalamudMarketBoardPacket",
+                        SellerOwnerContentId = native?.SellerOwnerContentId,
+                        ArtisanContentId = native?.ArtisanContentId,
+                        Quantity = listing.Quantity,
+                        UnitPrice = listing.UnitPrice,
+                        IsHq = listing.IsHighQuality,
+                    };
                 }).ToArray(),
             });
         }

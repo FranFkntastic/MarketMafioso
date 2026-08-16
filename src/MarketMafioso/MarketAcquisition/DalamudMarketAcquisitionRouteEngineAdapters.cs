@@ -367,6 +367,7 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
         };
         await client.PostMarketObservationAsync(config.ServerUrl, WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config), report.RequestId, new MarketAcquisitionMarketObservationRequest
         {
+            SchemaVersion = 2,
             SourceInstanceId = config.PluginInstanceId,
             SourceBuild = typeof(MarketAcquisitionRouteRequestReporter).Assembly.GetName().Version?.ToString(),
             CaptureMode = MarketAcquisitionResearchModePolicy.Capture(config.MarketAcquisitionExhaustiveResearchMode),
@@ -390,6 +391,9 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
                 ListingId = listing.ListingId,
                 RetainerId = listing.RetainerId,
                 RetainerName = listing.RetainerName,
+                RetainerNameSource = listing.RetainerNameSource,
+                SellerOwnerContentId = listing.SellerOwnerContentId,
+                ArtisanContentId = listing.ArtisanContentId,
                 Quantity = listing.Quantity,
                 UnitPrice = listing.UnitPrice,
                 IsHq = listing.IsHq,
