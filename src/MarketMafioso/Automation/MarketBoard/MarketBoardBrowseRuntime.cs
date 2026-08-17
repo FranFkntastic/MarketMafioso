@@ -52,6 +52,9 @@ public sealed record MarketBoardBrowseSnapshot
     public IReadOnlyList<byte> ContinuationTokens { get; init; } = [];
     public string? FailureCode { get; init; }
     public string Message { get; init; } = "No market-board browse is active.";
+    public int SessionRateLimitCount { get; init; }
+    public bool SessionRelogRequired { get; init; }
+    public DateTimeOffset? SessionExpiredAtUtc { get; init; }
 
     public bool IsActive =>
         Phase is not MarketBoardBrowsePhase.Idle
@@ -104,21 +107,65 @@ internal static class MarketBoardBrowseTimeoutPolicy
             : InactivityTimeout;
 }
 
+[Serializable]
+public sealed class PersistedMarketBoardSessionCircuitBreakerState
+{
+    public int RateLimitCount { get; set; }
+    public bool RelogRequired { get; set; }
+    public bool LogoutObserved { get; set; }
+    public DateTimeOffset? LastRateLimitAtUtc { get; set; }
+    public DateTimeOffset? ExpiredAtUtc { get; set; }
+}
+
 internal sealed class MarketBoardBrowseOperationGate
 {
     private const uint RateLimitStatus = 0x70000002;
+    internal const int RateLimitExpirationThreshold = 3;
     private const int ListingsPerPage = 10;
     private const int MaximumListings = 100;
 
     private readonly object sync = new();
     private readonly Func<DateTimeOffset> getUtcNow;
+    private readonly PersistedMarketBoardSessionCircuitBreakerState sessionState;
+    private readonly Action persistSessionState;
     private long operationSequence;
     private MarketBoardBrowseSnapshot snapshot = MarketBoardBrowseSnapshot.Idle;
     private readonly HashSet<byte> continuationTokens = [];
 
-    public MarketBoardBrowseOperationGate(Func<DateTimeOffset>? getUtcNow = null)
+    public MarketBoardBrowseOperationGate(
+        Func<DateTimeOffset>? getUtcNow = null,
+        PersistedMarketBoardSessionCircuitBreakerState? sessionState = null,
+        Action? persistSessionState = null)
     {
         this.getUtcNow = getUtcNow ?? (() => DateTimeOffset.UtcNow);
+        this.sessionState = sessionState ?? new PersistedMarketBoardSessionCircuitBreakerState();
+        this.persistSessionState = persistSessionState ?? (() => { });
+        var repaired = false;
+        if (this.sessionState.RateLimitCount < 0)
+        {
+            this.sessionState.RateLimitCount = 0;
+            repaired = true;
+        }
+        if (this.sessionState.RelogRequired && this.sessionState.RateLimitCount < RateLimitExpirationThreshold)
+        {
+            this.sessionState.RateLimitCount = RateLimitExpirationThreshold;
+            repaired = true;
+        }
+        if (this.sessionState.RateLimitCount >= RateLimitExpirationThreshold)
+        {
+            if (!this.sessionState.RelogRequired)
+            {
+                this.sessionState.RelogRequired = true;
+                repaired = true;
+            }
+            if (this.sessionState.ExpiredAtUtc is null)
+            {
+                this.sessionState.ExpiredAtUtc = this.sessionState.LastRateLimitAtUtc ?? this.getUtcNow();
+                repaired = true;
+            }
+        }
+        if (repaired)
+            this.persistSessionState();
     }
 
     public MarketBoardBrowseSnapshot Snapshot
@@ -137,6 +184,12 @@ internal sealed class MarketBoardBrowseOperationGate
     {
         lock (sync)
         {
+            if (sessionState.RelogRequired)
+            {
+                result = CreateSessionExpiredSnapshot(owner, itemId);
+                return false;
+            }
+
             if (snapshot.IsActive)
             {
                 result = snapshot;
@@ -161,6 +214,41 @@ internal sealed class MarketBoardBrowseOperationGate
             };
             result = snapshot;
             return true;
+        }
+    }
+
+    public bool ObserveClientSession(bool isLoggedIn)
+    {
+        lock (sync)
+        {
+            if (!isLoggedIn)
+            {
+                if (sessionState.RateLimitCount == 0 || sessionState.LogoutObserved)
+                    return false;
+
+                sessionState.LogoutObserved = true;
+                persistSessionState();
+                return false;
+            }
+
+            if (!sessionState.LogoutObserved)
+                return false;
+
+            var clearedExpiredSession = sessionState.RelogRequired;
+            sessionState.RateLimitCount = 0;
+            sessionState.RelogRequired = false;
+            sessionState.LogoutObserved = false;
+            sessionState.LastRateLimitAtUtc = null;
+            sessionState.ExpiredAtUtc = null;
+            persistSessionState();
+
+            if (snapshot.IsFailed &&
+                string.Equals(snapshot.FailureCode, "MarketBoardSessionExpired", StringComparison.Ordinal))
+            {
+                snapshot = MarketBoardBrowseSnapshot.Idle;
+            }
+
+            return clearedExpiredSession;
         }
     }
 
@@ -326,11 +414,22 @@ internal sealed class MarketBoardBrowseOperationGate
                     HeaderObserved = true,
                     HeaderStatus = status,
                 };
-                Fail(
-                    status == RateLimitStatus ? "MarketBoardRateLimited" : "ServerStatusRejected",
-                    status == RateLimitStatus
-                        ? "The market-board server asked MMF to wait before searching again (status 0x70000002)."
-                        : $"The market-board server rejected the browse with status 0x{status:X8}.");
+                if (status == RateLimitStatus)
+                {
+                    RecordRateLimit();
+                    var expired = sessionState.RelogRequired;
+                    Fail(
+                        expired ? "MarketBoardSessionExpired" : "MarketBoardRateLimited",
+                        expired
+                            ? $"The market-board server rate-limited MMF {sessionState.RateLimitCount} times in this login session. MMF has expired market access and will not search again until you relog."
+                            : $"The market-board server asked MMF to wait before searching again (status 0x70000002; strike {sessionState.RateLimitCount}/{RateLimitExpirationThreshold}).");
+                }
+                else
+                {
+                    Fail(
+                        "ServerStatusRejected",
+                        $"The market-board server rejected the browse with status 0x{status:X8}.");
+                }
                 return;
             }
 
@@ -585,8 +684,39 @@ internal sealed class MarketBoardBrowseOperationGate
             Phase = MarketBoardBrowsePhase.Failed,
             FailureCode = code,
             Message = message,
+            SessionRateLimitCount = sessionState.RateLimitCount,
+            SessionRelogRequired = sessionState.RelogRequired,
+            SessionExpiredAtUtc = sessionState.ExpiredAtUtc,
         };
     }
+
+    private void RecordRateLimit()
+    {
+        var nowUtc = getUtcNow();
+        sessionState.RateLimitCount++;
+        sessionState.LastRateLimitAtUtc = nowUtc;
+        if (sessionState.RateLimitCount >= RateLimitExpirationThreshold)
+        {
+            sessionState.RelogRequired = true;
+            sessionState.LogoutObserved = false;
+            sessionState.ExpiredAtUtc ??= nowUtc;
+        }
+        persistSessionState();
+    }
+
+    private MarketBoardBrowseSnapshot CreateSessionExpiredSnapshot(
+        MarketBoardBrowseOwner owner,
+        uint itemId) => new()
+    {
+        Owner = owner,
+        ItemId = itemId,
+        Phase = MarketBoardBrowsePhase.Failed,
+        FailureCode = "MarketBoardSessionExpired",
+        Message = $"MMF market access expired after {sessionState.RateLimitCount} server rate limits. Relog before starting or resuming market searches.",
+        SessionRateLimitCount = sessionState.RateLimitCount,
+        SessionRelogRequired = true,
+        SessionExpiredAtUtc = sessionState.ExpiredAtUtc,
+    };
 
     private void RecordProgress()
     {

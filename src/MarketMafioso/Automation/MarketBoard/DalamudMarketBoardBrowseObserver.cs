@@ -30,7 +30,9 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
     private readonly IPluginLog log;
     private readonly IFramework framework;
     private readonly IGameGui gameGui;
-    private readonly MarketBoardBrowseOperationGate gate = new();
+    private readonly IClientState clientState;
+    private readonly MarketBoardBrowseOperationGate gate;
+    private string? loggedTerminalOperationId;
     private Hook<InfoProxyItemSearch.Delegates.RequestData>? requestDataHook;
     private Hook<PacketDispatcher.Delegates.HandleMarketBoardItemRequestStartPacket>? headerHook;
     private Hook<InfoProxyItemSearch.Delegates.AddPage>? addPageHook;
@@ -40,12 +42,19 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
         IGameInteropProvider interopProvider,
         IFramework framework,
         IGameGui gameGui,
+        IClientState clientState,
+        PersistedMarketBoardSessionCircuitBreakerState sessionState,
+        Action persistSessionState,
         IPluginLog log)
     {
         ArgumentNullException.ThrowIfNull(interopProvider);
         this.framework = framework ?? throw new ArgumentNullException(nameof(framework));
         this.gameGui = gameGui ?? throw new ArgumentNullException(nameof(gameGui));
+        this.clientState = clientState ?? throw new ArgumentNullException(nameof(clientState));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
+        gate = new MarketBoardBrowseOperationGate(
+            sessionState: sessionState ?? throw new ArgumentNullException(nameof(sessionState)),
+            persistSessionState: persistSessionState ?? throw new ArgumentNullException(nameof(persistSessionState)));
         framework.Update += OnFrameworkUpdate;
 
         try
@@ -230,7 +239,15 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
         }
     }
 
-    private void OnFrameworkUpdate(IFramework _) => gate.Advance(DateTimeOffset.UtcNow);
+    private void OnFrameworkUpdate(IFramework _)
+    {
+        if (gate.ObserveClientSession(clientState.IsLoggedIn))
+        {
+            log.Information(
+                "[MarketMafioso] A completed relog cleared the expired market-board session; autonomous searches may resume.");
+        }
+        gate.Advance(DateTimeOffset.UtcNow);
+    }
 
     private bool IsAddonVisible(string name)
     {
@@ -382,8 +399,10 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
     private void LogTerminalFailure()
     {
         var current = gate.Snapshot;
-        if (current.IsFailed)
+        if (current.IsFailed &&
+            !string.Equals(loggedTerminalOperationId, current.OperationId, StringComparison.Ordinal))
         {
+            loggedTerminalOperationId = current.OperationId;
             log.Warning(
                 "[MarketMafioso] Market-board browse {OperationId} failed closed. Code={Code} Message={Message}",
                 current.OperationId,

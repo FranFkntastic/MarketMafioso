@@ -166,6 +166,9 @@ public sealed class Plugin : IDalamudPlugin
             GameInteropProvider,
             Framework,
             GameGui,
+            ClientState,
+            Configuration.MarketBoardSessionCircuitBreaker,
+            Configuration.Save,
             Log);
         sharedObservationListings = new FranthropyRetainerListingRefreshSource(
             sharedObservationClient,

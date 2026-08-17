@@ -240,13 +240,13 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId) =>
         session?.GetLinePurchaseTotals(lineId) ?? default;
 
-    public MarketAcquisitionRouteActionResult Pause()
+    public MarketAcquisitionRouteActionResult Pause(string? message = null)
     {
         if (!IsRunning)
             return Fail($"Route cannot be paused while {State}.");
 
         State = "Paused";
-        StatusMessage = "Route paused.";
+        StatusMessage = string.IsNullOrWhiteSpace(message) ? "Route paused." : message.Trim();
         diagnostics.Record("paused", StatusMessage);
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }

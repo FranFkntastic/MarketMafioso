@@ -1,5 +1,6 @@
 using Dalamud.Configuration;
 using MarketMafioso.MarketAcquisition;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.RetainerRestock;
 using MarketMafioso.TradeQueue;
 using MarketMafioso.WorkshopPrep;
@@ -17,6 +18,7 @@ public class Configuration : IPluginConfiguration
 
     private TradeQueueTimingOptions? tradeQueueTiming = new();
     private TradeQueuePolicyOptions? tradeQueuePolicy = new();
+    private PersistedMarketBoardSessionCircuitBreakerState? marketBoardSessionCircuitBreaker = new();
 
     public int Version { get; set; } = 1;
 
@@ -79,6 +81,11 @@ public class Configuration : IPluginConfiguration
     public bool EnableMarketDiagnostics { get; set; } = false;
     public bool EnableRetainerListingRefresh { get; set; } = false;
     public PersistedRetainerListingRefreshState RetainerListingRefresh { get; set; } = new();
+    public PersistedMarketBoardSessionCircuitBreakerState MarketBoardSessionCircuitBreaker
+    {
+        get => marketBoardSessionCircuitBreaker ??= new();
+        set => marketBoardSessionCircuitBreaker = value ?? new();
+    }
 
     [JsonIgnore]
     public Dictionary<ulong, CachedRetainer> RetainerCache { get; set; } = new();
