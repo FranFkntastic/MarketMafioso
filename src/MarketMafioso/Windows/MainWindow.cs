@@ -559,6 +559,7 @@ public class MainWindow : Window, IDisposable
             marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary,
             marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary,
             DrawMarketBoardProbeStatus,
+            marketAcquisitionDiagnosticsPanel.OpenDiagnosticsFolder,
             AgentReviewRegistry);
         settingsTab = new SettingsTabPanel(
             config,

@@ -256,8 +256,12 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(filePrefix);
 
         Directory.CreateDirectory(directory);
+        var dateDirectory = Path.Combine(
+            directory,
+            startedAt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(dateDirectory);
         var baseName = $"{filePrefix}-{startedAt:yyyyMMdd-HHmmss}";
-        var packageDirectory = Path.Combine(directory, baseName);
+        var packageDirectory = Path.Combine(dateDirectory, baseName);
         if (!Directory.Exists(packageDirectory))
         {
             Directory.CreateDirectory(packageDirectory);
@@ -266,7 +270,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
 
         for (var suffix = 1; suffix < 1000; suffix++)
         {
-            packageDirectory = Path.Combine(directory, $"{baseName}-{suffix}");
+            packageDirectory = Path.Combine(dateDirectory, $"{baseName}-{suffix}");
             if (Directory.Exists(packageDirectory))
                 continue;
 

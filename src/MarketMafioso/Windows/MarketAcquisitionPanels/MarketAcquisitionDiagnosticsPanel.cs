@@ -132,13 +132,13 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             ImGui.SameLine();
             DrawWrappedColored(MarketMafiosoUiTheme.Muted, GetReportFileName(snapshot.LastDiagnosticFilePath));
             ImGui.TableNextColumn();
-            if (ImGuiUi.Button("Open diagnostics folder", true))
-                OpenDiagnosticsFolder(diagnosticsDirectory);
+            if (ImGuiUi.Button("Open logs folder", true))
+                OpenDiagnosticsFolder();
             RegisterLastControl(
                 "diagnostics.open-folder",
-                "Open diagnostics folder",
+                "Open route logs folder",
                 true,
-                () => OpenDiagnosticsFolder(diagnosticsDirectory));
+                OpenDiagnosticsFolder);
 
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
@@ -440,12 +440,12 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             invoke,
             uiStateCapture.EventCount.ToString(CultureInfo.InvariantCulture));
 
-    private void OpenDiagnosticsFolder(string folderPath)
+    public void OpenDiagnosticsFolder()
     {
         try
         {
-            Directory.CreateDirectory(folderPath);
-            Process.Start(new ProcessStartInfo(folderPath)
+            Directory.CreateDirectory(diagnosticsDirectory);
+            Process.Start(new ProcessStartInfo(diagnosticsDirectory)
             {
                 UseShellExecute = true,
             });
