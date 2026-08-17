@@ -24,6 +24,25 @@ public sealed class MarketAcquisitionRouteRecoveryTests
     }
 
     [Fact]
+    public void MarketSessionExpiration_PausesWithExactReasonAndRetainsStop()
+    {
+        using var runner = new MarketAcquisitionRouteRunner(Path.GetTempPath());
+        Assert.True(runner.Start(CreatePlan("Siren")).Success);
+        Assert.True(runner.RecordCurrentWorld("Siren").Success);
+        const string message = "MMF market access expired after three server rate limits. Relog before resuming.";
+
+        var paused = runner.Pause(message);
+
+        Assert.True(paused.Success);
+        Assert.True(runner.IsPaused);
+        Assert.Equal(message, runner.StatusMessage);
+        Assert.Equal("Siren", runner.ActiveStop?.WorldName);
+        Assert.Equal("Arrived", runner.ActiveStop?.Status);
+        Assert.True(runner.Resume().Success);
+        Assert.Equal("Siren", runner.ActiveStop?.WorldName);
+    }
+
+    [Fact]
     public void ExhaustedRoute_CompletesWithBelowTargetOutcome()
     {
         using var runner = new MarketAcquisitionRouteRunner(Path.GetTempPath());

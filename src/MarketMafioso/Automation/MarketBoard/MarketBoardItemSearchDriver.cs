@@ -783,6 +783,9 @@ public sealed class MarketBoardItemSearchDriver
         details["browseLastProgressAtUtc"] = browse.LastProgressAtUtc?.ToString("O", CultureInfo.InvariantCulture);
         details["browseProgressDeadlineUtc"] = browse.DeadlineUtc?.ToString("O", CultureInfo.InvariantCulture);
         details["failureCode"] = browse.FailureCode;
+        details["sessionRateLimitCount"] = browse.SessionRateLimitCount.ToString(CultureInfo.InvariantCulture);
+        details["sessionRelogRequired"] = browse.SessionRelogRequired.ToString();
+        details["sessionExpiredAtUtc"] = browse.SessionExpiredAtUtc?.ToString("O", CultureInfo.InvariantCulture);
 
         var status = browse.Phase switch
         {

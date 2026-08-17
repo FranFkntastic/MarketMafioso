@@ -269,6 +269,27 @@ public sealed class RetainerListingRefreshCoordinatorTests
     }
 
     [Fact]
+    public void Expired_market_session_blocks_item_without_another_timed_retry()
+    {
+        var source = new FakeSource(new RetainerListingRefreshCandidate[] { new(100, "Iron Ore") });
+        var runtime = new FakeRuntime();
+        var config = CreateConfig();
+        var coordinator = CreateCoordinator(config, source, runtime);
+
+        coordinator.Tick(Start, true);
+        runtime.Fail("MarketBoardSessionExpired", "Relog before resuming market searches.");
+        coordinator.Tick(Start.AddSeconds(1), true);
+
+        var blocked = Assert.Single(config.RetainerListingRefresh.Items);
+        Assert.Equal(RetainerListingRefreshItemState.Blocked, blocked.State);
+        Assert.Equal("MarketBoardSessionExpired", blocked.LastCode);
+        Assert.Null(blocked.NextAttemptAtUtc);
+
+        coordinator.Tick(Start.AddHours(1), true);
+        Assert.Equal([100u], runtime.RequestedItems);
+    }
+
+    [Fact]
     public void Legacy_rate_limit_block_is_recovered_automatically()
     {
         var config = CreateConfig();

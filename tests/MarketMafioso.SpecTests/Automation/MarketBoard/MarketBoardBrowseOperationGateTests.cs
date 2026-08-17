@@ -97,14 +97,126 @@ public sealed class MarketBoardBrowseOperationGateTests
     }
 
     [Fact]
-    public void RateLimitHeaderStatus_IsClassifiedForRetry()
+    public void FirstTwoRateLimitHeaders_AreClassifiedWithoutExpiringSession()
     {
-        var gate = BeginAccepted(ItemId);
+        var state = new PersistedMarketBoardSessionCircuitBreakerState();
+        var gate = BeginAccepted(ItemId, state);
 
         gate.ObserveHeader(0x70000002u, 0);
 
         AssertFailure(gate, "MarketBoardRateLimited");
         Assert.Equal(0x70000002u, gate.Snapshot.HeaderStatus);
+        Assert.Equal(1, state.RateLimitCount);
+        Assert.False(state.RelogRequired);
+
+        gate = BeginAccepted(ItemId + 1, state);
+        gate.ObserveHeader(0x70000002u, 0);
+
+        AssertFailure(gate, "MarketBoardRateLimited");
+        Assert.Equal(2, state.RateLimitCount);
+        Assert.False(state.RelogRequired);
+    }
+
+    [Fact]
+    public void ThirdRateLimit_ExpiresSessionAndBlocksEveryOwner()
+    {
+        var persisted = new PersistedMarketBoardSessionCircuitBreakerState
+        {
+            RateLimitCount = 2,
+        };
+        var saveCount = 0;
+        var gate = BeginAccepted(ItemId, persisted, () => saveCount++);
+
+        gate.ObserveHeader(0x70000002u, 0);
+
+        AssertFailure(gate, "MarketBoardSessionExpired");
+        Assert.Equal(3, persisted.RateLimitCount);
+        Assert.True(persisted.RelogRequired);
+        Assert.NotNull(persisted.ExpiredAtUtc);
+        Assert.Equal(1, saveCount);
+
+        foreach (var owner in Enum.GetValues<MarketBoardBrowseOwner>())
+        {
+            Assert.False(gate.TryBegin(owner, ItemId + 1, out var blocked));
+            Assert.Equal("MarketBoardSessionExpired", blocked.FailureCode);
+            Assert.True(blocked.SessionRelogRequired);
+            Assert.Equal(3, blocked.SessionRateLimitCount);
+        }
+    }
+
+    [Fact]
+    public void ExpiredSession_SurvivesRuntimeReplacementUntilObservedLogoutAndLogin()
+    {
+        var persisted = new PersistedMarketBoardSessionCircuitBreakerState
+        {
+            RateLimitCount = 3,
+            RelogRequired = true,
+            ExpiredAtUtc = DateTimeOffset.Parse("2026-08-17T20:00:00Z"),
+        };
+        var gate = new MarketBoardBrowseOperationGate(sessionState: persisted);
+
+        Assert.False(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var blocked));
+        Assert.Equal("MarketBoardSessionExpired", blocked.FailureCode);
+        Assert.False(gate.ObserveClientSession(isLoggedIn: true));
+        Assert.True(persisted.RelogRequired);
+
+        Assert.False(gate.ObserveClientSession(isLoggedIn: false));
+        Assert.True(persisted.LogoutObserved);
+        Assert.True(persisted.RelogRequired);
+
+        Assert.True(gate.ObserveClientSession(isLoggedIn: true));
+        Assert.Equal(0, persisted.RateLimitCount);
+        Assert.False(persisted.RelogRequired);
+        Assert.False(persisted.LogoutObserved);
+        Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out _));
+    }
+
+    [Fact]
+    public void InconsistentPersistedThreshold_IsRepairedFailClosed()
+    {
+        var persisted = new PersistedMarketBoardSessionCircuitBreakerState
+        {
+            RateLimitCount = 3,
+            RelogRequired = false,
+        };
+
+        var gate = new MarketBoardBrowseOperationGate(sessionState: persisted);
+
+        Assert.True(persisted.RelogRequired);
+        Assert.NotNull(persisted.ExpiredAtUtc);
+        Assert.False(gate.TryBegin(MarketBoardBrowseOwner.RemoteAccessProbe, ItemId, out var blocked));
+        Assert.Equal("MarketBoardSessionExpired", blocked.FailureCode);
+    }
+
+    [Fact]
+    public void Relog_ClearsNonExpiredStrikesForTheNewSession()
+    {
+        var persisted = new PersistedMarketBoardSessionCircuitBreakerState
+        {
+            RateLimitCount = 2,
+        };
+        var gate = new MarketBoardBrowseOperationGate(sessionState: persisted);
+
+        gate.ObserveClientSession(isLoggedIn: false);
+        Assert.False(gate.ObserveClientSession(isLoggedIn: true));
+
+        Assert.Equal(0, persisted.RateLimitCount);
+        Assert.False(persisted.RelogRequired);
+    }
+
+    [Fact]
+    public void RouteEngine_RecognizesExpiredSessionAsPauseBoundary()
+    {
+        var result = new MarketBoardItemSearchResult
+        {
+            Status = "MarketBoardSessionExpired",
+            Message = "Relog required.",
+        };
+
+        Assert.True(MarketAcquisitionRouteEngine.ShouldPauseForExpiredMarketSession(result));
+        Assert.Equal(
+            MarketAcquisitionRouteOperationDisposition.Failed,
+            MarketAcquisitionRouteEngine.ClassifyItemSearchResult(result));
     }
 
     [Fact]
@@ -658,9 +770,14 @@ public sealed class MarketBoardBrowseOperationGateTests
         Assert.Contains("discontinuous", exception.Message);
     }
 
-    private static MarketBoardBrowseOperationGate BeginAccepted(uint itemId)
+    private static MarketBoardBrowseOperationGate BeginAccepted(
+        uint itemId,
+        PersistedMarketBoardSessionCircuitBreakerState? sessionState = null,
+        Action? persistSessionState = null)
     {
-        var gate = new MarketBoardBrowseOperationGate();
+        var gate = new MarketBoardBrowseOperationGate(
+            sessionState: sessionState,
+            persistSessionState: persistSessionState);
         Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, itemId, out _));
         Assert.True(gate.TryClaimActivation(MarketBoardBrowseOwner.MarketAcquisition, itemId, out _));
         gate.ObserveRequest(itemId, true);

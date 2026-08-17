@@ -1273,6 +1273,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
             if (operationResult.Disposition != MarketAcquisitionRouteOperationDisposition.Succeeded)
             {
+                if (ShouldPauseForExpiredMarketSession(searchResult))
+                {
+                    runner.ClearSearchSubmission(operationResult.Message);
+                    exactAcquisitionAuthority?.Pause(operationResult.Message);
+                    UpdateStatus(runner.Pause(operationResult.Message));
+                    return;
+                }
+
                 UpdateStatus(FailRoute(operationResult.Message));
                 return;
             }
@@ -1431,6 +1439,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ? MarketAcquisitionRouteOperationDisposition.Pending
                 : MarketAcquisitionRouteOperationDisposition.Failed;
     }
+
+    internal static bool ShouldPauseForExpiredMarketSession(MarketBoardItemSearchResult searchResult) =>
+        string.Equals(searchResult.Status, "MarketBoardSessionExpired", StringComparison.Ordinal);
 
     private void ProbeLiveMarketBoardCore(
         MarketAcquisitionPlan plan,
