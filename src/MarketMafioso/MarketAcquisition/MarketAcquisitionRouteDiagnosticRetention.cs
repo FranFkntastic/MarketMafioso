@@ -286,10 +286,13 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
 
     private static IEnumerable<LoadedPackage> LoadPackages(string rootDirectory)
     {
-        foreach (var directory in Directory.EnumerateDirectories(rootDirectory))
+        foreach (var manifestPath in Directory.EnumerateFiles(
+                     rootDirectory,
+                     "manifest.json",
+                     SearchOption.AllDirectories))
         {
-            var manifestPath = Path.Combine(directory, "manifest.json");
-            if (!File.Exists(manifestPath))
+            var directory = Path.GetDirectoryName(manifestPath);
+            if (string.IsNullOrWhiteSpace(directory))
                 continue;
 
             MarketAcquisitionRouteDiagnosticManifest? manifest;
@@ -351,7 +354,12 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
             .ToHashSet(StringComparer.Ordinal);
         var entries = packages
             .OrderByDescending(package => PackageTimestamp(package.Manifest))
-            .Select(package => BuildCatalogEntry(package, policy, now, protectedRunIds.Contains(package.Manifest.RunId)))
+            .Select(package => BuildCatalogEntry(
+                rootDirectory,
+                package,
+                policy,
+                now,
+                protectedRunIds.Contains(package.Manifest.RunId)))
             .ToArray();
         AtomicJsonFile.Write(
             Path.Combine(rootDirectory, CatalogFileName),
@@ -365,6 +373,7 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
     }
 
     private static MarketAcquisitionRouteDiagnosticCatalogEntry BuildCatalogEntry(
+        string rootDirectory,
         LoadedPackage package,
         MarketAcquisitionRouteDiagnosticRetentionPolicy policy,
         DateTimeOffset now,
@@ -403,7 +412,7 @@ public sealed class MarketAcquisitionRouteDiagnosticRetention
         return new MarketAcquisitionRouteDiagnosticCatalogEntry
         {
             RunId = package.Manifest.RunId,
-            PackageDirectory = Path.GetFileName(package.DirectoryPath),
+            PackageDirectory = Path.GetRelativePath(rootDirectory, package.DirectoryPath),
             PackageKind = package.Manifest.PackageKind,
             StartedAtUtc = package.Manifest.StartedAtUtc,
             FinalizedAtUtc = package.Manifest.FinalizedAtUtc,

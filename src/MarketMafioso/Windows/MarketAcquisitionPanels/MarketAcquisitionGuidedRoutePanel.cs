@@ -28,6 +28,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus;
+    private readonly Action openLogsFolder;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly HashSet<string> expandedStops = new(StringComparer.OrdinalIgnoreCase);
 
@@ -49,6 +50,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus,
+        Action openLogsFolder,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
@@ -68,6 +70,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.drawPostRunDiagnosticSummary = drawPostRunDiagnosticSummary ?? throw new ArgumentNullException(nameof(drawPostRunDiagnosticSummary));
         this.drawLatestWorldCompletionSummary = drawLatestWorldCompletionSummary ?? throw new ArgumentNullException(nameof(drawLatestWorldCompletionSummary));
         this.drawMarketBoardProbeStatus = drawMarketBoardProbeStatus ?? throw new ArgumentNullException(nameof(drawMarketBoardProbeStatus));
+        this.openLogsFolder = openLogsFolder ?? throw new ArgumentNullException(nameof(openLogsFolder));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
@@ -75,6 +78,13 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     {
         var snapshot = getRouteSnapshot();
         ImGuiUi.SectionHeader("Route", MarketMafiosoUiTheme.Header);
+        if (ImGuiUi.Button("Open Logs Folder##MarketAcquisitionOpenLogsFolder", true))
+            openLogsFolder();
+        reviewRegistry.RegisterLastButton(
+            "acquisition.route.open-logs-folder",
+            "Open the date-grouped Market Acquisition logs folder",
+            true,
+            openLogsFolder);
 
         var canStart = plan is { Status: "Ready" } &&
                        !isPlanStale &&

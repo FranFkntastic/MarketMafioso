@@ -8,6 +8,29 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRouteDiagnosticsTests
 {
     [Fact]
+    public void CreateEnabled_GroupsPackagesByDateAndCatalogsTheirRelativePath()
+    {
+        var root = CreateTempDirectory();
+        var startedAt = new DateTimeOffset(2026, 8, 17, 23, 42, 11, TimeSpan.FromHours(-4));
+        using var diagnostics = MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            root,
+            startedAt,
+            "route",
+            MarketAcquisitionRouteDiagnosticsLevel.Summary);
+
+        diagnostics.Complete("Finished.");
+
+        Assert.Equal("2026-08-17", Directory.GetParent(diagnostics.PackageDirectoryPath!)!.Name);
+        Assert.Equal("route-20260817-234211", Path.GetFileName(diagnostics.PackageDirectoryPath));
+        using var catalog = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(root, MarketAcquisitionRouteDiagnosticRetention.CatalogFileName)));
+        var entry = Assert.Single(catalog.RootElement.GetProperty("entries").EnumerateArray());
+        Assert.Equal(
+            Path.Combine("2026-08-17", "route-20260817-234211"),
+            entry.GetProperty("packageDirectory").GetString());
+    }
+
+    [Fact]
     public void Compressor_PreservesSourceUntilManifestOwnerCommitsTransition()
     {
         var root = CreateTempDirectory();
@@ -215,6 +238,10 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.True(File.Exists(Path.Combine(package, "route-events.jsonl.gz")));
         using var upgraded = JsonDocument.Parse(File.ReadAllText(Path.Combine(package, "manifest.json")));
         Assert.Equal(2, upgraded.RootElement.GetProperty("schemaVersion").GetInt32());
+        using var catalog = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(root, MarketAcquisitionRouteDiagnosticRetention.CatalogFileName)));
+        var catalogEntry = Assert.Single(catalog.RootElement.GetProperty("entries").EnumerateArray());
+        Assert.Equal("route-legacy-package", catalogEntry.GetProperty("packageDirectory").GetString());
     }
 
     [Fact]
