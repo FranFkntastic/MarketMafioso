@@ -414,6 +414,8 @@ public sealed partial class MarketAcquisitionRequestStore
             ItemKind = line.ItemKind,
             QuantityMode = line.QuantityMode,
             TargetQuantity = line.TargetQuantity,
+            TargetBasis = line.TargetBasis,
+            MaximumOverage = line.MaximumOverage,
             MaxQuantity = line.MaxQuantity,
             HqPolicy = line.HqPolicy,
             MaxUnitPrice = line.MaxUnitPrice,

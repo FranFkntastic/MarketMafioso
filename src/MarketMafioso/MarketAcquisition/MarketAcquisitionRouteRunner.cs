@@ -1287,7 +1287,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             .Select(line => new
             {
                 line.RequestedQuantity,
-                PurchasedQuantity = session.GetLinePurchaseTotals(line.LineId).PurchasedQuantity,
+                FulfilledQuantity = checked(line.InitialOnHandQuantity + session.GetLinePurchaseTotals(line.LineId).PurchasedQuantity),
             })
             .ToArray();
         if (targetLines.Length == 0)
@@ -1300,11 +1300,16 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         }
 
         var requested = targetLines.Aggregate(0u, (total, line) => checked(total + line.RequestedQuantity));
-        var purchased = targetLines.Aggregate(0u, (total, line) => checked(total + Math.Min(line.PurchasedQuantity, line.RequestedQuantity)));
+        var purchased = targetLines.Aggregate(0u, (total, line) => checked(total + Math.Min(line.FulfilledQuantity, line.RequestedQuantity)));
         var remaining = requested - purchased;
+        var overageLimited = session.Stops
+            .SelectMany(stop => stop.LineStates)
+            .Any(line => line.Status.Equals("SkippedOverageLimit", StringComparison.OrdinalIgnoreCase));
         return new MarketAcquisitionRouteCompletionOutcome(
             remaining == 0
                 ? MarketAcquisitionRouteCompletionKinds.TargetSatisfied
+                : overageLimited
+                    ? MarketAcquisitionRouteCompletionKinds.IncompleteOverageLimit
                 : MarketAcquisitionRouteCompletionKinds.ScopeExhaustedBelowTarget,
             requested,
             purchased,

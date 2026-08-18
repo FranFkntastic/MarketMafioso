@@ -81,6 +81,8 @@ public static class MarketAcquisitionPlanner
                 ItemName = line.ItemName,
                 QuantityMode = line.QuantityMode,
                 RequestedQuantity = line.Quantity,
+                TargetBasis = line.TargetBasis,
+                MaximumOverage = line.MaximumOverage,
                 HqPolicy = line.HqPolicy,
                 MaxUnitPrice = line.MaxUnitPrice,
                 GilCap = line.MaxTotalGil,
@@ -134,6 +136,8 @@ public static class MarketAcquisitionPlanner
                     ItemName = request.ItemName,
                     QuantityMode = request.QuantityMode,
                     TargetQuantity = request.Quantity,
+                    TargetBasis = MarketAcquisitionTargetBases.Normalize(request.TargetBasis),
+                    MaximumOverage = request.MaximumOverage,
                     MaxQuantity = request.Quantity,
                     HqPolicy = request.HqPolicy,
                     MaxUnitPrice = request.MaxUnitPrice,
@@ -156,6 +160,8 @@ public static class MarketAcquisitionPlanner
                 ItemName = line.ItemName,
                 QuantityMode = NormalizeQuantityMode(line.QuantityMode),
                 Quantity = ResolveLineQuantity(line),
+                TargetBasis = MarketAcquisitionTargetBases.Normalize(line.TargetBasis),
+                MaximumOverage = line.MaximumOverage,
                 HqPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(line.HqPolicy),
                 MaxUnitPrice = line.MaxUnitPrice,
                 MaxTotalGil = line.GilCap,
@@ -476,7 +482,6 @@ public static class MarketAcquisitionPlanner
         var subtasks = new List<MarketAcquisitionWorldItemSubtask>();
         uint plannedQuantity = 0;
         uint plannedGil = 0;
-        var hasGilCap = line.MaxTotalGil > 0;
 
         foreach (var subtask in candidates)
         {
@@ -487,16 +492,17 @@ public static class MarketAcquisitionPlanner
                 continue;
             }
 
-            if (hasGilCap && plannedGil + subtask.PlannedGil > line.MaxTotalGil)
+            var admitted = TrimSubtaskToRemainingBudget(line, subtask, plannedQuantity, plannedGil);
+            if (admitted.Listings.Count == 0)
             {
                 if (keepProbeSubtasksAfterCaps)
                     subtasks.Add(ToProbeSubtask(subtask));
                 continue;
             }
 
-            subtasks.Add(subtask);
-            plannedQuantity += subtask.PlannedQuantity;
-            plannedGil += subtask.PlannedGil;
+            subtasks.Add(admitted);
+            plannedQuantity = checked(plannedQuantity + admitted.PlannedQuantity);
+            plannedGil = checked(plannedGil + admitted.PlannedGil);
         }
 
         return subtasks;
@@ -546,6 +552,8 @@ public static class MarketAcquisitionPlanner
 
             if (hasGilCap && plannedGil + listing.TotalGil > line.MaxTotalGil)
                 continue;
+            if ((ulong)plannedQuantity + listing.Quantity > ResolveMaximumQuantity(line))
+                continue;
 
             plannedListings.Add(new MarketAcquisitionPlannedListing
             {
@@ -576,6 +584,8 @@ public static class MarketAcquisitionPlanner
             DataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName),
             QuantityMode = line.QuantityMode,
             RequestedQuantity = line.Quantity,
+            TargetBasis = line.TargetBasis,
+            MaximumOverage = line.MaximumOverage,
             HqPolicy = line.HqPolicy,
             MaxUnitPrice = line.MaxUnitPrice,
             GilCap = line.MaxTotalGil,
@@ -595,6 +605,38 @@ public static class MarketAcquisitionPlanner
             ExceedsRequestedQuantity = false,
             Listings = [],
         };
+
+    private static MarketAcquisitionWorldItemSubtask TrimSubtaskToRemainingBudget(
+        PlannerLine line,
+        MarketAcquisitionWorldItemSubtask subtask,
+        uint alreadyPlannedQuantity,
+        uint alreadyPlannedGil)
+    {
+        var listings = new List<MarketAcquisitionPlannedListing>();
+        var quantity = 0u;
+        var gil = 0u;
+        foreach (var listing in subtask.Listings)
+        {
+            if ((ulong)alreadyPlannedQuantity + quantity + listing.Quantity > ResolveMaximumQuantity(line))
+                continue;
+            if (line.MaxTotalGil > 0 && (ulong)alreadyPlannedGil + gil + listing.TotalGil > line.MaxTotalGil)
+                continue;
+
+            listings.Add(listing);
+            quantity = checked(quantity + listing.Quantity);
+            gil = checked(gil + listing.TotalGil);
+            if (HasReachedQuantityCap(line, checked(alreadyPlannedQuantity + quantity)))
+                break;
+        }
+
+        return subtask with
+        {
+            PlannedQuantity = quantity,
+            PlannedGil = gil,
+            ExceedsRequestedQuantity = line.Quantity > 0 && (ulong)alreadyPlannedQuantity + quantity > line.Quantity,
+            Listings = listings,
+        };
+    }
 
     private static MarketAcquisitionWorldBatch BuildWorldBatch(
         string worldName,
@@ -621,6 +663,13 @@ public static class MarketAcquisitionPlanner
 
     private static bool HasReachedQuantityCap(PlannerLine line, uint plannedQuantity) =>
         !IsUnboundedAllBelowThreshold(line) && plannedQuantity >= line.Quantity;
+
+    private static ulong ResolveMaximumQuantity(PlannerLine line) =>
+        IsUnboundedAllBelowThreshold(line)
+            ? ulong.MaxValue
+            : line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase)
+                ? (ulong)line.Quantity + line.MaximumOverage
+                : line.Quantity;
 
     private static bool IsUnboundedAllBelowThreshold(PlannerLine line) =>
         line.Quantity == 0 &&
@@ -679,6 +728,8 @@ public static class MarketAcquisitionPlanner
         public string? ItemName { get; init; }
         public string QuantityMode { get; init; } = string.Empty;
         public uint Quantity { get; init; }
+        public string TargetBasis { get; init; } = MarketAcquisitionTargetBases.OnHandTotal;
+        public uint MaximumOverage { get; init; }
         public string HqPolicy { get; init; } = string.Empty;
         public uint MaxUnitPrice { get; init; }
         public uint MaxTotalGil { get; init; }

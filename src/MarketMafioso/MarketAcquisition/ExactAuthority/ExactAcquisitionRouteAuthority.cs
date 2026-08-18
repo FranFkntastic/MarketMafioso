@@ -351,6 +351,8 @@ public sealed class ExactAcquisitionRouteAuthoritySession
             {
                 QuantityMode = "TargetQuantity",
                 TargetQuantity = line.RequiredQuantity - line.PurchasedQuantity,
+                TargetBasis = MarketAcquisitionTargetBases.RequiredPurchaseQuantity,
+                MaximumOverage = 0,
                 MaxQuantity = 0,
                 MaxUnitPrice = line.MaxUnitPriceGil,
                 GilCap = line.MaxTotalGil - line.SpentGil,

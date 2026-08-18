@@ -54,6 +54,12 @@ public record MarketAcquisitionRequestView
     [JsonPropertyName("quantity")]
     public uint Quantity { get; init; }
 
+    [JsonPropertyName("targetBasis")]
+    public string TargetBasis { get; init; } = string.Empty;
+
+    [JsonPropertyName("maximumOverage")]
+    public uint MaximumOverage { get; init; }
+
     [JsonPropertyName("hqPolicy")]
     public string HqPolicy { get; init; } = string.Empty;
 
@@ -219,6 +225,12 @@ public sealed record MarketAcquisitionBatchLineCreateRequest
     [JsonPropertyName("targetQuantity")]
     public uint TargetQuantity { get; init; }
 
+    [JsonPropertyName("targetBasis")]
+    public string TargetBasis { get; init; } = string.Empty;
+
+    [JsonPropertyName("maximumOverage")]
+    public uint MaximumOverage { get; init; }
+
     [JsonPropertyName("maxQuantity")]
     public uint MaxQuantity { get; init; }
 
@@ -257,6 +269,12 @@ public sealed record MarketAcquisitionBatchLineView
 
     [JsonPropertyName("targetQuantity")]
     public uint TargetQuantity { get; init; }
+
+    [JsonPropertyName("targetBasis")]
+    public string TargetBasis { get; init; } = string.Empty;
+
+    [JsonPropertyName("maximumOverage")]
+    public uint MaximumOverage { get; init; }
 
     [JsonPropertyName("maxQuantity")]
     public uint MaxQuantity { get; init; }

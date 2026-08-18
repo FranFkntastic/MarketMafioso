@@ -46,6 +46,8 @@ internal static class MarketAcquisitionSchema
                 item_kind TEXT NULL,
                 quantity_mode TEXT NOT NULL,
                 target_quantity INTEGER NOT NULL,
+                target_basis TEXT NOT NULL DEFAULT 'OnHandTotal',
+                maximum_overage INTEGER NOT NULL DEFAULT 0,
                 max_quantity INTEGER NOT NULL,
                 hq_policy TEXT NOT NULL,
                 max_unit_price INTEGER NOT NULL,
@@ -235,6 +237,8 @@ internal static class MarketAcquisitionSchema
             """;
         command.ExecuteNonQuery();
         EnsureColumn(connection, "acquisition_requests", "revision", "INTEGER NOT NULL DEFAULT 1");
+        EnsureColumn(connection, "acquisition_batch_lines", "target_basis", "TEXT NOT NULL DEFAULT 'OnHandTotal'");
+        EnsureColumn(connection, "acquisition_batch_lines", "maximum_overage", "INTEGER NOT NULL DEFAULT 0");
 
         using var migrate = connection.CreateCommand();
         migrate.CommandText =

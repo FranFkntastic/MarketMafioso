@@ -68,6 +68,8 @@ public sealed record MarketAcquisitionRequestLineDocument
     public string? ItemKind { get; init; }
     public string QuantityMode { get; init; } = "AllBelowThreshold";
     public uint TargetQuantity { get; init; }
+    public string TargetBasis { get; init; } = MarketAcquisitionTargetBases.OnHandTotal;
+    public uint MaximumOverage { get; init; }
     public uint MaxQuantity { get; init; }
     public string HqPolicy { get; init; } = "Either";
     public uint MaxUnitPrice { get; init; }

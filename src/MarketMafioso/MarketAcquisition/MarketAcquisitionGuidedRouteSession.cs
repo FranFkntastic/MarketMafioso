@@ -139,6 +139,8 @@ public sealed class MarketAcquisitionGuidedRouteSession
                 DataCenter = dataCenter,
                 QuantityMode = line.QuantityMode,
                 RequestedQuantity = line.RequestedQuantity,
+                TargetBasis = line.TargetBasis,
+                MaximumOverage = line.MaximumOverage,
                 HqPolicy = line.HqPolicy,
                 MaxUnitPrice = line.MaxUnitPrice,
                 GilCap = line.GilCap,
@@ -451,11 +453,15 @@ public sealed class MarketAcquisitionGuidedRouteSession
     private static string ResolveZeroPurchaseLineStatus(string candidateStatus) =>
         MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidateStatus)
             ? "SkippedIncompleteListingCoverage"
+            : candidateStatus.Equals(MarketAcquisitionLiveCandidateStatuses.OverageLimit, StringComparison.OrdinalIgnoreCase)
+                ? "SkippedOverageLimit"
             : "SkippedNoLiveStock";
 
     private static string FormatZeroPurchaseProbeMessage(string candidateStatus) =>
         MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidateStatus)
             ? "Incomplete listing coverage"
+            : candidateStatus.Equals(MarketAcquisitionLiveCandidateStatuses.OverageLimit, StringComparison.OrdinalIgnoreCase)
+                ? "No whole listing fit the overage limit"
             : "No safe live candidates remained";
 
     private static string FormatActiveItem(MarketAcquisitionGuidedRouteStop stop) =>

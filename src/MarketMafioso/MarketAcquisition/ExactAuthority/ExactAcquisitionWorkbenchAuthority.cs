@@ -300,6 +300,8 @@ public static class ExactAcquisitionWorkbenchAuthorityService
         ItemKind = envelope.ItemKind,
         QuantityMode = "TargetQuantity",
         TargetQuantity = envelope.RequiredQuantity,
+        TargetBasis = MarketAcquisitionTargetBases.RequiredPurchaseQuantity,
+        MaximumOverage = 0,
         MaxQuantity = 0,
         HqPolicy = envelope.Quality == EquipmentQuality.High ? "HQOnly" : "NQOnly",
         MaxUnitPrice = envelope.MaxUnitPriceGil,

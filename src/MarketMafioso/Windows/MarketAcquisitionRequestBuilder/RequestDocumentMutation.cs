@@ -32,7 +32,8 @@ public static class RequestDocumentMutation
         if (selectedLineIndex < 0 || selectedLineIndex >= document.Lines.Count)
             throw new ArgumentOutOfRangeException(nameof(selectedLineIndex));
 
-        var line = document.Lines[selectedLineIndex] with
+        var originalLine = document.Lines[selectedLineIndex];
+        var line = originalLine with
         {
             MaxUnitPrice = maxUnitPrice,
             GilCap = gilCap,
@@ -45,6 +46,7 @@ public static class RequestDocumentMutation
         int selectedLineIndex,
         string quantityMode,
         uint targetQuantity,
+        uint maximumOverage,
         uint maxQuantity,
         string hqPolicy,
         uint maxUnitPrice,
@@ -54,10 +56,17 @@ public static class RequestDocumentMutation
         if (selectedLineIndex < 0 || selectedLineIndex >= document.Lines.Count)
             throw new ArgumentOutOfRangeException(nameof(selectedLineIndex));
 
-        var line = document.Lines[selectedLineIndex] with
+        var originalLine = document.Lines[selectedLineIndex];
+        var line = originalLine with
         {
             QuantityMode = string.IsNullOrWhiteSpace(quantityMode) ? "AllBelowThreshold" : quantityMode,
             TargetQuantity = targetQuantity,
+            TargetBasis = string.Equals(quantityMode, "TargetQuantity", StringComparison.OrdinalIgnoreCase)
+                ? MarketAcquisitionTargetBases.Normalize(originalLine.TargetBasis)
+                : string.Empty,
+            MaximumOverage = string.Equals(quantityMode, "TargetQuantity", StringComparison.OrdinalIgnoreCase)
+                ? maximumOverage
+                : 0,
             MaxQuantity = maxQuantity,
             HqPolicy = string.IsNullOrWhiteSpace(hqPolicy) ? "Either" : hqPolicy,
             MaxUnitPrice = maxUnitPrice,

@@ -320,12 +320,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var flags = AcquisitionRequestTableStyle.LineTableFlags |
                     ImGuiTableFlags.SizingStretchProp |
                     ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV3", 8, flags, new Vector2(0, tableHeight)))
+        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV4", 9, flags, new Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.4f);
         ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthStretch, 1.5f);
         ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+        ImGui.TableSetupColumn("Max over", ImGuiTableColumnFlags.WidthStretch, 0.8f);
         ImGui.TableSetupColumn("Unit ceiling", ImGuiTableColumnFlags.WidthStretch, 1.1f);
         ImGui.TableSetupColumn("Spend ceiling", ImGuiTableColumnFlags.WidthStretch, 1.2f);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthStretch, 0.8f);
@@ -387,6 +388,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         DrawCompactQuantityCell(line, index);
+
+        ImGui.TableNextColumn();
+        DrawCompactOverageCell(line, index);
 
         ImGui.TableNextColumn();
         DrawCompactUnitCell(line, index);
@@ -472,6 +476,21 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.SetNextItemWidth(-1);
         if (ImGui.InputInt("##Unit", ref maxUnit))
             ApplyLineEdit(index, line, maxUnitPrice: ClampToUInt(maxUnit), message: "Unit ceiling updated.");
+    }
+
+    private void DrawCompactOverageCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        if (!line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(MainWindow.ColMuted, "-");
+            return;
+        }
+
+        var maximumOverage = ClampToInt(line.MaximumOverage);
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputInt("##MaximumOverage", ref maximumOverage))
+            ApplyLineEdit(index, line, maximumOverage: ClampToUInt(maximumOverage), message: "Maximum target overage updated.");
     }
 
     private void DrawUnitPriceContextMenu(
@@ -977,6 +996,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         MarketAcquisitionRequestLineDocument line,
         string? quantityMode = null,
         uint? targetQuantity = null,
+        uint? maximumOverage = null,
         uint? maxQuantity = null,
         string? hqPolicy = null,
         uint? maxUnitPrice = null,
@@ -987,6 +1007,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             index,
             quantityMode ?? line.QuantityMode,
             targetQuantity ?? line.TargetQuantity,
+            maximumOverage ?? line.MaximumOverage,
             maxQuantity ?? line.MaxQuantity,
             hqPolicy ?? line.HqPolicy,
             maxUnitPrice ?? line.MaxUnitPrice,

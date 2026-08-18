@@ -188,6 +188,8 @@ public sealed class MarketAcquisitionPlanPreparationService
                 ItemName = claimed.ItemName,
                 QuantityMode = claimed.QuantityMode,
                 TargetQuantity = claimed.Quantity,
+                TargetBasis = MarketAcquisitionTargetBases.Normalize(claimed.TargetBasis),
+                MaximumOverage = claimed.MaximumOverage,
                 MaxQuantity = claimed.Quantity,
                 HqPolicy = claimed.HqPolicy,
                 MaxUnitPrice = claimed.MaxUnitPrice,
