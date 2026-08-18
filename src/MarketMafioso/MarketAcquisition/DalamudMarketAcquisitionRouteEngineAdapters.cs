@@ -236,7 +236,7 @@ public sealed class DalamudMarketAcquisitionPurchaseIo : IMarketAcquisitionPurch
             return submitted.IsRecorded
                 ? null
                 : $"Purchase confirmation was blocked after intent arming: {submitted.Message}";
-        });
+        }, context.ExpectedItemName);
     }
 
     public MarketPurchaseEvidenceAdvanceResult AdvancePurchaseEvidence(DateTimeOffset nowUtc) =>

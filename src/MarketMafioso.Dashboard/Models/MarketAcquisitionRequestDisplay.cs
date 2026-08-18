@@ -23,6 +23,8 @@ public static class MarketAcquisitionRequestDisplay
                 ItemName = request.ItemName,
                 QuantityMode = request.QuantityMode,
                 TargetQuantity = request.QuantityMode == "AllBelowThreshold" ? 0 : request.Quantity,
+                TargetBasis = request.TargetBasis,
+                MaximumOverage = request.MaximumOverage,
                 MaxQuantity = request.QuantityMode == "AllBelowThreshold" ? request.Quantity : 0,
                 HqPolicy = request.HqPolicy,
                 MaxUnitPrice = request.MaxUnitPrice,

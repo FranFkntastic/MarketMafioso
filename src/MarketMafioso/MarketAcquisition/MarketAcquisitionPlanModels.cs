@@ -42,6 +42,9 @@ public sealed record MarketAcquisitionPlanLine
     public string? ItemName { get; init; }
     public string QuantityMode { get; init; } = string.Empty;
     public uint RequestedQuantity { get; init; }
+    public string TargetBasis { get; init; } = MarketAcquisitionTargetBases.OnHandTotal;
+    public uint MaximumOverage { get; init; }
+    public uint InitialOnHandQuantity { get; init; }
     public string HqPolicy { get; init; } = string.Empty;
     public uint MaxUnitPrice { get; init; }
     public uint GilCap { get; init; }
@@ -61,6 +64,8 @@ public sealed record MarketAcquisitionWorldItemSubtask
     public string DataCenter { get; init; } = string.Empty;
     public string QuantityMode { get; init; } = string.Empty;
     public uint RequestedQuantity { get; init; }
+    public string TargetBasis { get; init; } = MarketAcquisitionTargetBases.OnHandTotal;
+    public uint MaximumOverage { get; init; }
     public string HqPolicy { get; init; } = string.Empty;
     public uint MaxUnitPrice { get; init; }
     public uint GilCap { get; init; }

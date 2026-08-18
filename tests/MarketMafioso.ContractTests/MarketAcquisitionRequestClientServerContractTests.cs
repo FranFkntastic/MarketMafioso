@@ -209,6 +209,8 @@ public sealed class MarketAcquisitionRequestClientServerContractTests
         Assert.Equal(5064u, line.ItemId);
         Assert.Equal("Silver Ingot", line.ItemName);
         Assert.Equal(10u, line.TargetQuantity);
+        Assert.Equal("OnHandTotal", line.TargetBasis);
+        Assert.Equal(3u, line.MaximumOverage);
         Assert.Equal(50u, line.MaxUnitPrice);
 
         var claimed = await client.ClaimAsync(
@@ -338,6 +340,8 @@ public sealed class MarketAcquisitionRequestClientServerContractTests
                 ItemKind = "Crystal",
                 QuantityMode = "TargetQuantity",
                 TargetQuantity = 10,
+                TargetBasis = "OnHandTotal",
+                MaximumOverage = 2,
                 HqPolicy = "Either",
                 MaxUnitPrice = 99,
                 GilCap = 990,
@@ -361,6 +365,8 @@ public sealed class MarketAcquisitionRequestClientServerContractTests
                 ItemKind = "Metal",
                 QuantityMode = "TargetQuantity",
                 TargetQuantity = 10,
+                TargetBasis = "OnHandTotal",
+                MaximumOverage = 3,
                 HqPolicy = "Either",
                 MaxUnitPrice = 50,
                 GilCap = 500,

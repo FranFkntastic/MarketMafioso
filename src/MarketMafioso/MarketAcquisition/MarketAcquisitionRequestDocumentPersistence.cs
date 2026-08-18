@@ -57,6 +57,8 @@ internal static class MarketAcquisitionRequestDocumentPersistence
                         ? "AllBelowThreshold"
                         : line.QuantityMode,
                     TargetQuantity = line.TargetQuantity,
+                    TargetBasis = MarketAcquisitionTargetBases.Normalize(line.TargetBasis),
+                    MaximumOverage = line.MaximumOverage,
                     MaxQuantity = line.MaxQuantity,
                     HqPolicy = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy,
                     MaxUnitPrice = line.MaxUnitPrice,
@@ -101,6 +103,8 @@ internal static class MarketAcquisitionRequestDocumentPersistence
                     ItemKind = line.ItemKind,
                     QuantityMode = line.QuantityMode,
                     TargetQuantity = line.TargetQuantity,
+                    TargetBasis = MarketAcquisitionTargetBases.Normalize(line.TargetBasis),
+                    MaximumOverage = line.MaximumOverage,
                     MaxQuantity = line.MaxQuantity,
                     HqPolicy = line.HqPolicy,
                     MaxUnitPrice = line.MaxUnitPrice,

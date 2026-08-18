@@ -27,6 +27,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly IMarketAcquisitionRouteEvidenceRecorder evidence;
     private readonly MarketAcquisitionRouteReportDispatcher reportDispatcher;
     private readonly IMarketAcquisitionIntelligenceReporter? intelligenceReporter;
+    private readonly IMarketAcquisitionInventoryObserver? inventoryObserver;
     private readonly IMarketAcquisitionRouteClock clock;
     private readonly MarketAcquisitionTravelFrameThrottle travelFrameThrottle;
     private readonly string reportPluginInstanceId;
@@ -50,6 +51,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool exactAcquisitionDryRunFaultInjected;
     private bool exactAcquisitionDryRunNoViableConsumed;
     private bool purchaseEvidenceRouteBlocked;
+    private readonly Dictionary<string, uint> initialOnHandByLine = new(StringComparer.Ordinal);
+    private string? activeLinePurchaseWorld;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -71,7 +74,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         string? reportPluginInstanceId = null,
         string? reportPluginVersion = null,
         Func<bool>? exhaustiveResearchModeProvider = null,
-        IMarketAcquisitionIntelligenceReporter? intelligenceReporter = null)
+        IMarketAcquisitionIntelligenceReporter? intelligenceReporter = null,
+        IMarketAcquisitionInventoryObserver? inventoryObserver = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -92,6 +96,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         this.reportPluginVersion = reportPluginVersion;
         this.exhaustiveResearchModeProvider = exhaustiveResearchModeProvider ?? (() => false);
         this.intelligenceReporter = intelligenceReporter;
+        this.inventoryObserver = inventoryObserver;
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
         this.shardCheckpoints = shardCheckpoints;
     }
@@ -241,6 +246,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             exactAcquisitionAuthority = null;
         }
+        if (!TryApplyInventoryBaselines(routePlan, exactAcquisitionContract is not null, out routePlan, out var inventoryFailure))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(inventoryFailure));
         if (executionMode == MarketAcquisitionExecutionMode.Live && shardCheckpoints is not null)
         {
             var checkpointPreflight = shardCheckpoints.Prepare(routePlan, state.ProgressNonce);
@@ -298,9 +305,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         try
         {
             exactAcquisitionAuthority.ValidateCurrentDocument(workbenchDocument);
-            exactAcquisitionAuthority.BeginRecovery(plan);
             claimedRequest = remainingClaim;
             ClearExecutionState(preserveExecutionMode: true);
+            if (!TryApplyInventoryBaselines(plan, exactAcquisition: true, out plan, out var inventoryFailure))
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(inventoryFailure));
+            exactAcquisitionAuthority.BeginRecovery(plan);
             if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
                 BeginHostedReportingSession(remainingClaim);
             var result = runner.Start(
@@ -546,6 +555,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
         ClearExecutionState(preserveExecutionMode: true);
+        if (!TryApplyInventoryBaselines(plan, exactAcquisitionAuthority is not null, out plan, out var inventoryFailure))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(inventoryFailure));
         if (exactAcquisitionAuthority is not null)
         {
             try
@@ -584,6 +595,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
         ClearExecutionState(preserveExecutionMode: true);
+        if (!TryApplyInventoryBaselines(plan, exactAcquisitionAuthority is not null, out plan, out var inventoryFailure))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(inventoryFailure));
         if (exactAcquisitionAuthority is not null)
         {
             try
@@ -1451,6 +1464,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var activeLine = GetActiveRouteLine(claimed);
         var activeSubtask = recordRouteResult ? runner.ActiveStop?.ActiveItemSubtask : null;
         var currentWorld = context.GetCurrentWorldName();
+        if (recordRouteResult)
+            EnsureActiveLinePurchaseAccumulator(activeSubtask, currentWorld);
 
         state.MarketBoardReconciliation = null;
         state.LiveCandidatePlan = null;
@@ -1564,6 +1579,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ItemName = activeSubtask.ItemName,
                 QuantityMode = activeSubtask.QuantityMode,
                 Quantity = activeSubtask.RequestedQuantity,
+                TargetBasis = activeSubtask.TargetBasis,
+                MaximumOverage = activeSubtask.MaximumOverage,
                 HqPolicy = activeSubtask.HqPolicy,
                 MaxUnitPrice = activeSubtask.MaxUnitPrice,
                 MaxTotalGil = activeSubtask.GilCap,
@@ -1577,15 +1594,42 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         var completed = runner.GetLinePurchaseTotals(activeSubtask.LineId);
         return new MarketAcquisitionRouteLinePurchaseTotals(
-            checked(completed.PurchasedQuantity + state.ActiveLinePurchasedQuantity),
+            checked(initialOnHandByLine.GetValueOrDefault(activeSubtask.LineId) + completed.PurchasedQuantity + state.ActiveLinePurchasedQuantity),
             checked(completed.SpentGil + state.ActiveLineSpentGil));
     }
+
+    private void EnsureActiveLinePurchaseAccumulator(MarketAcquisitionWorldItemSubtask? activeSubtask, string currentWorld)
+    {
+        if (activeSubtask == null)
+            return;
+        if (!ShouldResetLinePurchaseAccumulator(
+                state.ActivePurchaseLineId,
+                activeLinePurchaseWorld,
+                activeSubtask.LineId,
+                currentWorld))
+            return;
+
+        state.ActivePurchaseLineId = activeSubtask.LineId;
+        activeLinePurchaseWorld = currentWorld;
+        state.ActiveLinePurchasedQuantity = 0;
+        state.ActiveLineSpentGil = 0;
+    }
+
+    internal static bool ShouldResetLinePurchaseAccumulator(
+        string? activeLineId,
+        string? activeWorld,
+        string nextLineId,
+        string nextWorld) =>
+        !string.Equals(activeLineId, nextLineId, StringComparison.Ordinal) ||
+        !string.Equals(activeWorld, nextWorld, StringComparison.OrdinalIgnoreCase);
 
     private static string FormatItem(MarketAcquisitionRequestView line) =>
         string.IsNullOrWhiteSpace(line.ItemName) ? line.ItemId.ToString() : $"{line.ItemName} ({line.ItemId})";
 
     public void BeginNextWorldPurchase()
     {
+        if (!runner.IsRunning)
+            return;
         var activeStop = runner.ActiveStop;
         if (activeStop is not { Status: "Purchasing" })
             return;
@@ -1605,11 +1649,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         var activeLine = GetActiveRouteLine(claimed);
         var activeLineId = GetActiveRouteLineId(claimed);
-        if (!string.Equals(state.ActivePurchaseLineId, activeLineId, StringComparison.Ordinal))
+        var startingLineOrWorld = !string.Equals(state.ActivePurchaseLineId, activeLineId, StringComparison.Ordinal) ||
+                                  !string.Equals(activeLinePurchaseWorld, currentWorld, StringComparison.OrdinalIgnoreCase);
+        EnsureActiveLinePurchaseAccumulator(activeStop.ActiveItemSubtask, currentWorld);
+        if (startingLineOrWorld)
         {
-            state.ActivePurchaseLineId = activeLineId;
-            state.ActiveLinePurchasedQuantity = 0;
-            state.ActiveLineSpentGil = 0;
             if (activeStop.ActiveItemSubtask != null)
                 ReportAcquisitionLineProgress(activeStop.ActiveItemSubtask, "Running", 0, 0,
                     $"Started purchasing {FormatItem(activeLine)} on {activeStop.WorldName}.");
@@ -1801,6 +1845,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return MarketAcquisitionRouteEngineTickResult.Idle();
 
         var now = clock.UtcNow;
+        if (runner.IsPaused && previousSession.Phase != MarketBoardPurchaseSessionPhase.WaitingForOutcome)
+        {
+            RequirePurchaseRecoveryRefresh("Route paused before purchase confirmation; the pending selection was fenced and will be replanned after resume.");
+            purchaseAutomation.Clear();
+            state.AcquisitionStatus = "Route paused; no purchase confirmation authority is active.";
+            return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
+        }
         if (!purchaseAutomation.IsMonitorDue(now))
             return MarketAcquisitionRouteEngineTickResult.Idle("Waiting for purchase monitor tick.");
 
@@ -1986,6 +2037,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             RouteRunId = state.ProgressNonce,
             AttemptId = state.ProgressNonce,
             LineId = GetActiveRouteLineId(claimed),
+            ExpectedItemName = GetActiveRouteLine(claimed).ItemName,
             EvidenceTimeout = MarketBoardPurchaseOutcomeWatchdog,
         };
     }
@@ -2069,6 +2121,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0 ? state.LiveCandidatePlan?.Message : null);
         state.AcquisitionStatus = result.Message;
         ClearMarketBoardAutomationState();
+        state.ActiveLinePurchasedQuantity = 0;
+        state.ActiveLineSpentGil = 0;
+        state.ActivePurchaseLineId = null;
+        activeLinePurchaseWorld = null;
 
         var nextStop = runner.ActiveStop;
         var shouldCloseMarketBoard =
@@ -2080,9 +2136,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldPurchasedQuantity = 0;
             state.ActiveWorldSpentGil = 0;
             state.ActiveWorldPurchaseBatchWorld = null;
-            state.ActivePurchaseLineId = null;
-            state.ActiveLinePurchasedQuantity = 0;
-            state.ActiveLineSpentGil = 0;
         }
         else if (activeSubtask != null && nextStop is not null && nextStop.ActiveItemSubtask != null &&
                  !activeSubtask.LineId.Equals(nextStop.ActiveItemSubtask.LineId, StringComparison.Ordinal))
@@ -2441,6 +2494,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             ? "Complete"
             : MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidatePlan?.Status)
                 ? "SkippedIncompleteListingCoverage"
+                : candidatePlan?.Status.Equals(MarketAcquisitionLiveCandidateStatuses.OverageLimit, StringComparison.OrdinalIgnoreCase) == true
+                    ? "SkippedOverageLimit"
                 : "SkippedNoLiveStock";
 
     internal static bool ShouldFailWorldPurchaseBatchOnNoCandidate(MarketAcquisitionLiveCandidatePlan? candidatePlan) =>
@@ -2576,10 +2631,53 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ManualRecoveryBlockedReason = preflight.BlockReason;
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
+        initialOnHandByLine.Clear();
+        activeLinePurchaseWorld = null;
         reportDispatcher.ResetSession();
         freshnessCancellation.Cancel();
         freshnessCancellation.Dispose();
         freshnessCancellation = new CancellationTokenSource();
+    }
+
+    private bool TryApplyInventoryBaselines(
+        MarketAcquisitionPlan plan,
+        bool exactAcquisition,
+        out MarketAcquisitionPlan adjustedPlan,
+        out string failure)
+    {
+        initialOnHandByLine.Clear();
+        var adjustedLines = new List<MarketAcquisitionPlanLine>(plan.Lines.Count);
+        foreach (var line in plan.Lines)
+        {
+            var basis = MarketAcquisitionTargetBases.Normalize(line.TargetBasis, exactAcquisition);
+            var initialOnHand = 0u;
+            if (line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase) &&
+                basis == MarketAcquisitionTargetBases.OnHandTotal)
+            {
+                if (inventoryObserver is null)
+                {
+                    adjustedPlan = plan;
+                    failure = $"Cannot start acquisition safely because current inventory is unavailable for {line.ItemName ?? line.ItemId.ToString()}.";
+                    return false;
+                }
+
+                var observation = inventoryObserver.Observe(line.ItemId, line.HqPolicy);
+                if (!observation.IsAvailable)
+                {
+                    adjustedPlan = plan;
+                    failure = $"Cannot start acquisition safely for {line.ItemName ?? line.ItemId.ToString()}: {observation.Message}";
+                    return false;
+                }
+                initialOnHand = observation.Quantity;
+            }
+
+            initialOnHandByLine[line.LineId] = initialOnHand;
+            adjustedLines.Add(line with { TargetBasis = basis, InitialOnHandQuantity = initialOnHand });
+        }
+
+        adjustedPlan = plan with { Lines = adjustedLines };
+        failure = string.Empty;
+        return true;
     }
 
     private MarketAcquisitionRouteActionResult UpdateStatus(MarketAcquisitionRouteActionResult result)

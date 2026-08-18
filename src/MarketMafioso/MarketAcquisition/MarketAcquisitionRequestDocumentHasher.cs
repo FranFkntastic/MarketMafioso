@@ -32,6 +32,8 @@ public static class MarketAcquisitionRequestDocumentHasher
                     ItemKind = Normalize(line.ItemKind),
                     QuantityMode = Normalize(line.QuantityMode),
                     line.TargetQuantity,
+                    TargetBasis = MarketAcquisitionTargetBases.Normalize(line.TargetBasis),
+                    line.MaximumOverage,
                     line.MaxQuantity,
                     HqPolicy = Normalize(line.HqPolicy),
                     line.MaxUnitPrice,

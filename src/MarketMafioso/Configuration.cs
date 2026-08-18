@@ -242,6 +242,8 @@ public sealed class PersistedMarketAcquisitionClaim
     public string? ItemName { get; set; }
     public string QuantityMode { get; set; } = string.Empty;
     public uint Quantity { get; set; }
+    public string TargetBasis { get; set; } = string.Empty;
+    public uint MaximumOverage { get; set; }
     public string HqPolicy { get; set; } = string.Empty;
     public uint MaxUnitPrice { get; set; }
     public uint MaxTotalGil { get; set; }
@@ -264,6 +266,8 @@ public sealed class PersistedMarketAcquisitionLine
     public string? ItemKind { get; set; }
     public string QuantityMode { get; set; } = string.Empty;
     public uint TargetQuantity { get; set; }
+    public string TargetBasis { get; set; } = string.Empty;
+    public uint MaximumOverage { get; set; }
     public uint MaxQuantity { get; set; }
     public string HqPolicy { get; set; } = string.Empty;
     public uint MaxUnitPrice { get; set; }
@@ -305,6 +309,8 @@ public sealed class PersistedMarketAcquisitionRequestLineDocument
     public string? ItemKind { get; set; }
     public string QuantityMode { get; set; } = string.Empty;
     public uint TargetQuantity { get; set; }
+    public string TargetBasis { get; set; } = string.Empty;
+    public uint MaximumOverage { get; set; }
     public uint MaxQuantity { get; set; }
     public string HqPolicy { get; set; } = string.Empty;
     public uint MaxUnitPrice { get; set; }

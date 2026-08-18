@@ -205,6 +205,17 @@ public static class MarketAcquisitionLiveCandidatePlanner
         var mode = NormalizeQuantityMode(request.QuantityMode);
         var hasGilCap = request.MaxTotalGil > 0;
         var hasMaxQuantity = mode == "AllBelowThreshold" && request.Quantity > 0;
+        var targetBudget = mode == "TargetQuantity"
+            ? new MarketAcquisitionLinePurchaseBudget
+            {
+                LineId = request.Id,
+                TargetBasis = MarketAcquisitionTargetBases.Normalize(request.TargetBasis),
+                TargetQuantity = request.Quantity,
+                MaximumOverage = request.MaximumOverage,
+                InitialOnHandQuantity = alreadyPurchasedQuantity,
+                ConfirmedPurchasedQuantity = 0,
+            }
+            : null;
         var selectedQuantity = 0u;
         var selectedGil = 0u;
         var rows = new List<MarketAcquisitionLiveCandidateRow>();
@@ -247,6 +258,12 @@ public static class MarketAcquisitionLiveCandidatePlanner
 
             var nextSelectedQuantity = checked(selectedQuantity + listing.Quantity);
             var nextTotalQuantity = checked(alreadyPurchasedQuantity + nextSelectedQuantity);
+            if (targetBudget != null &&
+                !(targetBudget with { ConfirmedPurchasedQuantity = selectedQuantity }).CanAdmit(listing.Quantity))
+            {
+                rows.Add(Skipped(listing, "TargetOverageExceeded", "Buying this whole listing would exceed the configured maximum target overage.", selectedQuantity, selectedGil));
+                continue;
+            }
             if (hasMaxQuantity && nextTotalQuantity > request.Quantity)
             {
                 rows.Add(Skipped(listing, "MaxQuantityExceeded", "Buying this whole listing would exceed the configured max quantity.", selectedQuantity, selectedGil));
@@ -450,6 +467,8 @@ public static class MarketAcquisitionLiveCandidatePlanner
         {
             if (readResult?.HasIncompleteCoverage == true)
                 return MarketAcquisitionLiveCandidateStatuses.IncompleteListingCoverage;
+            if (rows.Any(row => row.Reason.Equals("TargetOverageExceeded", StringComparison.Ordinal)))
+                return MarketAcquisitionLiveCandidateStatuses.OverageLimit;
 
             return MarketAcquisitionLiveCandidateStatuses.NoSafeListings;
         }
@@ -524,6 +543,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
             MarketAcquisitionLiveCandidateStatuses.Ready => $"Would buy {selectedQuantity:N0} confirmed live item(s) below threshold.",
             MarketAcquisitionLiveCandidateStatuses.UnderProcured => $"Only {alreadyPurchasedQuantity + selectedQuantity:N0}/{requestedQuantity:N0} requested item(s) are safely available so far.",
             MarketAcquisitionLiveCandidateStatuses.IncompleteListingCoverage => $"No visible live listings satisfy the request constraints; the game reported {readResult?.ReportedListingCount ?? 0:N0} listing(s), but only {readResult?.Listings.Count ?? 0:N0} are currently readable from the visible listing cache.",
+            MarketAcquisitionLiveCandidateStatuses.OverageLimit => "No whole visible listing fits inside the configured maximum target overage.",
             _ => "No visible live listings satisfy the request constraints.",
         };
 }

@@ -149,6 +149,7 @@ public sealed record MarketPurchaseIntentContext
     public required string RouteRunId { get; init; }
     public required string AttemptId { get; init; }
     public required string LineId { get; init; }
+    public string? ExpectedItemName { get; init; }
     public required TimeSpan EvidenceTimeout { get; init; }
 }
 

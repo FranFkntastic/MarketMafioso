@@ -341,7 +341,8 @@ public class MainWindow : Window, IDisposable
             config.PluginInstanceId,
             PluginBuildInfo.DisplayVersion,
             () => config.MarketAcquisitionExhaustiveResearchMode,
-            marketIntelligencePassiveReporter);
+            marketIntelligencePassiveReporter,
+            new DalamudMarketAcquisitionInventoryObserver());
 
         SizeConstraints = new WindowSizeConstraints
         {

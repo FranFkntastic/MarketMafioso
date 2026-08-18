@@ -25,6 +25,8 @@ public sealed class LocalFirstAcquisitionBoundaryTests
         var line = Assert.Single(request.Lines);
         Assert.Equal("local:local-request:line:1", line.LineId);
         Assert.Equal(3u, line.TargetQuantity);
+        Assert.Equal(MarketAcquisitionTargetBases.OnHandTotal, line.TargetBasis);
+        Assert.Equal(7u, line.MaximumOverage);
         Assert.Equal(100u, line.MaxUnitPrice);
     }
 
@@ -176,6 +178,8 @@ public sealed class LocalFirstAcquisitionBoundaryTests
                     ItemName = "Rose Gold Ingot",
                     QuantityMode = "TargetQuantity",
                     TargetQuantity = 3,
+                    TargetBasis = MarketAcquisitionTargetBases.OnHandTotal,
+                    MaximumOverage = 7,
                     HqPolicy = "Either",
                     MaxUnitPrice = 100,
                     GilCap = 300,

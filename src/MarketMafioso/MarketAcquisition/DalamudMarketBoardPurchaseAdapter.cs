@@ -184,7 +184,8 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
 
     public unsafe MarketBoardPurchaseResult TryConfirmPendingPurchase(
         MarketBoardPurchaseCandidate candidate,
-        Func<DateTimeOffset, string?>? authorizeBeforeConfirmation = null)
+        Func<DateTimeOffset, string?>? authorizeBeforeConfirmation = null,
+        string? expectedItemName = null)
     {
         ArgumentNullException.ThrowIfNull(candidate);
 
@@ -209,6 +210,15 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
                 "UnexpectedConfirmation",
                 $"A SelectYesno prompt appeared, but it did not look like a market-board purchase prompt: {text}",
                 candidate) with
+            {
+                ConfirmationPromptText = text,
+                ConfirmationAddonName = SelectYesNoAddon,
+            };
+        }
+        var promptValidation = MarketBoardPurchasePromptPolicy.Validate(text, candidate.Quantity, expectedItemName);
+        if (!promptValidation.IsValid)
+        {
+            return Fail(promptValidation.Status, promptValidation.Message, candidate) with
             {
                 ConfirmationPromptText = text,
                 ConfirmationAddonName = SelectYesNoAddon,

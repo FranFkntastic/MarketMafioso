@@ -48,6 +48,8 @@ internal static class MarketAcquisitionLinePersistence
             ItemKind = line.ItemKind,
             QuantityMode = line.QuantityMode,
             TargetQuantity = line.TargetQuantity,
+            TargetBasis = NormalizeTargetBasis(line),
+            MaximumOverage = line.MaximumOverage,
             MaxQuantity = line.MaxQuantity,
             HqPolicy = line.HqPolicy,
             MaxUnitPrice = line.MaxUnitPrice,
@@ -68,6 +70,8 @@ internal static class MarketAcquisitionLinePersistence
                 item_kind,
                 quantity_mode,
                 target_quantity,
+                target_basis,
+                maximum_overage,
                 max_quantity,
                 hq_policy,
                 max_unit_price,
@@ -88,6 +92,8 @@ internal static class MarketAcquisitionLinePersistence
                 $itemKind,
                 $quantityMode,
                 $targetQuantity,
+                $targetBasis,
+                $maximumOverage,
                 $maxQuantity,
                 $hqPolicy,
                 $maxUnitPrice,
@@ -108,6 +114,8 @@ internal static class MarketAcquisitionLinePersistence
         command.Parameters.AddWithValue("$itemKind", (object?)view.ItemKind ?? DBNull.Value);
         command.Parameters.AddWithValue("$quantityMode", view.QuantityMode);
         command.Parameters.AddWithValue("$targetQuantity", view.TargetQuantity);
+        command.Parameters.AddWithValue("$targetBasis", view.TargetBasis);
+        command.Parameters.AddWithValue("$maximumOverage", view.MaximumOverage);
         command.Parameters.AddWithValue("$maxQuantity", view.MaxQuantity);
         command.Parameters.AddWithValue("$hqPolicy", view.HqPolicy);
         command.Parameters.AddWithValue("$maxUnitPrice", view.MaxUnitPrice);
@@ -126,6 +134,7 @@ internal static class MarketAcquisitionLinePersistence
         existing.Status == MarketAcquisitionStatuses.PendingPickup &&
         existing.ItemId == incoming.ItemId &&
         string.Equals(existing.QuantityMode, incoming.QuantityMode, StringComparison.Ordinal) &&
+        string.Equals(existing.TargetBasis, NormalizeTargetBasis(incoming), StringComparison.Ordinal) &&
         string.Equals(existing.HqPolicy, incoming.HqPolicy, StringComparison.Ordinal) &&
         existing.MaxUnitPrice == incoming.MaxUnitPrice &&
         existing.GilCap == incoming.GilCap;
@@ -136,6 +145,7 @@ internal static class MarketAcquisitionLinePersistence
         existing with
         {
             TargetQuantity = checked(existing.TargetQuantity + incoming.TargetQuantity),
+            MaximumOverage = checked(existing.MaximumOverage + incoming.MaximumOverage),
             MaxQuantity = CoalesceMaxQuantity(existing.MaxQuantity, incoming.MaxQuantity),
             ItemName = string.IsNullOrWhiteSpace(existing.ItemName) ? incoming.ItemName : existing.ItemName,
             ItemKind = string.IsNullOrWhiteSpace(existing.ItemKind) ? incoming.ItemKind : existing.ItemKind,
@@ -148,6 +158,13 @@ internal static class MarketAcquisitionLinePersistence
 
         return checked(existing + incoming);
     }
+
+    private static string NormalizeTargetBasis(MarketAcquisitionBatchLineCreateRequest line) =>
+        !line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : line.TargetBasis.Equals("RequiredPurchaseQuantity", StringComparison.Ordinal)
+                ? "RequiredPurchaseQuantity"
+                : "OnHandTotal";
 
     public static async Task UpdateLineIntentAsync(
         SqliteConnection connection,
@@ -164,6 +181,8 @@ internal static class MarketAcquisitionLinePersistence
             SET item_name = $itemName,
                 item_kind = $itemKind,
                 target_quantity = $targetQuantity,
+                target_basis = $targetBasis,
+                maximum_overage = $maximumOverage,
                 max_quantity = $maxQuantity,
                 updated_at_utc = $updatedAtUtc
             WHERE line_id = $lineId;
@@ -171,6 +190,8 @@ internal static class MarketAcquisitionLinePersistence
         command.Parameters.AddWithValue("$itemName", (object?)line.ItemName ?? DBNull.Value);
         command.Parameters.AddWithValue("$itemKind", (object?)line.ItemKind ?? DBNull.Value);
         command.Parameters.AddWithValue("$targetQuantity", line.TargetQuantity);
+        command.Parameters.AddWithValue("$targetBasis", line.TargetBasis);
+        command.Parameters.AddWithValue("$maximumOverage", line.MaximumOverage);
         command.Parameters.AddWithValue("$maxQuantity", line.MaxQuantity);
         command.Parameters.AddWithValue("$updatedAtUtc", now.ToString("O"));
         command.Parameters.AddWithValue("$lineId", line.LineId);
@@ -209,6 +230,8 @@ internal static class MarketAcquisitionLinePersistence
                 item_kind,
                 quantity_mode,
                 target_quantity,
+                target_basis,
+                maximum_overage,
                 max_quantity,
                 hq_policy,
                 max_unit_price,
@@ -249,6 +272,8 @@ internal static class MarketAcquisitionLinePersistence
                 item_kind,
                 quantity_mode,
                 target_quantity,
+                target_basis,
+                maximum_overage,
                 max_quantity,
                 hq_policy,
                 max_unit_price,

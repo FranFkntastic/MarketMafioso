@@ -161,6 +161,58 @@ public sealed class MarketAcquisitionRouteRecoveryTests
     }
 
     [Fact]
+    public void ExhaustedRoute_CountsInitialInventoryTowardTarget()
+    {
+        using var runner = new MarketAcquisitionRouteRunner(Path.GetTempPath());
+        var plan = CreatePlan("Siren") with
+        {
+            Lines =
+            [
+                CreatePlan("Siren").Lines[0] with
+                {
+                    QuantityMode = "TargetQuantity",
+                    RequestedQuantity = 10,
+                    InitialOnHandQuantity = 7,
+                },
+            ],
+        };
+
+        Assert.True(runner.Start(plan).Success);
+        Assert.True(runner.RecordCurrentWorld("Siren").Success);
+        Assert.True(runner.RecordProbe("Siren", new MarketAcquisitionLiveCandidatePlan
+        {
+            Status = "Ready",
+            Message = "Three safe items found.",
+            WouldBuyQuantity = 3,
+            WouldSpendGil = 150,
+        }).Success);
+        Assert.True(runner.RecordWorldPurchaseBatchComplete("Siren", 3, 150).Success);
+
+        Assert.Equal(MarketAcquisitionRouteCompletionKinds.TargetSatisfied, runner.CompletionOutcome?.Kind);
+        Assert.Equal(10u, runner.CompletionOutcome?.TargetPurchasedQuantity);
+    }
+
+    [Fact]
+    public void ExhaustedRoute_ReportsOverageLimitedCompletionKind()
+    {
+        using var runner = new MarketAcquisitionRouteRunner(Path.GetTempPath());
+        var plan = CreatePlan("Siren") with
+        {
+            Lines = [CreatePlan("Siren").Lines[0] with { QuantityMode = "TargetQuantity", RequestedQuantity = 10 }],
+        };
+
+        Assert.True(runner.Start(plan).Success);
+        Assert.True(runner.RecordCurrentWorld("Siren").Success);
+        Assert.True(runner.RecordProbe("Siren", new MarketAcquisitionLiveCandidatePlan
+        {
+            Status = MarketAcquisitionLiveCandidateStatuses.OverageLimit,
+            Message = "No whole listing fits.",
+        }).Success);
+
+        Assert.Equal(MarketAcquisitionRouteCompletionKinds.IncompleteOverageLimit, runner.CompletionOutcome?.Kind);
+    }
+
+    [Fact]
     public void PendingStopOnCurrentWorld_StillDelegatesCompleteTripToLifestream()
     {
         using var runner = new MarketAcquisitionRouteRunner(Path.GetTempPath());

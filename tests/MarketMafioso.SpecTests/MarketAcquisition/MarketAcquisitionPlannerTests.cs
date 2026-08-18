@@ -5,7 +5,7 @@ public sealed class MarketAcquisitionPlannerTests
     [Fact]
     public void BuildPlan_RecommendedModeKeepsOnlyListingsUnderThreshold()
     {
-        var request = CreateRequest(quantity: 7, maxUnitPrice: 100, maxTotalGil: 700);
+        var request = CreateRequest(quantity: 7, maxUnitPrice: 100, maxTotalGil: 700, maximumOverage: 1);
         var listings = new[]
         {
             CreateListing("Gilgamesh", quantity: 4, unitPrice: 80, listingId: "g-1"),
@@ -98,7 +98,7 @@ public sealed class MarketAcquisitionPlannerTests
     [Fact]
     public void BuildPlan_TreatsZeroGilCapAsNoTotalCap()
     {
-        var request = CreateRequest(quantity: 10, maxUnitPrice: 100, maxTotalGil: 0);
+        var request = CreateRequest(quantity: 10, maxUnitPrice: 100, maxTotalGil: 0, maximumOverage: 2);
         var listings = new[]
         {
             CreateListing("Gilgamesh", quantity: 4, unitPrice: 90, listingId: "first"),
@@ -517,7 +517,8 @@ public sealed class MarketAcquisitionPlannerTests
         string hqPolicy = "Either",
         string quantityMode = "TargetQuantity",
         string region = "North-America",
-        IReadOnlyList<string>? selectedWorlds = null) =>
+        IReadOnlyList<string>? selectedWorlds = null,
+        uint maximumOverage = 0) =>
         new()
         {
             Id = "request-1",
@@ -529,6 +530,7 @@ public sealed class MarketAcquisitionPlannerTests
             ItemName = "Fire Shard",
             QuantityMode = quantityMode,
             Quantity = quantity,
+            MaximumOverage = maximumOverage,
             HqPolicy = hqPolicy,
             MaxUnitPrice = maxUnitPrice,
             MaxTotalGil = maxTotalGil,

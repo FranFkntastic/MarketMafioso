@@ -7,6 +7,7 @@ public static class MarketAcquisitionLiveCandidateStatuses
     public const string Ready = "Ready";
     public const string UnderProcured = "UnderProcured";
     public const string NoSafeListings = "NoSafeListings";
+    public const string OverageLimit = "OverageLimit";
     public const string IncompleteListingCoverage = "IncompleteListingCoverage";
     public const string LegalStockObserved = "LegalStockObserved";
     public const string Purchased = "Purchased";
