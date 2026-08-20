@@ -15,6 +15,7 @@ using ECommons;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Franthropy.Dalamud.Observations;
 using Franthropy.Dalamud.Runtime;
+using Franthropy.Dalamud.Travel;
 using Franthropy.Observations.V1;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.Automation.MarketBoard;
@@ -24,6 +25,7 @@ using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.MarketDiagnostics;
 using MarketMafioso.Quartermaster;
+using MarketMafioso.ProfileLogin;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.SquireIntegration;
 using MarketMafioso.TradeQueue;
@@ -96,6 +98,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeProofWindow agentBridgeProofWindow;
     private readonly AgentBridgeHost agentBridge;
     private readonly AgentBridgeViewportCaptureService agentBridgeViewportCapture;
+    private readonly ProfileLoginCoordinator profileLoginCoordinator;
 
     private CancellationTokenSource? timerCancellation;
 
@@ -106,6 +109,21 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        profileLoginCoordinator = new ProfileLoginCoordinator(
+            PluginInterface.GetPluginConfigDirectory(),
+            new DalamudCharacterLoginDriver(new DalamudLifestreamLogin(PluginInterface)),
+            () =>
+            {
+                var player = ObjectTable.LocalPlayer;
+                return (ClientState.IsLoggedIn && player is not null,
+                    player?.Name.TextValue ?? string.Empty,
+                    PlayerState.HomeWorld.IsValid ? PlayerState.HomeWorld.Value.Name.ToString() : string.Empty);
+            },
+            (message, exception) =>
+            {
+                if (exception is null) Log.Warning("[MarketMafioso] {Message}", message);
+                else Log.Error(exception, "[MarketMafioso] {Message}", message);
+            });
         Legacy.LegacyRetainerMigrationSource.Preserve(
             Configuration,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));
@@ -717,6 +735,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         try
         {
+            profileLoginCoordinator.Tick();
             retainerSaleChatObserver.Tick();
             retainerHistoryObserver.Tick();
             var nowUtc = DateTimeOffset.UtcNow;
