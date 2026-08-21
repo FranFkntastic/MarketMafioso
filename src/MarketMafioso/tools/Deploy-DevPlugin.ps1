@@ -143,6 +143,12 @@ try {
             throw "Dev-plugin sync failed with exit code $LASTEXITCODE."
         }
     }
+    else {
+        & $syncScript -SourceDir $sourceDir -DestDir $destDir -PluginName "MarketMafioso" -CapabilityOnly
+        if ($LASTEXITCODE -ne 0) {
+            throw "Dev-plugin capability sync failed with exit code $LASTEXITCODE."
+        }
+    }
 
     if (-not (Test-Path -LiteralPath $destDll)) {
         throw "Expected Dalamud target DLL was not found after deploy: $destDll"

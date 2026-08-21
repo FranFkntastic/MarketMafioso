@@ -8,6 +8,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PluginName,
 
+    [switch]$CapabilityOnly,
+
     [int]$RetryCount = 20,
     [int]$RetryDelayMs = 200
 )
@@ -134,31 +136,33 @@ $optionalFiles = @(
     "$PluginName.xml"
 )
 
-foreach ($file in $requiredFiles) {
-    $sourcePath = Join-Path -Path $SourceDir -ChildPath $file
-    if (-not (Test-Path -LiteralPath $sourcePath)) {
-        throw "Required build output not found: $sourcePath"
-    }
+if (-not $CapabilityOnly) {
+    foreach ($file in $requiredFiles) {
+        $sourcePath = Join-Path -Path $SourceDir -ChildPath $file
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            throw "Required build output not found: $sourcePath"
+        }
 
-    Copy-WithRetry -Source $sourcePath -Destination $DestDir -MaxAttempts $RetryCount -DelayMs $RetryDelayMs
-}
-
-foreach ($file in $optionalFiles) {
-    $sourcePath = Join-Path -Path $SourceDir -ChildPath $file
-    if (Test-Path -LiteralPath $sourcePath) {
         Copy-WithRetry -Source $sourcePath -Destination $DestDir -MaxAttempts $RetryCount -DelayMs $RetryDelayMs
     }
-}
 
-$dependencyAssemblies = Get-ChildItem -LiteralPath $SourceDir -Filter "*.dll" -File |
-    Where-Object { -not [string]::Equals($_.Name, "$PluginName.dll", [System.StringComparison]::OrdinalIgnoreCase) }
+    foreach ($file in $optionalFiles) {
+        $sourcePath = Join-Path -Path $SourceDir -ChildPath $file
+        if (Test-Path -LiteralPath $sourcePath) {
+            Copy-WithRetry -Source $sourcePath -Destination $DestDir -MaxAttempts $RetryCount -DelayMs $RetryDelayMs
+        }
+    }
 
-foreach ($dependencyAssembly in $dependencyAssemblies) {
-    Copy-WithRetry -Source $dependencyAssembly.FullName -Destination $DestDir -MaxAttempts $RetryCount -DelayMs $RetryDelayMs
-}
+    $dependencyAssemblies = Get-ChildItem -LiteralPath $SourceDir -Filter "*.dll" -File |
+        Where-Object { -not [string]::Equals($_.Name, "$PluginName.dll", [System.StringComparison]::OrdinalIgnoreCase) }
 
-if ($dependencyAssemblies.Count -gt 0) {
-    Write-Host "Synced dependency assemblies: $($dependencyAssemblies.Name -join ', ')"
+    foreach ($dependencyAssembly in $dependencyAssemblies) {
+        Copy-WithRetry -Source $dependencyAssembly.FullName -Destination $DestDir -MaxAttempts $RetryCount -DelayMs $RetryDelayMs
+    }
+
+    if ($dependencyAssemblies.Count -gt 0) {
+        Write-Host "Synced dependency assemblies: $($dependencyAssemblies.Name -join ', ')"
+    }
 }
 
 $assemblyPath = Join-Path -Path $DestDir -ChildPath "$PluginName.dll"
