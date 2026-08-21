@@ -1,6 +1,8 @@
 param(
     [switch]$SkipBuild,
 
+    [switch]$BuildOnly,
+
     [ValidateSet("Debug", "Release")]
     [string]$Configuration,
 
@@ -76,27 +78,8 @@ if ($effectiveConfiguration -ne "Debug" -and $effectiveConfiguration -ne "Releas
     throw "Unsupported dev-plugin configuration '$effectiveConfiguration'. Expected Debug or Release."
 }
 
-$configuredTargetDll = $TargetDll
-if ([string]::IsNullOrWhiteSpace($configuredTargetDll) -and $null -ne $localConfig -and -not [string]::IsNullOrWhiteSpace($localConfig.TargetDll)) {
-    $configuredTargetDll = $localConfig.TargetDll
-}
-
-if ([string]::IsNullOrWhiteSpace($configuredTargetDll) -and $null -ne $localConfig -and -not [string]::IsNullOrWhiteSpace($localConfig.TargetDir)) {
-    $configuredTargetDll = Join-Path -Path $localConfig.TargetDir -ChildPath "MarketMafioso.dll"
-}
-
-if ([string]::IsNullOrWhiteSpace($configuredTargetDll)) {
-    $configuredTargetDll = Resolve-RegisteredDeployedTarget
-}
-
 $sourceDir = Join-Path -Path $projectDir -ChildPath "bin\$effectiveConfiguration"
 $sourceDll = Join-Path -Path $sourceDir -ChildPath "MarketMafioso.dll"
-$destDll = Resolve-ConfigPath -Path $configuredTargetDll -BaseDir $projectDir
-$destDir = Split-Path -Parent $destDll
-
-if ((Split-Path -Leaf $destDll) -ne "MarketMafioso.dll") {
-    throw "Dalamud target DLL must be named MarketMafioso.dll: $destDll"
-}
 
 Push-Location $repoRoot
 try {
@@ -115,6 +98,7 @@ try {
             $projectPath,
             '-c', $effectiveConfiguration,
             '-p:UseSharedCompilation=false',
+            '-p:SkipDevPluginSync=true',
             "-p:FranthropyRoot=$franthropyRoot"
         )
         & dotnet @buildArguments
@@ -127,6 +111,30 @@ try {
         throw "Expected $effectiveConfiguration build output was not found: $sourceDll"
     }
 
+    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceDll).Hash
+    if ($BuildOnly) {
+        Write-Host "Build output DLL: $sourceDll"
+        Write-Host "SHA256: $sourceHash"
+        return
+    }
+
+    $configuredTargetDll = $TargetDll
+    if ([string]::IsNullOrWhiteSpace($configuredTargetDll) -and $null -ne $localConfig -and -not [string]::IsNullOrWhiteSpace($localConfig.TargetDll)) {
+        $configuredTargetDll = $localConfig.TargetDll
+    }
+    if ([string]::IsNullOrWhiteSpace($configuredTargetDll) -and $null -ne $localConfig -and -not [string]::IsNullOrWhiteSpace($localConfig.TargetDir)) {
+        $configuredTargetDll = Join-Path -Path $localConfig.TargetDir -ChildPath "MarketMafioso.dll"
+    }
+    if ([string]::IsNullOrWhiteSpace($configuredTargetDll)) {
+        $configuredTargetDll = Resolve-RegisteredDeployedTarget
+    }
+
+    $destDll = Resolve-ConfigPath -Path $configuredTargetDll -BaseDir $projectDir
+    $destDir = Split-Path -Parent $destDll
+    if ((Split-Path -Leaf $destDll) -ne "MarketMafioso.dll") {
+        throw "Dalamud target DLL must be named MarketMafioso.dll: $destDll"
+    }
+
     $sourceFullPath = [System.IO.Path]::GetFullPath($sourceDll)
     $destFullPath = [System.IO.Path]::GetFullPath($destDll)
     if (-not [string]::Equals($sourceFullPath, $destFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -135,12 +143,17 @@ try {
             throw "Dev-plugin sync failed with exit code $LASTEXITCODE."
         }
     }
+    else {
+        & $syncScript -SourceDir $sourceDir -DestDir $destDir -PluginName "MarketMafioso" -CapabilityOnly
+        if ($LASTEXITCODE -ne 0) {
+            throw "Dev-plugin capability sync failed with exit code $LASTEXITCODE."
+        }
+    }
 
     if (-not (Test-Path -LiteralPath $destDll)) {
         throw "Expected Dalamud target DLL was not found after deploy: $destDll"
     }
 
-    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceDll).Hash
     $destHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $destDll).Hash
     if ($sourceHash -ne $destHash) {
         throw "Dalamud target DLL hash does not match $effectiveConfiguration output. Source=$sourceHash Destination=$destHash"
