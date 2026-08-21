@@ -31,6 +31,39 @@ function Sync-ManifestAssemblyVersion {
     Write-Host "Visible manifest version: $visibleVersion"
 }
 
+function Write-ProfileManagerCapabilityManifest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AssemblyPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [string]$InternalName
+    )
+
+    if (-not [string]::Equals($InternalName, 'MarketMafioso', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    $manifestPath = Join-Path $DestinationDirectory "$InternalName.profile-manager-capabilities.json"
+    $temporaryPath = "$manifestPath.$([Guid]::NewGuid().ToString('N')).tmp"
+    $manifest = [ordered]@{
+        SchemaVersion = 1
+        PluginInternalName = $InternalName
+        PluginSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $AssemblyPath).Hash
+        DirectCharacterLoginProtocolVersions = @(1)
+    }
+    try {
+        $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
+        Move-Item -LiteralPath $temporaryPath -Destination $manifestPath -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force }
+    }
+}
+
 function Get-VisibleManifestVersion {
     param(
         [Parameter(Mandatory = $true)]
@@ -131,5 +164,6 @@ if ($dependencyAssemblies.Count -gt 0) {
 $assemblyPath = Join-Path -Path $DestDir -ChildPath "$PluginName.dll"
 $manifestPath = Join-Path -Path $DestDir -ChildPath "$PluginName.json"
 Sync-ManifestAssemblyVersion -AssemblyPath $assemblyPath -ManifestPath $manifestPath
+Write-ProfileManagerCapabilityManifest -AssemblyPath $assemblyPath -DestinationDirectory $DestDir -InternalName $PluginName
 
 Write-Host "Synced plugin artifacts to $DestDir"
