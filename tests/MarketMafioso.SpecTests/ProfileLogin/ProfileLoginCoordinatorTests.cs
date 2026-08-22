@@ -104,6 +104,49 @@ public sealed class ProfileLoginCoordinatorTests
     }
 
     [Fact]
+    public void RunningDifferentCharacter_SubmitsOneBoundSwitchAndWaitsForExactIdentity()
+    {
+        using var fixture = new Fixture(identity: (true, "Someone Else", "Siren"));
+        fixture.WriteRequest(schemaVersion: 2, expectedProcessId: 42, allowCharacterSwitch: true);
+
+        fixture.Tick();
+        Assert.Equal("Submitted", fixture.ReadReceipt().Phase);
+        Assert.True(fixture.Driver.LastChangeCharacter);
+
+        fixture.Tick(TimeSpan.FromSeconds(1));
+        Assert.Equal("Submitted", fixture.ReadReceipt().Phase);
+        Assert.Equal(1, fixture.Driver.Calls);
+
+        fixture.Identity = (true, "Eriana Ning", "Siren");
+        fixture.Tick(TimeSpan.FromSeconds(1));
+        Assert.Equal("LoggedIn", fixture.ReadReceipt().Phase);
+        Assert.Equal(1, fixture.Driver.Calls);
+    }
+
+    [Fact]
+    public void RunningSameCharacter_CompletesWithoutDriver()
+    {
+        using var fixture = new Fixture(identity: (true, "Eriana Ning", "Siren"));
+        fixture.WriteRequest(schemaVersion: 2, expectedProcessId: 42, allowCharacterSwitch: true);
+        fixture.Tick();
+        Assert.Equal("LoggedIn", fixture.ReadReceipt().Phase);
+        Assert.Equal(0, fixture.Driver.Calls);
+    }
+
+    [Theory]
+    [InlineData(1, null, true, "ProtocolUpgradeRequired")]
+    [InlineData(2, null, true, "ProcessBindingRequired")]
+    [InlineData(2, 84, true, "ExpectedProcessMismatch")]
+    public void CharacterSwitch_RequiresMatchingExactProcess(int schemaVersion, int? expectedProcessId, bool allowSwitch, string code)
+    {
+        using var fixture = new Fixture(identity: (true, "Someone Else", "Siren"));
+        fixture.WriteRequest(schemaVersion: schemaVersion, expectedProcessId: expectedProcessId, allowCharacterSwitch: allowSwitch);
+        fixture.Tick();
+        Assert.Equal(code, fixture.ReadReceipt().Code);
+        Assert.Equal(0, fixture.Driver.Calls);
+    }
+
+    [Fact]
     public void ExpiredRequest_DoesNotDispatch()
     {
         using var fixture = new Fixture();
@@ -129,7 +172,7 @@ public sealed class ProfileLoginCoordinatorTests
         public static readonly DateTimeOffset Now = new(2026, 8, 20, 12, 0, 0, TimeSpan.Zero);
         private readonly string root = Path.Combine(Path.GetTempPath(), "mmf-profile-login-" + Guid.NewGuid().ToString("N"));
         private readonly DateTimeOffset processStartedAt;
-        private readonly (bool LoggedIn, string Name, string HomeWorld) identity;
+        public (bool LoggedIn, string Name, string HomeWorld) Identity { get; set; }
         private DateTimeOffset clock = Now;
         public FakeDriver Driver { get; } = new();
         public int CurrentProcessId { get; set; } = 42;
@@ -139,7 +182,7 @@ public sealed class ProfileLoginCoordinatorTests
         public Fixture(DateTimeOffset? processStartedAt = null, (bool, string, string)? identity = null)
         {
             this.processStartedAt = processStartedAt ?? Now.AddSeconds(-5);
-            this.identity = identity ?? (false, "", "");
+            Identity = identity ?? (false, "", "");
             ProfileLoginCoordinator.Write(Path.Combine(ProtocolRoot, "provider-binding-v1.json"), new ProfileLoginBinding
             {
                 ProfileId = "profile-1",
@@ -147,9 +190,11 @@ public sealed class ProfileLoginCoordinatorTests
         }
 
         public void WriteRequest(string profileId = "profile-1", DateTimeOffset? minimumProcessStart = null,
-            DateTimeOffset? submissionExpiry = null, DateTimeOffset? completionExpiry = null) =>
+            DateTimeOffset? submissionExpiry = null, DateTimeOffset? completionExpiry = null,
+            int schemaVersion = 1, int? expectedProcessId = null, bool allowCharacterSwitch = false) =>
             ProfileLoginCoordinator.Write(Path.Combine(OperationRoot, "request.json"), new ProfileLoginRequest
             {
+                SchemaVersion = schemaVersion,
                 OperationId = "operation-1",
                 ProfileId = profileId,
                 CharacterId = "character-1",
@@ -159,6 +204,8 @@ public sealed class ProfileLoginCoordinatorTests
                 InitialSubmissionExpiresAtUtc = submissionExpiry ?? Now.AddMinutes(5),
                 CompletionExpiresAtUtc = completionExpiry ?? Now.AddMinutes(20),
                 MinimumGameProcessStartUtc = minimumProcessStart ?? Now.AddSeconds(-10),
+                ExpectedGameProcessId = expectedProcessId,
+                AllowCharacterSwitch = allowCharacterSwitch,
             });
 
         public void WriteReceipt(string phase) => ProfileLoginCoordinator.Write(Path.Combine(OperationRoot, "receipt.json"), new ProfileLoginReceipt
@@ -174,7 +221,7 @@ public sealed class ProfileLoginCoordinatorTests
         public void Tick(TimeSpan? advance = null)
         {
             clock += advance ?? TimeSpan.Zero;
-            new ProfileLoginCoordinator(root, Driver, () => identity, (_, _) => { }, () => clock, () => CurrentProcessId, () => processStartedAt).TickCore(clock);
+            new ProfileLoginCoordinator(root, Driver, () => Identity, (_, _) => { }, () => clock, () => CurrentProcessId, () => processStartedAt).TickCore(clock);
         }
 
         public ProfileLoginReceipt ReadReceipt() => JsonSerializer.Deserialize<ProfileLoginReceipt>(File.ReadAllText(Path.Combine(OperationRoot, "receipt.json")))!;
@@ -185,10 +232,12 @@ public sealed class ProfileLoginCoordinatorTests
     {
         public Queue<LifestreamLoginSubmissionResult> Results { get; } = new();
         public int Calls { get; private set; }
-        public LifestreamLoginSubmissionResult TryBegin(string characterName, string homeWorld)
+        public bool LastChangeCharacter { get; private set; }
+        public LifestreamLoginSubmissionResult TryBegin(string characterName, string homeWorld, bool changeCharacter)
         {
             Calls++;
-            return Results.Count > 0 ? Results.Dequeue() : new(true, "Submitted", "accepted", "TitleScreen");
+            LastChangeCharacter = changeCharacter;
+            return Results.Count > 0 ? Results.Dequeue() : new(true, "Submitted", "accepted", changeCharacter ? "CharacterSwitch" : "TitleScreen");
         }
     }
 }
