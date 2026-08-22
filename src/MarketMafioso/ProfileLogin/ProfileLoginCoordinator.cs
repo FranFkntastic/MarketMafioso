@@ -22,6 +22,8 @@ public sealed class ProfileLoginRequest
     public DateTimeOffset InitialSubmissionExpiresAtUtc { get; set; }
     public DateTimeOffset CompletionExpiresAtUtc { get; set; }
     public DateTimeOffset MinimumGameProcessStartUtc { get; set; }
+    public int? ExpectedGameProcessId { get; set; }
+    public bool AllowCharacterSwitch { get; set; }
 }
 
 public sealed class ProfileLoginBinding
@@ -49,14 +51,14 @@ public sealed class ProfileLoginReceipt
 
 public interface ICharacterLoginDriver
 {
-    LifestreamLoginSubmissionResult TryBegin(string characterName, string homeWorld);
+    LifestreamLoginSubmissionResult TryBegin(string characterName, string homeWorld, bool changeCharacter);
 }
 
 public sealed class DalamudCharacterLoginDriver(DalamudLifestreamLogin inner) : ICharacterLoginDriver
 {
-    public LifestreamLoginSubmissionResult TryBegin(string characterName, string homeWorld) =>
+    public LifestreamLoginSubmissionResult TryBegin(string characterName, string homeWorld, bool changeCharacter) =>
         LifestreamLoginRequest.TryCreate(characterName, homeWorld, out var request, out var error)
-            ? inner.TryBegin(request!)
+            ? changeCharacter ? inner.TryChangeCharacter(request!) : inner.TryBegin(request!)
             : new(false, "InvalidRequest", error);
 }
 
@@ -121,7 +123,7 @@ public sealed class ProfileLoginCoordinator
         foreach (var item in requests)
         {
             var request = item.Request!;
-            if (request.SchemaVersion != 1 || request.Provider != "MarketMafioso" ||
+            if (request.SchemaVersion is not (1 or 2) || request.Provider != "MarketMafioso" ||
                 request.ProfileId != binding.ProfileId || string.IsNullOrWhiteSpace(request.OperationId)) continue;
             Process(item.Path, request, now);
             return;
@@ -144,12 +146,27 @@ public sealed class ProfileLoginCoordinator
             return;
         }
         if (receipt?.Phase is "LoggedIn" or "Blocked" or "Failed" or "Expired") return;
+        if (request.AllowCharacterSwitch && request.SchemaVersion != 2)
+        {
+            Write(receiptPath, Next(receipt, request, "Blocked", "ProtocolUpgradeRequired", "Character switching requires direct-login protocol v2.", now, pid));
+            return;
+        }
+        if (request.AllowCharacterSwitch && request.ExpectedGameProcessId is null)
+        {
+            Write(receiptPath, Next(receipt, request, "Blocked", "ProcessBindingRequired", "Character switching requires an exact game-process binding.", now, pid));
+            return;
+        }
+        if (request.ExpectedGameProcessId is int expectedPid && expectedPid != pid)
+        {
+            Write(receiptPath, Next(receipt, request, "Blocked", "ExpectedProcessMismatch", "This request belongs to a different owned game process.", now, pid));
+            return;
+        }
         if (receipt?.ProcessId is int receiptPid && receiptPid != pid)
         {
             Write(receiptPath, Next(receipt, request, "Blocked", "ProcessReplaced", "The game process changed after this operation began; automatic continuation is refused.", now, pid));
             return;
         }
-        if (processStartUtc() < request.MinimumGameProcessStartUtc)
+        if (request.ExpectedGameProcessId is null && processStartUtc() < request.MinimumGameProcessStartUtc)
         {
             Write(receiptPath, Next(receipt, request, "Blocked", "StaleProcess", "The request belongs to a newer game process.", now, pid));
             return;
@@ -160,10 +177,25 @@ public sealed class ProfileLoginCoordinator
         {
             var matches = observed.Name.Equals(request.CharacterName, StringComparison.OrdinalIgnoreCase) &&
                           observed.HomeWorld.Equals(request.HomeWorld, StringComparison.OrdinalIgnoreCase);
-            Write(receiptPath, Next(receipt, request, matches ? "LoggedIn" : "Blocked", matches ? "ExactIdentity" : "IdentityMismatch",
-                matches ? "The requested character is logged in." : "A different character is logged in; no further login work will be submitted.",
-                now, pid, observed.Name, observed.HomeWorld, receipt?.SubmissionMode));
-            return;
+            if (matches)
+            {
+                Write(receiptPath, Next(receipt, request, "LoggedIn", "ExactIdentity", "The requested character is logged in.",
+                    now, pid, observed.Name, observed.HomeWorld, receipt?.SubmissionMode));
+                return;
+            }
+            if (receipt?.Phase == "Submitted" && request.AllowCharacterSwitch && receipt.SubmissionMode == "CharacterSwitch")
+            {
+                if (now > request.CompletionExpiresAtUtc)
+                    Write(receiptPath, Next(receipt, request, "Failed", "CompletionTimeout", "Character switching did not reach the exact character before its completion deadline.", now, pid,
+                        observed.Name, observed.HomeWorld, receipt.SubmissionMode));
+                return;
+            }
+            if (!request.AllowCharacterSwitch)
+            {
+                Write(receiptPath, Next(receipt, request, "Blocked", "IdentityMismatch", "A different character is logged in; this request did not authorize switching.",
+                    now, pid, observed.Name, observed.HomeWorld, receipt?.SubmissionMode));
+                return;
+            }
         }
 
         if (receipt?.Phase == "Submitting")
@@ -185,7 +217,8 @@ public sealed class ProfileLoginCoordinator
 
         receipt = Next(receipt, request, "Submitting", "Dispatching", "Submitting the exact character to the configured login driver.", now, pid);
         Write(receiptPath, receipt);
-        var result = driver.TryBegin(request.CharacterName, request.HomeWorld);
+        var changeCharacter = observed.LoggedIn && request.AllowCharacterSwitch;
+        var result = driver.TryBegin(request.CharacterName, request.HomeWorld, changeCharacter);
         if (result.Success)
         {
             Write(receiptPath, Next(receipt, request, "Submitted", result.Code, result.Message, now, pid, submissionMode: result.SubmissionMode));
@@ -199,6 +232,7 @@ public sealed class ProfileLoginCoordinator
     private static ProfileLoginReceipt Next(ProfileLoginReceipt? previous, ProfileLoginRequest request, string phase, string code,
         string message, DateTimeOffset now, int pid, string? name = null, string? world = null, string? submissionMode = null) => new()
     {
+        SchemaVersion = request.SchemaVersion,
         OperationId = request.OperationId,
         ProfileId = request.ProfileId,
         Sequence = (previous?.Sequence ?? 0) + 1,
