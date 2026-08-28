@@ -525,6 +525,9 @@ public sealed class RetainerListingRefreshCoordinatorTests
         public bool IsAvailable { get; set; } = true;
         public string AvailabilityMessage => IsAvailable ? "Available" : "Unavailable";
         public MarketBoardBrowseSnapshot Snapshot { get; private set; } = MarketBoardBrowseSnapshot.Idle;
+        public bool ServerAppearsUnresponsive { get; set; }
+        public int ConsecutiveNoResponseTimeouts { get; set; }
+        public DateTimeOffset? LastServerResponseUtc { get; set; }
         public List<uint> RequestedItems { get; } = [];
         public string? DispatchFailureCode { get; set; }
         public string? DispatchFailureMessage { get; set; }

@@ -324,6 +324,8 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
             return "Verifying prices...";
         if (!browseRuntime.IsAvailable)
             return browseRuntime.AvailabilityMessage;
+        if (browseRuntime.ServerAppearsUnresponsive)
+            return "The market board server is not responding to queries (recent browses timed out with no data). Purchases will fail price verification until it answers - a full game restart is the known fix.";
         if (listingSession.Revision is { } partial &&
             partial.Listings.Count < partial.Source.ListingCount)
         {

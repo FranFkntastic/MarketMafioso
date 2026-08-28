@@ -71,6 +71,9 @@ public interface IMarketBoardBrowseRuntime
     bool IsAvailable { get; }
     string AvailabilityMessage { get; }
     MarketBoardBrowseSnapshot Snapshot { get; }
+    bool ServerAppearsUnresponsive { get; }
+    int ConsecutiveNoResponseTimeouts { get; }
+    DateTimeOffset? LastServerResponseUtc { get; }
 
     bool TryBegin(
         MarketBoardBrowseOwner owner,
@@ -129,6 +132,8 @@ internal sealed class MarketBoardBrowseOperationGate
     private readonly PersistedMarketBoardSessionCircuitBreakerState sessionState;
     private readonly Action persistSessionState;
     private readonly Action<string>? diagnostic;
+    private int consecutiveNoResponseTimeouts;
+    private DateTimeOffset? lastServerResponseUtc;
     private long operationSequence;
     private MarketBoardBrowseSnapshot snapshot = MarketBoardBrowseSnapshot.Idle;
     private readonly HashSet<byte> continuationTokens = [];
@@ -180,6 +185,42 @@ internal sealed class MarketBoardBrowseOperationGate
         }
     }
 
+    /// <summary>
+    /// True when the last <see cref="ConsecutiveNoResponseThreshold"/> armed browses for a real
+    /// item reached their deadline without the server delivering a RequestData response.
+    /// Detected 2026-08-27: a wedged game session silently dropped every market-board query;
+    /// price verification timed out at 15s with no distinguishing symptom.
+    /// </summary>
+    public bool ServerAppearsUnresponsive
+    {
+        get
+        {
+            lock (sync)
+                return consecutiveNoResponseTimeouts >= ConsecutiveNoResponseThreshold;
+        }
+    }
+
+    public int ConsecutiveNoResponseTimeouts
+    {
+        get
+        {
+            lock (sync)
+                return consecutiveNoResponseTimeouts;
+        }
+    }
+
+    public DateTimeOffset? LastServerResponseUtc
+    {
+        get
+        {
+            lock (sync)
+                return lastServerResponseUtc;
+        }
+    }
+
+    /// <summary>Armed-with-real-item browses that may time out before "unresponsive" is declared.</summary>
+    public const int ConsecutiveNoResponseThreshold = 2;
+
     public bool TryBegin(
         MarketBoardBrowseOwner owner,
         uint itemId,
@@ -223,9 +264,22 @@ internal sealed class MarketBoardBrowseOperationGate
                     ? "Armed for the next exact market-board RequestData call."
                     : $"Armed one market-board browse for item {itemId}.",
             };
-            diagnostic?.Invoke(
-                $"[BrowseGate] TryBegin ARMED operation {snapshot.OperationId} for owner={owner} item={itemId} " +
-                $"(inactivity timeout {inactivityTimeout.TotalSeconds:F1}s).");
+            if (itemId != 0)
+            {
+                // A new real-item browse starting means the previous one is no longer
+                // pending evidence; keep the consecutive-timeout counter as-is so
+                // repeated dead-server timeouts accumulate.
+                diagnostic?.Invoke(
+                    $"[BrowseGate] TryBegin ARMED operation {snapshot.OperationId} for owner={owner} item={itemId} " +
+                    $"(inactivity timeout {inactivityTimeout.TotalSeconds:F1}s; " +
+                    $"consecutive no-response timeouts: {consecutiveNoResponseTimeouts}).");
+            }
+            else
+            {
+                diagnostic?.Invoke(
+                    $"[BrowseGate] TryBegin ARMED operation {snapshot.OperationId} for owner={owner} " +
+                    "(passive arm; item deferred to activation).");
+            }
             result = snapshot;
             return true;
         }
@@ -306,6 +360,17 @@ internal sealed class MarketBoardBrowseOperationGate
                     Fail(
                         "BrowseTimeout",
                         $"Market-board browse {snapshot.OperationId} timed out while in {snapshot.Phase}.");
+                    if (snapshot.ItemId != 0)
+                    {
+                        consecutiveNoResponseTimeouts++;
+                        diagnostic?.Invoke(
+                            "[BrowseGate] Browse " + snapshot.OperationId + " (item " + snapshot.ItemId +
+                            ") timed out with NO server response. Consecutive no-response timeouts: " +
+                            consecutiveNoResponseTimeouts + "/" + ConsecutiveNoResponseThreshold +
+                            (consecutiveNoResponseTimeouts >= ConsecutiveNoResponseThreshold
+                                ? " — MARKET BOARD SERVER APPEARS UNRESPONSIVE; purchases will fail price verification. A full game restart is the known fix."
+                                : "."));
+                    }
                 }
                 return;
             }
@@ -315,6 +380,17 @@ internal sealed class MarketBoardBrowseOperationGate
                 Fail(
                     "BrowseStalled",
                     $"Market-board browse {snapshot.OperationId} made no progress for {MarketBoardBrowseTimeoutPolicy.GetInactivityTimeout(snapshot.Owner!.Value).TotalSeconds:N0}s while in {snapshot.Phase} after {snapshot.PageCount}/{snapshot.ExpectedPageCount} page(s).");
+                if (snapshot.PageCount == 0 && snapshot.Phase is MarketBoardBrowsePhase.Armed or MarketBoardBrowsePhase.AwaitingHeader)
+                {
+                    consecutiveNoResponseTimeouts++;
+                    diagnostic?.Invoke(
+                        "[BrowseGate] Browse " + snapshot.OperationId + " (item " + snapshot.ItemId +
+                        ") stalled before any page with NO server response. Consecutive no-response timeouts: " +
+                        consecutiveNoResponseTimeouts + "/" + ConsecutiveNoResponseThreshold +
+                        (consecutiveNoResponseTimeouts >= ConsecutiveNoResponseThreshold
+                            ? " — MARKET BOARD SERVER APPEARS UNRESPONSIVE; purchases will fail price verification. A full game restart is the known fix."
+                            : "."));
+                }
             }
         }
     }
@@ -387,6 +463,12 @@ internal sealed class MarketBoardBrowseOperationGate
                 RequestObserved = true,
                 RequestAccepted = accepted,
             };
+            if (consecutiveNoResponseTimeouts > 0)
+                diagnostic?.Invoke(
+                    $"[BrowseGate] Server responded to a market-board query again after " +
+                    $"{consecutiveNoResponseTimeouts} consecutive no-response timeout(s); clearing the unresponsive flag.");
+            consecutiveNoResponseTimeouts = 0;
+            lastServerResponseUtc = getUtcNow();
             if (!accepted)
             {
                 Fail("RequestRejected", $"The client rejected RequestData for item {itemId}.");

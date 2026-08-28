@@ -116,6 +116,9 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
     public bool IsAvailable { get; private set; }
     public string AvailabilityMessage { get; private set; } = "Market-board browse observer has not initialized.";
     public MarketBoardBrowseSnapshot Snapshot => gate.Snapshot;
+    public bool ServerAppearsUnresponsive => gate.ServerAppearsUnresponsive;
+    public int ConsecutiveNoResponseTimeouts => gate.ConsecutiveNoResponseTimeouts;
+    public DateTimeOffset? LastServerResponseUtc => gate.LastServerResponseUtc;
 
     public bool TryBegin(
         MarketBoardBrowseOwner owner,
