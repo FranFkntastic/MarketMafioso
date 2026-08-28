@@ -54,7 +54,8 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         gate = new MarketBoardBrowseOperationGate(
             sessionState: sessionState ?? throw new ArgumentNullException(nameof(sessionState)),
-            persistSessionState: persistSessionState ?? throw new ArgumentNullException(nameof(persistSessionState)));
+            persistSessionState: persistSessionState ?? throw new ArgumentNullException(nameof(persistSessionState)),
+            diagnostic: message => log.Information("[MarketMafioso] {0}", message));
         framework.Update += OnFrameworkUpdate;
 
         try

@@ -128,6 +128,7 @@ internal sealed class MarketBoardBrowseOperationGate
     private readonly Func<DateTimeOffset> getUtcNow;
     private readonly PersistedMarketBoardSessionCircuitBreakerState sessionState;
     private readonly Action persistSessionState;
+    private readonly Action<string>? diagnostic;
     private long operationSequence;
     private MarketBoardBrowseSnapshot snapshot = MarketBoardBrowseSnapshot.Idle;
     private readonly HashSet<byte> continuationTokens = [];
@@ -135,9 +136,11 @@ internal sealed class MarketBoardBrowseOperationGate
     public MarketBoardBrowseOperationGate(
         Func<DateTimeOffset>? getUtcNow = null,
         PersistedMarketBoardSessionCircuitBreakerState? sessionState = null,
-        Action? persistSessionState = null)
+        Action? persistSessionState = null,
+        Action<string>? diagnostic = null)
     {
         this.getUtcNow = getUtcNow ?? (() => DateTimeOffset.UtcNow);
+        this.diagnostic = diagnostic;
         this.sessionState = sessionState ?? new PersistedMarketBoardSessionCircuitBreakerState();
         this.persistSessionState = persistSessionState ?? (() => { });
         var repaired = false;
@@ -186,12 +189,20 @@ internal sealed class MarketBoardBrowseOperationGate
         {
             if (sessionState.RelogRequired)
             {
+                diagnostic?.Invoke(
+                    $"[BrowseGate] TryBegin REFUSED for owner={owner} item={itemId}: session expired " +
+                    $"(rateLimits={sessionState.RateLimitCount}, expiredAt={sessionState.ExpiredAtUtc:O}).");
                 result = CreateSessionExpiredSnapshot(owner, itemId);
                 return false;
             }
 
             if (snapshot.IsActive)
             {
+                diagnostic?.Invoke(
+                    $"[BrowseGate] TryBegin REFUSED for owner={owner} item={itemId}: browse " +
+                    $"{snapshot.OperationId} is still {snapshot.Phase} (owned by {snapshot.Owner}, " +
+                    $"started {snapshot.StartedAtUtc:yyyy-MM-dd'T'HH:mm:ss.fff'Z'}, last progress {snapshot.LastProgressAtUtc:yyyy-MM-dd'T'HH:mm:ss.fff'Z'}, " +
+                    $"deadline {snapshot.DeadlineUtc:yyyy-MM-dd'T'HH:mm:ss.fff'Z'}).");
                 result = snapshot;
                 return false;
             }
@@ -212,6 +223,9 @@ internal sealed class MarketBoardBrowseOperationGate
                     ? "Armed for the next exact market-board RequestData call."
                     : $"Armed one market-board browse for item {itemId}.",
             };
+            diagnostic?.Invoke(
+                $"[BrowseGate] TryBegin ARMED operation {snapshot.OperationId} for owner={owner} item={itemId} " +
+                $"(inactivity timeout {inactivityTimeout.TotalSeconds:F1}s).");
             result = snapshot;
             return true;
         }
