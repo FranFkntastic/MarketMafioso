@@ -11,14 +11,14 @@ namespace MarketMafioso.MarketDiagnostics;
 
 internal sealed partial class RemoteSummoningBellProbe
 {
-    private const string RetainerRpcExpectedClientVersion = "2026.08.11.0000.0000";
-    private const long ServerRequestCallbackInterfaceFinalizeRva = 0x00844A50;
-    private const long ServerRequestCallbackManagerAvailableRva = 0x00844B30;
-    private const long ServerRequestCallbackManagerGetRva = 0x00844B50;
-    private const long ServerRequestCallbackManagerRequestRva = 0x00844C70;
-    private const long ServerRequestCallbackManagerRegisterRva = 0x00844FF0;
-    private const long RetainerManagerRequestListRva = 0x0110B0D0;
-    private const long RetainerManagerRequestSingleDataRva = 0x0110B200;
+    private const string RetainerRpcExpectedClientVersion = "2026.09.01.0000.0000";
+    private const long ServerRequestCallbackInterfaceFinalizeRva = 0x844FB0;
+    private const long ServerRequestCallbackManagerAvailableRva = 0x845090;
+    private const long ServerRequestCallbackManagerGetRva = 0x8450B0;
+    private const long ServerRequestCallbackManagerRequestRva = 0x8451D0;
+    private const long ServerRequestCallbackManagerRegisterRva = 0x845550;
+    private const long RetainerManagerRequestListRva = 0x110F850;
+    private const long RetainerManagerRequestSingleDataRva = 0x110F980;
     private static readonly TimeSpan RetainerRpcStageTimeout = TimeSpan.FromSeconds(12);
     private const int MaximumRetainerRpcRosterEntries = 10;
     private const uint MaximumRetainerRpcCallbackToken = 4096;
