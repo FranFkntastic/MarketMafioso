@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
@@ -10,6 +11,7 @@ using ECommons.Automation.UIInput;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.Automation.Runtime;
 using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
@@ -26,11 +28,13 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     private const string SelectYesNoAddon = "SelectYesno";
     private const string CompanyCraftRecipeNoteBookAddon = "CompanyCraftRecipeNoteBook";
     private const string CompanyCraftMaterialAddon = "CompanyCraftMaterial";
+    private const string CompanyCraftSupplyAddon = "CompanyCraftSupply";
     private const string SubmarinePartsMenuAddon = "SubmarinePartsMenu";
     private const string AirshipPartsMenuAddon = "AirshipPartsMenu";
 
     internal static readonly IReadOnlyList<string> MaterialDeliveryAddonNames =
     [
+        CompanyCraftSupplyAddon,
         CompanyCraftMaterialAddon,
         SubmarinePartsMenuAddon,
         AirshipPartsMenuAddon,
@@ -43,6 +47,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     private readonly ICondition condition;
     private readonly ExternalAutomationCoordinator externalAutomationCoordinator;
     private readonly Action<string> onMaterialRequestConfirmed;
+    private readonly WorkshopNativeCallbackCapability callbackCapability;
     private uint? pendingContributionItemId;
     private readonly WorkshopRequestTurnInStateMachine requestTurnIn = new();
 
@@ -52,6 +57,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         IObjectTable objectTable,
         ITargetManager targetManager,
         ICondition condition,
+        ISigScanner sigScanner,
         ExternalAutomationCoordinator externalAutomationCoordinator,
         Action<string> onMaterialRequestConfirmed)
     {
@@ -62,7 +68,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         this.condition = condition;
         this.externalAutomationCoordinator = externalAutomationCoordinator;
         this.onMaterialRequestConfirmed = onMaterialRequestConfirmed;
-
+        callbackCapability = new(sigScanner);
     }
 
     public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
@@ -133,7 +139,9 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
 
     public unsafe void SelectCraftCategory(WorkshopCraftingLogSnapshot craftingLog, WorkshopAssemblyQueueEntry entry)
     {
-        var addon = (AtkUnitBase*)craftingLog.AddonAddress;
+        var addon = RequireCraftingLog(craftingLog);
+        if (entry.CategoryId == 0 || entry.TypeId == 0)
+            throw new InvalidOperationException("Workshop category/type data is missing; no callback was sent.");
         var values = stackalloc AtkValue[]
         {
             new() { Type = AtkValueType.Int, Int = 2 },
@@ -145,12 +153,14 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             new() { Type = AtkValueType.UInt, Int = 0 },
             new() { Type = 0, Int = 0 },
         };
+        WorkshopCallbackProtocol.RequirePayload(WorkshopCallbackOperation.Category, new ReadOnlySpan<AtkValue>(values, 8));
         addon->FireCallback(8, values, true);
     }
 
     public unsafe void SelectCraft(WorkshopCraftingLogSnapshot craftingLog, WorkshopAssemblyQueueEntry entry)
     {
-        var addon = (AtkUnitBase*)craftingLog.AddonAddress;
+        var addon = RequireCraftingLog(craftingLog);
+        WorkshopCallbackProtocol.RequireProjectVisible(ReadVisibleCraftingLogItems(addon), entry.WorkshopItemId);
         var values = stackalloc AtkValue[]
         {
             new() { Type = AtkValueType.Int, Int = 1 },
@@ -162,6 +172,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             new() { Type = 0, Int = 0 },
             new() { Type = 0, Int = 0 },
         };
+        WorkshopCallbackProtocol.RequirePayload(WorkshopCallbackOperation.Project, new ReadOnlySpan<AtkValue>(values, 8));
         addon->FireCallback(8, values, true);
     }
 
@@ -177,12 +188,20 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         int materialIndex,
         WorkshopCraftMaterialState item)
     {
-        pendingContributionItemId = item.ItemId;
-        requestTurnIn.Begin(item.ItemId);
-        externalAutomationCoordinator.SuppressWorkshopRequestAutomation();
-        externalAutomationCoordinator.SuppressTextAdvance();
+        var addon = RequireMaterialDelivery(materialDelivery);
+        var current = ReadCraftState(addon) ?? throw new InvalidOperationException("Workshop material values changed; no contribution was sent.");
+        var agent = AgentCompanyCraftMaterial.Instance();
+        var nativeBytes = (byte*)agent;
+        // The validated handler binds these mode/request/quantity accesses.
+        // SDK fields independently bind the result and twelve supply slots.
+        if (Marshal.OffsetOf<AgentCompanyCraftMaterial>(nameof(AgentCompanyCraftMaterial.ResultItem)).ToInt32() != 0x94 ||
+            Marshal.OffsetOf<AgentCompanyCraftMaterial>("_supplyItems").ToInt32() != 0x9c ||
+            AgentCompanyCraftMaterial.StructSize < 0xe5)
+            throw new InvalidOperationException("Workshop native supply layout changed; no contribution was sent.");
+        var quantities = new ReadOnlySpan<byte>(nativeBytes + 0xcc, agent->SupplyItems.Length).ToArray();
+        WorkshopCallbackProtocol.RequireContribution(materialDelivery.CraftState, current, materialIndex, item,
+            nativeBytes[0x98], nativeBytes[0xe4] != 0, agent->ResultItem, agent->SupplyItems.ToArray(), quantities);
 
-        var addon = (AtkUnitBase*)materialDelivery.AddonAddress;
         var values = stackalloc AtkValue[]
         {
             new() { Type = AtkValueType.Int, Int = 0 },
@@ -190,19 +209,27 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             new() { Type = AtkValueType.UInt, UInt = item.ItemCountPerStep },
             new() { Type = 0, Int = 0 },
         };
-        addon->FireCallback(4, values, true);
+        WorkshopCallbackProtocol.RequirePayload(WorkshopCallbackOperation.Contribution, new ReadOnlySpan<AtkValue>(values, 4));
+        pendingContributionItemId = item.ItemId;
+        requestTurnIn.Begin(item.ItemId);
+        try
+        {
+            externalAutomationCoordinator.SuppressWorkshopRequestAutomation();
+            externalAutomationCoordinator.SuppressTextAdvance();
+            addon->FireCallback(4, values, true);
+        }
+        catch { ClearMaterialRequest(); throw; }
     }
 
     public unsafe void CloseMaterialDelivery(WorkshopMaterialDeliverySnapshot materialDelivery)
     {
-        var addon = (AtkUnitBase*)materialDelivery.AddonAddress;
-        if (!IsAddonReady(addon))
-            return;
+        var addon = RequireMaterialDelivery(materialDelivery);
 
         var values = stackalloc AtkValue[]
         {
             new() { Type = AtkValueType.Int, Int = -1 },
         };
+        WorkshopCallbackProtocol.RequirePayload(WorkshopCallbackOperation.Close, new ReadOnlySpan<AtkValue>(values, 1));
         addon->FireCallback(1, values, true);
     }
 
@@ -537,6 +564,45 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         return IsAddonReady(addon) ? addon : null;
     }
 
+    private unsafe AtkUnitBase* RequireCraftingLog(WorkshopCraftingLogSnapshot captured)
+    {
+        var expectedReceiver = callbackCapability.RequireRecipe();
+        RequireCallbackAddresses();
+        var addon = GetCraftingLogAddon();
+        var agent = AgentModule.Instance()->GetAgentByInternalId(AgentId.CompanyCraftRecipeNoteBook);
+        WorkshopCallbackProtocol.RequireOwner(captured.AddonAddress, (nint)addon, addon == null ? 0u : (uint)addon->Id,
+            agent == null ? 0 : agent->AddonId,
+            agent == null || agent->VirtualTable == null ? 0 : (nint)agent->VirtualTable->ReceiveEvent, expectedReceiver);
+        if (addon->AtkValues == null)
+            throw new InvalidOperationException("Workshop recipe values are unavailable; no callback was sent.");
+        WorkshopCallbackProtocol.RequireCraftingLogSchema(new ReadOnlySpan<AtkValue>(addon->AtkValues, addon->AtkValuesCount));
+        return addon;
+    }
+
+    private unsafe AtkUnitBase* RequireMaterialDelivery(WorkshopMaterialDeliverySnapshot captured)
+    {
+        var expectedReceiver = callbackCapability.RequireMaterial();
+        RequireCallbackAddresses();
+        var addon = GetMaterialDeliveryAddon();
+        var agent = AgentCompanyCraftMaterial.Instance();
+        WorkshopCallbackProtocol.RequireOwner(captured.AddonAddress, (nint)addon, addon == null ? 0u : (uint)addon->Id,
+            agent == null ? 0 : agent->AddonId,
+            agent == null || agent->VirtualTable == null ? 0 : (nint)agent->VirtualTable->ReceiveEvent, expectedReceiver);
+        var current = ReadCraftState(addon);
+        if (current == null || current.ResultItem != captured.CraftState.ResultItem ||
+            current.StepsComplete != captured.CraftState.StepsComplete || current.StepsTotal != captured.CraftState.StepsTotal)
+            throw new InvalidOperationException("Workshop material values changed; no callback was sent.");
+        return addon;
+    }
+
+    private static unsafe void RequireCallbackAddresses()
+    {
+        NativeCapability.RequireAddress((nint)AtkUnitBase.Addresses.FireCallback.Value, "Workshop callback dispatch");
+        NativeCapability.RequireAddress((nint)AgentModule.Addresses.GetAgentByInternalId.Value, "Workshop agent lookup");
+        if (AgentModule.Instance() == null)
+            throw new InvalidOperationException("Workshop agent module is unavailable; no callback was sent.");
+    }
+
     private unsafe AtkUnitBase* GetMaterialDeliveryAddon()
     {
         foreach (var addonName in MaterialDeliveryAddonNames)
@@ -580,8 +646,9 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     private static unsafe IReadOnlyList<WorkshopCraftingLogItem> ReadVisibleCraftingLogItems(AtkUnitBase* addon)
     {
         var atkValues = addon->AtkValues;
-        if (atkValues == null || addon->AtkValuesCount <= 13)
+        if (atkValues == null)
             return [];
+        WorkshopCallbackProtocol.RequireCraftingLogSchema(new ReadOnlySpan<AtkValue>(atkValues, addon->AtkValuesCount));
 
         var shownItemCount = atkValues[13].UInt;
         var visibleItems = new List<WorkshopCraftingLogItem>();
@@ -601,8 +668,16 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
 
     private static unsafe WorkshopCraftState? ReadCraftState(AtkUnitBase* addon)
     {
-        if (!IsAddonReady(addon) || addon->AtkValues == null || addon->AtkValuesCount != 157)
+        if (!IsAddonReady(addon) || addon->AtkValues == null)
             return null;
+
+        try
+        {
+            var layout = default(AgentCompanyCraftMaterial);
+            var capacity = layout.SupplyItems.Length;
+            WorkshopCallbackProtocol.RequireMaterialSchema(new ReadOnlySpan<AtkValue>(addon->AtkValues, addon->AtkValuesCount), capacity);
+        }
+        catch (InvalidOperationException) { return null; }
 
         var atkValues = addon->AtkValues;
         var listItemCount = atkValues[11].UInt;
