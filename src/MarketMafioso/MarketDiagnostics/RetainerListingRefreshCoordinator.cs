@@ -520,13 +520,13 @@ internal sealed class RetainerListingRefreshCoordinator
                     "MMF restarted while a read-only browse was active; the item is cooling down before reconciliation.";
             }
             else if (item.State == RetainerListingRefreshItemState.Blocked &&
-                      item.LastCode == GamePatchCompatibility.FailureCode &&
+                      item.LastCode is NativeCapability.FailureCode or "UnsupportedGameBuild" &&
                       browseRuntime.IsAvailable)
             {
                 item.State = RetainerListingRefreshItemState.Deferred;
                 item.NextAttemptAtUtc = DateTime.UtcNow;
                 item.LastCode = "BuildContractRecovered";
-                item.LastMessage = "The exact-build browse contract is available again.";
+                item.LastMessage = "The native browse capability is available again.";
                 item.AttentionNotified = false;
             }
             else if (item.State == RetainerListingRefreshItemState.Blocked && IsLegacyRateLimit(item))

@@ -105,9 +105,10 @@ public sealed class TradeQueueRunner : IDisposable
     {
         if (IsActive)
             return new(false, "Trade queue is already running.");
+        var hasSelectedPartner = io.TryGetSelectedPartner(out var selectedPartner);
         if (!io.TryGetExecutionReadiness(out var readinessError))
-            return RejectStart(null, readinessError);
-        if (!io.TryGetSelectedPartner(out var selectedPartner))
+            return RejectStart(hasSelectedPartner ? selectedPartner : null, readinessError);
+        if (!hasSelectedPartner)
             return RejectStart(null, "Select or focus-target the player who should receive this queue.");
 
         return Start(selectedPartner);
@@ -145,6 +146,14 @@ public sealed class TradeQueueRunner : IDisposable
     private TradeQueueStartResult RejectStart(TradeQueuePartner? recipient, string reason)
     {
         var attemptId = Guid.NewGuid().ToString("N");
+        var preserveCheckpoint = HasResumeCheckpoint;
+        if (!preserveCheckpoint)
+        {
+            runId = null;
+            partner = null;
+            checkpointQueueSignature = string.Empty;
+            batchNumber = initialUnitCount = completedUnitCount = completedBatchCount = 0;
+        }
         Snapshot = new(
             TradeQueueExecutionState.Failed, reason, runId ?? attemptId, partner?.Name ?? recipient?.Name,
             batchNumber, 0, completedBatchCount,

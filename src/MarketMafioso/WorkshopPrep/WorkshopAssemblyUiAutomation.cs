@@ -9,8 +9,6 @@ namespace MarketMafioso.WorkshopPrep;
 
 public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 {
-    private const string ApprovedGameVersion = "2026.09.01.0000.0000";
-    private const string PatchContractId = "mmf.workshop-ui-callbacks";
     internal static readonly IReadOnlyList<string> MaterialDeliveryAddonNames =
         WorkshopAssemblyUiDriver.MaterialDeliveryAddonNames;
 
@@ -19,7 +17,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     private WorkshopAssemblyDiagnostics diagnostics = WorkshopAssemblyDiagnostics.Disabled;
     private uint? pendingContributionItemId;
     private WorkshopAssemblyPendingConfirmationKind pendingConfirmationKind;
-    private bool patchBlockLogged;
 
     public WorkshopAssemblyUiAutomation(
         IGameGui gameGui,
@@ -67,9 +64,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyActionResult TrySkipCutscene()
     {
-        if (TryGetPatchBlock(out var blocked))
-            return blocked;
-
         return uiDriver.TrySkipCutscene() switch
         {
             WorkshopCutsceneSkipState.CutsceneActive =>
@@ -82,9 +76,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyActionResult TryOpenFabricationStation()
     {
-        if (TryGetPatchBlock(out var blocked))
-            return blocked;
-
         var result = uiDriver.TryOpenFabricationStation();
         return result.State switch
         {
@@ -98,9 +89,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry)
     {
-        if (TryGetPatchBlock(out var blocked))
-            return blocked;
-
         var activeCraft = uiDriver.ReadMaterialDelivery()?.CraftState;
         if (activeCraft != null)
         {
@@ -196,9 +184,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry)
     {
-        if (TryGetPatchBlock(out var blocked))
-            return blocked;
-
         var confirmation = TryConfirmPendingConfirmation();
         if (confirmation != null)
             return confirmation;
@@ -309,9 +294,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyActionResult TryConfirmContribution()
     {
-        if (TryGetPatchBlock(out var blocked))
-            return blocked;
-
         var confirmation = TryConfirmPendingConfirmation();
         if (confirmation != null)
             return confirmation;
@@ -376,24 +358,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             default:
                 return null;
         }
-    }
-
-    private bool TryGetPatchBlock(out WorkshopAssemblyActionResult blocked)
-    {
-        var compatibility = GamePatchCompatibilityGate.Evaluate(PatchContractId, ApprovedGameVersion);
-        if (compatibility.IsApproved)
-        {
-            blocked = default!;
-            return false;
-        }
-
-        if (!patchBlockLogged)
-        {
-            patchBlockLogged = true;
-            log.Warning("[MarketMafioso] {Message}", compatibility.Message);
-        }
-        blocked = new(false, compatibility.Message);
-        return true;
     }
 
     public WorkshopAssemblyActionResult TryWaitForContributionProgress(

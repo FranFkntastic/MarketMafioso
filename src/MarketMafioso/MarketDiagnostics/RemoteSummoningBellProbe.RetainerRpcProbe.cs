@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using MarketMafioso.Automation.Runtime;
 using System.Text.Json;
 using FFXIVClientStructs.FFXIV.Client.Game;
 
@@ -11,14 +12,13 @@ namespace MarketMafioso.MarketDiagnostics;
 
 internal sealed partial class RemoteSummoningBellProbe
 {
-    private const string RetainerRpcExpectedClientVersion = "2026.09.01.0000.0000";
-    private const long ServerRequestCallbackInterfaceFinalizeRva = 0x844FB0;
-    private const long ServerRequestCallbackManagerAvailableRva = 0x845090;
-    private const long ServerRequestCallbackManagerGetRva = 0x8450B0;
-    private const long ServerRequestCallbackManagerRequestRva = 0x8451D0;
-    private const long ServerRequestCallbackManagerRegisterRva = 0x845550;
-    private const long RetainerManagerRequestListRva = 0x110F850;
-    private const long RetainerManagerRequestSingleDataRva = 0x110F980;
+    private const string ServerRequestCallbackInterfaceFinalizeSignature = "48 8D 05 ?? ?? ?? ?? 48 89 01 48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 50 08 48 8B 00 48 3B C2";
+    private const string ServerRequestCallbackManagerAvailableSignature = "48 83 3D ?? ?? ?? ?? 00 0F 95 C0 C3 CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC 48 8B 05 ?? ?? ?? ?? C3 CC CC CC CC CC CC CC CC 48 83 EC 28 48 83 3D ?? ?? ?? ?? 00 0F 85 ?? ?? ?? ?? 48 89 5C 24 30 B9 18 00 00 00 48 89 7C 24 20 E8 ?? ?? ?? ?? 33 DB 48 8B F8 48 85 C0 74 ??";
+    private const string ServerRequestCallbackManagerGetSignature = "48 8B 05 ?? ?? ?? ?? C3 CC CC CC CC CC CC CC CC 48 83 EC 28 48 83 3D ?? ?? ?? ?? 00 0F 85 ?? ?? ?? ?? 48 89 5C 24 30 B9 18 00 00 00 48 89 7C 24 20 E8 ?? ?? ?? ?? 33 DB 48 8B F8 48 85 C0 74 ??";
+    private const string ServerRequestCallbackManagerRequestSignature = "48 89 5C 24 08 57 48 83 EC 30 41 8B D9 41 8B F8 E8 ?? ?? ?? ?? 44 8B CB 44 8B C7 B9 2B 23 00 00";
+    private const string ServerRequestCallbackManagerRegisterSignature = "40 57 41 55 41 57 48 83 EC 30 4C 8B 09 33 C0 4C 8B 41 08 4C 8B EA 4D 2B C1 48 8B F9 49 C1 F8 03 45 8B F8 45 85 C0";
+    private const string RetainerManagerRequestListSignature = "48 89 5C 24 18 48 89 6C 24 20 57 48 83 EC 30 48 8B E9 48 8B DA 48 8B 0D ?? ?? ?? ?? 48 85 C9 74 ?? E8 ?? ?? ?? ?? 84 C0 75 ?? E8 ?? ?? ?? ?? 84 C0 75 ?? 48 85 DB";
+    private const string RetainerManagerRequestSingleDataSignature = "48 85 D2 74 ?? 48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 49 8B F8 48 8B DA 48 8B F1 E8 ?? ?? ?? ?? 84 C0 74 ?? E8 ?? ?? ?? ?? 4C 8B CF";
     private static readonly TimeSpan RetainerRpcStageTimeout = TimeSpan.FromSeconds(12);
     private const int MaximumRetainerRpcRosterEntries = 10;
     private const uint MaximumRetainerRpcCallbackToken = 4096;
@@ -159,17 +159,18 @@ internal sealed partial class RemoteSummoningBellProbe
         if (IsAnyRetainerSessionUiOpen() || condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.OccupiedSummoningBell])
             return "Close the current bell/retainer session before running the cold RPC probe.";
 
-        var version = GetCurrentClientVersion();
-        if (!string.Equals(
-                version,
-                RetainerRpcExpectedClientVersion,
-                StringComparison.Ordinal))
+        try
         {
-            return
-                $"Client build {version} is not the statically verified " +
-                $"{RetainerRpcExpectedClientVersion} build; no request was sent.";
+            foreach (var signature in new[] { ServerRequestCallbackInterfaceFinalizeSignature,
+                ServerRequestCallbackManagerAvailableSignature, ServerRequestCallbackManagerGetSignature,
+                ServerRequestCallbackManagerRequestSignature, ServerRequestCallbackManagerRegisterSignature,
+                RetainerManagerRequestListSignature, RetainerManagerRequestSingleDataSignature })
+                ResolveRetainerRpcAddress(signature);
         }
-
+        catch (Exception exception)
+        {
+            return $"Retainer RPC is unavailable: {exception.Message}; no request was sent.";
+        }
         unsafe
         {
             if (RetainerManager.Instance() == null)
@@ -380,14 +381,14 @@ internal sealed partial class RemoteSummoningBellProbe
                 case 2:
                 {
                     var requestList = (delegate* unmanaged<nint, nint, void>)
-                        ResolveRetainerRpcAddress(RetainerManagerRequestListRva);
+                        ResolveRetainerRpcAddress(RetainerManagerRequestListSignature);
                     requestList((nint)retainerManager, retainerRpcCallbackObject);
                     break;
                 }
                 case 3:
                 {
                     var requestSingle = (delegate* unmanaged<nint, nint, ulong, void>)
-                        ResolveRetainerRpcAddress(RetainerManagerRequestSingleDataRva);
+                        ResolveRetainerRpcAddress(RetainerManagerRequestSingleDataSignature);
                     requestSingle(
                         (nint)retainerManager,
                         retainerRpcCallbackObject,
@@ -397,7 +398,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 default:
                 {
                     var request = (delegate* unmanaged<nint, nint, uint, uint, uint, void>)
-                        ResolveRetainerRpcAddress(ServerRequestCallbackManagerRequestRva);
+                        ResolveRetainerRpcAddress(ServerRequestCallbackManagerRequestSignature);
                     request(callbackManager, retainerRpcCallbackObject, kind, argument1, argument2);
                     break;
                 }
@@ -452,7 +453,7 @@ internal sealed partial class RemoteSummoningBellProbe
             throw new InvalidOperationException("ServerRequestCallbackManager became unavailable.");
 
         var register = (delegate* unmanaged<nint, nint, ulong>)
-            ResolveRetainerRpcAddress(ServerRequestCallbackManagerRegisterRva);
+            ResolveRetainerRpcAddress(ServerRequestCallbackManagerRegisterSignature);
         *(nint*)retainerRpcSinkCallbackObject = retainerRpcCallbackVtable;
 
         for (uint attempt = 0; attempt <= targetToken; attempt++)
@@ -482,14 +483,14 @@ internal sealed partial class RemoteSummoningBellProbe
     private unsafe nint GetServerRequestCallbackManager()
     {
         var get = (delegate* unmanaged<nint>)
-            ResolveRetainerRpcAddress(ServerRequestCallbackManagerGetRva);
+            ResolveRetainerRpcAddress(ServerRequestCallbackManagerGetSignature);
         return get();
     }
 
     private unsafe bool IsServerRequestCallbackManagerAvailable()
     {
         var available = (delegate* unmanaged<byte>)
-            ResolveRetainerRpcAddress(ServerRequestCallbackManagerAvailableRva);
+            ResolveRetainerRpcAddress(ServerRequestCallbackManagerAvailableSignature);
         return available() != 0;
     }
 
@@ -499,7 +500,7 @@ internal sealed partial class RemoteSummoningBellProbe
             return;
 
         var finalize = (delegate* unmanaged<nint, void>)
-            ResolveRetainerRpcAddress(ServerRequestCallbackInterfaceFinalizeRva);
+            ResolveRetainerRpcAddress(ServerRequestCallbackInterfaceFinalizeSignature);
         finalize(retainerRpcCallbackObject);
         retainerRpcCallbackRegistered = false;
         retainerRpcCallbackToken = null;
@@ -511,13 +512,26 @@ internal sealed partial class RemoteSummoningBellProbe
             return;
 
         var finalize = (delegate* unmanaged<nint, void>)
-            ResolveRetainerRpcAddress(ServerRequestCallbackInterfaceFinalizeRva);
+            ResolveRetainerRpcAddress(ServerRequestCallbackInterfaceFinalizeSignature);
         finalize(retainerRpcSinkCallbackObject);
         retainerRpcSinkCallbackMayBeRegistered = false;
     }
 
-    private unsafe nint ResolveRetainerRpcAddress(long rva) =>
-        sigScanner.Module.BaseAddress + checked((int)rva);
+    private readonly Dictionary<string, nint> retainerRpcAddresses = new();
+
+    private nint ResolveRetainerRpcAddress(string signature)
+    {
+        if (!retainerRpcAddresses.TryGetValue(signature, out var address))
+        {
+            address = NativeCapability.ResolveUnique(sigScanner, signature, "Retainer RPC");
+            retainerRpcAddresses.Add(signature, address);
+        }
+        return address;
+    }
+
+    private string DescribeRetainerRpcAddress(string signature) =>
+        retainerRpcAddresses.TryGetValue(signature, out var address)
+            ? $"0x{address - sigScanner.Module.BaseAddress:X}" : "unresolved";
 
     private unsafe bool TryInitializeRetainerRpcCallback(out string error)
     {
@@ -626,12 +640,12 @@ internal sealed partial class RemoteSummoningBellProbe
             active.StartPosition,
             CapturePosition(),
             FormatPointerValue(sigScanner.Module.BaseAddress),
-            $"0x{ServerRequestCallbackManagerGetRva:X}",
-            $"0x{ServerRequestCallbackManagerRequestRva:X}",
-            $"0x{RetainerManagerRequestListRva:X}",
-            $"0x{RetainerManagerRequestSingleDataRva:X}",
-            $"0x{ServerRequestCallbackInterfaceFinalizeRva:X}",
-            $"0x{ServerRequestCallbackManagerRegisterRva:X}",
+            DescribeRetainerRpcAddress(ServerRequestCallbackManagerGetSignature),
+            DescribeRetainerRpcAddress(ServerRequestCallbackManagerRequestSignature),
+            DescribeRetainerRpcAddress(RetainerManagerRequestListSignature),
+            DescribeRetainerRpcAddress(RetainerManagerRequestSingleDataSignature),
+            DescribeRetainerRpcAddress(ServerRequestCallbackInterfaceFinalizeSignature),
+            DescribeRetainerRpcAddress(ServerRequestCallbackManagerRegisterSignature),
             active.Requests.ToArray(),
             active.Callbacks.ToArray(),
             active.SinkCallbacks.ToArray(),
@@ -790,12 +804,12 @@ internal sealed partial class RemoteSummoningBellProbe
                 active.StartPosition,
                 CapturePosition(),
                 FormatPointerValue(sigScanner.Module.BaseAddress),
-                $"0x{ServerRequestCallbackManagerGetRva:X}",
-                $"0x{ServerRequestCallbackManagerRequestRva:X}",
-                $"0x{RetainerManagerRequestListRva:X}",
-                $"0x{RetainerManagerRequestSingleDataRva:X}",
-                $"0x{ServerRequestCallbackInterfaceFinalizeRva:X}",
-                $"0x{ServerRequestCallbackManagerRegisterRva:X}",
+                DescribeRetainerRpcAddress(ServerRequestCallbackManagerGetSignature),
+                DescribeRetainerRpcAddress(ServerRequestCallbackManagerRequestSignature),
+                DescribeRetainerRpcAddress(RetainerManagerRequestListSignature),
+                DescribeRetainerRpcAddress(RetainerManagerRequestSingleDataSignature),
+                DescribeRetainerRpcAddress(ServerRequestCallbackInterfaceFinalizeSignature),
+                DescribeRetainerRpcAddress(ServerRequestCallbackManagerRegisterSignature),
                 active.Requests.ToArray(),
                 active.Callbacks.ToArray(),
                 active.SinkCallbacks.ToArray(),
