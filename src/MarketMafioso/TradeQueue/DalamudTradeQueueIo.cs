@@ -21,6 +21,7 @@ namespace MarketMafioso.TradeQueue;
 
 public interface ITradeQueueIo
 {
+    bool TryGetExecutionReadiness(out string error);
     TradeQueueInventoryObservation ObserveTradeableInventory();
     IReadOnlyList<TradeQueuePartner> GetAvailablePartners();
     bool TryGetSelectedPartner(out TradeQueuePartner partner);
@@ -100,6 +101,8 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
     }
 
     public bool IsTradeOpen => condition[ConditionFlag.TradeOpen];
+
+    public bool TryGetExecutionReadiness(out string error) => TryAuthorizePatchContract(out error);
 
     public bool IsPartnerReadyForTrade =>
         IsTradeOpen && TradeDetectionManager.PartnerReadyForTrade;
