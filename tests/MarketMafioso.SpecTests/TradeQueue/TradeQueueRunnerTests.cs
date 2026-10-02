@@ -29,6 +29,7 @@ public sealed class TradeQueueRunnerTests
         Assert.Equal(reason, result.Message);
         Assert.Equal(reason, runner.Snapshot.Message);
         Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
+        Assert.Equal("Recipient", runner.Snapshot.PartnerName);
         Assert.False(runner.IsActive);
         Assert.Equal(2, Assert.Single(queue).Quantity);
         Assert.Equal(0, saves);
@@ -40,6 +41,50 @@ public sealed class TradeQueueRunnerTests
         Assert.Empty(stopRequests);
         Assert.Contains(recording.Entries, entry => entry.Method == "Warning" &&
             entry.Template.Contains("start rejected") && entry.Values.Contains(reason));
+        Assert.Contains(recording.Entries, entry => entry.Template.Contains("start rejected") &&
+            entry.Values.Contains("Recipient") && entry.Values.Contains("Siren"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RejectedFreshStartDoesNotReuseInvalidatedOrCompletedRunMetadata(bool previousCompleted)
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2));
+        using var coordinator = Coordinator(new());
+        var log = TestPluginLog.Create(out var recording);
+        using var runner = new TradeQueueRunner(queue, new(), () => { }, io,
+            new FakeQualityLowering(), coordinator, log,
+            new() { NormalizeHighQualityItems = false });
+        Assert.True(runner.Start().Success);
+        var previousRunId = runner.Snapshot.RunId;
+        runner.Stop();
+        if (previousCompleted)
+        {
+            queue.Clear();
+            Assert.True(runner.Start().Success);
+            Assert.Equal(TradeQueueExecutionState.Completed, runner.Snapshot.State);
+            previousRunId = runner.Snapshot.RunId;
+        }
+        queue.Clear();
+        queue.Add(new() { ItemId = 42, ItemName = "New queue item", Quantity = 7 });
+        Assert.False(runner.HasResumeCheckpoint);
+        io.ReadinessError = "Trade item signature is unavailable.";
+        var recipient = new TradeQueuePartner(3, "New Recipient", 4, "Ultros");
+
+        Assert.False(runner.Start(recipient).Success);
+        Assert.NotEqual(previousRunId, runner.Snapshot.RunId);
+        Assert.Equal(recipient.Name, runner.Snapshot.PartnerName);
+        Assert.Equal(7, runner.Snapshot.InitialUnitCount);
+        Assert.Equal(0, runner.Snapshot.CompletedUnitCount);
+        Assert.Equal(0, runner.Snapshot.CompletedBatchCount);
+        Assert.Equal(0, runner.Snapshot.BatchNumber);
+        Assert.False(runner.HasResumeCheckpoint);
+        var rejected = recording.Entries.Last(entry => entry.Template.Contains("start rejected"));
+        Assert.Contains(runner.Snapshot.RunId!, rejected.Values);
+        Assert.Contains(recipient.Name, rejected.Values);
+        Assert.Equal(7, Assert.Single(queue).Quantity);
     }
 
     [Theory]
