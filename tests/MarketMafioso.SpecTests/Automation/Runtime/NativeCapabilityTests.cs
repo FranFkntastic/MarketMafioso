@@ -26,15 +26,15 @@ public sealed class NativeCapabilityTests
     public void MissingOrAmbiguousSignatureDoesNotProduceACallableAddress(int count)
     {
         var matches = Enumerable.Range(1, count).Select(index => (nint)(index * 0x1000)).ToArray();
-        var error = Assert.Throws<InvalidOperationException>(() => NativeCapability.ResolveUnique(matches, "Trade item offering"));
+        var error = Assert.ThrowsAny<InvalidOperationException>(() => NativeCapability.ResolveUnique(matches, "Trade item offering"));
         Assert.Contains("exactly one", error.Message);
     }
 
     [Fact]
     public void NullAddressAndMissingDependencyRemainUnavailable()
     {
-        Assert.Throws<InvalidOperationException>(() => NativeCapability.ResolveUnique([(nint)0], "Trade"));
-        var error = Assert.Throws<InvalidOperationException>(() => NativeCapability.RequireAddress(0, "Purchase evidence hook"));
+        Assert.ThrowsAny<InvalidOperationException>(() => NativeCapability.ResolveUnique([(nint)0], "Trade"));
+        var error = Assert.ThrowsAny<InvalidOperationException>(() => NativeCapability.RequireAddress(0, "Purchase evidence hook"));
         Assert.Contains("Purchase evidence hook", error.Message);
         NativeCapability.RequireAddress(0x1000, "Independent trade capability");
     }
@@ -45,7 +45,7 @@ public sealed class NativeCapabilityTests
     [InlineData(0x570, 0x28, 0x578)]
     public void IncompatibleTradeLayoutFailsBeforeNativeCall(int agentSize, int contextOffset, int contextSize)
     {
-        var error = Assert.Throws<InvalidOperationException>(() => NativeCapability.RequireTradeContextLayout(agentSize, contextOffset, contextSize));
+        var error = Assert.ThrowsAny<InvalidOperationException>(() => NativeCapability.RequireTradeContextLayout(agentSize, contextOffset, contextSize));
         Assert.Contains("layout is unsupported", error.Message);
     }
 

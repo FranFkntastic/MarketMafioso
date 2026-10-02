@@ -1,36 +1,27 @@
 using System;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using Dalamud.Plugin.Services;
+using Franthropy.Dalamud.Diagnostics;
 
 namespace MarketMafioso.Automation.Runtime;
 
 internal static class NativeCapability
 {
-    public const string FailureCode = "NativeCapabilityUnavailable";
+    public const string FailureCode = NativeCapabilityGuard.FailureCode;
 
     public static void RequireAddress(nint address, string name)
     {
-        if (address == 0)
-            throw new InvalidOperationException($"{name} native address could not be resolved.");
+        NativeCapabilityGuard.RequireAddress(address, name);
     }
 
     public static nint ResolveUnique(ISigScanner scanner, string signature, string name)
     {
-        if (!OperatingSystem.IsWindows() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
-            throw new InvalidOperationException($"{name} requires the Windows x64 native calling convention.");
-        var address = ResolveUnique(scanner.ScanAllText(signature), name);
-        var textStart = scanner.Module.BaseAddress + checked((nint)scanner.TextSectionOffset);
-        if (address < textStart || address - textStart >= scanner.TextSectionSize)
-            throw new InvalidOperationException($"{name} signature resolved outside the game's executable code section.");
-        return address;
+        return NativeCapabilityGuard.ResolveUnique(scanner, signature, name);
     }
 
     internal static nint ResolveUnique(IReadOnlyList<nint> matches, string name)
     {
-        if (matches.Count != 1 || matches[0] == 0)
-            throw new InvalidOperationException($"{name} signature resolved {matches.Count} matches; exactly one nonzero native address is required.");
-        return matches[0];
+        return NativeCapabilityGuard.ResolveUnique(matches, name);
     }
 
     internal static void RequireTradeContextLayout(int agentSize, int contextOffset, int contextSize)

@@ -9,6 +9,37 @@ namespace MarketMafioso.SpecTests.TradeQueue;
 public sealed class TradeQueueRunnerTests
 {
     [Theory]
+    [InlineData(null)]
+    [InlineData("Trade item signature is unavailable.")]
+    public void CapabilityInspectionCannotStartATradeOrChangeItsCheckpoint(string? failure)
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2)) { ReadinessError = failure };
+        var quality = new FakeQualityLowering();
+        var stopped = new HashSet<string>();
+        var saves = 0;
+        using var coordinator = Coordinator(stopped);
+        using var runner = new TradeQueueRunner(queue, new(), () => saves++, io, quality, coordinator, TestPluginLog.Create(out _));
+        var snapshot = runner.Snapshot;
+
+        var capability = runner.InspectExecutionCapability();
+
+        Assert.Equal(failure == null, capability.Available);
+        if (failure != null) Assert.Equal(failure, capability.Message);
+        Assert.Same(snapshot, runner.Snapshot);
+        Assert.False(runner.IsActive);
+        Assert.False(runner.HasResumeCheckpoint);
+        Assert.Equal(2, Assert.Single(queue).Quantity);
+        Assert.Equal(0, saves);
+        Assert.Equal(0, io.InventoryObservations);
+        Assert.Equal(0, io.OpenTradeAttempts);
+        Assert.Equal(0, io.OfferItemAttempts);
+        Assert.Equal(0, io.CancelTradeAttempts);
+        Assert.Equal(0, quality.BeginCount);
+        Assert.Empty(stopped);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void UnapprovedExecutionFailsImmediatelyWithoutChangingInventoryOrTradeState(bool exactRecipient)

@@ -115,6 +115,8 @@ public sealed record AgentBridgeWorkshopAssemblyTruth
 
 public sealed record AgentBridgeTradeQueueTruth
 {
+    public bool ExecutionCapabilityAvailable { get; init; }
+    public string ExecutionCapabilityMessage { get; init; } = "Trade capability has not been inspected.";
     public required string State { get; init; }
     public required string Message { get; init; }
     public string? RunId { get; init; }
