@@ -8,6 +8,74 @@ namespace MarketMafioso.SpecTests.TradeQueue;
 
 public sealed class TradeQueueRunnerTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnapprovedExecutionFailsImmediatelyWithoutChangingInventoryOrTradeState(bool exactRecipient)
+    {
+        const string reason = "Trade UI contract is approved for an older game build.";
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2)) { ReadinessError = reason, IsTradeOpenValue = true };
+        var quality = new FakeQualityLowering();
+        var stopRequests = new HashSet<string>();
+        var saves = 0;
+        using var coordinator = Coordinator(stopRequests);
+        var log = TestPluginLog.Create(out var recording);
+        using var runner = new TradeQueueRunner(queue, new(), () => saves++, io, quality, coordinator, log);
+
+        var result = exactRecipient ? runner.Start(new(1, "Recipient", 2, "Siren")) : runner.Start();
+
+        Assert.False(result.Success);
+        Assert.Equal(reason, result.Message);
+        Assert.Equal(reason, runner.Snapshot.Message);
+        Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
+        Assert.False(runner.IsActive);
+        Assert.Equal(2, Assert.Single(queue).Quantity);
+        Assert.Equal(0, saves);
+        Assert.Equal(0, io.InventoryObservations);
+        Assert.Equal(0, io.OpenTradeAttempts);
+        Assert.Equal(0, io.OfferItemAttempts);
+        Assert.Equal(0, io.CancelTradeAttempts);
+        Assert.Equal(0, quality.BeginCount);
+        Assert.Empty(stopRequests);
+        Assert.Contains(recording.Entries, entry => entry.Method == "Warning" &&
+            entry.Template.Contains("start rejected") && entry.Values.Contains(reason));
+    }
+
+    [Theory]
+    [InlineData("timeout")]
+    [InlineData("stop")]
+    [InlineData("readiness-lost")]
+    public void OrdinaryTerminalFailuresAndStopsRecordStageRecipientAndReason(string ending)
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2));
+        var clock = new TestClock();
+        using var coordinator = Coordinator(new());
+        var log = TestPluginLog.Create(out var recording);
+        using var runner = new TradeQueueRunner(queue, new(), () => { }, io,
+            new FakeQualityLowering(), coordinator, log, clock.Read,
+            new() { NormalizeHighQualityItems = false });
+        Assert.True(runner.Start().Success);
+        if (ending == "stop") runner.Stop();
+        else
+        {
+            if (ending == "readiness-lost") io.ReadinessError = "Current build is no longer approved.";
+            else clock.Advance(TimeSpan.FromSeconds(31));
+            runner.Tick();
+        }
+
+        var terminal = Assert.Single(recording.Entries, entry => entry.Values.Contains(runner.Snapshot.State));
+        Assert.Contains(TradeQueueExecutionState.OpeningTrade, terminal.Values);
+        Assert.Contains("Recipient", terminal.Values);
+        Assert.Contains("Siren", terminal.Values);
+        Assert.Contains(runner.Snapshot.Message, terminal.Values);
+        Assert.Equal(ending == "stop" ? "Information" : "Warning", terminal.Method);
+        Assert.Equal(2, Assert.Single(queue).Quantity);
+        Assert.Equal(0, io.OpenTradeAttempts);
+        Assert.Equal(0, io.OfferItemAttempts);
+    }
+
     [Fact]
     public void Runner_RequiresExactCompletionEvidenceAndRestoresAutomationOwnership()
     {
@@ -101,6 +169,15 @@ public sealed class TradeQueueRunnerTests
         Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
         Assert.Equal(2, Assert.Single(queue).Quantity);
         Assert.True(runner.CanResume);
+
+        var checkpoint = runner.Snapshot;
+        io.ReadinessError = "Current game build is not approved.";
+        Assert.False(runner.Start().Success);
+        Assert.Equal(checkpoint.RunId, runner.Snapshot.RunId);
+        Assert.Equal(checkpoint.PartnerName, runner.Snapshot.PartnerName);
+        Assert.Equal(checkpoint.InitialUnitCount, runner.Snapshot.InitialUnitCount);
+        Assert.Equal(checkpoint.CompletedUnitCount, runner.Snapshot.CompletedUnitCount);
+        Assert.Equal(2, Assert.Single(queue).Quantity);
     }
 
     private static void StopReleasesAutoConfirmAndPreservesQueue()
@@ -833,6 +910,14 @@ public sealed class TradeQueueRunnerTests
 
     private sealed class FakeIo(IReadOnlyList<TradeQueueInventoryStack> inventory) : ITradeQueueIo
     {
+        public string? ReadinessError { get; set; }
+        public int InventoryObservations { get; private set; }
+        public int CancelTradeAttempts { get; private set; }
+        public bool TryGetExecutionReadiness(out string error)
+        {
+            error = ReadinessError ?? string.Empty;
+            return ReadinessError == null;
+        }
         public IReadOnlyList<TradeQueueInventoryStack> Inventory { get; set; } = inventory;
         public bool InventoryIsAuthoritative { get; set; } = true;
         private bool isTradeOpenValue;
@@ -886,10 +971,13 @@ public sealed class TradeQueueRunnerTests
         public int LastSubmittedQuantity { get; private set; }
         private bool gilInputRequested;
 
-        public TradeQueueInventoryObservation ObserveTradeableInventory() =>
-            InventoryIsAuthoritative
+        public TradeQueueInventoryObservation ObserveTradeableInventory()
+        {
+            InventoryObservations++;
+            return InventoryIsAuthoritative
                 ? TradeQueueInventoryObservation.Authoritative(Inventory)
                 : TradeQueueInventoryObservation.Unavailable;
+        }
 
         public IReadOnlyList<TradeQueuePartner> GetAvailablePartners() =>
             [new(1, "Recipient", 2, "Siren")];
@@ -1006,6 +1094,7 @@ public sealed class TradeQueueRunnerTests
 
         public bool TryCancelTrade(out string error)
         {
+            CancelTradeAttempts++;
             error = string.Empty;
             IsTradeOpenValue = false;
             return true;
@@ -1115,6 +1204,20 @@ public sealed class TradeQueueRunnerTests
     {
         public static IPluginLog Create() => DispatchProxy.Create<IPluginLog, TestPluginLog>();
 
-        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) => null;
+        public List<(string Method, string Template, object[] Values)> Entries { get; } = [];
+
+        public static IPluginLog Create(out TestPluginLog recording)
+        {
+            var log = Create();
+            recording = (TestPluginLog)(object)log;
+            return log;
+        }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (args is [string template, object[] values])
+                Entries.Add((targetMethod!.Name, template, values));
+            return null;
+        }
     }
 }

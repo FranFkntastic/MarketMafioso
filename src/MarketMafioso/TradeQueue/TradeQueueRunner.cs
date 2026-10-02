@@ -105,8 +105,10 @@ public sealed class TradeQueueRunner : IDisposable
     {
         if (IsActive)
             return new(false, "Trade queue is already running.");
+        if (!io.TryGetExecutionReadiness(out var readinessError))
+            return RejectStart(null, readinessError);
         if (!io.TryGetSelectedPartner(out var selectedPartner))
-            return new(false, "Select or focus-target the player who should receive this queue.");
+            return RejectStart(null, "Select or focus-target the player who should receive this queue.");
 
         return Start(selectedPartner);
     }
@@ -115,8 +117,10 @@ public sealed class TradeQueueRunner : IDisposable
     {
         if (IsActive)
             return new(false, "Trade queue is already running.");
+        if (!io.TryGetExecutionReadiness(out var readinessError))
+            return RejectStart(selectedPartner, readinessError);
         if (!io.PartnerIsAvailable(selectedPartner))
-            return new(false, $"{selectedPartner.Name} @ {selectedPartner.HomeWorldName} is not an exact visible trade recipient.");
+            return RejectStart(selectedPartner, $"{selectedPartner.Name} @ {selectedPartner.HomeWorldName} is not an exact visible trade recipient.");
 
         partner = selectedPartner;
         normalizeHighQualityItemsForRun = policy.NormalizeHighQualityItems;
@@ -136,6 +140,21 @@ public sealed class TradeQueueRunner : IDisposable
         }
 
         return StartFromAuthoritativeInventory(observation.Stacks);
+    }
+
+    private TradeQueueStartResult RejectStart(TradeQueuePartner? recipient, string reason)
+    {
+        var attemptId = Guid.NewGuid().ToString("N");
+        Snapshot = new(
+            TradeQueueExecutionState.Failed, reason, runId ?? attemptId, partner?.Name ?? recipient?.Name,
+            batchNumber, 0, completedBatchCount,
+            initialUnitCount > 0 ? initialUnitCount : queue.Sum(item => item.Quantity), completedUnitCount,
+            queue.Count, queue.Sum(item => item.Quantity), false);
+        log.Warning(
+            "[MarketMafioso] Trade Queue start rejected attempt={AttemptId} recipient={Recipient}@{World} stage=preflight remainingLines={RemainingLines} remainingUnits={RemainingUnits} reason={Reason}",
+            attemptId, recipient?.Name ?? "unselected", recipient?.HomeWorldName ?? "",
+            queue.Count, Snapshot.RemainingUnitCount, reason);
+        return new(false, reason);
     }
 
     private TradeQueueStartResult StartFromAuthoritativeInventory(
@@ -160,7 +179,7 @@ public sealed class TradeQueueRunner : IDisposable
                 return new(true, Snapshot.Message);
             }
 
-            return new(false, validation.Message);
+            return RejectStart(currentPartner, validation.Message);
         }
 
         var isResume = CanResumeWith(currentPartner);
@@ -226,6 +245,12 @@ public sealed class TradeQueueRunner : IDisposable
                 {
                     save();
                 }
+                return;
+            }
+
+            if (!io.TryGetExecutionReadiness(out var readinessError))
+            {
+                Fail(readinessError);
                 return;
             }
 
@@ -568,6 +593,7 @@ public sealed class TradeQueueRunner : IDisposable
 
     private void SetActive(TradeQueueExecutionState state, string message, TimeSpan? timeout)
     {
+        var previousState = Snapshot.State;
         deadline = timeout is { } bounded && bounded > TimeSpan.Zero
             ? clock() + bounded
             : default;
@@ -584,12 +610,15 @@ public sealed class TradeQueueRunner : IDisposable
             queue.Count,
             queue.Sum(item => item.Quantity),
             true);
+        if (previousState != state)
+            LogTransition(previousState, state, message);
     }
 
     private void Fail(string message) => Finish(TradeQueueExecutionState.Failed, message);
 
     private void Finish(TradeQueueExecutionState state, string message)
     {
+        var previousState = Snapshot.State;
         if (state is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped &&
             io.IsTradeOpen)
         {
@@ -625,6 +654,18 @@ public sealed class TradeQueueRunner : IDisposable
             queue.Count,
             queue.Sum(item => item.Quantity),
             false);
+        LogTransition(previousState, state, message);
+    }
+
+    private void LogTransition(TradeQueueExecutionState previousState, TradeQueueExecutionState state, string reason)
+    {
+        const string template = "[MarketMafioso] Trade Queue transition run={RunId} recipient={Recipient}@{World} previous={PreviousState} state={State} batch={Batch} completedBatches={CompletedBatches} remainingLines={RemainingLines} remainingUnits={RemainingUnits} reason={Reason}";
+        object[] values = [runId ?? "none", partner?.Name ?? "unselected", partner?.HomeWorldName ?? "",
+            previousState, state, batchNumber, completedBatchCount, queue.Count, Snapshot.RemainingUnitCount, reason];
+        if (state == TradeQueueExecutionState.Failed)
+            log.Warning(template, values);
+        else
+            log.Information(template, values);
     }
 
     private static string ComputeQueueSignature(IEnumerable<TradeQueueItem> items) =>
