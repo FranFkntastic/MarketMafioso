@@ -223,6 +223,7 @@ public sealed class Plugin : IDalamudPlugin
                 ObjectTable,
                 TargetManager,
                 Condition,
+                SigScanner,
                 new ExternalAutomationCoordinator(
                     new DalamudPluginDataStore(PluginInterface),
                     Log,

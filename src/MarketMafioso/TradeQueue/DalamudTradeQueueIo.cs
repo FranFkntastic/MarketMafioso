@@ -49,6 +49,10 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
     private const string SelectYesNoAddon = "SelectYesno";
     private const uint TradeInventoryContainerId = 2005;
     private const uint TradeConfirmationAddonRowId = 102223;
+    // Trade.uld assigns these Addon rows to its two action buttons. Resolve
+    // localized text, then locate the unique live control by semantic identity.
+    private const uint TradeReadyAddonRowId = 203;
+    private const uint TradeCancelAddonRowId = 204;
     private const string OfferItemTradeSignature =
         "48 89 6C 24 ?? 48 89 74 24 ?? 57 48 83 EC 30 83 B9 58 05 00 00 00 41 8B F0";
 
@@ -70,6 +74,8 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
     private readonly HashSet<uint> tradeableItems;
     private readonly IReadOnlyDictionary<uint, string> itemNames;
     private readonly string tradeConfirmationText;
+    private readonly string tradeReadyText;
+    private readonly string tradeCancelText;
     private OfferItemTradeDelegate? offerItemTrade;
     private int tradeContextOffset;
     private string? lastCapabilityError;
@@ -96,7 +102,9 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         itemNames = items.ToDictionary(item => item.RowId, item => item.Name.ToString());
         tradeConfirmationText = dataManager.GetExcelSheet<Addon>()
             .GetRow(TradeConfirmationAddonRowId)
-            .Text.ToString();
+            .Text.ExtractText();
+        tradeReadyText = dataManager.GetExcelSheet<Addon>().GetRow(TradeReadyAddonRowId).Text.ExtractText();
+        tradeCancelText = dataManager.GetExcelSheet<Addon>().GetRow(TradeCancelAddonRowId).Text.ExtractText();
     }
 
     public bool IsTradeOpen => condition[ConditionFlag.TradeOpen];
@@ -405,7 +413,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
         if (!TryGetReadyButton(out var addon, out var button))
         {
-            error = "The trade Ready control is not an enabled Button component.";
+            error = "The trade action has no unique visible enabled Button with the expected localized label.";
             return false;
         }
 
@@ -442,17 +450,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     private unsafe bool TryGetReadyButton(
         out AtkUnitBase* addon,
-        out AtkComponentButton* button)
-    {
-        addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
-        button = null;
-        if (!IsReady(addon) || addon->UldManager.NodeList == null || addon->UldManager.NodeListCount <= 3)
-            return false;
-
-        var node = addon->UldManager.NodeList[3];
-        button = node == null ? null : node->GetAsAtkComponentButton();
-        return button != null && button->IsEnabled;
-    }
+        out AtkComponentButton* button) => TryGetTradeButton(tradeReadyText, out addon, out button);
 
     private unsafe bool TryGetTradeConfirmation(out AddonSelectYesno* addon)
     {
@@ -480,22 +478,29 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     private unsafe bool TryGetCancelButton(
         out AtkUnitBase* addon,
-        out AtkComponentButton* button)
+        out AtkComponentButton* button) => TryGetTradeButton(tradeCancelText, out addon, out button);
+
+    private unsafe bool TryGetTradeButton(string label, out AtkUnitBase* addon, out AtkComponentButton* button)
     {
         addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
         button = null;
-        if (!IsReady(addon) || addon->UldManager.NodeList == null || addon->UldManager.NodeListCount <= 2)
+        if (!IsReady(addon) || addon->UldManager.NodeList == null)
             return false;
 
-        var node = addon->UldManager.NodeList[2];
-        button = node == null ? null : node->GetAsAtkComponentButton();
-        return button != null &&
-               button->IsEnabled &&
-               button->ButtonTextNode != null &&
-               string.Equals(
-                   button->ButtonTextNode->NodeText.ExtractText(),
-                   "Cancel",
-                   StringComparison.Ordinal);
+        var candidates = new List<TradeButtonCandidate>();
+        for (var index = 0; index < addon->UldManager.NodeListCount; index++)
+        {
+            var node = addon->UldManager.NodeList[index];
+            if (node == null)
+                continue;
+            var candidate = node->GetAsAtkComponentButton();
+            if (candidate == null || candidate->ButtonTextNode == null)
+                continue;
+            candidates.Add(new((nint)candidate, candidate->ButtonTextNode->NodeText.ExtractText(),
+                node->IsVisible(), candidate->IsEnabled));
+        }
+        button = (AtkComponentButton*)TradeButtonIdentity.FindUnique(candidates, label);
+        return button != null;
     }
 
     private static TradeQueuePartner CreatePartner(IPlayerCharacter player) =>

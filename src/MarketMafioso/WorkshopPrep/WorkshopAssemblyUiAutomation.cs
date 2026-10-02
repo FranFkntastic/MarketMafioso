@@ -24,6 +24,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         IObjectTable objectTable,
         ITargetManager targetManager,
         ICondition condition,
+        ISigScanner sigScanner,
         ExternalAutomationCoordinator externalAutomationCoordinator)
     {
         this.log = log;
@@ -33,6 +34,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             objectTable,
             targetManager,
             condition,
+            sigScanner,
             externalAutomationCoordinator,
             source => SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.MaterialContribution, source));
     }
@@ -127,6 +129,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         {
             if (craftingLog.VisibleItems.Any(x => x.WorkshopItemId == entry.WorkshopItemId))
             {
+                uiDriver.SelectCraft(craftingLog, entry);
                 Diagnostics.Record(
                     "select-project",
                     "Selected visible workshop project.",
@@ -135,7 +138,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                         ["project"] = entry.ProjectName,
                         ["workshopItemId"] = entry.WorkshopItemId.ToString(),
                     });
-                uiDriver.SelectCraft(craftingLog, entry);
                 SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProjectStart, $"selected workshop project {entry.ProjectName}");
                 return new(false, $"Selected workshop project {entry.ProjectName}.", ActionTaken: true);
             }
@@ -143,6 +145,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             if (entry.CategoryId == 0 || entry.TypeId == 0)
                 return new(false, $"Workshop project {entry.ProjectName} cannot be selected because category/type data is missing. {DescribeUiState()}");
 
+            uiDriver.SelectCraftCategory(craftingLog, entry);
             Diagnostics.Record(
                 "select-category",
                 "Selected workshop category/type.",
@@ -152,7 +155,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     ["categoryId"] = entry.CategoryId.ToString(),
                     ["typeId"] = entry.TypeId.ToString(),
                 });
-            uiDriver.SelectCraftCategory(craftingLog, entry);
             return new(false, $"Selected workshop category/type for {entry.ProjectName}.", ActionTaken: true);
         }
 
@@ -252,6 +254,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     $"Player inventory does not contain {item.ItemCountPerStep}x {item.ItemName} in one slot for workshop contribution.");
             }
 
+            uiDriver.BeginMaterialContribution(materialDelivery, index, item);
+            pendingContributionItemId = item.ItemId;
             Diagnostics.Record(
                 "contribute-material",
                 "Submitted workshop material request.",
@@ -265,8 +269,6 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     ["stepsComplete"] = item.StepsComplete.ToString(),
                     ["stepsTotal"] = item.StepsTotal.ToString(),
                 });
-            pendingContributionItemId = item.ItemId;
-            uiDriver.BeginMaterialContribution(materialDelivery, index, item);
             return new(
                 false,
                 $"Submitted workshop material request for {item.ItemCountPerStep}x {item.ItemName}.",
