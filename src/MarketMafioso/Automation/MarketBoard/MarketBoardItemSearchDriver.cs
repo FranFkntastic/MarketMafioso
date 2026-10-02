@@ -47,7 +47,7 @@ public sealed class MarketBoardItemSearchDriver
         {
             return new MarketBoardItemSearchResult
             {
-                Status = GamePatchCompatibility.FailureCode,
+                Status = NativeCapability.FailureCode,
                 Message = browseRuntime.AvailabilityMessage,
             };
         }

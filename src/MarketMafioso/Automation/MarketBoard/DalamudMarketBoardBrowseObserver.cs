@@ -13,7 +13,6 @@ namespace MarketMafioso.Automation.MarketBoard;
 
 internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketBoardBrowseRuntime, IDisposable
 {
-    internal const string ApprovedGameVersion = "2026.09.01.0000.0000";
     internal const string PatchContractId = "mmf.market-board-browse";
 
     private const int HeaderLength = 8;
@@ -59,10 +58,6 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
 
         try
         {
-            var compatibility = GamePatchCompatibilityGate.Evaluate(PatchContractId, ApprovedGameVersion);
-            if (!compatibility.IsApproved)
-                throw new InvalidOperationException(compatibility.Message);
-
             var infoProxyVtable = InfoProxyItemSearch.StaticVirtualTablePointer;
             var requestDataAddress = infoProxyVtable == null ? 0 : (nint)infoProxyVtable->RequestData;
             var addPageAddress = infoProxyVtable == null ? 0 : (nint)infoProxyVtable->AddPage;
@@ -98,14 +93,14 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
             addPageHook.Enable();
             historyHook.Enable();
             IsAvailable = true;
-            AvailabilityMessage = compatibility.Message;
+            AvailabilityMessage = "Market-board native addresses and hooks are available.";
         }
         catch (Exception exception)
         {
             DisposeHooks();
             IsAvailable = false;
             AvailabilityMessage =
-                $"{GamePatchCompatibility.FailureCode}: {PatchContractId} observer unavailable: {exception.Message}";
+                $"{NativeCapability.FailureCode}: {PatchContractId} observer unavailable: {exception.Message}";
             log.Error(
                 exception,
                 "[MarketMafioso] Market-board browse observer is unavailable; remote browse remains blocked.");
@@ -126,7 +121,7 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
             snapshot = MarketBoardBrowseSnapshot.Idle with
             {
                 Phase = MarketBoardBrowsePhase.Failed,
-                FailureCode = GamePatchCompatibility.FailureCode,
+                FailureCode = NativeCapability.FailureCode,
                 Message = AvailabilityMessage,
             };
             return false;
@@ -145,7 +140,7 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
             snapshot = MarketBoardBrowseSnapshot.Idle with
             {
                 Phase = MarketBoardBrowsePhase.Failed,
-                FailureCode = GamePatchCompatibility.FailureCode,
+                FailureCode = NativeCapability.FailureCode,
                 Message = AvailabilityMessage,
             };
             return false;
@@ -172,7 +167,7 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
             snapshot = MarketBoardBrowseSnapshot.Idle with
             {
                 Phase = MarketBoardBrowsePhase.Failed,
-                FailureCode = GamePatchCompatibility.FailureCode,
+                FailureCode = NativeCapability.FailureCode,
                 ItemId = itemId,
                 Message = AvailabilityMessage,
             };

@@ -13,8 +13,6 @@ namespace MarketMafioso.MarketAcquisition.MarketBoard;
 internal sealed unsafe class MarketBoardPurchaseGuard : IDisposable
 {
     private const string ItemSearchResultAddon = "ItemSearchResult";
-    private const string ApprovedGameVersion = "2026.09.01.0000.0000";
-    private const string PatchContractId = "mmf.market-board-purchase-send";
 
     private readonly IAddonLifecycle addonLifecycle;
     private readonly IPluginLog log;
@@ -42,13 +40,8 @@ internal sealed unsafe class MarketBoardPurchaseGuard : IDisposable
 
         try
         {
-            var compatibility = GamePatchCompatibilityGate.Evaluate(PatchContractId, ApprovedGameVersion);
-            if (!compatibility.IsApproved)
-                throw new InvalidOperationException(compatibility.Message);
-
             var address = InfoProxyItemSearch.Addresses.SendPurchaseRequestPacket.Value;
-            if (address == 0)
-                throw new InvalidOperationException("InfoProxyItemSearch.SendPurchaseRequestPacket address is unavailable.");
+            NativeCapability.RequireAddress(address, "InfoProxyItemSearch.SendPurchaseRequestPacket");
 
             hook = interopProvider.HookFromAddress<InfoProxyItemSearch.Delegates.SendPurchaseRequestPacket>(
                 address,

@@ -480,23 +480,6 @@ public sealed class MarketBoardBrowseOperationGateTests
     }
 
     [Fact]
-    public void BrowseContract_IsApprovedOnlyForExactMappedBuild()
-    {
-        var approved = GamePatchCompatibilityGate.Evaluate(
-            DalamudMarketBoardBrowseObserver.PatchContractId,
-            DalamudMarketBoardBrowseObserver.ApprovedGameVersion,
-            DalamudMarketBoardBrowseObserver.ApprovedGameVersion);
-        var drifted = GamePatchCompatibilityGate.Evaluate(
-            DalamudMarketBoardBrowseObserver.PatchContractId,
-            DalamudMarketBoardBrowseObserver.ApprovedGameVersion,
-            "different-build");
-
-        Assert.True(approved.IsApproved);
-        Assert.False(drifted.IsApproved);
-        Assert.Equal(GamePatchCompatibility.FailureCode, "UnsupportedGameBuild");
-    }
-
-    [Fact]
     public void PacketDecoder_ReadsWireItemIdsAndPageMetadataBoundary()
     {
         var packet = new byte[(10 * 0x90) + 4];

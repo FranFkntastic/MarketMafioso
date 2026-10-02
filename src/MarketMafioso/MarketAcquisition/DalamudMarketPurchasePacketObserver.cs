@@ -10,8 +10,6 @@ namespace MarketMafioso.MarketAcquisition;
 internal sealed unsafe class DalamudMarketPurchasePacketObserver : IDisposable
 {
     private const int MinimumPacketLength = 12;
-    private const string ApprovedGameVersion = "2026.09.01.0000.0000";
-    private const string PatchContractId = "mmf.market-purchase-receive-packet";
     private readonly IPluginLog log;
     private Hook<PacketDispatcher.Delegates.HandleMarketBoardPurchasePacket>? hook;
 
@@ -21,13 +19,8 @@ internal sealed unsafe class DalamudMarketPurchasePacketObserver : IDisposable
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         try
         {
-            var compatibility = GamePatchCompatibilityGate.Evaluate(PatchContractId, ApprovedGameVersion);
-            if (!compatibility.IsApproved)
-                throw new InvalidOperationException(compatibility.Message);
-
             var address = PacketDispatcher.Addresses.HandleMarketBoardPurchasePacket.Value;
-            if (address == 0)
-                throw new InvalidOperationException("HandleMarketBoardPurchasePacket address is unavailable.");
+            NativeCapability.RequireAddress(address, "HandleMarketBoardPurchasePacket");
             Queue = new MarketPurchasePacketEvidenceQueue(true);
             hook = interopProvider.HookFromAddress<PacketDispatcher.Delegates.HandleMarketBoardPurchasePacket>(
                 address,
