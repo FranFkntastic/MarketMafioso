@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -23,6 +24,8 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
     private readonly HttpClient http;
     private readonly IMarketAcquisitionReportOutbox outbox;
     private readonly Action<Exception> reportFailure;
+    private readonly object enqueueSync = new();
+    private string? lastPassiveEvidenceId;
     private readonly SemaphoreSlim flushGate = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
     private readonly Task retryLoop;
@@ -40,7 +43,17 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
     public void Enqueue(MarketEvidenceUploadRequest evidence)
     {
         if (string.IsNullOrWhiteSpace(evidence.OccurrenceId)) return;
-        outbox.Put($"evidence|{evidence.SourceKind}|{evidence.OccurrenceId}", ReportType, evidence.OccurrenceId, evidence);
+        var id = $"evidence|{evidence.SourceKind}|{evidence.OccurrenceId}";
+        lock (enqueueSync)
+        {
+            // The current complete browse can be observed repeatedly, including after its
+            // upload succeeds. Keep its first payload instead of generating a new timestamp.
+            if (evidence.SourceKind == MarketEvidenceSources.PassiveMarketBoard && id == lastPassiveEvidenceId)
+                return;
+            outbox.Put(id, ReportType, evidence.OccurrenceId, evidence);
+            if (evidence.SourceKind == MarketEvidenceSources.PassiveMarketBoard)
+                lastPassiveEvidenceId = id;
+        }
         _ = FlushAsync(lifetime.Token);
     }
 
@@ -145,6 +158,12 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
                     using var request = new HttpRequestMessage(HttpMethod.Post, isActorName ? ResolveActorNameEndpoint(configuration.ServerUrl) : ResolveEndpoint(configuration.ServerUrl)) { Content = JsonContent.Create(body) };
                     request.Headers.Add("X-Api-Key", WorkshopHostApiKeyRouting.ResolveAcquisitionKey(configuration));
                     using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                    if (response.StatusCode == HttpStatusCode.Conflict)
+                        throw new HttpRequestException(
+                            "Market intelligence upload blocked by HTTP 409: an existing identity is bound to different evidence. " +
+                            "The queued report is retained unchanged; later intelligence reports remain blocked pending explicit reconciliation.",
+                            inner: null,
+                            statusCode: response.StatusCode);
                     response.EnsureSuccessStatusCode();
                     outbox.Remove(entry.Id);
                 }

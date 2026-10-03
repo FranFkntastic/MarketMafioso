@@ -10,6 +10,37 @@ public sealed class MarketBoardBrowseOperationGateTests
     private const uint ItemId = 5116;
 
     [Fact]
+    public void RecreatedCollector_CannotReuseFirstCounterIdentity()
+    {
+        var sessionState = new PersistedMarketBoardSessionCircuitBreakerState();
+        var first = new MarketBoardBrowseOperationGate(sessionState: sessionState);
+        var recreated = new MarketBoardBrowseOperationGate(sessionState: sessionState);
+
+        Assert.True(first.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var beforeRestart));
+        Assert.True(recreated.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var afterRestart));
+        // Both counters start at one, including with the same saved session state.
+        Assert.EndsWith(":1", beforeRestart.OperationId);
+        Assert.EndsWith(":1", afterRestart.OperationId);
+        Assert.NotEqual(beforeRestart.OperationId, afterRestart.OperationId);
+    }
+
+    [Fact]
+    public void NewBrowse_IsDistinctWhileCurrentBrowseIdentityRemainsStable()
+    {
+        var gate = new MarketBoardBrowseOperationGate();
+        Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var first));
+        Assert.False(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var blocked));
+        Assert.Equal(first.OperationId, blocked.OperationId);
+        Assert.True(gate.TryClaimActivation(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var claimed));
+        Assert.Equal(first.OperationId, claimed.OperationId);
+        gate.ObserveRequest(ItemId, false);
+
+        Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, ItemId, out var next));
+        Assert.NotEqual(first.OperationId, next.OperationId);
+        Assert.EndsWith(":2", next.OperationId);
+    }
+
+    [Fact]
     public void HappyPath_RequiresAcceptedRequestHeaderExactPagesTerminalAndHistory()
     {
         var gate = BeginAccepted(ItemId);
