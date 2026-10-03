@@ -1105,5 +1105,5 @@ public sealed class MarketIntelligenceStore
 
 public sealed class MarketEvidenceIdempotencyConflictException : Exception
 {
-    public MarketEvidenceIdempotencyConflictException() : base("The idempotency key is already bound to different market evidence.") { }
+    public MarketEvidenceIdempotencyConflictException() : base(MarketEvidenceErrors.IdempotencyConflictMessage) { }
 }

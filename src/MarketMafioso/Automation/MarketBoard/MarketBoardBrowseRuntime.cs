@@ -128,6 +128,7 @@ internal sealed class MarketBoardBrowseOperationGate
     private readonly Func<DateTimeOffset> getUtcNow;
     private readonly PersistedMarketBoardSessionCircuitBreakerState sessionState;
     private readonly Action persistSessionState;
+    private readonly string operationNamespace = Guid.NewGuid().ToString("N");
     private long operationSequence;
     private MarketBoardBrowseSnapshot snapshot = MarketBoardBrowseSnapshot.Idle;
     private readonly HashSet<byte> continuationTokens = [];
@@ -201,7 +202,8 @@ internal sealed class MarketBoardBrowseOperationGate
             var inactivityTimeout = MarketBoardBrowseTimeoutPolicy.GetInactivityTimeout(owner);
             snapshot = new MarketBoardBrowseSnapshot
             {
-                OperationId = $"market-browse:{++operationSequence}",
+                // Counters restart when the observer is recreated; evidence identities must not.
+                OperationId = $"market-browse:{operationNamespace}:{++operationSequence}",
                 Owner = owner,
                 Phase = MarketBoardBrowsePhase.Armed,
                 StartedAtUtc = nowUtc,

@@ -2,6 +2,12 @@ using System.Text.Json.Serialization;
 
 namespace MarketMafioso.Contracts.MarketIntelligence;
 
+public static class MarketEvidenceErrors
+{
+    public const string IdempotencyConflict = "market-evidence-idempotency-conflict";
+    public const string IdempotencyConflictMessage = "The idempotency key is already bound to different market evidence.";
+}
+
 public static class MarketEvidenceSources
 {
     public const string MarketAcquisition = "MarketAcquisition";

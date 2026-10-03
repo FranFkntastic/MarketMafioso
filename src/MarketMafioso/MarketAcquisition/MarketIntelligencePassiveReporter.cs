@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -13,6 +14,12 @@ using MarketMafioso.Contracts.MarketIntelligence;
 
 namespace MarketMafioso.MarketAcquisition;
 
+public sealed record MarketIntelligenceReportingStatus(
+    int PendingCount,
+    int QuarantinedCount,
+    DateTimeOffset? LastQuarantinedAtUtc,
+    string? QuarantineReason);
+
 internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionIntelligenceReporter, IDisposable
 {
     private const string ReportType = "market-evidence.v2";
@@ -21,8 +28,10 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
     private const string ActorNameReportType = "market-actor-name.v1";
     private readonly Configuration configuration;
     private readonly HttpClient http;
-    private readonly IMarketAcquisitionReportOutbox outbox;
+    private readonly FileMarketAcquisitionReportOutbox outbox;
     private readonly Action<Exception> reportFailure;
+    private readonly object enqueueSync = new();
+    private string? lastPassiveEvidenceId;
     private readonly SemaphoreSlim flushGate = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
     private readonly Task retryLoop;
@@ -40,7 +49,17 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
     public void Enqueue(MarketEvidenceUploadRequest evidence)
     {
         if (string.IsNullOrWhiteSpace(evidence.OccurrenceId)) return;
-        outbox.Put($"evidence|{evidence.SourceKind}|{evidence.OccurrenceId}", ReportType, evidence.OccurrenceId, evidence);
+        var id = $"evidence|{evidence.SourceKind}|{evidence.OccurrenceId}";
+        lock (enqueueSync)
+        {
+            // The current complete browse can be observed repeatedly, including after its
+            // upload succeeds. Keep its first payload instead of generating a new timestamp.
+            if (evidence.SourceKind == MarketEvidenceSources.PassiveMarketBoard && id == lastPassiveEvidenceId)
+                return;
+            outbox.Put(id, ReportType, evidence.OccurrenceId, evidence);
+            if (evidence.SourceKind == MarketEvidenceSources.PassiveMarketBoard)
+                lastPassiveEvidenceId = id;
+        }
         _ = FlushAsync(lifetime.Token);
     }
 
@@ -117,7 +136,19 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
         });
     }
 
-    internal IReadOnlyList<MarketAcquisitionReportOutboxEntry> Pending => outbox.Snapshot();
+    internal IReadOnlyList<MarketAcquisitionReportOutboxEntry> Pending =>
+        outbox.Snapshot().Where(entry => entry.Quarantine is null).ToArray();
+
+    internal IReadOnlyList<MarketAcquisitionReportOutboxEntry> Quarantined =>
+        outbox.Snapshot().Where(entry => entry.Quarantine is not null).ToArray();
+
+    public MarketIntelligenceReportingStatus CreateStatus()
+    {
+        var entries = outbox.Snapshot();
+        var conflicts = entries.Where(entry => entry.Quarantine is not null).ToArray();
+        var last = conflicts.OrderByDescending(entry => entry.Quarantine!.QuarantinedAtUtc).FirstOrDefault()?.Quarantine;
+        return new(entries.Count - conflicts.Length, conflicts.Length, last?.QuarantinedAtUtc, last?.Reason);
+    }
 
     private async Task RetryLoopAsync(CancellationToken cancellationToken)
     {
@@ -134,7 +165,8 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
         if (!entered) return;
         try
         {
-            foreach (var entry in outbox.Snapshot().Where(x => x.ReportType is ReportType or PreviousReportType or LegacyPassiveReportType or ActorNameReportType))
+            foreach (var entry in outbox.Snapshot().Where(x => x.Quarantine is null &&
+                         x.ReportType is ReportType or PreviousReportType or LegacyPassiveReportType or ActorNameReportType))
             {
                 try
                 {
@@ -145,6 +177,23 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
                     using var request = new HttpRequestMessage(HttpMethod.Post, isActorName ? ResolveActorNameEndpoint(configuration.ServerUrl) : ResolveEndpoint(configuration.ServerUrl)) { Content = JsonContent.Create(body) };
                     request.Headers.Add("X-Api-Key", WorkshopHostApiKeyRouting.ResolveAcquisitionKey(configuration));
                     using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                    if (response.StatusCode == HttpStatusCode.Conflict)
+                    {
+                        if (await IsConfirmedIdentityConflictAsync(response, cancellationToken).ConfigureAwait(false))
+                        {
+                            outbox.QuarantineConflict(entry.Id);
+                            reportFailure(new HttpRequestException(
+                                "The server confirmed an evidence identity conflict. The original report is retained in durable quarantine; " +
+                                "later pending intelligence reports can continue. Quarantined reports require reconciliation and are not retried automatically.",
+                                inner: null, statusCode: response.StatusCode));
+                            continue;
+                        }
+                        throw new HttpRequestException(
+                            "Market intelligence upload returned an unrecognized HTTP 409. " +
+                            "The report remains pending; no report was quarantined and later uploads remain blocked.",
+                            inner: null,
+                            statusCode: response.StatusCode);
+                    }
                     response.EnsureSuccessStatusCode();
                     outbox.Remove(entry.Id);
                 }
@@ -153,6 +202,40 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
             }
         }
         finally { flushGate.Release(); }
+    }
+
+    private static async Task<bool> IsConfirmedIdentityConflictAsync(
+        HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        if (response.Content is null)
+            return false;
+        // Never log an arbitrary error body or allow an unbounded proxy response here.
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var buffer = new byte[4097];
+        var length = 0;
+        while (length < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(length), cancellationToken).ConfigureAwait(false);
+            if (read == 0) break;
+            length += read;
+        }
+        if (length > 4096)
+            return false;
+        try
+        {
+            using var json = JsonDocument.Parse(buffer.AsMemory(0, length));
+            if (json.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+            if (json.RootElement.TryGetProperty("code", out var code))
+                return code.ValueKind == JsonValueKind.String && code.GetString() == MarketEvidenceErrors.IdempotencyConflict;
+            // Compatibility with the receiver deployed before the additive error code.
+            return json.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String &&
+                   error.GetString() == MarketEvidenceErrors.IdempotencyConflictMessage;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string ResolveEndpoint(string serverUrl)
