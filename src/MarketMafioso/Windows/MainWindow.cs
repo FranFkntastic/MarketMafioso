@@ -600,6 +600,7 @@ public class MainWindow : Window, IDisposable
         var listingView = marketBoardAcquisition.GetView();
         var nativeListingPresentation = marketBoardAcquisition.GetNativePresentationState();
         var tradeExecution = tradeQueueRunner.Snapshot;
+        var tradeCapability = tradeQueueRunner.InspectExecutionCapability();
         var tradeInventory = tradeQueueIo.ObserveTradeableInventory();
         var tradeValidation = tradeInventory.IsAuthoritative
             ? TradeQueuePlanner.Validate(config.TradeQueueItems, tradeInventory.Stacks)
@@ -687,6 +688,8 @@ public class MainWindow : Window, IDisposable
             },
             TradeQueue = new AgentBridgeTradeQueueTruth
             {
+                ExecutionCapabilityAvailable = tradeCapability.Available,
+                ExecutionCapabilityMessage = tradeCapability.Message,
                 State = tradeExecution.State.ToString(),
                 Message = tradeExecution.Message,
                 RunId = tradeExecution.RunId,

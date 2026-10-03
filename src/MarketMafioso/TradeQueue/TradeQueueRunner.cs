@@ -84,6 +84,13 @@ public sealed class TradeQueueRunner : IDisposable
 
     public bool IsActive => Snapshot.IsActive;
 
+    /// <summary>Resolves capability evidence without selecting a recipient or starting any operation.</summary>
+    public (bool Available, string Message) InspectExecutionCapability()
+    {
+        var available = io.TryGetExecutionReadiness(out var error);
+        return (available, available ? "Trade native entry points and context layout are available." : error);
+    }
+
     public bool HasResumeCheckpoint =>
         Snapshot.State is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped &&
         queue.Count > 0 &&
