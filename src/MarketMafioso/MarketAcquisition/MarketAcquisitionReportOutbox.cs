@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Security.Cryptography;
 using Franthropy.Dalamud.Persistence;
 
 namespace MarketMafioso.MarketAcquisition;
@@ -15,6 +17,17 @@ public sealed record MarketAcquisitionReportOutboxEntry
     public string? RequestId { get; init; }
     public string PayloadJson { get; init; } = string.Empty;
     public DateTimeOffset EnqueuedAtUtc { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MarketAcquisitionReportQuarantine? Quarantine { get; init; }
+}
+
+public sealed record MarketAcquisitionReportQuarantine
+{
+    public const string ConflictReason = "The server confirmed conflicting market evidence for an existing identity.";
+    public int HttpStatusCode { get; init; } = 409;
+    public DateTimeOffset QuarantinedAtUtc { get; init; }
+    public string PayloadSha256 { get; init; } = string.Empty;
+    public string Reason { get; init; } = ConflictReason;
 }
 
 public interface IMarketAcquisitionReportOutbox
@@ -111,6 +124,37 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
             return entries.OrderBy(entry => entry.EnqueuedAtUtc).ToArray();
     }
 
+    public MarketAcquisitionReportOutboxEntry QuarantineConflict(string id)
+    {
+        lock (sync)
+        {
+            var index = entries.FindIndex(entry => entry.Id.Equals(id, StringComparison.Ordinal));
+            if (index < 0)
+                throw new InvalidOperationException("The conflicting report is no longer present in the outbox.");
+            var existing = entries[index];
+            if (existing.Quarantine is not null)
+                return existing;
+            var quarantined = existing with
+            {
+                Quarantine = new MarketAcquisitionReportQuarantine
+                {
+                    QuarantinedAtUtc = DateTimeOffset.UtcNow,
+                    PayloadSha256 = PayloadHash(existing.PayloadJson),
+                },
+            };
+            EnsureQuarantineBackup();
+            // A standard put record retains compatibility with older journal readers.
+            // Publish the in-memory status only after its full record reaches disk.
+            AppendJournalRecord(new OutboxJournalRecord
+            {
+                Operation = OutboxJournalOperation.Put,
+                Entry = quarantined,
+            }, flushToDisk: true);
+            entries[index] = quarantined;
+            return quarantined;
+        }
+    }
+
     public void Remove(string id) => RemoveMany([id]);
 
     public void RemoveMany(IReadOnlyCollection<string> ids)
@@ -122,6 +166,8 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
         var idSet = ids.ToHashSet(StringComparer.Ordinal);
         lock (sync)
         {
+            if (entries.Any(entry => idSet.Contains(entry.Id) && entry.Quarantine is not null))
+                throw new InvalidOperationException("Quarantined reports cannot be acknowledged or removed automatically.");
             var removed = entries.Where(entry => idSet.Contains(entry.Id)).ToArray();
             if (removed.Length == 0)
                 return;
@@ -208,11 +254,28 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
         switch (record.Operation)
         {
             case OutboxJournalOperation.Put when record.Entry != null:
-                entriesById.TryAdd(record.Entry.Id, record.Entry);
+                if (record.Entry.Quarantine is { } quarantine)
+                {
+                    if (quarantine.HttpStatusCode != 409 || quarantine.QuarantinedAtUtc == default ||
+                        quarantine.Reason != MarketAcquisitionReportQuarantine.ConflictReason ||
+                        quarantine.PayloadSha256 != PayloadHash(record.Entry.PayloadJson))
+                        throw new InvalidDataException("An outbox quarantine record has invalid conflict evidence.");
+                    if (entriesById.TryGetValue(record.Entry.Id, out var original) &&
+                        (original with { Quarantine = quarantine } != record.Entry ||
+                         original.Quarantine is not null && original.Quarantine != quarantine))
+                        throw new InvalidDataException("An outbox quarantine record changes the original report.");
+                    entriesById[record.Entry.Id] = record.Entry;
+                }
+                else
+                    entriesById.TryAdd(record.Entry.Id, record.Entry);
                 break;
             case OutboxJournalOperation.Remove when record.Ids != null:
                 foreach (var id in record.Ids)
+                {
+                    if (entriesById.TryGetValue(id, out var retained) && retained.Quarantine is not null)
+                        throw new InvalidDataException("An outbox journal removes a quarantined report.");
                     entriesById.Remove(id);
+                }
                 break;
             default:
                 throw new InvalidDataException(
@@ -220,7 +283,7 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
         }
     }
 
-    private void AppendJournalRecord(OutboxJournalRecord record)
+    private void AppendJournalRecord(OutboxJournalRecord record, bool flushToDisk = false)
     {
         EnsureParentDirectory();
         var json = JsonSerializer.Serialize(record, JsonOptions);
@@ -233,7 +296,36 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
             bufferSize: 64 * 1024,
             FileOptions.SequentialScan);
         stream.Write(bytes);
+        if (flushToDisk)
+            stream.Flush(flushToDisk: true);
         observePhysicalWrite?.Invoke(bytes.LongLength);
+    }
+
+    private static string PayloadHash(string payload) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+
+    private void EnsureQuarantineBackup()
+    {
+        var destination = path + ".pre-quarantine.bak";
+        if (File.Exists(destination))
+            return;
+        var temporaryPath = destination + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using (var original = File.OpenRead(path))
+            using (var backup = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
+                       FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                original.CopyTo(backup);
+                backup.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, destination);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
     }
 
     private void CompactJournalAtStartupWhenNeeded(int recordCount)

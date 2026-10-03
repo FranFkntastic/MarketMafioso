@@ -11,6 +11,36 @@ namespace MarketMafioso.Server.ContractTests;
 public sealed class MarketIntelligenceContractTests
 {
     [Fact]
+    public async Task HttpConflict_IsExplicitWhileIdenticalRetryStillSucceeds()
+    {
+        await using var application = ServerTestHost.Create(host =>
+        {
+            host.Configuration["MarketMafioso:RequireApiKey"] = "true";
+            host.Configuration["MarketMafioso:ClientApiKey"] = "test-key";
+        });
+        using var client = application.CreateClient();
+        var original = Book("confirmed-conflict", DateTimeOffset.UtcNow.AddHours(-9));
+        async Task<HttpResponseMessage> Send(MarketEvidenceUploadRequest evidence)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/market-intelligence/evidence")
+            {
+                Content = JsonContent.Create(evidence),
+            };
+            request.Headers.Add("X-Api-Key", "test-key");
+            return await client.SendAsync(request);
+        }
+        using var initial = await Send(original);
+        using var identical = await Send(original);
+        using var conflicting = await Send(original with { ObservedAtUtc = original.ObservedAtUtc.AddHours(8) });
+        Assert.Equal(HttpStatusCode.OK, initial.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, identical.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, conflicting.StatusCode);
+        var json = await conflicting.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal(MarketEvidenceErrors.IdempotencyConflict, json.GetProperty("code").GetString());
+        Assert.Equal(MarketEvidenceErrors.IdempotencyConflictMessage, json.GetProperty("error").GetString());
+    }
+
+    [Fact]
     public async Task PluginIngestBypassesDashboardSessionButLedgerDoesNot()
     {
         await using var application = ServerTestHost.Create(host =>

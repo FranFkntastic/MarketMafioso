@@ -186,7 +186,7 @@ public class MainWindow : Window, IDisposable
             config,
             acquisitionHttpClient,
             Plugin.PluginInterface.GetPluginConfigDirectory(),
-            ex => log.Warning(ex, "[MarketMafioso] Passive market evidence remains queued for retry."));
+            ex => log.Warning(ex, "[MarketMafioso] Market intelligence reporting requires attention."));
         var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         var marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
@@ -569,7 +569,8 @@ public class MainWindow : Window, IDisposable
             () => _ = routeEngine.Stop(),
             forceRetryRetainerListingRefresh,
             Plugin.Instance.RestartTimer,
-            AgentReviewRegistry);
+            AgentReviewRegistry,
+            marketIntelligencePassiveReporter.CreateStatus);
 
         acquisitionWorkspace.RestoreClaimIntoBuilder();
         acquisitionWorkspace.RestoreFinalizedDryRunPlan(
@@ -631,6 +632,7 @@ public class MainWindow : Window, IDisposable
             WorkspaceBusy = acquisitionWorkspace.IsBusy,
             ClaimedRequestId = acquisitionWorkspace.ClaimedRequest?.Id,
             PreparedPlanStatus = acquisitionWorkspace.PreparedPlan?.Status,
+            MarketIntelligenceReporting = marketIntelligencePassiveReporter.CreateStatus(),
             CraftAppraisal = acquisitionRequestBuilder.CreateAgentBridgeCraftAppraisalTruth(),
             WorkshopRestock = new AgentBridgeWorkshopRestockTruth
             {

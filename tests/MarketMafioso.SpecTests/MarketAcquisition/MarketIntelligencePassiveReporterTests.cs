@@ -70,7 +70,7 @@ public sealed class MarketIntelligencePassiveReporterTests
     }
 
     [Fact]
-    public async Task Conflict_RetainsJournalBytesAndBlocksLaterReportsAcrossRestart()
+    public async Task UnrecognizedConflict_RetainsJournalBytesAndBlocksLaterReportsAcrossRestart()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"mmf-intelligence-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
@@ -91,6 +91,7 @@ public sealed class MarketIntelligencePassiveReporterTests
                 using var reporter = new MarketIntelligencePassiveReporter(TestConfiguration(), http, directory, failures.Enqueue);
                 await WaitUntilAsync(() => failures.Count == restart + 1);
                 Assert.Equal(2, reporter.Pending.Count);
+                Assert.Empty(reporter.Quarantined);
                 Assert.Equal(before, File.ReadAllBytes(path));
             }
 
@@ -102,8 +103,8 @@ public sealed class MarketIntelligencePassiveReporterTests
             {
                 var conflict = Assert.IsType<HttpRequestException>(failure);
                 Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
-                Assert.Contains("retained unchanged", conflict.Message);
-                Assert.Contains("later intelligence reports remain blocked", conflict.Message);
+                Assert.Contains("unrecognized HTTP 409", conflict.Message);
+                Assert.Contains("later uploads remain blocked", conflict.Message);
                 Assert.DoesNotContain("test-key", conflict.Message);
                 Assert.DoesNotContain("Retainer One", conflict.Message);
             });
@@ -115,12 +116,128 @@ public sealed class MarketIntelligencePassiveReporterTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ConfirmedConflict_IsDurableAndLaterReportUploadsWithoutRetryingConflict(bool codedResponse)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-intelligence-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "market-intelligence-outbox.jsonl");
+            var outbox = new FileMarketAcquisitionReportOutbox(path);
+            var first = Evidence();
+            outbox.Put("first", "market-evidence.v2", first.OccurrenceId, first);
+            outbox.Put("next", "market-evidence.v2", "browse-two", first with
+            {
+                IdempotencyKey = "passive-two", OccurrenceId = "browse-two", ItemId = 43,
+            });
+            var original = outbox.Snapshot()[0];
+            var originalJournal = File.ReadAllBytes(path);
+            var response = codedResponse
+                ? JsonSerializer.Serialize(new { code = MarketEvidenceErrors.IdempotencyConflict })
+                : JsonSerializer.Serialize(new { error = MarketEvidenceErrors.IdempotencyConflictMessage });
+            var handler = new RecordingHandler(HttpStatusCode.OK, response, request =>
+                JsonSerializer.Deserialize<MarketEvidenceUploadRequest>(request.Body,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!.OccurrenceId == "browse-one"
+                    ? HttpStatusCode.Conflict : HttpStatusCode.OK);
+            var failures = new ConcurrentQueue<Exception>();
+            using (var http = new HttpClient(handler))
+            using (var reporter = new MarketIntelligencePassiveReporter(TestConfiguration(), http, directory, failures.Enqueue))
+            {
+                await WaitUntilAsync(() => reporter.Pending.Count == 0 && reporter.Quarantined.Count == 1);
+                var retained = Assert.Single(reporter.Quarantined);
+                Assert.Equal(original, retained with { Quarantine = null });
+                Assert.Equal(originalJournal, File.ReadAllBytes(path + ".pre-quarantine.bak"));
+                Assert.Equal(2, handler.Requests.Count);
+                var status = reporter.CreateStatus();
+                Assert.Equal(0, status.PendingCount);
+                Assert.Equal(1, status.QuarantinedCount);
+                Assert.NotNull(status.LastQuarantinedAtUtc);
+                Assert.Equal(MarketAcquisitionReportQuarantine.ConflictReason, status.QuarantineReason);
+                var diagnostics = JsonSerializer.Serialize(status);
+                Assert.DoesNotContain("Retainer One", diagnostics);
+                Assert.DoesNotContain("test-key", diagnostics);
+                Assert.DoesNotContain("passive-one", diagnostics);
+                Assert.Single(failures);
+            }
+
+            var restartedHandler = new RecordingHandler();
+            using var restartedHttp = new HttpClient(restartedHandler);
+            using var restarted = new MarketIntelligencePassiveReporter(TestConfiguration(), restartedHttp, directory, failures.Enqueue);
+            Assert.Single(restarted.Quarantined);
+            restarted.Enqueue(first with { OccurrenceId = "browse-three", IdempotencyKey = "passive-three" });
+            await WaitUntilAsync(() => restarted.Pending.Count == 0 && restartedHandler.Requests.Count == 1);
+            Assert.DoesNotContain("browse-one", Assert.Single(restartedHandler.Requests).Body);
+            Assert.Single(restarted.Quarantined);
+            Assert.Equal(originalJournal, File.ReadAllBytes(path + ".pre-quarantine.bak"));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "{\"code\":\"market-evidence-idempotency-conflict\"}")]
+    [InlineData(HttpStatusCode.Unauthorized, "{}")]
+    [InlineData(HttpStatusCode.Conflict, "<html>Conflict</html>")]
+    [InlineData(HttpStatusCode.Conflict, "{\"code\":42}")]
+    [InlineData(HttpStatusCode.Conflict, "{\"code\":\"another-conflict\",\"error\":\"The idempotency key is already bound to different market evidence.\"}")]
+    public async Task UnconfirmedFailure_RemainsPendingAndRetryUsesOriginalBody(HttpStatusCode code, string response)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-intelligence-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var failures = new ConcurrentQueue<Exception>();
+            var handler = new RecordingHandler(code, response);
+            string original;
+            using (var http = new HttpClient(handler))
+            using (var reporter = new MarketIntelligencePassiveReporter(TestConfiguration(), http, directory, failures.Enqueue))
+            {
+                reporter.Enqueue(Evidence());
+                await WaitUntilAsync(() => !failures.IsEmpty);
+                Assert.Single(reporter.Pending);
+                Assert.Empty(reporter.Quarantined);
+                original = Assert.Single(handler.Requests).Body;
+                Assert.False(File.Exists(Path.Combine(directory, "market-intelligence-outbox.jsonl.pre-quarantine.bak")));
+            }
+            var recoveredHandler = new RecordingHandler();
+            using var recoveredHttp = new HttpClient(recoveredHandler);
+            using var recovered = new MarketIntelligencePassiveReporter(TestConfiguration(), recoveredHttp, directory, failures.Enqueue);
+            await WaitUntilAsync(() => recovered.Pending.Count == 0);
+            Assert.Equal(original, Assert.Single(recoveredHandler.Requests).Body);
+            Assert.Empty(recovered.Quarantined);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     private static Configuration TestConfiguration() => new()
     {
         ServerUrl = "https://example.test/api/inventory",
         ApiKey = "test-key",
         PluginInstanceId = "test-instance",
     };
+
+    [Fact]
+    public async Task OversizedConflictResponse_IsNotTrustedOrLogged()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-intelligence-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var response = JsonSerializer.Serialize(new { code = MarketEvidenceErrors.IdempotencyConflict,
+                privateProxyDetail = new string('x', 5000) });
+            var failures = new ConcurrentQueue<Exception>();
+            using var http = new HttpClient(new RecordingHandler(HttpStatusCode.Conflict, response));
+            using var reporter = new MarketIntelligencePassiveReporter(TestConfiguration(), http, directory, failures.Enqueue);
+            reporter.Enqueue(Evidence());
+            await WaitUntilAsync(() => !failures.IsEmpty);
+            Assert.Single(reporter.Pending);
+            Assert.Empty(reporter.Quarantined);
+            Assert.DoesNotContain("privateProxyDetail", Assert.Single(failures).Message);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
 
     [Fact]
     public async Task RecreatedCollector_PreservesTwoObservationsDespiteSameCounterAndInstance()
@@ -335,7 +452,8 @@ public sealed class MarketIntelligencePassiveReporterTests
             Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("{}") });
     }
 
-    private sealed class RecordingHandler(HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
+    private sealed class RecordingHandler(HttpStatusCode status = HttpStatusCode.OK, string responseBody = "{}",
+        Func<RecordedRequest, HttpStatusCode>? resolveStatus = null) : HttpMessageHandler
     {
         private readonly object sync = new();
         private readonly List<RecordedRequest> requests = [];
@@ -354,7 +472,7 @@ public sealed class MarketIntelligencePassiveReporterTests
                 request.Headers.GetValues("X-Api-Key").Single(),
                 await request.Content!.ReadAsStringAsync(cancellationToken));
             lock (sync) requests.Add(recorded);
-            return new HttpResponseMessage(status) { Content = new StringContent("{}") };
+            return new HttpResponseMessage(resolveStatus?.Invoke(recorded) ?? status) { Content = new StringContent(responseBody) };
         }
     }
 

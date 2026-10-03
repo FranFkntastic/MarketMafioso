@@ -5,6 +5,7 @@ using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Settings;
 using MarketMafioso.Windows.Main.Settings;
+using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.Windows.Main;
 
@@ -24,7 +25,8 @@ internal sealed class SettingsTabPanel
         Action stopMarketAcquisitionRoute,
         Func<uint, bool> forceRetryRetainerListingRefresh,
         Action restartTimer,
-        AgentBridgeUiReviewRegistry reviewRegistry)
+        AgentBridgeUiReviewRegistry reviewRegistry,
+        Func<MarketIntelligenceReportingStatus>? intelligenceStatus = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
@@ -34,7 +36,7 @@ internal sealed class SettingsTabPanel
 
         var pages = new List<SettingsPageDescriptor>
         {
-            new ServerConnectionSettingsPage(config, reporter, log).Descriptor,
+            new ServerConnectionSettingsPage(config, reporter, log, intelligenceStatus).Descriptor,
             new TradeQueueSettingsPage(config, reviewRegistry).Descriptor,
         };
         pages.AddRange(new InventoryReporterSettingsPages(config, restartTimer, reporter, reviewRegistry).Descriptors);

@@ -15,6 +15,7 @@ internal sealed class ServerConnectionSettingsPage
     private readonly Configuration config;
     private readonly HttpReporter reporter;
     private readonly IPluginLog log;
+    private readonly Func<MarketIntelligenceReportingStatus>? intelligenceStatus;
     private string urlBuffer;
     private string apiKeyBuffer;
     private string acquisitionApiKeyBuffer;
@@ -23,11 +24,13 @@ internal sealed class ServerConnectionSettingsPage
     private bool showApiKey;
     private bool showAcquisitionApiKey;
 
-    public ServerConnectionSettingsPage(Configuration config, HttpReporter reporter, IPluginLog log)
+    public ServerConnectionSettingsPage(Configuration config, HttpReporter reporter, IPluginLog log,
+        Func<MarketIntelligenceReportingStatus>? intelligenceStatus = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
+        this.intelligenceStatus = intelligenceStatus;
         urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
         acquisitionApiKeyBuffer = config.CommandPickupApiKey;
@@ -36,7 +39,7 @@ internal sealed class ServerConnectionSettingsPage
             "General / Server Connection",
             Draw,
             0,
-            searchTerms: ["receiver URL", "API key", "MMF client key", "Craft Architect key", "dashboard", "local receiver", "development server"]);
+            searchTerms: ["receiver URL", "API key", "MMF client key", "Craft Architect key", "dashboard", "local receiver", "development server", "market intelligence", "quarantine", "conflict", "pending reports"]);
     }
 
     public SettingsPageDescriptor Descriptor { get; }
@@ -149,6 +152,21 @@ internal sealed class ServerConnectionSettingsPage
 
         if (context.Matches("Dashboard URL", "open dashboard", "receiver dashboard"))
             DrawDashboard();
+        if (intelligenceStatus is not null && context.Matches("Market intelligence", "quarantine", "conflict", "pending reports"))
+        {
+            var status = intelligenceStatus();
+            ImGui.Spacing();
+            ImGui.Text("Market intelligence reports");
+            ImGui.Text($"Pending: {status.PendingCount} | Quarantined conflicts: {status.QuarantinedCount}");
+            if (status.QuarantinedCount > 0)
+            {
+                ImGui.TextColored(MarketMafiosoUiTheme.Error, "Conflicting reports are preserved and require reconciliation.");
+                ImGui.TextWrapped("Other pending reports continue uploading. Quarantined reports are not retried automatically.");
+                ImGui.TextWrapped(status.QuarantineReason ?? string.Empty);
+                if (status.LastQuarantinedAtUtc is { } last)
+                    ImGui.Text($"Last conflict: {last:yyyy-MM-dd HH:mm:ss} UTC");
+            }
+        }
     }
 
     private void DrawDashboard()

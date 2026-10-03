@@ -25,6 +25,7 @@ public sealed record AgentBridgeTruth
     public required bool WorkspaceBusy { get; init; }
     public required string? ClaimedRequestId { get; init; }
     public required string? PreparedPlanStatus { get; init; }
+    public MarketIntelligenceReportingStatus? MarketIntelligenceReporting { get; init; }
     public AgentBridgeCraftAppraisalTruth? CraftAppraisal { get; init; }
     public AgentBridgeWorkshopRestockTruth? WorkshopRestock { get; init; }
     public AgentBridgeWorkshopAssemblyTruth? WorkshopAssembly { get; init; }

@@ -36,7 +36,7 @@ internal static class MarketIntelligenceEndpoints
                 ? Results.Unauthorized()
                 : Results.Ok(await store.RecordActorNameAsync(accountId.Value, request, token));
         }
-        catch (MarketEvidenceIdempotencyConflictException exception) { return Results.Conflict(new { error = exception.Message }); }
+        catch (MarketEvidenceIdempotencyConflictException exception) { return EvidenceConflict(exception); }
         catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
     }
 
@@ -59,13 +59,16 @@ internal static class MarketIntelligenceEndpoints
         }
         catch (MarketEvidenceIdempotencyConflictException exception)
         {
-            return Results.Conflict(new { error = exception.Message });
+            return EvidenceConflict(exception);
         }
         catch (ArgumentException exception)
         {
             return Results.BadRequest(new { error = exception.Message });
         }
     }
+
+    private static IResult EvidenceConflict(MarketEvidenceIdempotencyConflictException exception) =>
+        Results.Conflict(new { code = MarketEvidenceErrors.IdempotencyConflict, error = exception.Message });
 
     private static async Task<IResult> RecordImportReceipt(
         HttpRequest request,
