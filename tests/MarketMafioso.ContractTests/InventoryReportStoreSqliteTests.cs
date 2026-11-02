@@ -316,6 +316,7 @@ public sealed class InventoryReportStoreSqliteTests
     public async Task SaveAsync_PrunesSemanticHistoryWithoutDeletingCurrentHead()
     {
         var fixture = await StoreFixture.CreateAsync(
+            CountPolicy,
             new KeyValuePair<string, string?>("MarketMafioso:InventoryHistoryRetentionPerCharacter", "1"));
 
         var first = await fixture.Store.SaveAsync(
@@ -353,6 +354,7 @@ public sealed class InventoryReportStoreSqliteTests
     public async Task SaveAsync_SerializesConcurrentInventoryWrites()
     {
         var fixture = await StoreFixture.CreateAsync(
+            CountPolicy,
             new KeyValuePair<string, string?>("MarketMafioso:InventoryHistoryRetentionPerCharacter", "8"));
 
         var writes = Enumerable.Range(0, 16)
@@ -466,6 +468,7 @@ public sealed class InventoryReportStoreSqliteTests
     public async Task SaveAsync_QuietCharacterCurrentHeadSurvivesOtherCharacterHistoryPruning()
     {
         var fixture = await StoreFixture.CreateAsync(
+            CountPolicy,
             new KeyValuePair<string, string?>("MarketMafioso:InventoryHistoryRetentionPerCharacter", "1"));
         var quiet = await fixture.Store.SaveAsync(
             fixture.AccountId,
@@ -795,6 +798,153 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.Equal((uint)3, accepted.Report.PlayerInventory[0].Items[0].ItemId);
         Assert.Equal(before.Token, after.Token);
         Assert.Equal(2, await fixture.CountAsync("snapshots"));
+    }
+
+    private static readonly KeyValuePair<string, string?> CountPolicy =
+        new("MarketMafioso:InventoryHistory:Policy", "Count");
+
+    [Fact]
+    public async Task SaveAsync_TieredPolicyKeepsSparseHistoryBeyondTheCountLimit()
+    {
+        var fixture = await StoreFixture.CreateAsync(
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistoryRetentionPerCharacter", "1"),
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistory:KeepAllDays", "1"),
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistory:HourlyDays", "2"),
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistory:DailyDays", "3"));
+        var now = DateTimeOffset.UtcNow;
+        var weekAgo = new DateTimeOffset(now.UtcDateTime.Date.AddDays(-10).AddHours(12), TimeSpan.Zero);
+        var old = new List<string>();
+        for (var index = 0; index < 4; index++)
+        {
+            var stored = await fixture.Store.SaveAsync(
+                fixture.AccountId,
+                CreateReport("Tiered Character", "Siren", checked((uint)(200 + index))),
+                null,
+                "{}",
+                CancellationToken.None);
+            // Four changes inside the same UTC hour ten days ago: only one should survive weekly bucketing.
+            await fixture.SetReceivedAtAsync(stored.Id, weekAgo.AddMinutes(index));
+            old.Add(stored.Id);
+        }
+
+        var recent = new List<string>();
+        for (var index = 0; index < 3; index++)
+        {
+            var stored = await fixture.Store.SaveAsync(
+                fixture.AccountId,
+                CreateReport("Tiered Character", "Siren", checked((uint)(300 + index))),
+                null,
+                "{}",
+                CancellationToken.None);
+            await fixture.SetReceivedAtAsync(stored.Id, now.AddMinutes(-30 + index));
+            recent.Add(stored.Id);
+        }
+
+        var current = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Tiered Character", "Siren", 400),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var ids = (await fixture.Store.ListSummariesAsync(fixture.AccountId, null, CancellationToken.None))
+            .Select(summary => summary.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains(current.Id, ids);
+        Assert.All(recent, id => Assert.Contains(id, ids));
+        Assert.Contains(old[^1], ids);
+        Assert.Equal(1, old.Count(ids.Contains));
+        Assert.Equal(5, ids.Count);
+    }
+
+    [Fact]
+    public async Task SaveAsync_TieredPolicyPrefersCompleteRetainerSnapshotWithinABucket()
+    {
+        var fixture = await StoreFixture.CreateAsync(
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistoryRetentionPerCharacter", "0"),
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistory:KeepAllDays", "1"),
+            new KeyValuePair<string, string?>("MarketMafioso:InventoryHistory:CarryForwardMissingRetainers", "false"));
+        var bucketStart = new DateTimeOffset(DateTimeOffset.UtcNow.UtcDateTime.Date.AddDays(-5).AddHours(9), TimeSpan.Zero);
+
+        var complete = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Bucket Character", "Siren", 500) with
+            {
+                Retainers = [Retainer("Keeper", 9001, "Bucket Character", "Siren", 3)],
+            },
+            null,
+            "{}",
+            CancellationToken.None);
+        await fixture.SetReceivedAtAsync(complete.Id, bucketStart.AddMinutes(5));
+        var partial = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Bucket Character", "Siren", 501),
+            null,
+            "{}",
+            CancellationToken.None);
+        await fixture.SetReceivedAtAsync(partial.Id, bucketStart.AddMinutes(40));
+        await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Bucket Character", "Siren", 502),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        Assert.NotNull(await fixture.Store.GetAsync(fixture.AccountId, complete.Id, CancellationToken.None));
+        Assert.Null(await fixture.Store.GetAsync(fixture.AccountId, partial.Id, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SaveAsync_ReportWithoutRetainersCarriesForwardLastRetainerState()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var full = CreateReport("Partial Character", "Siren", 42) with
+        {
+            Retainers = [Retainer("Keeper", 9001, "Partial Character", "Siren", 3) with { Gil = 12345 }],
+        };
+        var first = await fixture.Store.SaveAsync(fixture.AccountId, full, null, "{}", CancellationToken.None);
+        var before = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+
+        var identicalPartial = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            full with { Retainers = [], Timestamp = "2026-06-23T12:05:00.0000000Z" },
+            null,
+            "{}",
+            CancellationToken.None);
+        var afterIdentical = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+
+        Assert.Equal(first.Id, identicalPartial.Id);
+        Assert.Equal(before.Token, afterIdentical.Token);
+        Assert.Equal(1, await fixture.CountAsync("snapshots"));
+
+        var changedPartial = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Partial Character", "Siren", 43) with { Timestamp = "2026-06-23T12:10:00.0000000Z" },
+            null,
+            "{}",
+            CancellationToken.None);
+
+        Assert.NotEqual(first.Id, changedPartial.Id);
+        var retainer = Assert.Single(changedPartial.Report.Retainers);
+        Assert.Equal((ulong)12345, retainer.Gil);
+        Assert.Equal(9001UL, retainer.RetainerId);
+        Assert.Equal((uint)43, changedPartial.Report.PlayerInventory[0].Items[0].ItemId);
+    }
+
+    [Fact]
+    public void TieredPolicy_RejectsMisorderedTiers()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["MarketMafioso:InventoryHistory:KeepAllDays"] = "30",
+                ["MarketMafioso:InventoryHistory:HourlyDays"] = "10",
+            })
+            .Build();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            MarketMafioso.Server.Inventory.InventoryHistoryRetentionPolicy.Resolve(configuration));
     }
 
     private static InventoryReport WithItemType(InventoryReport report, string? itemType) => report with

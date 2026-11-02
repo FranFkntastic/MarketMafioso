@@ -152,6 +152,8 @@ internal static class DashboardDataEndpoints
         SqliteConnectionFactory connectionFactory,
         InventoryReportStore store,
         long? characterId,
+        DateTimeOffset? before,
+        int? limit,
         CancellationToken token)
     {
         if (characterId != null &&
@@ -160,13 +162,17 @@ internal static class DashboardDataEndpoints
             return Results.NotFound();
         }
 
+        if (limit is < 1 or > 5000)
+            return Results.BadRequest(new { error = "unsupported_limit" });
+
         var summaries = new List<ReportSummary>();
         foreach (var accountId in await GetAccountIdsAsync(context, connectionFactory, token))
             summaries.AddRange(await store.ListSummariesAsync(accountId, characterId, token));
 
         return Results.Ok(summaries
+            .Where(summary => before is null || summary.ReceivedAt < before.Value)
             .OrderByDescending(summary => summary.ReceivedAt)
-            .Take(500)
+            .Take(limit ?? 500)
             .ToArray());
     }
 
@@ -262,6 +268,7 @@ internal static class DashboardDataEndpoints
         return Results.Ok(new ReceiverStorageSummaryView
         {
             HistoryRetentionPerCharacter = InventoryReportWritePersistence.ResolveHistoryRetention(configuration),
+            HistoryRetentionPolicy = InventoryHistoryRetentionPolicy.Resolve(configuration).Describe(),
             RawJsonRetentionCount = configuration.GetValue("MarketMafioso:RawJsonRetentionCount", 20),
             DiagnosticEventRetentionCount = Math.Max(
                 1,

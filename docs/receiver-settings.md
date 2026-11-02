@@ -178,9 +178,25 @@ Example:
 MarketMafioso__InventoryHistoryRetentionPerCharacter=100
 ```
 
-This controls how many older semantic inventory changes are kept for each character. Every character's current inventory is retained separately and is never deleted by history pruning. Existing installations may continue using `MarketMafioso__SnapshotRetentionCount` as a deprecated alias until they adopt the new setting.
+With the default tiered history policy, this is the number of newest semantic changes per character that are always kept regardless of age. With `MarketMafioso__InventoryHistory__Policy=Count`, it is the hard limit on older semantic changes per character (the previous behavior). Every character's current inventory is retained separately and is never deleted by history pruning. Existing installations may continue using `MarketMafioso__SnapshotRetentionCount` as a deprecated alias until they adopt the new setting.
 
-Why it matters: this is the main inventory history limit. Higher values keep more history and use more disk space.
+### `MarketMafioso__InventoryHistory__*`
+
+Example (defaults):
+
+```text
+MarketMafioso__InventoryHistory__Policy=Tiered
+MarketMafioso__InventoryHistory__KeepAllDays=14
+MarketMafioso__InventoryHistory__HourlyDays=90
+MarketMafioso__InventoryHistory__DailyDays=365
+MarketMafioso__InventoryHistory__CarryForwardMissingRetainers=true
+```
+
+The tiered policy keeps every semantic inventory change for `KeepAllDays`, then the last change of each UTC hour until `HourlyDays`, then the last change of each UTC day until `DailyDays`, and the last change of each ISO week forever. Within an hour, day, or week, a snapshot that includes retainer data is preferred over one that only observed the player inventory. Tiers must satisfy `KeepAllDays <= HourlyDays <= DailyDays`.
+
+Identical consecutive uploads never create history. When `CarryForwardMissingRetainers` is enabled, an upload that contains no retainers keeps the character's last stored retainer state instead of recording every retainer as empty, so partial uploads do not create history or make retainer gil and stock appear to drop to zero.
+
+Why it matters: long-term gil and stock history stays available at reduced resolution instead of being lost once the per-character count is reached. Set `Policy=Count` to restore the previous count-only pruning.
 
 ### `MarketMafioso__DiagnosticsRetentionCount`
 

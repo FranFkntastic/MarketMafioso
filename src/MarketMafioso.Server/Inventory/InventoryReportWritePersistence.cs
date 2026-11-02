@@ -11,6 +11,7 @@ internal sealed class InventoryReportWritePersistence(
     ILogger log)
 {
     private readonly HashSet<string> incompleteIdentityDiagnostics = new(StringComparer.Ordinal);
+    private readonly InventoryReportReadQueries headReader = new(connectionFactory);
 
     public async Task<InventoryWriteResult> WriteSnapshotAsync(
         SqliteConnection connection,
@@ -32,10 +33,21 @@ internal sealed class InventoryReportWritePersistence(
             receivedAt,
             cancellationToken);
 
-        var semanticHash = InventorySemanticFingerprint.Compute(report);
         var current = characterId is null
             ? null
             : await ReadCurrentHeadAsync(connection, transaction, accountId, characterId.Value, cancellationToken);
+        if (current is not null && report.Retainers.Count == 0 && current.RetainerCount > 0 &&
+            InventoryHistoryRetentionPolicy.Resolve(configuration).CarryForwardMissingRetainers)
+        {
+            // A report without retainer evidence is a partial observation, not proof that every retainer
+            // emptied. Preserve the last truthful retainer state so partial uploads neither churn history
+            // nor read as retainer gil/stock dropping to zero.
+            var head = await headReader.GetAsync(accountId, current.SnapshotId, cancellationToken);
+            if (head is not null && head.Report.Retainers.Count > 0)
+                report = report with { Retainers = head.Report.Retainers };
+        }
+
+        var semanticHash = InventorySemanticFingerprint.Compute(report);
         if (current is not null && IsOlderObservation(report.Timestamp, current.ReportTimestamp))
         {
             await TouchCurrentDeliveryAsync(
@@ -129,10 +141,14 @@ internal sealed class InventoryReportWritePersistence(
         long accountId,
         CancellationToken cancellationToken)
     {
-        var retentionCount = ResolveHistoryRetention(configuration);
-        if (retentionCount < 1)
-            throw new InvalidOperationException("MarketMafioso:InventoryHistoryRetentionPerCharacter must be one or greater.");
+        var policy = InventoryHistoryRetentionPolicy.Resolve(configuration);
+        if (policy.Mode == InventoryHistoryRetentionMode.Tiered)
+        {
+            await PruneTieredHistoryAsync(connection, transaction, accountId, policy, DateTimeOffset.UtcNow, cancellationToken);
+            return;
+        }
 
+        var retentionCount = policy.MinimumRecent;
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -159,6 +175,61 @@ internal sealed class InventoryReportWritePersistence(
         command.Parameters.AddWithValue("$accountId", accountId);
         command.Parameters.AddWithValue("$retentionCount", retentionCount);
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    internal static async Task<int> PruneTieredHistoryAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        InventoryHistoryRetentionPolicy policy,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var candidates = new List<InventoryHistoryCandidate>();
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = """
+                SELECT
+                    s.id,
+                    s.character_id,
+                    s.received_at_utc,
+                    EXISTS (
+                        SELECT 1 FROM inventory_owners o
+                        WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer')
+                FROM snapshots s
+                WHERE s.account_id = $accountId
+                  AND s.is_current = 0;
+                """;
+            select.Parameters.AddWithValue("$accountId", accountId);
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                candidates.Add(new InventoryHistoryCandidate(
+                    reader.GetString(0),
+                    reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                    DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    reader.GetInt64(3) != 0));
+            }
+        }
+
+        var prunable = policy.SelectPrunable(candidates, now);
+        if (prunable.Count == 0)
+            return 0;
+
+        await using var delete = connection.CreateCommand();
+        delete.Transaction = transaction;
+        delete.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId AND id = $id AND is_current = 0";
+        delete.Parameters.AddWithValue("$accountId", accountId);
+        var idParameter = delete.Parameters.Add("$id", SqliteType.Text);
+        var deleted = 0;
+        foreach (var id in prunable)
+        {
+            idParameter.Value = id;
+            deleted += await delete.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        return deleted;
     }
 
     public async Task<bool> DeleteAsync(long accountId, string id, CancellationToken cancellationToken)
@@ -473,11 +544,16 @@ internal sealed class InventoryReportWritePersistence(
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            SELECT id, semantic_revision, semantic_hash, report_timestamp
-            FROM snapshots
-            WHERE account_id = $accountId
-              AND character_id = $characterId
-              AND is_current = 1
+            SELECT
+                s.id,
+                s.semantic_revision,
+                s.semantic_hash,
+                s.report_timestamp,
+                (SELECT COUNT(*) FROM inventory_owners o WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer')
+            FROM snapshots s
+            WHERE s.account_id = $accountId
+              AND s.character_id = $characterId
+              AND s.is_current = 1
             LIMIT 1;
             """;
         command.Parameters.AddWithValue("$accountId", accountId);
@@ -489,7 +565,8 @@ internal sealed class InventoryReportWritePersistence(
             reader.GetString(0),
             reader.GetInt64(1),
             reader.IsDBNull(2) ? null : reader.GetString(2),
-            reader.GetString(3));
+            reader.GetString(3),
+            reader.GetInt32(4));
     }
 
     private static bool IsOlderObservation(string incomingTimestamp, string currentTimestamp) =>
@@ -592,7 +669,8 @@ internal sealed class InventoryReportWritePersistence(
         string SnapshotId,
         long SemanticRevision,
         string? SemanticHash,
-        string ReportTimestamp);
+        string ReportTimestamp,
+        int RetainerCount);
 
     private static async Task InsertOwnerAsync(
         SqliteConnection connection,

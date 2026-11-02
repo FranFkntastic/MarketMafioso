@@ -125,7 +125,7 @@ else
                         </MudItem>
                         <MudItem xs="12">
                             <div class="snapshot-retention-summary wide">
-                                <MetricTile Label="History Retention" Value="@($"{_storage.HistoryRetentionPerCharacter:N0} changes / character")" />
+                                <MetricTile Label="History Retention" Value="@(string.IsNullOrWhiteSpace(_storage.HistoryRetentionPolicy) ? $"{_storage.HistoryRetentionPerCharacter:N0} changes / character" : _storage.HistoryRetentionPolicy)" />
                                 <MetricTile Label="Raw JSON Retention" Value="@($"{_storage.RawJsonRetentionCount:N0} snapshots")" />
                                 <MetricTile Label="Newest Snapshot" Value="@NewestSnapshotLabel" />
                                 <MetricTile Label="Oldest Snapshot" Value="@OldestSnapshotLabel" />
