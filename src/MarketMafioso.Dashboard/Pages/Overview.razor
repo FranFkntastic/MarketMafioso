@@ -60,7 +60,7 @@ else
                         <MetricTile Label="Raw JSON Pruned" Value="@_storage.RawJsonPrunedCount.ToString("N0")" />
                     </div>
                     <MudText Typo="Typo.caption" Class="muted">
-                        Semantic history keeps up to @_storage.HistoryRetentionPerCharacter.ToString("N0") change(s) per character; current inventories are retained separately.
+                        Semantic history: @HistoryRetentionLabel; current inventories are retained separately.
                         raw JSON retention keeps @_storage.RawJsonRetentionCount.ToString("N0").
                     </MudText>
                 </div>
@@ -157,6 +157,10 @@ else
     private string InventoryCharacterLabel => string.IsNullOrWhiteSpace(_inventory.CharacterName)
         ? "No inventory snapshot"
         : $"{_inventory.CharacterName} @ {_inventory.HomeWorld}";
+
+    private string HistoryRetentionLabel => string.IsNullOrWhiteSpace(_storage.HistoryRetentionPolicy)
+        ? $"keeps up to {_storage.HistoryRetentionPerCharacter:N0} change(s) per character"
+        : _storage.HistoryRetentionPolicy;
 
     private string InventorySnapshotLabel => _inventory.ReceivedAt == null
         ? "No latest snapshot available."

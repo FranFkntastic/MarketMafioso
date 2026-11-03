@@ -163,7 +163,7 @@ For the dev VPS, the database is:
 /srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
 ```
 
-The receiver keeps one durable current inventory for every known character. Older semantic changes remain available through structured dashboard and API views up to `MarketMafioso__InventoryHistoryRetentionPerCharacter`, defaulting to `100` per character. Original incoming JSON is governed separately by `MarketMafioso__RawJsonRetentionCount`, defaulting to `20`; raw JSON routes return `410 Gone` with `raw_json_pruned` after that diagnostic payload is pruned.
+The receiver keeps one durable current inventory for every known character. Older semantic changes remain available through structured dashboard and API views under a tiered policy: every change for 14 days, then hourly to 90 days, daily to 365 days, and weekly forever, with the newest `MarketMafioso__InventoryHistoryRetentionPerCharacter` changes (default `100`) always kept. See `MarketMafioso__InventoryHistory__*` in the receiver settings reference; `MarketMafioso__InventoryHistory__Policy=Count` restores count-only pruning. `GET /api/inventory/snapshots` accepts optional `before` (timestamp) and `limit` (1-5000, default 500) query parameters for paging older history. Original incoming JSON is governed separately by `MarketMafioso__RawJsonRetentionCount`, defaulting to `20`; raw JSON routes return `410 Gone` with `raw_json_pruned` after that diagnostic payload is pruned.
 
 On first startup after the SQLite migration, existing JSON files under `data/reports/*.json` are imported into the default local account. The import is idempotent and does not delete source JSON files.
 

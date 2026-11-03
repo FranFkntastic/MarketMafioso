@@ -26,6 +26,7 @@ public sealed record DashboardFeatureFlagsView
 public sealed record ReceiverStorageSummaryView
 {
     public int HistoryRetentionPerCharacter { get; init; }
+    public string HistoryRetentionPolicy { get; init; } = string.Empty;
     public int RawJsonRetentionCount { get; init; }
     public int DiagnosticEventRetentionCount { get; init; }
     public int SnapshotCount { get; init; }
