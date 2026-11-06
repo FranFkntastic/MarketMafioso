@@ -15,6 +15,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
     private readonly Configuration config;
     private readonly QuartermasterIpcClient client;
     private readonly Action saveConfiguration;
+    private readonly Action persistIdentity;
     private readonly Func<DateTimeOffset> utcNow;
     private DateTimeOffset nextOperationPollAtUtc;
     private string? activeScopeKey;
@@ -27,11 +28,13 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         Configuration config,
         QuartermasterIpcClient client,
         Action saveConfiguration,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        Action? persistIdentity = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
         this.saveConfiguration = saveConfiguration ?? throw new ArgumentNullException(nameof(saveConfiguration));
+        this.persistIdentity = persistIdentity ?? saveConfiguration;
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         client.Changed += OnQuartermasterChanged;
     }
@@ -149,7 +152,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             config.QuartermasterWorkshopRequests[key] = candidate;
             try
             {
-                saveConfiguration();
+                persistIdentity();
                 persisted = candidate;
             }
             catch (Exception ex)
@@ -252,14 +255,17 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         {
             activeScopeKey = key;
             LastOperation = null;
+            nextOperationPollAtUtc = DateTimeOffset.MinValue;
         }
-        if (!config.QuartermasterWorkshopRequests.TryGetValue(key, out var persisted) ||
-            string.IsNullOrWhiteSpace(persisted.OperationId) ||
-            !IsRefreshDue || IsTerminalStatus(persisted.Status))
+        if (!IsRefreshDue)
             return;
-
         var wakeReason = Interlocked.Exchange(ref changePending, 0) != 0 ? "event" : "fallback";
         nextOperationPollAtUtc = utcNow().AddSeconds(20);
+        if (!config.QuartermasterWorkshopRequests.TryGetValue(key, out var persisted) ||
+            string.IsNullOrWhiteSpace(persisted.OperationId) ||
+            IsTerminalStatus(persisted.Status))
+            return;
+
         DiagnosticLog?.Invoke($"[MarketMafioso] RQ restock wake={wakeReason} operation={persisted.OperationId}");
         if (!client.TryGetOperation(persisted.OperationId, ownerScope, out var operation, out var error))
         {

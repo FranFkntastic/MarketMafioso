@@ -6,6 +6,68 @@ namespace MarketMafioso.SpecTests.WorkshopPrep;
 public sealed class WorkshopQuartermasterCadenceTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void IdentitySaveIsSynchronousAndFailurePreventsDispatch(bool failSave)
+    {
+        var adapter = new Adapter { SnapshotJson = StockSnapshot };
+        using var client = new QuartermasterIpcClient(adapter);
+        var config = new Configuration();
+        var identitySaved = false;
+        var deferred = new WorkshopRestockPersistence(() => { }, _ => { });
+        using var service = new WorkshopQuartermasterRequestService(config, client, deferred.Request,
+            persistIdentity: () =>
+            {
+                Assert.Null(adapter.SubmittedJson);
+                var identity = Assert.Single(config.QuartermasterWorkshopRequests).Value;
+                Assert.False(string.IsNullOrWhiteSpace(identity.OperationId));
+                if (failSave) throw new IOException("disk unavailable");
+                identitySaved = true;
+            });
+        service.Submit(new(10, 20, "Tester", "World"), [new(12580, "Holy Cedar Lumber", 0, 84, 0, 156, 84, 0, [])]);
+        Assert.Equal(!failSave, identitySaved);
+        Assert.Equal(!failSave, adapter.SubmittedJson is not null);
+        if (failSave)
+        {
+            Assert.Empty(config.QuartermasterWorkshopRequests);
+            Assert.Contains("retrieval was not started", service.LastStatus);
+        }
+    }
+
+    [Fact]
+    public void StoppedPolicyStillReconcilesTerminalRemoteStateOnChanged()
+    {
+        var adapter = new Adapter { OperationJson = Operation("running", 1) };
+        using var client = new QuartermasterIpcClient(adapter);
+        var config = new Configuration(); // No active local restock policy.
+        config.QuartermasterWorkshopRequests["10:20"] = new()
+        { RequestId = "request", OperationId = "operation", Status = "running" };
+        var now = DateTimeOffset.UtcNow;
+        using var service = new WorkshopQuartermasterRequestService(config, client, () => { }, () => now);
+        QuartermasterOwnerScope Owner() => new(10, 20, "Tester", "World");
+        Assert.True(WorkshopRestockService.TickRequestReconciliation(service, Owner));
+        Assert.False(WorkshopRestockService.TickRequestReconciliation(service, Owner));
+        adapter.OperationJson = Operation("completed", 2);
+        adapter.Emit();
+        Assert.True(WorkshopRestockService.TickRequestReconciliation(service, Owner));
+        Assert.Equal("completed", config.QuartermasterWorkshopRequests["10:20"].Status);
+        Assert.False(WorkshopRestockService.TickRequestReconciliation(service, Owner));
+    }
+
+    private static string Operation(string status, int revision) => System.Text.Json.JsonSerializer.Serialize(new
+    {
+        schema = QuartermasterIpcClient.OperationSchema, operationId = "operation", requestId = "request",
+        providerInstanceId = "test", revision, status,
+        owner = new { localContentId = 10, homeWorldId = 20, characterName = "Tester" },
+    });
+
+    private const string StockSnapshot = """
+        {"schema":"gooseworks-quartermaster-snapshot/v1","providerInstanceId":"test","revision":1,
+        "generatedAtUtc":"2026-11-06T08:20:41Z","owner":{"localContentId":10,"homeWorldId":20,"characterName":"Tester"},
+        "retainers":[{"retainerId":200,"retainerName":"Scrongle","observedAtUtc":"2026-11-06T08:20:41Z",
+        "bags":[{"bagName":"RetainerInventory1","items":[{"itemId":12580,"quantity":12}]}]}]}
+        """;
+    [Theory]
     [InlineData(12, 10)]
     [InlineData(0, 10)]
     [InlineData(12, 11)]
@@ -99,7 +161,7 @@ public sealed class WorkshopQuartermasterCadenceTests
         public bool HasSnapshot => SnapshotJson is not null;
         public bool HasSubmitShortages => SnapshotJson is not null;
         public bool HasSubmitElementalDeposit => false;
-        public string? OperationJson { get; init; }
+        public string? OperationJson { get; set; }
         public string? SnapshotJson { get; init; }
         public string? SubmittedJson { get; private set; }
         public bool HasOperation => OperationJson is not null;
