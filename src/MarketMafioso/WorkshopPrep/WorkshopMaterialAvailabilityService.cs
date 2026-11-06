@@ -68,7 +68,9 @@ public static class WorkshopMaterialAvailabilityService
     {
         var bagTimes = report.Bags.Select(bag => ParseTimestamp(bag.ObservedAtUtc))
             .Where(time => time != DateTimeOffset.MinValue).ToArray();
-        return bagTimes.Length > 0 ? bagTimes.Min() : ParseTimestamp(report.LastUpdated);
+        // No inventory observation is no evidence: roster/gil/listing headers must never
+        // make an absent inventory look like a fresh zero that outranks RQ's cache.
+        return bagTimes.Length > 0 ? bagTimes.Min() : DateTimeOffset.MinValue;
     }
 
     private static DateTimeOffset ParseTimestamp(string? value) =>

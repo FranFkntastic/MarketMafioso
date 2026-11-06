@@ -59,6 +59,15 @@ public sealed class WorkshopRetainerFreshnessTests
     }
 
     [Fact]
+    public void Report_without_inventory_observation_never_outranks_RQ()
+    {
+        var report = Report(200, 0, "07:31:53") with { LastUpdated = "2026-11-06T09:00:00Z", Bags = [] };
+        var line = Build([report], Snapshot(12));
+        Assert.Equal(12, line.QuartermasterStock);
+        Assert.Equal(12, line.RetrievableStock);
+    }
+
+    [Fact]
     public void Mismatched_shared_owner_is_excluded()
     {
         var report = Report(201, 156, "08:30:00") with { OwnerCharacterName = "Other" };
