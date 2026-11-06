@@ -273,7 +273,7 @@ public sealed class TradeQueueRunner : IDisposable
             var now = clock();
             if (deadline != default && now > deadline)
             {
-                Fail($"Timed out while {DescribeState(Snapshot.State)}.");
+                Fail($"Timed out while {DescribeState(Snapshot.State)}. Last observation: {Snapshot.Message}");
                 return;
             }
 
@@ -415,6 +415,18 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         }
 
+        var liveOffer = io.ObserveOffer();
+        if (liveOffer == null)
+        {
+            Snapshot = Snapshot with { Message = "Verifying the trade recipient..." };
+            return;
+        }
+        if (partner == null || liveOffer.PartnerEntityId != (uint)partner.GameObjectId)
+        {
+            Fail("The live trade recipient differs from the selected recipient.");
+            return;
+        }
+
         if (batch.GilAmount > 0 && !(offerGilOperation?.IsCompleted ?? false))
         {
             if (now < nextActionAt)
@@ -422,6 +434,7 @@ public sealed class TradeQueueRunner : IDisposable
 
             offerGilOperation ??= new TradeQueueOfferGilOperation(io, batch.GilAmount);
             var gilResult = offerGilOperation.Advance();
+            Snapshot = Snapshot with { Message = gilResult.Message };
             if (gilResult.IsFailed)
             {
                 Fail(gilResult.Message);
@@ -438,10 +451,13 @@ public sealed class TradeQueueRunner : IDisposable
             if (io.OfferedSlotCount != batch.Lines.Count)
                 return;
 
+            if (!VerifyOffer())
+                return;
+
             SetActive(
                 TradeQueueExecutionState.WaitingForPartner,
                 $"Batch {batchNumber:N0} is loaded; locking the trade when ready.",
-                PartnerTimeout);
+                OfferItemsTimeout);
             return;
         }
 
@@ -480,10 +496,15 @@ public sealed class TradeQueueRunner : IDisposable
         if (readyClicked || now < nextActionAt)
             return;
 
+        if (!VerifyOffer())
+            return;
+
         if (!io.TryClickReady(out var error))
         {
             if (!string.IsNullOrWhiteSpace(error))
                 Fail(error);
+            else
+                Snapshot = Snapshot with { Message = $"Waiting for trade readiness. {io.ReadyDiagnostic}" };
             return;
         }
 
@@ -507,6 +528,9 @@ public sealed class TradeQueueRunner : IDisposable
         if (confirmationSubmitted)
             return;
 
+        if (!VerifyOffer())
+            return;
+
         if (!io.TryConfirmTrade(out var error))
         {
             if (!string.IsNullOrWhiteSpace(error))
@@ -519,6 +543,26 @@ public sealed class TradeQueueRunner : IDisposable
             TradeQueueExecutionState.VerifyingInventory,
             $"Confirmed batch {batchNumber:N0}; waiting for inventory evidence.",
             CompletionTimeout);
+    }
+
+    private bool VerifyOffer()
+    {
+        var offer = io.ObserveOffer();
+        if (offer == null || offer.SyncPending || io.IsNumericInputOpen)
+        {
+            Snapshot = Snapshot with { Message = "Verifying the live trade offer..." };
+            return false;
+        }
+        if (partner == null || batch == null)
+        {
+            Fail("The expected trade recipient or batch is unavailable.");
+            return false;
+        }
+        var mismatch = offer.Mismatch(partner, batch);
+        if (mismatch == null)
+            return true;
+        Fail(mismatch);
+        return false;
     }
 
     private void TickVerifyingInventory(DateTimeOffset now)

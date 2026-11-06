@@ -368,6 +368,8 @@ public sealed class TradeQueueRunnerTests
         runner.Tick();
 
         Assert.Equal(600_000, io.SubmittedGil);
+        // Gil acknowledgement adds a distinct state transition before completion verification.
+        runner.Tick();
         Assert.Equal(TradeQueueExecutionState.Completed, runner.Snapshot.State);
         Assert.Empty(queue);
     }
@@ -691,8 +693,88 @@ public sealed class TradeQueueRunnerTests
         Assert.True(opened.ActionIssued);
         Assert.Equal(TradeQueueOfferGilState.WaitingForInput, offer.Advance().State);
 
+        Assert.Equal(TradeQueueOfferGilState.WaitingForAcknowledgement, offer.Advance().State);
         Assert.True(offer.Advance().IsCompleted);
         Assert.Equal(600_000, io.SubmittedGil);
+    }
+
+    [Fact]
+    public void GilSubmissionWaitsForReadbackWithoutResubmitting()
+    {
+        var io = new FakeIo(Inventory(1)) { HoldGilAcknowledgement = true };
+        var offer = new TradeQueueOfferGilOperation(io, 600_000);
+        offer.Advance();
+        offer.Advance();
+        for (var i = 0; i < 5; i++) Assert.False(offer.Advance().IsCompleted);
+        Assert.Equal(1, io.QuantitySubmissions);
+        io.HoldGilAcknowledgement = false;
+        Assert.True(offer.Advance().IsCompleted);
+    }
+
+    [Fact]
+    public void GilReadbackRejectsAnIncorrectNonzeroAmount()
+    {
+        var io = new FakeIo(Inventory(1)) { ObservedGilOverride = 7 };
+        var offer = new TradeQueueOfferGilOperation(io, 600_000);
+        offer.Advance();
+        offer.Advance();
+        Assert.True(offer.Advance().IsFailed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ChangedOfferIsRejectedBeforeReadyOrConfirmation(bool afterReady)
+    {
+        var io = new FakeIo(Inventory(2)) { IsTradeOpenValue = true };
+        var clock = new TestClock();
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(Queue(2), new(), () => { }, io,
+            new FakeQualityLowering(), coordinator, TestPluginLog.Create(), clock.Read,
+            new() { NormalizeHighQualityItems = false });
+        runner.Start();
+        for (var i = 0; i < 15 && runner.Snapshot.State != TradeQueueExecutionState.WaitingForPartner; i++)
+        { clock.Advance(TimeSpan.FromMilliseconds(250)); runner.Tick(); }
+        Assert.Equal(TradeQueueExecutionState.WaitingForPartner, runner.Snapshot.State);
+        if (afterReady)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(250)); runner.Tick();
+            Assert.Equal(TradeQueueExecutionState.ConfirmingTrade, runner.Snapshot.State);
+        }
+        io.ObservedGilOverride = 7;
+        clock.Advance(TimeSpan.FromMilliseconds(250)); runner.Tick();
+        Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
+        Assert.Equal(0, io.ConfirmAttempts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunnerWaitsForDisabledReadyOrTimesOutWithItsDiagnostic(bool timeout)
+    {
+        var io = new FakeIo(Inventory(2)) { ReadyEnabled = false, IsTradeOpenValue = true };
+        var clock = new TestClock();
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(Queue(2), new(), () => { }, io,
+            new FakeQualityLowering(), coordinator, TestPluginLog.Create(), clock.Read,
+            new() { NormalizeHighQualityItems = false });
+        runner.Start();
+        for (var i = 0; i < 10; i++) { clock.Advance(TimeSpan.FromMilliseconds(250)); runner.Tick(); }
+        Assert.Equal(TradeQueueExecutionState.WaitingForPartner, runner.Snapshot.State);
+        Assert.Equal(0, io.CancelTradeAttempts);
+        if (timeout)
+        {
+            clock.Advance(TimeSpan.FromSeconds(31));
+            runner.Tick();
+            Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
+            Assert.Contains("disabled", runner.Snapshot.Message);
+        }
+        else
+        {
+            io.ReadyEnabled = true;
+            runner.Tick();
+            Assert.Equal(TradeQueueExecutionState.ConfirmingTrade, runner.Snapshot.State);
+        }
     }
 
     [Fact]
@@ -1005,6 +1087,7 @@ public sealed class TradeQueueRunnerTests
                 if (isTradeOpenValue && !value)
                 {
                     OfferedSlotCount = 0;
+                    offeredItems.Clear();
                     IsNumericInputOpen = false;
                 }
 
@@ -1034,6 +1117,15 @@ public sealed class TradeQueueRunnerTests
         }
         public int OfferedSlotCount { get; private set; }
         public int SubmittedGil { get; private set; }
+        public bool HoldGilAcknowledgement { get; set; }
+        public int? ObservedGilOverride { get; set; }
+        public int QuantitySubmissions { get; private set; }
+        public int ConfirmAttempts { get; private set; }
+        public bool ReadyEnabled { get; set; } = true;
+        public string ReadyDiagnostic => "Trade control is disabled.";
+        private readonly List<TradeOfferedItem> offeredItems = new();
+        public TradeOfferObservation? ObserveOffer() => new(1,
+            ObservedGilOverride ?? (HoldGilAcknowledgement ? 0 : SubmittedGil), false, offeredItems);
         public int OpenTradeAttempts { get; private set; }
         public int OfferItemAttempts { get; private set; }
         public bool HasSelectedPartner { get; set; } = true;
@@ -1106,6 +1198,7 @@ public sealed class TradeQueueRunnerTests
         {
             error = string.Empty;
             OfferItemAttempts++;
+            offeredItems.Add(new(line.ItemId, line.IsHighQuality, line.Quantity));
             if (line.SourceStackQuantity > 1)
             {
                 IsNumericInputOpen = true;
@@ -1130,6 +1223,7 @@ public sealed class TradeQueueRunnerTests
 
             error = string.Empty;
             LastSubmittedQuantity = quantity;
+            QuantitySubmissions++;
             if (gilInputRequested)
             {
                 SubmittedGil = quantity;
@@ -1159,11 +1253,12 @@ public sealed class TradeQueueRunnerTests
         public bool TryClickReady(out string error)
         {
             error = string.Empty;
-            return true;
+            return ReadyEnabled;
         }
 
         public bool TryConfirmTrade(out string error)
         {
+            ConfirmAttempts++;
             error = string.Empty;
             return true;
         }

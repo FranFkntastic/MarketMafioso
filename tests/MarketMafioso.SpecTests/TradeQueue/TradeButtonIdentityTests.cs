@@ -4,6 +4,16 @@ namespace MarketMafioso.SpecTests.TradeQueue;
 
 public sealed class TradeButtonIdentityTests
 {
+    [Fact]
+    public void ReadinessAndIdentityFailuresHaveDistinctDiagnostics()
+    {
+        Assert.Equal(TradeButtonState.Missing, TradeButtonIdentity.Observe([], "Trade").State);
+        Assert.Equal(TradeButtonState.Disabled, TradeButtonIdentity.Observe([new(3, "Trade", true, false)], "Trade").State);
+        var wrong = TradeButtonIdentity.Observe([new(3, "Other", true, true)], "Trade");
+        Assert.Equal(TradeButtonState.LabelMismatch, wrong.State);
+        Assert.Contains("Other", wrong.Diagnostic);
+        Assert.Equal(TradeButtonState.Ambiguous, TradeButtonIdentity.Observe([new(3, "Trade", true, true), new(4, "Trade", true, true)], "Trade").State);
+    }
     [Theory]
     [InlineData("Trade", "Cancel")]
     [InlineData("Anbieten", "Abbrechen")]

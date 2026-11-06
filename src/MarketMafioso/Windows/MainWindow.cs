@@ -659,6 +659,8 @@ public class MainWindow : Window, IDisposable
                 AutoAcceptIncomingTrades = config.AutoAcceptIncomingTrades,
                 IsTradeOpen = tradeQueueIo.IsTradeOpen,
                 OfferedSlotCount = tradeQueueIo.IsTradeOpen ? tradeQueueIo.OfferedSlotCount : 0,
+                LiveOffer = tradeQueueIo.ObserveOffer(),
+                ReadyDiagnostic = tradeQueueIo.IsTradeOpen ? tradeQueueIo.ReadyDiagnostic : null,
                 CanReceiverReady = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanClickReady,
                 CanReceiverConfirm = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanConfirmTrade,
                 CanReceiverCancel = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanCancelTrade,

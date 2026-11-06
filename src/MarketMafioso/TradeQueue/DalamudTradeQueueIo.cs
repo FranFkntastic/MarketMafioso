@@ -30,6 +30,8 @@ public interface ITradeQueueIo
     bool IsTradeOpen { get; }
     bool IsNumericInputOpen { get; }
     int OfferedSlotCount { get; }
+    TradeOfferObservation? ObserveOffer();
+    string ReadyDiagnostic { get; }
     bool CanClickReady { get; }
     bool CanConfirmTrade { get; }
     bool CanCancelTrade { get; }
@@ -115,6 +117,26 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         IsTradeOpen && TradeDetectionManager.PartnerReadyForTrade;
 
     public unsafe bool CanClickReady => TryGetReadyButton(out _, out _);
+
+    public unsafe string ReadyDiagnostic => ObserveReadyButton(out _, out _).Diagnostic;
+
+    public unsafe TradeOfferObservation? ObserveOffer()
+    {
+        var manager = InventoryManager.Instance();
+        var agent = AgentTrade.Instance();
+        if (!IsTradeOpen || manager == null || agent == null || !agent->IsAgentActive() ||
+            manager->TradePartnerEntityId == 0 || manager->TradePartnerEntityId == 0xE0000000)
+            return null;
+        var items = new List<TradeOfferedItem>();
+        for (var index = 0; index < TradeQueuePlanner.MaximumTradeSlots; index++)
+        {
+            var item = manager->TradeItemsLocal[index];
+            if (item.ItemId != 0 && item.Quantity > 0)
+                items.Add(new(item.ItemId, item.Flags.HasFlag(InventoryItem.ItemFlags.HighQuality), checked((int)item.Quantity)));
+        }
+        return new(manager->TradePartnerEntityId, checked((int)manager->TradeItemsLocal[5].Quantity),
+            manager->TradeIsSyncPending, items);
+    }
 
     public unsafe bool CanConfirmTrade => TryGetTradeConfirmation(out _);
 
@@ -411,9 +433,11 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         if (!TryResolveTradeCapability(out error))
             return false;
 
-        if (!TryGetReadyButton(out var addon, out var button))
+        var observation = ObserveReadyButton(out var addon, out var button);
+        if (observation.State != TradeButtonState.Ready)
         {
-            error = "The trade action has no unique visible enabled Button with the expected localized label.";
+            // Transient readiness is not a capability failure. The runner owns a bounded wait.
+            error = observation.State == TradeButtonState.Ambiguous ? observation.Diagnostic : string.Empty;
             return false;
         }
 
@@ -450,7 +474,10 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     private unsafe bool TryGetReadyButton(
         out AtkUnitBase* addon,
-        out AtkComponentButton* button) => TryGetTradeButton(tradeReadyText, out addon, out button);
+        out AtkComponentButton* button) => ObserveReadyButton(out addon, out button).State == TradeButtonState.Ready;
+
+    private unsafe TradeButtonObservation ObserveReadyButton(out AtkUnitBase* addon, out AtkComponentButton* button)
+        => ObserveTradeButton(tradeReadyText, out addon, out button);
 
     private unsafe bool TryGetTradeConfirmation(out AddonSelectYesno* addon)
     {
@@ -481,11 +508,14 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         out AtkComponentButton* button) => TryGetTradeButton(tradeCancelText, out addon, out button);
 
     private unsafe bool TryGetTradeButton(string label, out AtkUnitBase* addon, out AtkComponentButton* button)
+        => ObserveTradeButton(label, out addon, out button).State == TradeButtonState.Ready;
+
+    private unsafe TradeButtonObservation ObserveTradeButton(string label, out AtkUnitBase* addon, out AtkComponentButton* button)
     {
         addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
         button = null;
         if (!IsReady(addon) || addon->UldManager.NodeList == null)
-            return false;
+            return new(TradeButtonState.Loading, 0, "Waiting for the trade controls to load.");
 
         var candidates = new List<TradeButtonCandidate>();
         for (var index = 0; index < addon->UldManager.NodeListCount; index++)
@@ -499,8 +529,9 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
             candidates.Add(new((nint)candidate, candidate->ButtonTextNode->NodeText.ExtractText(),
                 node->IsVisible(), candidate->IsEnabled));
         }
-        button = (AtkComponentButton*)TradeButtonIdentity.FindUnique(candidates, label);
-        return button != null;
+        var observation = TradeButtonIdentity.Observe(candidates, label);
+        button = (AtkComponentButton*)observation.Address;
+        return observation;
     }
 
     private static TradeQueuePartner CreatePartner(IPlayerCharacter player) =>
