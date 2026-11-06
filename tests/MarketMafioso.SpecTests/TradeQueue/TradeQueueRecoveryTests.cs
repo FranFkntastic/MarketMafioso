@@ -4,6 +4,52 @@ namespace MarketMafioso.SpecTests.TradeQueue;
 
 public sealed partial class TradeQueueRunnerTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InvalidOfferDoesNotBlockOwnedCancellation(bool resumed)
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(2)) { IsTradeOpenValue = true, OfferUnavailable = true };
+        var recovery = new TradeQueueRecoveryState { CancellationPending = resumed, PartnerEntityId = 1 };
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(queue, new(), () => { }, io,
+            new FakeQualityLowering(), coordinator, TestPluginLog.Create(),
+            policy: new() { NormalizeHighQualityItems = false }, recovery: recovery);
+        if (resumed)
+            runner.Tick();
+        else
+        {
+            Assert.True(runner.Start().Success);
+            runner.Stop();
+        }
+        Assert.Equal(1, io.CancelTradeAttempts);
+        Assert.False(io.IsTradeOpen);
+        Assert.False(runner.IsActive);
+        Assert.False(recovery.CancellationPending);
+        Assert.Equal(2, Assert.Single(queue).Quantity);
+        Assert.Equal(0, io.ConfirmAttempts);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(99u)]
+    public void InvalidOfferDoesNotAuthorizeCancellingAnUnknownOrDifferentRecipient(uint? recipient)
+    {
+        var io = new FakeIo(Inventory(2))
+        {
+            IsTradeOpenValue = true, OfferUnavailable = true, ObservedPartnerEntityId = recipient,
+        };
+        var recovery = new TradeQueueRecoveryState { CancellationPending = true, PartnerEntityId = 1 };
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(Queue(2), new(), () => { }, io,
+            new FakeQualityLowering(), coordinator, TestPluginLog.Create(), recovery: recovery);
+        runner.Tick();
+        Assert.Equal(0, io.CancelTradeAttempts);
+        Assert.True(io.IsTradeOpen);
+        Assert.Equal(recipient == null, recovery.CancellationPending);
+    }
+
     [Fact]
     public void StopSupersedesRebuildWhileCheckpointClearingFails()
     {

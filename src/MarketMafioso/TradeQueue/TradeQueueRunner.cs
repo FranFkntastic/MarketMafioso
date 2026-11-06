@@ -791,10 +791,12 @@ public sealed class TradeQueueRunner : IDisposable
         }
         if (io.IsTradeOpen)
         {
-            var offer = io.ObserveOffer();
-            if (offer == null)
+            // Invalid offer contents prevent confirmation, not cancellation of
+            // our own session. Read recipient ownership independently.
+            var partnerEntityId = io.ObserveTradePartnerEntityId();
+            if (partnerEntityId == null)
                 return;
-            if (offer.PartnerEntityId != recovery.PartnerEntityId)
+            if (partnerEntityId != recovery.PartnerEntityId)
             {
                 CompleteFinish(TradeQueueExecutionState.Stopped, "The previous trade session ended; a different trade was left untouched.");
                 return;

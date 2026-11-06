@@ -30,6 +30,7 @@ public interface ITradeQueueIo
     bool PartnerIsAvailable(TradeQueuePartner partner);
     bool IsTradeOpen { get; }
     bool IsNumericInputOpen { get; }
+    uint? ObserveTradePartnerEntityId();
     TradeOfferObservation? ObserveOffer();
     string ReadyDiagnostic { get; }
     bool CanClickReady { get; }
@@ -120,15 +121,24 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public unsafe string ReadyDiagnostic => ObserveReadyButton(out _, out _).Diagnostic;
 
-    public unsafe TradeOfferObservation? ObserveOffer()
+    public unsafe uint? ObserveTradePartnerEntityId()
     {
         var manager = InventoryManager.Instance();
         var agent = AgentTrade.Instance();
         if (!IsTradeOpen || manager == null || agent == null || !agent->IsAgentActive() ||
             manager->TradePartnerEntityId == 0 || manager->TradePartnerEntityId == 0xE0000000)
             return null;
+        return manager->TradePartnerEntityId;
+    }
+
+    public unsafe TradeOfferObservation? ObserveOffer()
+    {
+        var partnerEntityId = ObserveTradePartnerEntityId();
+        if (partnerEntityId == null)
+            return null;
+        var manager = InventoryManager.Instance();
         var container = manager->GetInventoryContainer((InventoryType)TradeInventoryContainerId);
-        return ReadOfferedInventory(container, manager->TradePartnerEntityId, manager->TradeIsSyncPending,
+        return ReadOfferedInventory(container, partnerEntityId.Value, manager->TradeIsSyncPending,
             type => (nint)manager->GetInventoryContainer(type));
     }
 

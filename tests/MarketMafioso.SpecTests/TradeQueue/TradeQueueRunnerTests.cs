@@ -1144,7 +1144,10 @@ public sealed partial class TradeQueueRunnerTests
             offeredItems.Clear();
             offeredItems.AddRange(items);
         }
-        public TradeOfferObservation? ObserveOffer() => new(1,
+        public bool OfferUnavailable { get; set; }
+        public uint? ObservedPartnerEntityId { get; set; } = 1;
+        public uint? ObserveTradePartnerEntityId() => ObservedPartnerEntityId;
+        public TradeOfferObservation? ObserveOffer() => OfferUnavailable ? null : new(1,
             ObservedGilOverride ?? (HoldGilAcknowledgement ? 0 : SubmittedGil), false, offeredItems);
         public int OpenTradeAttempts { get; private set; }
         public int OfferItemAttempts { get; private set; }
