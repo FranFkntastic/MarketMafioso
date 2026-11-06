@@ -29,7 +29,6 @@ public interface ITradeQueueIo
     bool PartnerIsAvailable(TradeQueuePartner partner);
     bool IsTradeOpen { get; }
     bool IsNumericInputOpen { get; }
-    int OfferedSlotCount { get; }
     TradeOfferObservation? ObserveOffer();
     string ReadyDiagnostic { get; }
     bool CanClickReady { get; }
@@ -111,7 +110,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public bool IsTradeOpen => condition[ConditionFlag.TradeOpen];
 
-    public bool TryGetExecutionReadiness(out string error) => TryResolveTradeCapability(out error);
+    public bool TryGetExecutionReadiness(out string error) => TryResolveUiCapability(out error);
 
     public bool IsPartnerReadyForTrade =>
         IsTradeOpen && TradeDetectionManager.PartnerReadyForTrade;
@@ -148,7 +147,9 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
             var itemId = item->GetBaseItemId();
             if (itemId == 0)
                 return null;
-            items.Add(new(itemId, item->GetFlags().HasFlag(InventoryItem.ItemFlags.HighQuality), checked((int)item->Quantity)));
+            items.Add(new(itemId, item->GetFlags().HasFlag(InventoryItem.ItemFlags.HighQuality), checked((int)item->Quantity),
+                item->IsSymbolic ? item->LinkedInventoryType : null,
+                item->IsSymbolic ? item->LinkedItemSlot : null));
         }
         return new(partnerEntityId, checked((int)container->Items[5].Quantity), syncPending, items);
     }
@@ -163,28 +164,6 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         {
             var addon = gameGui.GetAddonByName<AtkUnitBase>(NumericInputAddon, 1);
             return IsReady(addon);
-        }
-    }
-
-    public unsafe int OfferedSlotCount
-    {
-        get
-        {
-            var inventoryManager = InventoryManager.Instance();
-            if (inventoryManager == null)
-                return 0;
-
-            var container = inventoryManager->GetInventoryContainer((InventoryType)TradeInventoryContainerId);
-            if (container == null || !container->IsLoaded)
-                return 0;
-
-            var count = 0;
-            for (var slot = 0; slot < Math.Min(TradeQueuePlanner.MaximumTradeSlots, container->Size); slot++)
-            {
-                if (container->GetInventorySlot(slot)->ItemId != 0)
-                    count++;
-            }
-            return count;
         }
     }
 
@@ -298,9 +277,6 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public bool TryOpenTrade(TradeQueuePartner partner)
     {
-        if (!TryResolveTradeCapability(out _))
-            return false;
-
         if (!TryResolvePartner(partner, out var player))
             return false;
 
@@ -348,7 +324,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public unsafe bool TryOpenGilInput(out string error)
     {
-        if (!TryResolveTradeCapability(out error))
+        if (!TryResolveUiCapability(out error))
             return false;
 
         var addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
@@ -370,13 +346,12 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public unsafe bool TryOfferItem(TradeQueueBatchLine line, out string error)
     {
-        if (!TryResolveTradeCapability(out error))
+        if (!TryResolveItemCapability(out error))
             return false;
 
         var inventoryManager = InventoryManager.Instance();
         if (inventoryManager == null)
         {
-            error = "Inventory manager is unavailable.";
             return false;
         }
 
@@ -384,7 +359,6 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         var container = inventoryManager->GetInventoryContainer(inventoryType);
         if (container == null || !container->IsLoaded || line.SlotIndex < 0 || line.SlotIndex >= container->Size)
         {
-            error = $"Source container {inventoryType} is unavailable.";
             return false;
         }
 
@@ -394,14 +368,12 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
             slot->Quantity != line.SourceStackQuantity ||
             slot->Flags.HasFlag(InventoryItem.ItemFlags.HighQuality) != line.IsHighQuality)
         {
-            error = $"Source slot changed before offering {line.ItemName}.";
             return false;
         }
 
         var agent = AgentTrade.Instance();
         if (agent == null || !agent->IsAgentActive())
         {
-            error = "Trade agent is unavailable.";
             return false;
         }
 
@@ -420,7 +392,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public unsafe bool TrySubmitQuantity(int quantity, out string error)
     {
-        if (!TryResolveTradeCapability(out error))
+        if (!TryResolveUiCapability(out error))
             return false;
 
         var addon = gameGui.GetAddonByName<AtkUnitBase>(NumericInputAddon, 1);
@@ -433,11 +405,16 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         }
 
         var maximum = checked((int)addon->AtkValues[3].UInt);
-        if (quantity <= 0 || quantity > maximum)
+        if (quantity <= 0)
         {
-            error = $"Requested quantity {quantity:N0} exceeds the trade input maximum {maximum:N0}.";
+            error = $"Requested trade quantity {quantity:N0} is invalid.";
             return false;
         }
+        // The source stack can change between native dispatch and dialog load.
+        // Never clamp the user's intent; wait, then let the runner rebuild the
+        // uncommitted offer from fresh inventory if the smaller limit persists.
+        if (quantity > maximum)
+            return false;
 
         addon->FireCallbackInt(quantity);
         return true;
@@ -445,7 +422,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public unsafe bool TryClickReady(out string error)
     {
-        if (!TryResolveTradeCapability(out error))
+        if (!TryResolveUiCapability(out error))
             return false;
 
         var observation = ObserveReadyButton(out var addon, out var button);
@@ -462,7 +439,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public unsafe bool TryConfirmTrade(out string error)
     {
-        if (!TryResolveTradeCapability(out error))
+        if (!TryResolveUiCapability(out error))
             return false;
 
         if (!TryGetTradeConfirmation(out var addon))
@@ -474,7 +451,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public unsafe bool TryCancelTrade(out string error)
     {
-        if (!TryResolveTradeCapability(out error))
+        if (!TryResolveUiCapability(out error))
             return false;
 
         if (!TryGetCancelButton(out var addon, out var button))
@@ -564,7 +541,23 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
     private static unsafe bool IsReady(AtkUnitBase* addon) =>
         addon != null && addon->IsReady && addon->IsVisible;
 
-    private bool TryResolveTradeCapability(out string error)
+    private static bool TryResolveUiCapability(out string error)
+    {
+        try
+        {
+            NativeCapability.RequireAddress(AtkResNode.Addresses.GetAsAtkComponentButton.Value, "Trade Button component resolver");
+            NativeCapability.RequireAddress(AtkUnitBase.Addresses.FireCallback.Value, "Trade UI callbacks");
+            error = string.Empty;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            error = $"Trade UI is unavailable: {exception.Message}";
+            return false;
+        }
+    }
+
+    private bool TryResolveItemCapability(out string error)
     {
         try
         {
@@ -573,8 +566,6 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
                 var contextOffset = checked((int)Marshal.OffsetOf<AgentTrade>(nameof(AgentTrade.InventoryContextEvent)));
                 NativeCapability.RequireTradeContextLayout(Marshal.SizeOf<AgentTrade>(), contextOffset,
                     Marshal.SizeOf<AgentInventoryContext.InventoryContextEvent>());
-                NativeCapability.RequireAddress(AtkResNode.Addresses.GetAsAtkComponentButton.Value, "Trade Button component resolver");
-                NativeCapability.RequireAddress(AtkUnitBase.Addresses.FireCallback.Value, "Trade UI callbacks");
                 offerItemTrade = Marshal.GetDelegateForFunctionPointer<OfferItemTradeDelegate>(
                     NativeCapability.ResolveUnique(sigScanner, OfferItemTradeSignature, "Trade item offering"));
                 tradeContextOffset = contextOffset;
@@ -585,7 +576,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         }
         catch (Exception exception)
         {
-            error = $"Trade Queue is unavailable: {exception.Message}";
+            error = $"Trade item offering is unavailable: {exception.Message}";
             if (!string.Equals(lastCapabilityError, error, StringComparison.Ordinal))
                 log.Warning("[MarketMafioso] {Message}", error);
             lastCapabilityError = error;

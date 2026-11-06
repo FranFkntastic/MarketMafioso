@@ -42,7 +42,7 @@ public unsafe class TradeOfferedInventoryTests
         Assert.Equal(123u, offer.PartnerEntityId);
         Assert.True(offer.SyncPending);
         Assert.Equal(1_000_000, offer.Gil);
-        Assert.Equal(new TradeOfferedItem(42, true, 3), Assert.Single(offer.Items));
+        Assert.Equal(new TradeOfferedItem(42, true, 3, (uint)InventoryType.Inventory1, 7), Assert.Single(offer.Items));
     }
 
     [Fact]

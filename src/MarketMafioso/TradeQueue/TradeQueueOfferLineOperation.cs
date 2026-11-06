@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 
 namespace MarketMafioso.TradeQueue;
 
@@ -26,23 +27,27 @@ internal sealed class TradeQueueOfferLineOperation
 {
     private readonly ITradeQueueIo io;
     private readonly TradeQueueBatchLine line;
-    private readonly int expectedSlotCountBeforeOffer;
-    private readonly int expectedSlotCountAfterOffer;
+    private readonly int expectedQuantityAfterOffer;
     private readonly DateTimeOffset deadline;
     private TradeQueueOfferLineState state = TradeQueueOfferLineState.ReadyToOffer;
 
     public TradeQueueOfferLineOperation(
         ITradeQueueIo io,
         TradeQueueBatchLine line,
-        int expectedSlotCountBeforeOffer,
+        TradeOfferObservation beforeOffer,
         DateTimeOffset deadline)
     {
         this.io = io;
         this.line = line;
-        this.expectedSlotCountBeforeOffer = expectedSlotCountBeforeOffer;
-        expectedSlotCountAfterOffer = checked(expectedSlotCountBeforeOffer + 1);
+        expectedQuantityAfterOffer = checked(QuantityIn(beforeOffer) + line.Quantity);
         this.deadline = deadline;
     }
+
+    public bool HasDispatched => state != TradeQueueOfferLineState.ReadyToOffer;
+
+    private int QuantityIn(TradeOfferObservation offer) => offer.Items
+        .Where(item => item.ItemId == line.ItemId && item.IsHighQuality == line.IsHighQuality)
+        .Sum(item => item.Quantity);
 
     public TradeQueueOfferLineResult Advance(DateTimeOffset now)
     {
@@ -51,15 +56,8 @@ internal sealed class TradeQueueOfferLineOperation
         if (now > deadline)
             return Fail($"Timed out while offering {line.ItemName}.");
 
-        if (io.OfferedSlotCount < expectedSlotCountBeforeOffer)
-            return Fail($"Trade offer slots regressed while offering {line.ItemName}.");
-        if (io.OfferedSlotCount > expectedSlotCountAfterOffer)
-            return Fail($"Trade offer slots advanced unexpectedly while offering {line.ItemName}.");
-
         if (state == TradeQueueOfferLineState.ReadyToOffer)
         {
-            if (io.OfferedSlotCount != expectedSlotCountBeforeOffer)
-                return Fail($"Trade already exposed an unexpected offer slot before offering {line.ItemName}.");
             if (!io.TryOfferItem(line, out var offerError))
                 return string.IsNullOrWhiteSpace(offerError)
                     ? Result()
@@ -90,13 +88,13 @@ internal sealed class TradeQueueOfferLineOperation
         {
             if (io.IsNumericInputOpen)
                 return Result();
-            if (io.OfferedSlotCount == expectedSlotCountAfterOffer)
-                state = TradeQueueOfferLineState.Completed;
+            state = TradeQueueOfferLineState.WaitingForSlot;
         }
 
         if (state == TradeQueueOfferLineState.WaitingForSlot)
         {
-            if (io.OfferedSlotCount == expectedSlotCountAfterOffer)
+            var offer = io.ObserveOffer();
+            if (offer is { SyncPending: false } && QuantityIn(offer) >= expectedQuantityAfterOffer)
                 state = TradeQueueOfferLineState.Completed;
         }
 

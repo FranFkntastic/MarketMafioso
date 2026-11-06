@@ -52,6 +52,7 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     private readonly IPandoraFeatureControl? pandoraFeatureControl;
     private bool textAdvanceSuppressed;
     private bool tradeAutoConfirmSuppressed;
+    private bool retainTradeSuppressionOnDispose;
     private bool dropboxAutoAcceptSuppressed;
     private bool pandoraAutoSelectTurninSuppressed;
 
@@ -142,12 +143,13 @@ public sealed class ExternalAutomationCoordinator : IDisposable
 
     public void SuppressTradeAutoConfirm()
     {
+        SuppressDropboxAutoAccept();
         if (!pluginDataStore.TryGetData<HashSet<string>>(YesAlreadyStopRequests, out var stopRequests) || stopRequests == null)
             return;
 
+        tradeAutoConfirmSuppressed = true;
         if (stopRequests.Add(StopRequestOwner))
         {
-            tradeAutoConfirmSuppressed = true;
             log.Debug("[MarketMafioso] Temporarily paused YesAlready during Trade Queue execution.");
         }
     }
@@ -168,9 +170,9 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         if (!pluginDataStore.TryGetData<HashSet<string>>(DropboxStopRequests, out var stopRequests) || stopRequests == null)
             return;
 
+        dropboxAutoAcceptSuppressed = true;
         if (stopRequests.Add(StopRequestOwner))
         {
-            dropboxAutoAcceptSuppressed = true;
             log.Debug("[MarketMafioso] Paused Dropbox while MMF owns trade auto-accept.");
         }
     }
@@ -190,7 +192,12 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     {
         RestoreTextAdvance();
         RestoreWorkshopRequestAutomation();
-        RestoreTradeAutoConfirm();
-        RestoreDropboxAutoAccept();
+        if (!retainTradeSuppressionOnDispose)
+        {
+            RestoreTradeAutoConfirm();
+            RestoreDropboxAutoAccept();
+        }
     }
+
+    public void RetainTradeSuppressionOnDispose() => retainTradeSuppressionOnDispose = true;
 }

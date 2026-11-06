@@ -549,6 +549,7 @@ public class MainWindow : Window, IDisposable
         var listingView = marketBoardAcquisition.GetView();
         var nativeListingPresentation = marketBoardAcquisition.GetNativePresentationState();
         var tradeExecution = tradeQueueRunner.Snapshot;
+        var liveTradeOffer = tradeQueueIo.ObserveOffer();
         var tradeCapability = tradeQueueRunner.InspectExecutionCapability();
         var tradeInventory = tradeQueueIo.ObserveTradeableInventory();
         var tradeValidation = tradeInventory.IsAuthoritative
@@ -658,8 +659,8 @@ public class MainWindow : Window, IDisposable
                 TradeRetryMilliseconds = config.TradeQueueTiming.TradeRetryMilliseconds,
                 AutoAcceptIncomingTrades = config.AutoAcceptIncomingTrades,
                 IsTradeOpen = tradeQueueIo.IsTradeOpen,
-                OfferedSlotCount = tradeQueueIo.IsTradeOpen ? tradeQueueIo.OfferedSlotCount : 0,
-                LiveOffer = tradeQueueIo.ObserveOffer(),
+                OfferedSlotCount = liveTradeOffer?.Items.Count ?? 0,
+                LiveOffer = liveTradeOffer,
                 ReadyDiagnostic = tradeQueueIo.IsTradeOpen ? tradeQueueIo.ReadyDiagnostic : null,
                 CanReceiverReady = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanClickReady,
                 CanReceiverConfirm = !tradeExecution.IsActive && tradeQueueIo.IsTradeOpen && tradeQueueIo.CanConfirmTrade,
