@@ -127,14 +127,24 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         if (!IsTradeOpen || manager == null || agent == null || !agent->IsAgentActive() ||
             manager->TradePartnerEntityId == 0 || manager->TradePartnerEntityId == 0xE0000000)
             return null;
+        // SetTradeGilAmount writes slot 5 of inventory 2005 via SetQuantity. The
+        // manager's embedded TradeItemsLocal array is not the current offered inventory.
+        var container = manager->GetInventoryContainer((InventoryType)TradeInventoryContainerId);
+        if (container == null || !container->IsLoaded || container->Size < 6)
+            return null;
         var items = new List<TradeOfferedItem>();
         for (var index = 0; index < TradeQueuePlanner.MaximumTradeSlots; index++)
         {
-            var item = manager->TradeItemsLocal[index];
-            if (item.ItemId != 0 && item.Quantity > 0)
-                items.Add(new(item.ItemId, item.Flags.HasFlag(InventoryItem.ItemFlags.HighQuality), checked((int)item.Quantity)));
+            var item = container->GetInventorySlot(index);
+            if (item == null)
+                return null;
+            if (item->GetBaseItemId() != 0 && item->GetQuantity() > 0)
+                items.Add(new(item->GetBaseItemId(), item->GetFlags().HasFlag(InventoryItem.ItemFlags.HighQuality), checked((int)item->GetQuantity())));
         }
-        return new(manager->TradePartnerEntityId, checked((int)manager->TradeItemsLocal[5].Quantity),
+        var gil = container->GetInventorySlot(5);
+        if (gil == null)
+            return null;
+        return new(manager->TradePartnerEntityId, checked((int)gil->GetQuantity()),
             manager->TradeIsSyncPending, items);
     }
 
