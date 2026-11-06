@@ -37,8 +37,12 @@ jobs:
 
       - name: Read pinned Franthropy revision
         id: franthropy-ref
-        shell: bash
-        run: echo "ref=$(tr -d '[:space:]' < eng/franthropy.ref)" >> "$GITHUB_OUTPUT"
+        shell: pwsh
+        run: |
+          [xml]$pin = Get-Content eng/Franthropy.Version.props
+          $revision = ([string]$pin.Project.PropertyGroup.FranthropyPackageVersion).Replace('0.1.0-commit.', '')
+          if ($revision -notmatch '^[0-9a-f]{40}$') { throw 'Invalid Franthropy package pin.' }
+          "ref=$revision" >> $env:GITHUB_OUTPUT
 
       - name: Checkout Franthropy
         uses: actions/checkout@v4
@@ -58,10 +62,8 @@ jobs:
           -c Release
           -r linux-x64
           --self-contained true
+          -p:FranthropySource=Local
           -p:FranthropyRoot="${GITHUB_WORKSPACE}/franthropy"
-          -p:FranthropyFfxivProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj"
-          -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
-          -p:FranthropyWebProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Web/Franthropy.Web.csproj"
           -o dist/marketmafioso-server
 
       - name: Verify published receiver restart
