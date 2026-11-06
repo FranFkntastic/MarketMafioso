@@ -127,25 +127,30 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         if (!IsTradeOpen || manager == null || agent == null || !agent->IsAgentActive() ||
             manager->TradePartnerEntityId == 0 || manager->TradePartnerEntityId == 0xE0000000)
             return null;
-        // SetTradeGilAmount writes slot 5 of inventory 2005 via SetQuantity. The
-        // manager's embedded TradeItemsLocal array is not the current offered inventory.
         var container = manager->GetInventoryContainer((InventoryType)TradeInventoryContainerId);
-        if (container == null || !container->IsLoaded || container->Size < 6)
+        return ReadOfferedInventory(container, manager->TradePartnerEntityId, manager->TradeIsSyncPending);
+    }
+
+    internal static unsafe TradeOfferObservation? ReadOfferedInventory(
+        InventoryContainer* container, uint partnerEntityId, bool syncPending)
+    {
+        if (container == null || !container->IsLoaded || container->Size < 6 || container->Items == null)
             return null;
+        // Trade slots are symbolic links. GetInventorySlot resolves them to the
+        // source stack, losing the offered quantity. SetTradeGilAmount writes the
+        // local slot's Quantity directly; resolve only item identity and flags.
         var items = new List<TradeOfferedItem>();
         for (var index = 0; index < TradeQueuePlanner.MaximumTradeSlots; index++)
         {
-            var item = container->GetInventorySlot(index);
-            if (item == null)
+            var item = container->Items + index;
+            if (item->Quantity == 0)
+                continue;
+            var itemId = item->GetBaseItemId();
+            if (itemId == 0)
                 return null;
-            if (item->GetBaseItemId() != 0 && item->GetQuantity() > 0)
-                items.Add(new(item->GetBaseItemId(), item->GetFlags().HasFlag(InventoryItem.ItemFlags.HighQuality), checked((int)item->GetQuantity())));
+            items.Add(new(itemId, item->GetFlags().HasFlag(InventoryItem.ItemFlags.HighQuality), checked((int)item->Quantity)));
         }
-        var gil = container->GetInventorySlot(5);
-        if (gil == null)
-            return null;
-        return new(manager->TradePartnerEntityId, checked((int)gil->GetQuantity()),
-            manager->TradeIsSyncPending, items);
+        return new(partnerEntityId, checked((int)container->Items[5].Quantity), syncPending, items);
     }
 
     public unsafe bool CanConfirmTrade => TryGetTradeConfirmation(out _);
