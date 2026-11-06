@@ -296,6 +296,8 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 return;
             case WorkshopQuartermasterProgressState.Completed:
             case WorkshopQuartermasterProgressState.PartiallySucceeded:
+                if (progress.State == WorkshopQuartermasterProgressState.PartiallySucceeded)
+                    state.QuartermasterPartialResult = progress.Message;
                 state.Phase = WorkshopVendorRestockPhase.RefreshInventory;
                 state.Message = progress.Message;
                 PersistPolicy();
@@ -422,6 +424,9 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             AutomaticallyBuyVendorMaterials = state.AutomaticallyBuyVendorMaterials,
             Phase = engine is null ? state.Phase : ToWorkshopPhase(engine.Phase),
             Message = NormalizeMessage(engine?.Message ?? state.Message) +
+                      (state.QuartermasterPartialResult is { } partial &&
+                       !(engine?.Message ?? state.Message).Contains(partial, StringComparison.Ordinal)
+                          ? $" {partial}" : string.Empty) +
                       (persistenceError() is { } error ? " " + error : string.Empty),
             Stops = engine?.Stops ?? state.Stops,
             Receipts = receipts,

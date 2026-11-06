@@ -2491,8 +2491,7 @@ public class MainWindow : Window, IDisposable
                 out retainers);
         }
         Quartermaster.QuartermasterSnapshot? quartermasterSnapshot = null;
-        if (!hasDirectRetainerEvidence)
-            quartermaster.TryGetSnapshot(out quartermasterSnapshot, out _);
+        quartermaster.TryGetSnapshot(out quartermasterSnapshot, out _);
         return WorkshopMaterialAvailabilityService.BuildAvailabilityWithFallback(
             requirements,
             playerInventory,

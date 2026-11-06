@@ -34,7 +34,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
     }
 
     [Fact]
-    public void Available_empty_direct_observation_does_not_resurrect_fallback_stock()
+    public void Retainer_known_only_to_quartermaster_still_counts()
     {
         var owner = new QuartermasterOwnerScope(100, 40, "Wei Ning", "Maduin");
         var availability = WorkshopMaterialAvailabilityService.BuildAvailabilityWithFallback(
@@ -46,8 +46,9 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
             owner);
 
         var line = Assert.Single(availability);
-        Assert.Equal(0, line.QuartermasterStock);
-        Assert.Equal(8, line.TotalMissing);
+        Assert.Equal(7, line.QuartermasterStock);
+        Assert.Equal(7, line.RetrievableStock);
+        Assert.Equal(1, line.TotalMissing);
     }
 
     [Fact]

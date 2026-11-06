@@ -55,6 +55,12 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             return false;
         }
 
+        if (!client.TryGetSnapshot(out var snapshot, out var snapshotError) ||
+            snapshot is null || !ownerScope.Matches(snapshot.Owner))
+        {
+            LastStatus = $"Retainer retrieval unavailable: no owner-matched Quartermaster snapshot. {snapshotError}";
+            return false;
+        }
         var items = availability
             .Where(item => item.Shortage > 0)
             .GroupBy(item => item.ItemId)
@@ -62,7 +68,10 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
                 group.Key,
                 group.Select(item => item.ItemName).First(name => !string.IsNullOrWhiteSpace(name)),
                 group.Sum(item => item.Required),
-                group.Sum(item => item.Shortage)))
+                Math.Min(group.Sum(item => item.Shortage), snapshot.Retainers
+                    .SelectMany(retainer => retainer.Bags).SelectMany(bag => bag.Items)
+                    .Where(item => item.ItemId == group.Key).Sum(item => checked((int)item.Quantity)))))
+            .Where(item => item.ShortageQuantity > 0)
             .OrderBy(item => item.ItemId)
             .ToImmutableArray();
         if (items.IsDefaultOrEmpty)
@@ -218,18 +227,19 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         if (!config.QuartermasterWorkshopRequests.TryGetValue(key, out var state))
             return new(WorkshopQuartermasterProgressState.NotStarted, "Waiting for Quartermaster operation identity.");
         var status = state.Status?.Trim() ?? string.Empty;
+        var detail = $"Quartermaster retrieval {status} code={state.Code ?? "unspecified"} message={state.Message}";
         if (status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
             status.Equals("succeeded", StringComparison.OrdinalIgnoreCase))
             return new(WorkshopQuartermasterProgressState.Completed, state.Message ?? "Quartermaster retrieval completed.");
         if (status.Equals("partially_succeeded", StringComparison.OrdinalIgnoreCase))
-            return new(WorkshopQuartermasterProgressState.PartiallySucceeded, state.Message ?? "Quartermaster retrieval partially succeeded.");
+            return new(WorkshopQuartermasterProgressState.PartiallySucceeded, detail);
         if (status.Equals("indeterminate", StringComparison.OrdinalIgnoreCase))
             return new(WorkshopQuartermasterProgressState.Indeterminate, state.Message ?? "Quartermaster retrieval outcome is indeterminate.");
         if (status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
             status.Equals("cancelled", StringComparison.OrdinalIgnoreCase) ||
             status.Equals("rejected", StringComparison.OrdinalIgnoreCase) ||
             status.Equals("not_found", StringComparison.OrdinalIgnoreCase))
-            return new(WorkshopQuartermasterProgressState.Failed, state.Message ?? $"Quartermaster retrieval {status}.");
+            return new(WorkshopQuartermasterProgressState.Failed, detail);
         return new(WorkshopQuartermasterProgressState.Running, state.Message ?? $"Quartermaster retrieval {status}.");
     }
 
@@ -272,6 +282,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             if (operationRevision == persistedRevision &&
                 (!string.Equals(persisted.Status, operation.Status, StringComparison.Ordinal) ||
                  !string.Equals(persisted.Message, operation.Message, StringComparison.Ordinal) ||
+                 (persisted.Code is not null && !string.Equals(persisted.Code, operation.Code, StringComparison.Ordinal)) ||
                  !ReceiptsEquivalent(persisted.Receipts, operation.Receipts)))
             {
                 LastStatus = "Quartermaster operation response changed state without advancing its revision.";
@@ -287,15 +298,18 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
 
         var operationStatus = operation.Status.Equals("not_found", StringComparison.OrdinalIgnoreCase)
             ? "Quartermaster no longer has this operation in current owner scope; submit shortages again if still needed."
-            : $"Quartermaster retrieval {operation.Status}: {operation.Message}".TrimEnd();
+            : $"Quartermaster retrieval {operation.Status} code={operation.Code ?? "unspecified"} message={operation.Message}".TrimEnd();
         var changed = !string.Equals(persisted.ProviderInstanceId, operation.ProviderInstanceId, StringComparison.Ordinal) ||
                       persisted.Revision != operation.Revision ||
                       !string.Equals(persisted.Status, operation.Status, StringComparison.Ordinal) ||
-                      !string.Equals(persisted.Message, operation.Message, StringComparison.Ordinal);
+                      !string.Equals(persisted.Message, operation.Message, StringComparison.Ordinal) ||
+                      !string.Equals(persisted.Code, operation.Code, StringComparison.Ordinal);
         candidate.ProviderInstanceId = operation.ProviderInstanceId ?? persisted.ProviderInstanceId;
         candidate.Revision = operation.Revision ?? persisted.Revision;
         candidate.Status = operation.Status;
         candidate.Message = operation.Message;
+        candidate.Code = operation.Code;
+        DiagnosticLog?.Invoke($"[MarketMafioso] RQ restock operation={persisted.OperationId} result={operation.Status} code={operation.Code ?? "unspecified"} message={operation.Message} wake={wakeReason}");
         if (changed || receiptsChanged)
         {
             config.QuartermasterWorkshopRequests[key] = candidate;
@@ -313,7 +327,6 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         }
         LastOperation = operation;
         LastStatus = operationStatus;
-        DiagnosticLog?.Invoke($"[MarketMafioso] RQ restock operation={persisted.OperationId} result={operation.Status} wake={wakeReason}");
     }
 
     public void Dispose()
@@ -414,6 +427,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         Revision = state.Revision,
         Status = state.Status,
         Message = state.Message,
+        Code = state.Code,
         Receipts = state.Receipts.Select(receipt => new QuartermasterWorkshopOperationReceipt
         {
             Revision = receipt.Revision,
