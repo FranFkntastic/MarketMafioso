@@ -93,6 +93,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TradeQueueRunner tradeQueueRunner;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
+    private readonly WorkshopRestockService workshopRestock;
     private readonly FramePacingGovernor framePacingGovernor = new();
     private readonly AgentBridgeProofStore agentBridgeProofStore;
     private readonly AgentBridgeProofWindow agentBridgeProofWindow;
@@ -266,6 +267,7 @@ public sealed class Plugin : IDalamudPlugin
             tradeAutomationCoordinator,
             Log,
             Configuration.TradeQueuePolicy);
+        workshopRestock = new WorkshopRestockService(Configuration, quartermaster, workshopCatalog, DataManager, PlayerState, Log);
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -292,7 +294,8 @@ public sealed class Plugin : IDalamudPlugin
             itemId => retainerListingRefresh.ForceRetry(itemId),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             framePacingGovernor,
-            Log);
+            Log,
+            workshopRestock);
         exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
         marketAcquisitionItemContextMenu = new MarketAcquisitionItemContextMenu(
             ContextMenu,
@@ -758,6 +761,7 @@ public sealed class Plugin : IDalamudPlugin
             tradeAutoAcceptController.Tick(
                 Configuration.AutoAcceptIncomingTrades && !tradeQueueRunner.IsActive);
             tradeQueueRunner.Tick();
+            workshopRestock.Tick();
             mainWindow.OnFrameworkUpdate(framework);
             agentBridge.Tick();
         }
@@ -843,6 +847,7 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.ProjectBrowser.Dispose();
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.Dispose();
+        workshopRestock.Dispose();
         framePacingGovernor.Dispose();
         reporter.Dispose();
         remoteMarketAccessProbe.Dispose();

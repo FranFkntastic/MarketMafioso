@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.WorkshopPrep;
@@ -18,6 +19,9 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
     private DateTimeOffset nextOperationPollAtUtc;
     private string? activeScopeKey;
     private bool disposed;
+    private int changePending;
+    public Action<string>? DiagnosticLog { get; set; }
+    public bool IsRefreshDue => Volatile.Read(ref changePending) != 0 || utcNow() >= nextOperationPollAtUtc;
 
     public WorkshopQuartermasterRequestService(
         Configuration config,
@@ -241,10 +245,12 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         }
         if (!config.QuartermasterWorkshopRequests.TryGetValue(key, out var persisted) ||
             string.IsNullOrWhiteSpace(persisted.OperationId) ||
-            utcNow() < nextOperationPollAtUtc || IsTerminalStatus(persisted.Status))
+            !IsRefreshDue || IsTerminalStatus(persisted.Status))
             return;
 
-        nextOperationPollAtUtc = utcNow().AddSeconds(2);
+        var wakeReason = Interlocked.Exchange(ref changePending, 0) != 0 ? "event" : "fallback";
+        nextOperationPollAtUtc = utcNow().AddSeconds(20);
+        DiagnosticLog?.Invoke($"[MarketMafioso] RQ restock wake={wakeReason} operation={persisted.OperationId}");
         if (!client.TryGetOperation(persisted.OperationId, ownerScope, out var operation, out var error))
         {
             LastStatus = error;
@@ -307,6 +313,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         }
         LastOperation = operation;
         LastStatus = operationStatus;
+        DiagnosticLog?.Invoke($"[MarketMafioso] RQ restock operation={persisted.OperationId} result={operation.Status} wake={wakeReason}");
     }
 
     public void Dispose()
@@ -319,9 +326,8 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
 
     private void OnQuartermasterChanged(QuartermasterChanged changed)
     {
-        if (string.IsNullOrWhiteSpace(changed.OperationId) ||
-            config.QuartermasterWorkshopRequests.Values.Any(state => string.Equals(state.OperationId, changed.OperationId, StringComparison.Ordinal)))
-            nextOperationPollAtUtc = DateTimeOffset.MinValue;
+        // IPC callbacks may be off-thread. Coalesce notifications without touching product state.
+        Interlocked.Exchange(ref changePending, 1);
     }
 
     private static bool TryMergeReceipts(

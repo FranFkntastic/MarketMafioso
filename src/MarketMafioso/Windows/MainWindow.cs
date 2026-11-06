@@ -86,9 +86,7 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopPrepQueuePanel workshopPrepQueue;
     private readonly WorkshopMaterialPanel workshopMaterials;
     private readonly WorkshopAssemblyPanel workshopAssembly;
-    private readonly WorkshopQuartermasterRequestService workshopQuartermasterRequest;
-    private readonly DalamudGilVendorAccessReader workshopVendorAccess;
-    private readonly ExternalAutomationCoordinator workshopVendorAutomationCoordinator;
+
     private readonly WorkshopVendorRestockRunner workshopVendorRestockRunner;
     private readonly TradeQueuePanel tradeQueuePanel;
     private readonly TradeQueueRunner tradeQueueRunner;
@@ -143,7 +141,8 @@ public class MainWindow : Window, IDisposable
         Func<uint, bool> forceRetryRetainerListingRefresh,
         string marketAcquisitionRouteDiagnosticsDirectory,
         FramePacingGovernor framePacingGovernor,
-        IPluginLog log)
+        IPluginLog log,
+        WorkshopRestockService restock)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
     {
@@ -371,62 +370,11 @@ public class MainWindow : Window, IDisposable
             ReturnAcquisitionLinesToInbox,
             () => QueueAgentTabSelection("Market Acquisition", "Workbench"),
             AgentReviewRegistry);
-        workshopQuartermasterRequest = new WorkshopQuartermasterRequestService(
-            config,
-            quartermaster,
-            config.Save);
-        workshopVendorAutomationCoordinator = new ExternalAutomationCoordinator(
-            new DalamudPluginDataStore(Plugin.PluginInterface),
-            log);
-        workshopVendorAccess = new DalamudGilVendorAccessReader(
-            Plugin.ClientState,
-            playerState,
-            Plugin.ObjectTable,
-            Plugin.AetheryteList);
+        workshopVendorRestockRunner = restock.Runner;
         var vendorPlanner = new WorkshopVendorProcurementPlanner(
             DalamudGilVendorCatalogBuilder.Build(dataManager),
-            workshopVendorAccess.Assess,
+            restock.Access.Assess,
             itemId => workshopCraftRecipeResolver.TryResolveCraftRecipe(itemId, out _));
-        var vendorRuntime = new DalamudGilVendorBuyRuntime(
-            workshopVendorAccess,
-            new DalamudOrdinaryGilShop(Plugin.GameGui, dataManager),
-            new DalamudVNavmeshTravel(Plugin.PluginInterface),
-            new DalamudLifestreamAetheryteTravel(Plugin.PluginInterface),
-            new DalamudLifestreamAethernetTravel(Plugin.PluginInterface),
-            new DalamudLifestreamObjectInteractor(Plugin.PluginInterface),
-            new DalamudTravelReadiness(
-                Plugin.Condition,
-                Plugin.GameGui,
-                Plugin.ObjectTable,
-                [
-                    "RetainerList",
-                    "SelectString",
-                    "Talk",
-                    "InventoryRetainer",
-                    "InventoryRetainerLarge",
-                    "InventoryRetainerSmall",
-                ]),
-            dataManager,
-            Plugin.ClientState,
-            Plugin.ObjectTable,
-            Plugin.Condition,
-            Plugin.CommandManager,
-            beginAutomation: () =>
-            {
-                workshopVendorAutomationCoordinator.SuppressTextAdvance();
-                workshopVendorAutomationCoordinator.SuppressTradeAutoConfirm();
-            },
-            endAutomation: () =>
-            {
-                workshopVendorAutomationCoordinator.RestoreTextAdvance();
-                workshopVendorAutomationCoordinator.RestoreTradeAutoConfirm();
-            });
-        workshopVendorRestockRunner = new WorkshopVendorRestockRunner(
-            config,
-            vendorRuntime,
-            workshopQuartermasterRequest,
-            config.Save,
-            message => log.Information(message));
         tradeQueuePanel = new TradeQueuePanel(
             config,
             tradeQueueRunner,
@@ -990,15 +938,7 @@ public class MainWindow : Window, IDisposable
 
     public void OnFrameworkUpdate(IFramework _framework)
     {
-        workshopVendorAccess.RefreshAttunedAetherytes();
-        workshopQuartermasterRequest.PollOperationIfDue(GetCurrentQuartermasterOwnerScope());
-        if (workshopVendorRestockRunner.IsRunning)
-        {
-            var availability = GetWorkshopAvailability();
-            workshopVendorRestockRunner.Tick(
-                WorkshopVendorProcurementPlanner.BuildQueueSignature(availability),
-                GetCurrentQuartermasterOwnerScope());
-        }
+
 
         if (!IsMarketAcquisitionUnlocked())
             return;
@@ -2693,9 +2633,7 @@ public class MainWindow : Window, IDisposable
     public void Dispose()
     {
         AgentCaptureTransactions.CancelActive();
-        workshopVendorRestockRunner.Dispose();
-        workshopVendorAutomationCoordinator.Dispose();
-        workshopQuartermasterRequest.Dispose();
+
         uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();
         routeEngine.Dispose();
