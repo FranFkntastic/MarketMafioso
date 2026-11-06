@@ -15,13 +15,12 @@ Each Dalamud profile must contain one matching MMF settings entry and one matchi
 
 ## Deploy Workflow
 
-Claim and deploy through the lane controller from the worktree that should own the in-game plugin state:
+Claim and deploy through the workspace dispatcher from the worktree that should own the in-game plugin state. Here, `xiv <group> <command>` means `& '<workspace>\tools\xiv.ps1' <group> <command>`; resolve the workspace location for your installation.
 
 ```powershell
-$lanes = 'F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\tools\mmf-dev-lanes\MMF-DevLane.ps1'
-& $lanes -Action Status
-& $lanes -Action Claim -Lane Primary -Worktree $PWD
-& $lanes -Action Deploy -Lane Primary -Worktree $PWD
+xiv mmf status
+xiv mmf claim -Lane Primary -Worktree $PWD -OwnerContact '<contactable-owner>'
+xiv mmf deploy -Lane Primary -Worktree $PWD
 ```
 
 The controller rejects foreign worktrees, invokes `Deploy-DevPlugin.ps1` with the selected lane's explicit target, and then verifies the expected branch and commit through that lane's persistent Agent Bridge identity. A copied DLL without matching bridge evidence is a failed deployment.
