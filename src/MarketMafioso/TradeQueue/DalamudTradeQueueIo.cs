@@ -15,6 +15,7 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
+using Franthropy.Dalamud.Automation.Ui;
 using MarketMafioso.Automation.Runtime;
 
 namespace MarketMafioso.TradeQueue;
@@ -127,11 +128,13 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
             manager->TradePartnerEntityId == 0 || manager->TradePartnerEntityId == 0xE0000000)
             return null;
         var container = manager->GetInventoryContainer((InventoryType)TradeInventoryContainerId);
-        return ReadOfferedInventory(container, manager->TradePartnerEntityId, manager->TradeIsSyncPending);
+        return ReadOfferedInventory(container, manager->TradePartnerEntityId, manager->TradeIsSyncPending,
+            type => (nint)manager->GetInventoryContainer(type));
     }
 
     internal static unsafe TradeOfferObservation? ReadOfferedInventory(
-        InventoryContainer* container, uint partnerEntityId, bool syncPending)
+        InventoryContainer* container, uint partnerEntityId, bool syncPending,
+        Func<InventoryType, nint> sourceContainer)
     {
         if (container == null || !container->IsLoaded || container->Size < 6 || container->Items == null)
             return null;
@@ -144,14 +147,33 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
             var item = container->Items + index;
             if (item->Quantity == 0)
                 continue;
-            var itemId = item->GetBaseItemId();
+            if (item->Quantity < 0)
+                return null;
+            var source = item;
+            if (item->IsSymbolic)
+            {
+                var type = (InventoryType)item->LinkedInventoryType;
+                if (!SupportedInventories.Contains(type))
+                    return null;
+                var inventory = (InventoryContainer*)sourceContainer(type);
+                if (inventory == null || !inventory->IsLoaded || inventory->Items == null ||
+                    item->LinkedItemSlot >= inventory->Size)
+                    return null;
+                source = inventory->Items + item->LinkedItemSlot;
+            }
+            // A trade offer links directly to an ordinary carried stack. Never
+            // invoke symbolic virtual getters: they can loop on the game thread.
+            if (source->IsSymbolic || source->Quantity < item->Quantity)
+                return null;
+            var itemId = source->ItemId;
             if (itemId == 0)
                 return null;
-            items.Add(new(itemId, item->GetFlags().HasFlag(InventoryItem.ItemFlags.HighQuality), checked((int)item->Quantity),
+            items.Add(new(itemId, source->Flags.HasFlag(InventoryItem.ItemFlags.HighQuality), checked((int)item->Quantity),
                 item->IsSymbolic ? item->LinkedInventoryType : null,
                 item->IsSymbolic ? item->LinkedItemSlot : null));
         }
-        return new(partnerEntityId, checked((int)container->Items[5].Quantity), syncPending, items);
+        return container->Items[5].Quantity < 0 ? null
+            : new(partnerEntityId, container->Items[5].Quantity, syncPending, items);
     }
 
     public unsafe bool CanConfirmTrade => TryGetTradeConfirmation(out _);
@@ -169,6 +191,10 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
 
     public unsafe TradeQueueInventoryObservation ObserveTradeableInventory()
     {
+        // Containers can remain allocated/loaded while logging out or in. They
+        // cannot authorize destructive queue reconciliation without a character.
+        if (objectTable.LocalPlayer == null)
+            return TradeQueueInventoryObservation.Unavailable;
         var inventoryManager = InventoryManager.Instance();
         if (inventoryManager == null)
             return TradeQueueInventoryObservation.Unavailable;
@@ -396,15 +422,6 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
             return false;
 
         var addon = gameGui.GetAddonByName<AtkUnitBase>(NumericInputAddon, 1);
-        if (!IsReady(addon))
-            return false;
-        if (addon->AtkValuesCount <= 3)
-        {
-            error = "Numeric quantity input did not expose a maximum.";
-            return false;
-        }
-
-        var maximum = checked((int)addon->AtkValues[3].UInt);
         if (quantity <= 0)
         {
             error = $"Requested trade quantity {quantity:N0} is invalid.";
@@ -413,11 +430,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo, ITradeAutoAcceptIo
         // The source stack can change between native dispatch and dialog load.
         // Never clamp the user's intent; wait, then let the runner rebuild the
         // uncommitted offer from fresh inventory if the smaller limit persists.
-        if (quantity > maximum)
-            return false;
-
-        addon->FireCallbackInt(quantity);
-        return true;
+        return DalamudNumericDialog.TrySubmit(addon, quantity) == NumericDialogSubmission.Submitted;
     }
 
     public unsafe bool TryClickReady(out string error)
