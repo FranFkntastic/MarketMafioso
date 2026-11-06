@@ -147,6 +147,7 @@ public class Configuration : IPluginConfiguration
 [Serializable]
 public sealed class QuartermasterWorkshopRequestState
 {
+    public string? Code { get; set; }
     public ulong LocalContentId { get; set; }
     public uint HomeWorldId { get; set; }
     public string CharacterName { get; set; } = string.Empty;

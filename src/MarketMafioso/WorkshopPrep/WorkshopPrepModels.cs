@@ -48,6 +48,12 @@ public sealed record WorkshopMaterialAvailability(
     IReadOnlyList<QuartermasterRetainerCandidate> QuartermasterRetainers)
 {
     public int StockDifferential => PlayerInventory + QuartermasterStock - Required;
+    public int RetrievableStock { get; init; }
+    public string? RetrievalUnavailableReason { get; init; }
+    public string? RetrievalNotice => RetrievalUnavailableReason ??
+        (QuartermasterStock > RetrievableStock
+            ? $"{QuartermasterStock - RetrievableStock:N0} seen on retainers, not yet in Quartermaster's cache — visit the bell to refresh."
+            : null);
 }
 
 public sealed record QuartermasterRetainerCandidate(

@@ -1040,7 +1040,7 @@ public sealed class QuartermasterIpcClient : IDisposable
             wire.Message,
             updatedAt,
             completedAt,
-            receipts.ToImmutable());
+            receipts.ToImmutable()) { Code = wire.Code };
         return true;
     }
 

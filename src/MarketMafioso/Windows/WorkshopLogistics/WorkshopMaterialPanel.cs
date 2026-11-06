@@ -249,6 +249,8 @@ internal sealed class WorkshopMaterialPanel
             return RunStatusForLine(activeLine, null);
 
         var parts = new List<string>();
+        if (line.Availability.RetrievalNotice is { } notice)
+            parts.Add(notice);
         if (line.RetainerPlannedQuantity > 0)
             parts.Add($"Retrieve {line.RetainerPlannedQuantity:N0} from retainers");
         if (line.VendorNeed > 0)
@@ -341,6 +343,8 @@ internal sealed class WorkshopMaterialPanel
             return;
         }
 
+        if (line.Availability.RetrievalNotice is { } notice)
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, notice);
         if (line.RetainerPlannedQuantity > 0)
         {
             ImGui.TextColored(

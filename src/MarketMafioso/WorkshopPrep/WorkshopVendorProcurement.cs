@@ -84,7 +84,7 @@ public sealed class WorkshopVendorProcurementPlanner
         var drafts = availability
             .Select(item =>
             {
-                var retainerPlanned = Math.Min(item.Shortage, item.QuartermasterStock);
+                var retainerPlanned = Math.Min(item.Shortage, item.RetrievableStock);
                 var vendorNeed = Math.Max(0, item.Shortage - retainerPlanned);
                 var candidates = catalog.FindOffers(item.ItemId)
                     .Select(offer => new WorkshopVendorCandidate(offer, assessAccess(offer)))

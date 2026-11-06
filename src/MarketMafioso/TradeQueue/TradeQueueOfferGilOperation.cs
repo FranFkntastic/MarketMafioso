@@ -4,6 +4,7 @@ internal enum TradeQueueOfferGilState
 {
     ReadyToOpenInput,
     WaitingForInput,
+    WaitingForAcknowledgement,
     Completed,
     Failed,
 }
@@ -49,13 +50,26 @@ internal sealed class TradeQueueOfferGilOperation
             return new(state, "Waiting for the trade gil input.", ActionIssued: true);
         }
 
+        if (state == TradeQueueOfferGilState.WaitingForAcknowledgement)
+        {
+            if (io.IsNumericInputOpen)
+                return Result();
+            var offer = io.ObserveOffer();
+            if (offer == null || offer.SyncPending)
+                return Result();
+            if (offer.Gil != amount)
+                return offer.Gil == 0 ? Result() : Fail($"The live offer contains {offer.Gil:N0} gil; expected {amount:N0}.");
+            state = TradeQueueOfferGilState.Completed;
+            return Result();
+        }
+
         if (!io.IsNumericInputOpen)
             return Result();
         if (!io.TrySubmitQuantity(amount, out var submitError))
             return string.IsNullOrWhiteSpace(submitError) ? Result() : Fail(submitError);
 
-        state = TradeQueueOfferGilState.Completed;
-        return Result();
+        state = TradeQueueOfferGilState.WaitingForAcknowledgement;
+        return new(state, "Verifying offered gil...", ActionIssued: true);
     }
 
     private TradeQueueOfferGilResult Fail(string message)
@@ -68,6 +82,7 @@ internal sealed class TradeQueueOfferGilOperation
     {
         TradeQueueOfferGilState.ReadyToOpenInput => "Ready to open the trade gil input.",
         TradeQueueOfferGilState.WaitingForInput => "Waiting for the trade gil input.",
+        TradeQueueOfferGilState.WaitingForAcknowledgement => "Verifying offered gil...",
         TradeQueueOfferGilState.Completed => $"Offered {amount:N0} gil.",
         _ => "Offering trade gil failed.",
     });

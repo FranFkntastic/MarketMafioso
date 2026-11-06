@@ -159,6 +159,7 @@ public sealed class PersistedWorkshopVendorPurchaseReceipt
 [Serializable]
 public sealed class WorkshopVendorRestockState
 {
+    public string? QuartermasterPartialResult { get; set; }
     public ulong LocalContentId { get; set; }
     public uint HomeWorldId { get; set; }
     public string CharacterName { get; set; } = string.Empty;

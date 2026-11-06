@@ -168,6 +168,7 @@ public sealed record QuartermasterOperationStatus(
     DateTimeOffset? CompletedAtUtc,
     ImmutableArray<QuartermasterOperationReceipt> Receipts)
 {
+    public string? Code { get; init; }
     public bool IsTerminal => Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) ||
                               Status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase) ||
                               Status.Equals("Partially_Succeeded", StringComparison.OrdinalIgnoreCase) ||
@@ -381,6 +382,7 @@ internal sealed class QuartermasterAcknowledgementWire
 
 internal sealed class QuartermasterOperationStatusWire
 {
+    public string? Code { get; init; }
     public string? Schema { get; init; }
     public string? OperationId { get; init; }
     public string? RequestId { get; init; }

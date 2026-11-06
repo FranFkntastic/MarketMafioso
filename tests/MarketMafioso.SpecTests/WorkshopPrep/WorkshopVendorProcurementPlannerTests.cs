@@ -270,7 +270,7 @@ public sealed class WorkshopVendorProcurementPlannerTests
             retainer,
             shortage,
             Math.Max(0, shortage - retainer),
-            retainer == 0 ? [] : [new(1, "Retainer", DateTimeOffset.UtcNow, retainer)]);
+            retainer == 0 ? [] : [new(1, "Retainer", DateTimeOffset.UtcNow, retainer)]) { RetrievableStock = retainer };
     }
 
     private static WorkshopMaterialProcurement Procurement(

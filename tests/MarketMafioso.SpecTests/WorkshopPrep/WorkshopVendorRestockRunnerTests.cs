@@ -201,6 +201,7 @@ public sealed class WorkshopVendorRestockRunnerTests
 
         Assert.Equal(15, Assert.Single(config.ActiveWorkshopVendorBuyRun!.Lines).ApprovedQuantity);
         Assert.Equal(150UL, Assert.Single(config.ActiveWorkshopVendorBuyRun.Lines).ApprovedGilCeiling);
+        Assert.Contains("Quartermaster finished partially.", runner.ActiveRun!.Message);
     }
 
     [Fact]

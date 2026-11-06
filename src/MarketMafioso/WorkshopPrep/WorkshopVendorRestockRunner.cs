@@ -16,6 +16,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
     private readonly Func<DateTimeOffset> utcNow;
     private readonly GilVendorBuyCoordinator coordinator;
     private bool disposed;
+    private readonly Func<string?> persistenceError;
 
     public WorkshopVendorRestockRunner(
         Configuration config,
@@ -23,13 +24,15 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         IWorkshopQuartermasterRestockService quartermaster,
         Action save,
         Action<string>? diagnosticLog = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        Func<string?>? persistenceError = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
         this.save = save ?? throw new ArgumentNullException(nameof(save));
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        this.persistenceError = persistenceError ?? (() => null);
         ConvertLegacyRunIfPresent(diagnosticLog);
         coordinator = new GilVendorBuyCoordinator(
             new ConfigurationGilVendorBuyRunStore(config, save),
@@ -261,6 +264,11 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
 
     private void TickQuartermaster(WorkshopVendorRestockState state, QuartermasterOwnerScope owner)
     {
+        if (utcNow().UtcDateTime - state.StartedAtUtc > TimeSpan.FromMinutes(15))
+        {
+            FinishPolicy(WorkshopVendorRestockPhase.Indeterminate, "Quartermaster retrieval deadline expired; no further retrieval was submitted.");
+            return;
+        }
         if (!state.QuartermasterSubmitted)
         {
             var availability = state.Lines.Where(line => line.ReviewedRetainerQuantity > 0)
@@ -288,6 +296,8 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 return;
             case WorkshopQuartermasterProgressState.Completed:
             case WorkshopQuartermasterProgressState.PartiallySucceeded:
+                if (progress.State == WorkshopQuartermasterProgressState.PartiallySucceeded)
+                    state.QuartermasterPartialResult = progress.Message;
                 state.Phase = WorkshopVendorRestockPhase.RefreshInventory;
                 state.Message = progress.Message;
                 PersistPolicy();
@@ -309,6 +319,8 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         {
             state.Message = inventory.Message;
             error = inventory.Message;
+            if (waitForInventory && utcNow().UtcDateTime - state.UpdatedAtUtc > TimeSpan.FromSeconds(30))
+                FinishPolicy(WorkshopVendorRestockPhase.Failed, "Inventory refresh deadline expired: " + inventory.Message);
             if (waitForInventory) return false;
             return false;
         }
@@ -411,7 +423,11 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             QueueSignature = state.QueueSignature,
             AutomaticallyBuyVendorMaterials = state.AutomaticallyBuyVendorMaterials,
             Phase = engine is null ? state.Phase : ToWorkshopPhase(engine.Phase),
-            Message = NormalizeMessage(engine?.Message ?? state.Message),
+            Message = NormalizeMessage(engine?.Message ?? state.Message) +
+                      (state.QuartermasterPartialResult is { } partial &&
+                       !(engine?.Message ?? state.Message).Contains(partial, StringComparison.Ordinal)
+                          ? $" {partial}" : string.Empty) +
+                      (persistenceError() is { } error ? " " + error : string.Empty),
             Stops = engine?.Stops ?? state.Stops,
             Receipts = receipts,
             ArmedPurchase = engine?.ArmedPurchase,
