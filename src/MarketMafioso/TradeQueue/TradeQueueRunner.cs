@@ -860,6 +860,7 @@ public sealed class TradeQueueRunner : IDisposable
     private void CompleteFinish(TradeQueueExecutionState state, string message)
     {
         var previousState = Snapshot.State;
+        pendingFinish = (state, message);
         if (recovery.CancellationPending && !TrySaveCancellationState(false))
             return;
         pendingFinish = null;

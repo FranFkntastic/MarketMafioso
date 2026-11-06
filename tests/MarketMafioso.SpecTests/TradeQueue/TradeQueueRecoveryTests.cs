@@ -4,6 +4,51 @@ namespace MarketMafioso.SpecTests.TradeQueue;
 
 public sealed partial class TradeQueueRunnerTests
 {
+    [Fact]
+    public void StopSupersedesRebuildWhileCheckpointClearingFails()
+    {
+        var queue = Queue(2);
+        var io = new FakeIo(Inventory(4)) { IsTradeOpenValue = true };
+        var clock = new TestClock();
+        var recovery = new TradeQueueRecoveryState();
+        var suppression = new HashSet<string>();
+        var failClear = true;
+        using var coordinator = Coordinator(suppression);
+        using var runner = new TradeQueueRunner(queue, new(), () =>
+        {
+            if (failClear && !recovery.CancellationPending)
+                throw new IOException("Checkpoint clearing temporarily unavailable.");
+        }, io, new FakeQualityLowering(), coordinator, TestPluginLog.Create(), clock.Read,
+            new() { NormalizeHighQualityItems = false }, recovery);
+        Assert.True(runner.Start().Success);
+        io.SetManualOffer(new TradeOfferedItem(100, false, 1, 0, 0));
+        runner.Tick();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        runner.Tick();
+        Assert.Equal(TradeQueueExecutionState.ClosingTrade, runner.Snapshot.State);
+        Assert.False(io.IsTradeOpen);
+        Assert.True(recovery.CancellationPending);
+
+        runner.Stop("User stopped the pending rebuild.");
+        Assert.True(runner.IsActive);
+        Assert.Contains("MarketMafioso", suppression);
+        failClear = false;
+        clock.Advance(TimeSpan.FromSeconds(2));
+        runner.Tick();
+
+        Assert.Equal(TradeQueueExecutionState.Stopped, runner.Snapshot.State);
+        Assert.Contains("User stopped", runner.Snapshot.Message);
+        Assert.False(runner.IsActive);
+        Assert.False(recovery.CancellationPending);
+        Assert.DoesNotContain("MarketMafioso", suppression);
+        Assert.Equal(0, io.OpenTradeAttempts);
+        Assert.Equal(0, io.OfferItemAttempts);
+        Assert.Equal(0, io.ConfirmAttempts);
+        Assert.Equal(2, Assert.Single(queue).Quantity);
+        runner.Tick();
+        Assert.Equal(0, io.OpenTradeAttempts);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
