@@ -6,7 +6,7 @@ using MarketMafioso.TradeQueue;
 
 namespace MarketMafioso.SpecTests.TradeQueue;
 
-public sealed class TradeQueueRunnerTests
+public sealed partial class TradeQueueRunnerTests
 {
     [Theory]
     [InlineData(null)]
@@ -87,7 +87,7 @@ public sealed class TradeQueueRunnerTests
         var log = TestPluginLog.Create(out var recording);
         using var runner = new TradeQueueRunner(queue, new(), () => { }, io,
             new FakeQualityLowering(), coordinator, log,
-            new() { NormalizeHighQualityItems = false });
+            policy: new() { NormalizeHighQualityItems = false });
         Assert.True(runner.Start().Success);
         var previousRunId = runner.Snapshot.RunId;
         runner.Stop();
@@ -121,7 +121,6 @@ public sealed class TradeQueueRunnerTests
     [Theory]
     [InlineData("timeout")]
     [InlineData("stop")]
-    [InlineData("readiness-lost")]
     public void OrdinaryTerminalFailuresAndStopsRecordStageRecipientAndReason(string ending)
     {
         var queue = Queue(2);
@@ -136,8 +135,7 @@ public sealed class TradeQueueRunnerTests
         if (ending == "stop") runner.Stop();
         else
         {
-            if (ending == "readiness-lost") io.ReadinessError = "Current build is no longer approved.";
-            else clock.Advance(TimeSpan.FromSeconds(31));
+            clock.Advance(TimeSpan.FromSeconds(31));
             runner.Tick();
         }
 
@@ -239,7 +237,7 @@ public sealed class TradeQueueRunnerTests
         runner.Tick();
         Assert.Equal(TradeQueueExecutionState.VerifyingInventory, runner.Snapshot.State);
 
-        clock.Advance(TimeSpan.FromSeconds(1));
+        clock.Advance(TimeSpan.FromSeconds(31));
         runner.Tick();
 
         Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
@@ -299,7 +297,7 @@ public sealed class TradeQueueRunnerTests
 
         Assert.False(io.IsTradeOpen);
         Assert.True(runner.HasResumeCheckpoint);
-        Assert.Contains("trade was canceled", runner.Snapshot.Message, StringComparison.Ordinal);
+        Assert.Contains("trade is closed", runner.Snapshot.Message, StringComparison.Ordinal);
         Assert.Equal(2, Assert.Single(queue).Quantity);
     }
 
@@ -498,7 +496,7 @@ public sealed class TradeQueueRunnerTests
         runner.Tick();
         Assert.Equal(TradeQueueExecutionState.VerifyingInventory, runner.Snapshot.State);
 
-        clock.Advance(TimeSpan.FromSeconds(1));
+        clock.Advance(TimeSpan.FromSeconds(31));
         runner.Tick();
         Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
         Assert.True(runner.CanResume);
@@ -609,7 +607,7 @@ public sealed class TradeQueueRunnerTests
     }
 
     [Fact]
-    public void Runner_CancelsWhenSubmittedQuantityDialogNeverClosesBeforeTimeout()
+    public void Runner_RebuildsStuckQuantityDialogButRetainsTheBatchDeadline()
     {
         var queue = Queue(2);
         var io = new FakeIo(Inventory(2)) { QuantityDialogCloseAfterTicks = -1 };
@@ -637,10 +635,19 @@ public sealed class TradeQueueRunnerTests
         clock.Advance(TimeSpan.FromSeconds(31));
         runner.Tick();
 
+        Assert.Equal(TradeQueueExecutionState.OpeningTrade, runner.Snapshot.State);
+        Assert.False(io.IsTradeOpen);
+        Assert.Equal(1, io.CancelTradeAttempts);
+        Assert.Equal(0, io.ConfirmAttempts);
+        io.IsTradeOpenValue = true;
+        runner.Tick();
+        clock.Advance(TimeSpan.FromSeconds(31));
+        runner.Tick();
+
         Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
         Assert.False(io.IsTradeOpen);
         Assert.Contains("Timed out", runner.Snapshot.Message, StringComparison.Ordinal);
-        Assert.Contains("trade was canceled", runner.Snapshot.Message, StringComparison.Ordinal);
+        Assert.Contains("trade is closed", runner.Snapshot.Message, StringComparison.Ordinal);
         Assert.Equal(2, Assert.Single(queue).Quantity);
     }
 
@@ -658,23 +665,21 @@ public sealed class TradeQueueRunnerTests
     }
 
     [Fact]
-    public void OfferLine_FailsClosedWhenSlotProgressionIsContradictory()
+    public void OfferLine_UsesAcknowledgedContentsRatherThanAnIndependentSlotCounter()
     {
         var io = new FakeIo(Inventory(2)) { ExposeUnexpectedSlotProgression = true };
         var offer = Offer(io, quantity: 2, sourceStackQuantity: 2);
 
         offer.Advance(OfferNow);
-        var failed = offer.Advance(OfferNow);
-
-        Assert.True(failed.IsFailed);
-        Assert.Contains("advanced unexpectedly", failed.Message, StringComparison.Ordinal);
+        Assert.Equal(TradeQueueOfferLineState.AwaitingSubmitClosure, offer.Advance(OfferNow).State);
+        Assert.True(offer.Advance(OfferNow).IsCompleted);
     }
 
     [Fact]
     public void OfferLine_FailsClosedAtItsDeadline()
     {
         var io = new FakeIo(Inventory(1));
-        var offer = new TradeQueueOfferLineOperation(io, Line(1, 1), 0, OfferNow.AddMilliseconds(1));
+        var offer = new TradeQueueOfferLineOperation(io, Line(1, 1), io.ObserveOffer()!, OfferNow.AddMilliseconds(1));
 
         var failed = offer.Advance(OfferNow.AddMilliseconds(2));
 
@@ -743,8 +748,16 @@ public sealed class TradeQueueRunnerTests
         }
         io.ObservedGilOverride = 7;
         clock.Advance(TimeSpan.FromMilliseconds(250)); runner.Tick();
-        Assert.Equal(TradeQueueExecutionState.Failed, runner.Snapshot.State);
+        Assert.Equal(afterReady ? TradeQueueExecutionState.Failed : TradeQueueExecutionState.OfferingItems, runner.Snapshot.State);
         Assert.Equal(0, io.ConfirmAttempts);
+        if (!afterReady)
+        {
+            runner.Tick();
+            Assert.Contains("Waiting for the offer", runner.Snapshot.Message);
+            io.ObservedGilOverride = 0;
+            runner.Tick();
+            Assert.Equal(TradeQueueExecutionState.WaitingForPartner, runner.Snapshot.State);
+        }
     }
 
     [Theory]
@@ -814,7 +827,7 @@ public sealed class TradeQueueRunnerTests
         runner.Tick();
         Assert.Equal(TradeQueueExecutionState.VerifyingInventory, runner.Snapshot.State);
 
-        clock.Advance(TimeSpan.FromMilliseconds(500));
+        clock.Advance(TimeSpan.FromSeconds(2));
         io.Inventory = [];
         runner.Tick();
 
@@ -1061,7 +1074,7 @@ public sealed class TradeQueueRunnerTests
     private static readonly DateTimeOffset OfferNow = new(2026, 7, 31, 12, 0, 0, TimeSpan.Zero);
 
     private static TradeQueueOfferLineOperation Offer(FakeIo io, int quantity, int sourceStackQuantity) =>
-        new(io, Line(quantity, sourceStackQuantity), 0, OfferNow.AddSeconds(30));
+        new(io, Line(quantity, sourceStackQuantity), io.ObserveOffer()!, OfferNow.AddSeconds(30));
 
     private static ExternalAutomationCoordinator Coordinator(HashSet<string> stopRequests) =>
         new(new FakePluginDataStore(stopRequests), TestPluginLog.Create());
@@ -1071,6 +1084,8 @@ public sealed class TradeQueueRunnerTests
         public string? ReadinessError { get; set; }
         public int InventoryObservations { get; private set; }
         public int CancelTradeAttempts { get; private set; }
+        public bool CancelEnabled { get; set; } = true;
+        public bool CancelClosesTrade { get; set; } = true;
         public bool TryGetExecutionReadiness(out string error)
         {
             error = ReadinessError ?? string.Empty;
@@ -1124,6 +1139,11 @@ public sealed class TradeQueueRunnerTests
         public bool ReadyEnabled { get; set; } = true;
         public string ReadyDiagnostic => "Trade control is disabled.";
         private readonly List<TradeOfferedItem> offeredItems = new();
+        public void SetManualOffer(params TradeOfferedItem[] items)
+        {
+            offeredItems.Clear();
+            offeredItems.AddRange(items);
+        }
         public TradeOfferObservation? ObserveOffer() => new(1,
             ObservedGilOverride ?? (HoldGilAcknowledgement ? 0 : SubmittedGil), false, offeredItems);
         public int OpenTradeAttempts { get; private set; }
@@ -1132,6 +1152,7 @@ public sealed class TradeQueueRunnerTests
         public bool ExposeSlotBeforeQuantity { get; set; }
         public bool ExposeUnexpectedSlotProgression { get; set; }
         public bool RejectQuantitySubmission { get; set; }
+        public int QuantityMaximum { get; set; } = int.MaxValue;
         public bool RejectGilInput { get; set; }
         public int GilNumericInputDelayChecks { get; set; }
         public int NumericInputDelayChecks { get; set; }
@@ -1198,7 +1219,7 @@ public sealed class TradeQueueRunnerTests
         {
             error = string.Empty;
             OfferItemAttempts++;
-            offeredItems.Add(new(line.ItemId, line.IsHighQuality, line.Quantity));
+            offeredItems.Add(new(line.ItemId, line.IsHighQuality, line.Quantity, line.ContainerId, line.SlotIndex));
             if (line.SourceStackQuantity > 1)
             {
                 IsNumericInputOpen = true;
@@ -1215,6 +1236,11 @@ public sealed class TradeQueueRunnerTests
 
         public bool TrySubmitQuantity(int quantity, out string error)
         {
+            if (quantity > QuantityMaximum)
+            {
+                error = string.Empty;
+                return false;
+            }
             if (RejectQuantitySubmission)
             {
                 error = "Quantity submission was rejected.";
@@ -1266,8 +1292,11 @@ public sealed class TradeQueueRunnerTests
         public bool TryCancelTrade(out string error)
         {
             CancelTradeAttempts++;
-            error = string.Empty;
-            IsTradeOpenValue = false;
+            error = CancelEnabled ? string.Empty : "Cancel is temporarily unavailable.";
+            if (!CancelEnabled)
+                return false;
+            if (CancelClosesTrade)
+                IsTradeOpenValue = false;
             return true;
         }
     }

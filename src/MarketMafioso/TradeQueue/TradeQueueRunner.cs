@@ -14,11 +14,11 @@ public sealed class TradeQueueRunner : IDisposable
     private static readonly TimeSpan OfferItemsTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PartnerTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan InventoryEvidenceSettleDelay = TimeSpan.FromSeconds(1);
 
     private readonly IList<TradeQueueItem> queue;
     private readonly TradeQueueTimingOptions timing;
     private readonly TradeQueuePolicyOptions policy;
+    private readonly TradeQueueRecoveryState recovery;
     private readonly Action save;
     private readonly ITradeQueueIo io;
     private readonly IItemQualityLoweringAutomation qualityLowering;
@@ -30,8 +30,9 @@ public sealed class TradeQueueRunner : IDisposable
     private TradeQueueBatch? batch;
     private DateTimeOffset deadline;
     private DateTimeOffset nextActionAt;
-    private DateTimeOffset verificationStartedAt;
-    private int offeredLineIndex;
+    private (TradeQueueExecutionState State, string Message)? pendingFinish;
+    private bool cancellationCheckpointSaved;
+    private DateTimeOffset batchRecoveryDeadline;
     private TradeQueueOfferLineOperation? offerLineOperation;
     private TradeQueueOfferGilOperation? offerGilOperation;
     private bool readyClicked;
@@ -52,8 +53,9 @@ public sealed class TradeQueueRunner : IDisposable
         IItemQualityLoweringAutomation qualityLowering,
         ExternalAutomationCoordinator externalAutomation,
         IPluginLog log,
-        TradeQueuePolicyOptions? policy = null)
-        : this(queue, timing, save, io, qualityLowering, externalAutomation, log, () => DateTimeOffset.UtcNow, policy)
+        TradeQueuePolicyOptions? policy = null,
+        TradeQueueRecoveryState? recovery = null)
+        : this(queue, timing, save, io, qualityLowering, externalAutomation, log, () => DateTimeOffset.UtcNow, policy, recovery)
     {
     }
 
@@ -66,17 +68,26 @@ public sealed class TradeQueueRunner : IDisposable
         ExternalAutomationCoordinator externalAutomation,
         IPluginLog log,
         Func<DateTimeOffset> clock,
-        TradeQueuePolicyOptions? policy = null)
+        TradeQueuePolicyOptions? policy = null,
+        TradeQueueRecoveryState? recovery = null)
     {
         this.queue = queue;
         this.timing = timing;
         this.policy = policy ?? new();
+        this.recovery = recovery ?? new();
         this.save = save;
         this.io = io;
         this.qualityLowering = qualityLowering;
         this.externalAutomation = externalAutomation;
         this.log = log;
         this.clock = clock;
+        if (this.recovery.CancellationPending)
+        {
+            cancellationCheckpointSaved = true;
+            externalAutomation.SuppressTradeAutoConfirm();
+            pendingFinish = (TradeQueueExecutionState.Stopped, "Recovering the previous trade cancellation.");
+            SetActive(TradeQueueExecutionState.ClosingTrade, pendingFinish.Value.Message, null);
+        }
     }
 
     public TradeQueueExecutionSnapshot Snapshot { get; private set; } =
@@ -88,7 +99,7 @@ public sealed class TradeQueueRunner : IDisposable
     public (bool Available, string Message) InspectExecutionCapability()
     {
         var available = io.TryGetExecutionReadiness(out var error);
-        return (available, available ? "Trade native entry points and context layout are available." : error);
+        return (available, available ? "Trade UI capabilities are available; item offering is checked when needed." : error);
     }
 
     public bool HasResumeCheckpoint =>
@@ -253,6 +264,11 @@ public sealed class TradeQueueRunner : IDisposable
     {
         try
         {
+            if (Snapshot.State == TradeQueueExecutionState.ClosingTrade)
+            {
+                TickClosingTrade();
+                return;
+            }
             if (!IsActive)
             {
                 var idleObservation = io.ObserveTradeableInventory();
@@ -264,15 +280,16 @@ public sealed class TradeQueueRunner : IDisposable
                 return;
             }
 
-            if (!io.TryGetExecutionReadiness(out var readinessError))
-            {
-                Fail(readinessError);
-                return;
-            }
-
             var now = clock();
             if (deadline != default && now > deadline)
             {
+                if (Snapshot.State == TradeQueueExecutionState.OfferingItems &&
+                    now < batchRecoveryDeadline && io.IsTradeOpen)
+                {
+                    BeginClosing(TradeQueueExecutionState.OpeningTrade,
+                        "Offer acknowledgement timed out; rebuilding the uncommitted trade.");
+                    return;
+                }
                 Fail($"Timed out while {DescribeState(Snapshot.State)}. Last observation: {Snapshot.Message}");
                 return;
             }
@@ -305,7 +322,10 @@ public sealed class TradeQueueRunner : IDisposable
         catch (Exception exception)
         {
             log.Error(exception, "[MarketMafioso] Trade Queue runtime failed.");
-            Fail($"Trade Queue failed: {exception.Message}");
+            if (Snapshot.State == TradeQueueExecutionState.ClosingTrade)
+                Snapshot = Snapshot with { Message = $"Waiting to close the owned trade. {exception.Message}" };
+            else
+                Fail($"Trade Queue failed: {exception.Message}");
         }
     }
 
@@ -336,7 +356,10 @@ public sealed class TradeQueueRunner : IDisposable
     {
         if (IsActive)
             Stop("Trade Queue stopped because MarketMafioso is unloading.");
-        externalAutomation.RestoreTradeAutoConfirm();
+        if (recovery.CancellationPending)
+            externalAutomation.RetainTradeSuppressionOnDispose();
+        else
+            externalAutomation.RestoreTradeAutoConfirm();
     }
 
     private void TickOpeningTrade(DateTimeOffset now)
@@ -349,7 +372,6 @@ public sealed class TradeQueueRunner : IDisposable
 
         if (io.IsTradeOpen)
         {
-            offeredLineIndex = 0;
             offerLineOperation = null;
             offerGilOperation = null;
             readyClicked = false;
@@ -359,6 +381,8 @@ public sealed class TradeQueueRunner : IDisposable
                 TradeQueueExecutionState.OfferingItems,
                 $"Trade opened with {partner.Name}; offering batch {batchNumber:N0}.",
                 OfferItemsTimeout);
+            if (deadline > batchRecoveryDeadline)
+                deadline = batchRecoveryDeadline;
             return;
         }
 
@@ -427,12 +451,43 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         }
 
-        if (batch.GilAmount > 0 && !(offerGilOperation?.IsCompleted ?? false))
+        if (offerLineOperation != null)
+        {
+            var result = offerLineOperation.Advance(now);
+            Snapshot = Snapshot with { Message = result.Message };
+            if (result.IsFailed)
+                Fail(result.Message);
+            else if (result.IsCompleted || !offerLineOperation.HasDispatched)
+            {
+                offerLineOperation = null;
+                nextActionAt = now + timing.ActionDelay;
+            }
+            return;
+        }
+
+        if (liveOffer.SyncPending)
+            return;
+        if (offerGilOperation == null && io.IsNumericInputOpen)
+            return;
+        // During our numeric-input protocol the provisional slot need not yet
+        // contain the requested amount. Outside it, never lock an excess offer.
+        if (offerGilOperation == null || offerGilOperation.IsCompleted)
+        {
+            var conflict = liveOffer.Mismatch(partner, batch, allowPartial: true);
+            if (conflict != null)
+            {
+                Snapshot = Snapshot with { Message = $"Waiting for the offer to match the queue. {conflict}" };
+                return;
+            }
+        }
+
+        if (liveOffer.Gil != batch.GilAmount || offerGilOperation is { IsCompleted: false })
         {
             if (now < nextActionAt)
                 return;
 
-            offerGilOperation ??= new TradeQueueOfferGilOperation(io, batch.GilAmount);
+            if (offerGilOperation == null || offerGilOperation.IsCompleted)
+                offerGilOperation = new TradeQueueOfferGilOperation(io, batch.GilAmount);
             var gilResult = offerGilOperation.Advance();
             Snapshot = Snapshot with { Message = gilResult.Message };
             if (gilResult.IsFailed)
@@ -446,41 +501,51 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         }
 
-        if (offeredLineIndex >= batch.Lines.Count)
+        var inventory = io.ObserveTradeableInventory();
+        if (!inventory.IsAuthoritative)
         {
-            if (io.OfferedSlotCount != batch.Lines.Count)
-                return;
-
-            if (!VerifyOffer())
-                return;
-
+            Snapshot = Snapshot with { Message = "Refreshing source inventory for the remaining offer..." };
+            return;
+        }
+        if (liveOffer.Mismatch(partner, batch) == null)
+        {
+            batch = batch with { ExpectedInventoryBefore = TradeQueuePlanner.CountExactInventory(inventory.Stacks) };
             SetActive(
                 TradeQueueExecutionState.WaitingForPartner,
                 $"Batch {batchNumber:N0} is loaded; locking the trade when ready.",
                 OfferItemsTimeout);
+            if (deadline > batchRecoveryDeadline)
+                deadline = batchRecoveryDeadline;
             return;
         }
 
-        if (offerLineOperation == null && now < nextActionAt)
+        if (now < nextActionAt)
             return;
 
-        offerLineOperation ??= new TradeQueueOfferLineOperation(
-            io,
-            batch.Lines[offeredLineIndex],
-            offeredLineIndex,
-            deadline);
-        var offerResult = offerLineOperation.Advance(now);
-        if (offerResult.IsFailed)
+        var nextLine = TradeQueueOfferProgress.NextLine(batch, liveOffer, inventory.Stacks);
+        if (nextLine == null)
         {
-            Fail(offerResult.Message);
+            // A manual partial offer can occupy the only usable source stack or
+            // all five slots. Reopen before locking, rather than guessing how a
+            // second native offer call would alter an already-offered stack.
+            if (liveOffer.Items.Count > 0 && now < batchRecoveryDeadline)
+            {
+                BeginClosing(TradeQueueExecutionState.OpeningTrade, "Rebuilding the remaining trade from current inventory.");
+            }
+            else
+                Snapshot = Snapshot with { Message = "Waiting for sufficient eligible inventory for the planned offer..." };
             return;
         }
-        if (!offerResult.IsCompleted)
-            return;
-
-        offeredLineIndex++;
-        offerLineOperation = null;
-        nextActionAt = now + timing.ActionDelay;
+        offerLineOperation = new TradeQueueOfferLineOperation(io, nextLine, liveOffer, deadline);
+        var dispatched = offerLineOperation.Advance(now);
+        Snapshot = Snapshot with { Message = dispatched.Message };
+        if (dispatched.IsFailed)
+            Fail(dispatched.Message);
+        else if (!offerLineOperation.HasDispatched)
+        {
+            offerLineOperation = null;
+            nextActionAt = now + timing.ActionDelay;
+        }
     }
 
     private void TickWaitingForPartner(DateTimeOffset now)
@@ -496,8 +561,30 @@ public sealed class TradeQueueRunner : IDisposable
         if (readyClicked || now < nextActionAt)
             return;
 
-        if (!VerifyOffer())
+        var offer = io.ObserveOffer();
+        if (offer == null || offer.SyncPending || io.IsNumericInputOpen)
             return;
+        if (partner == null || batch == null)
+        {
+            Fail("The expected trade recipient or batch is unavailable.");
+            return;
+        }
+        if (offer.PartnerEntityId != (uint)partner.GameObjectId)
+        {
+            Fail("The live trade recipient changed before locking.");
+            return;
+        }
+        if (offer.Mismatch(partner, batch) != null)
+        {
+            SetActive(TradeQueueExecutionState.OfferingItems, "Reconciling the changed offer before locking...", null);
+            deadline = batchRecoveryDeadline;
+            return;
+        }
+
+        var inventory = io.ObserveTradeableInventory();
+        if (!inventory.IsAuthoritative)
+            return;
+        batch = batch with { ExpectedInventoryBefore = TradeQueuePlanner.CountExactInventory(inventory.Stacks) };
 
         if (!io.TryClickReady(out var error))
         {
@@ -587,24 +674,13 @@ public sealed class TradeQueueRunner : IDisposable
         var inventory = observation.Stacks;
         if (!TradeQueuePlanner.HasExpectedInventoryDelta(batch, inventory, out var diagnostic))
         {
-            if (verificationStartedAt == default)
-                verificationStartedAt = now;
-            if (now - verificationStartedAt < InventoryEvidenceSettleDelay)
+            Snapshot = Snapshot with
             {
-                Snapshot = Snapshot with
-                {
-                    Message = $"Trade closed; waiting for batch {batchNumber:N0} inventory evidence.",
-                };
-                return;
-            }
-
-            Fail(
-                $"Batch {batchNumber:N0} was not completed. Verified progress through " +
-                $"batch {completedBatchCount:N0} is saved; Resume continues with the remaining queue. {diagnostic}");
+                Message = $"Trade closed; waiting for batch {batchNumber:N0} inventory evidence. {diagnostic}",
+            };
             return;
         }
 
-        verificationStartedAt = default;
         TradeQueuePlanner.ApplyCompletedBatch(queue, batch);
         completedUnitCount = checked(completedUnitCount + batch.UnitCount);
         completedBatchCount++;
@@ -641,12 +717,11 @@ public sealed class TradeQueueRunner : IDisposable
             queue.ToList(),
             inventory,
             allowHighQualityItems: !normalizeHighQualityItemsForRun);
-        offeredLineIndex = 0;
+        batchRecoveryDeadline = clock() + OpenTradeTimeout + OfferItemsTimeout;
         offerLineOperation = null;
         offerGilOperation = null;
         readyClicked = false;
         confirmationSubmitted = false;
-        verificationStartedAt = default;
         SetActive(TradeQueueExecutionState.OpeningTrade, message, OpenTradeTimeout);
         return true;
     }
@@ -678,28 +753,123 @@ public sealed class TradeQueueRunner : IDisposable
 
     private void Finish(TradeQueueExecutionState state, string message)
     {
-        var previousState = Snapshot.State;
         if (state is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped &&
             io.IsTradeOpen)
         {
-            if (io.TryCancelTrade(out var cancelError))
+            BeginClosing(state, message);
+            return;
+        }
+
+        CompleteFinish(state, message);
+    }
+
+    private void BeginClosing(TradeQueueExecutionState state, string message)
+    {
+        pendingFinish = (state, message);
+        if (!recovery.CancellationPending)
+            cancellationCheckpointSaved = false;
+        recovery.CancellationPending = true;
+        recovery.PartnerEntityId = partner == null ? recovery.PartnerEntityId : (uint)partner.GameObjectId;
+        externalAutomation.SuppressTradeAutoConfirm();
+        nextActionAt = default;
+        SetActive(TradeQueueExecutionState.ClosingTrade, $"{message} Waiting for trade closure.", null);
+        TickClosingTrade();
+    }
+
+    private void TickClosingTrade()
+    {
+        if (pendingFinish is not { } terminal)
+            throw new InvalidOperationException("Trade closure has no terminal result.");
+        if (clock() < nextActionAt)
+            return;
+        nextActionAt = clock() + timing.TradeRetryDelay;
+        if (!cancellationCheckpointSaved)
+        {
+            if (!TrySaveCancellationState(true))
+                return;
+            cancellationCheckpointSaved = true;
+        }
+        if (io.IsTradeOpen)
+        {
+            var offer = io.ObserveOffer();
+            if (offer == null)
+                return;
+            if (offer.PartnerEntityId != recovery.PartnerEntityId)
             {
-                message += " The in-progress trade was canceled.";
+                CompleteFinish(TradeQueueExecutionState.Stopped, "The previous trade session ended; a different trade was left untouched.");
+                return;
+            }
+            io.TryCancelTrade(out var error);
+            Snapshot = Snapshot with
+            {
+                Message = $"{terminal.Message} Waiting for trade closure." +
+                          (string.IsNullOrWhiteSpace(error) ? string.Empty : $" {error}"),
+            };
+        }
+        if (!io.IsTradeOpen)
+        {
+            if (terminal.State == TradeQueueExecutionState.OpeningTrade)
+            {
+                if (clock() > batchRecoveryDeadline)
+                {
+                    CompleteFinish(TradeQueueExecutionState.Failed, "Trade closed; the batch recovery deadline expired before rebuilding the offer.");
+                    return;
+                }
+                var inventory = io.ObserveTradeableInventory();
+                if (!inventory.IsAuthoritative)
+                {
+                    Snapshot = Snapshot with { Message = "Trade closed; refreshing inventory before rebuilding the offer..." };
+                    return;
+                }
+                var recoveryDeadline = batchRecoveryDeadline;
+                if (!TrySaveCancellationState(false))
+                    return;
+                if (!PrepareBatch(inventory.Stacks, terminal.Message))
+                    return;
+                pendingFinish = null;
+                batchRecoveryDeadline = recoveryDeadline;
+                if (deadline > recoveryDeadline)
+                    deadline = recoveryDeadline;
+                nextActionAt = clock();
             }
             else
             {
-                message += string.IsNullOrWhiteSpace(cancelError)
-                    ? " The in-progress trade is still open because its exact Cancel control was unavailable."
-                    : $" The in-progress trade is still open: {cancelError}";
+                CompleteFinish(terminal.State, $"{terminal.Message} The trade is closed.");
             }
         }
+    }
+
+    private bool TrySaveCancellationState(bool pending)
+    {
+        var previous = recovery.CancellationPending;
+        recovery.CancellationPending = pending;
+        try
+        {
+            save();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            recovery.CancellationPending = previous;
+            log.Error(exception, "[MarketMafioso] Could not persist trade cancellation ownership.");
+            Snapshot = Snapshot with { Message = "Retaining trade ownership while retrying cancellation checkpoint storage." };
+            return false;
+        }
+    }
+
+    private void CompleteFinish(TradeQueueExecutionState state, string message)
+    {
+        var previousState = Snapshot.State;
+        pendingFinish = (state, message);
+        if (recovery.CancellationPending && !TrySaveCancellationState(false))
+            return;
+        pendingFinish = null;
 
         if (qualityLowering.Snapshot.IsActive)
             qualityLowering.Stop("Trade Queue released quality-lowering ownership.");
         externalAutomation.RestoreTradeAutoConfirm();
         deadline = default;
         nextActionAt = default;
-        verificationStartedAt = default;
         batch = null;
         Snapshot = new(
             state,

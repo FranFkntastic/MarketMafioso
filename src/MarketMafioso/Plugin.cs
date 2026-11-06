@@ -266,7 +266,8 @@ public sealed class Plugin : IDalamudPlugin
                 DalamudTradeQueueIo.SupportedInventories),
             tradeAutomationCoordinator,
             Log,
-            Configuration.TradeQueuePolicy);
+            Configuration.TradeQueuePolicy,
+            Configuration.TradeQueueRecovery ??= new());
         workshopRestock = new WorkshopRestockService(Configuration, quartermaster, workshopCatalog, DataManager, PlayerState, Log);
         mainWindow = new MainWindow(
             Configuration,
@@ -754,7 +755,7 @@ public sealed class Plugin : IDalamudPlugin
                 refreshReady,
                 refreshDeferredReason);
             mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
-            if (Configuration.AutoAcceptIncomingTrades)
+            if (Configuration.AutoAcceptIncomingTrades || tradeQueueRunner.IsActive)
                 tradeAutomationCoordinator.SuppressDropboxAutoAccept();
             else
                 tradeAutomationCoordinator.RestoreDropboxAutoAccept();

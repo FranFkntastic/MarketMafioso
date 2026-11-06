@@ -91,6 +91,13 @@ public sealed class TradeQueuePolicyOptions
     public bool NormalizeHighQualityItems { get; set; } = true;
 }
 
+[Serializable]
+public sealed class TradeQueueRecoveryState
+{
+    public bool CancellationPending { get; set; }
+    public uint PartnerEntityId { get; set; }
+}
+
 public sealed record TradeQueueStartResult(bool Success, string Message);
 
 public enum TradeQueueValidationCode
@@ -119,6 +126,7 @@ public enum TradeQueueExecutionState
     Completed,
     Stopped,
     Failed,
+    ClosingTrade,
 }
 
 public sealed record TradeQueueExecutionSnapshot(
