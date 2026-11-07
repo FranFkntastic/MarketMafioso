@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
@@ -20,7 +21,7 @@ namespace MarketMafioso.WorkshopPrep;
 
 internal sealed class WorkshopAssemblyUiDriver : IDisposable
 {
-    private const byte MaxFabricationStationDistance = 8;
+    private const float MaxFabricationStationDistance = 8f;
     private const string SelectStringAddon = "SelectString";
     private const string CutSceneSelectStringAddon = "CutSceneSelectString";
     private const string RequestAddon = "Request";
@@ -124,8 +125,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
                 ["objectKind"] = station.ObjectKind.ToString(),
                 ["gameObjectId"] = station.GameObjectId.ToString("X"),
                 ["baseId"] = station.BaseId.ToString(),
-                ["distanceX"] = station.YalmDistanceX.ToString(),
-                ["distanceZ"] = station.YalmDistanceZ.ToString(),
+                ["distance"] = DistanceToPlayer(station)?.ToString("0.00") ?? "unavailable",
                 ["result"] = result.ToString(),
             });
         log.Verbose($"[MarketMafioso] Interacted with fabrication station {station.Name.TextValue} ({station.GameObjectId:X}).");
@@ -563,24 +563,27 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
                condition[ConditionFlag.WatchingCutscene78];
     }
 
+    // Dalamud's YalmDistanceX/Z no longer report distance for event objects (they read 0),
+    // which let an out-of-reach station on another floor win. Use real positions instead.
     private IGameObject? FindFabricationStation()
     {
-        if (IsFabricationStationObject(targetManager.Target))
-            return targetManager.Target;
+        var player = objectTable.LocalPlayer;
+        if (player == null)
+            return null;
 
-        return objectTable
-            .Where(IsFabricationStationObject)
-            .OrderBy(x => x.YalmDistanceX + x.YalmDistanceZ)
-            .FirstOrDefault();
+        return WorkshopFabricationStationSelection.SelectNearest(
+            objectTable.Where(IsFabricationStationObject),
+            player.Position,
+            x => x.Position,
+            MaxFabricationStationDistance);
     }
+
+    private float? DistanceToPlayer(IGameObject gameObject) =>
+        objectTable.LocalPlayer is { } player ? Vector3.Distance(player.Position, gameObject.Position) : null;
 
     private static bool IsFabricationStationObject(IGameObject? gameObject)
     {
         if (gameObject == null || !gameObject.IsTargetable)
-            return false;
-
-        if (gameObject.YalmDistanceX > MaxFabricationStationDistance ||
-            gameObject.YalmDistanceZ > MaxFabricationStationDistance)
             return false;
 
         if (gameObject.ObjectKind is not (ObjectKind.EventObj or ObjectKind.HousingEventObject or ObjectKind.ReactionEventObject))
