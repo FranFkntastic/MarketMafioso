@@ -51,7 +51,7 @@ internal sealed class AdvancedSettingsPages
     }
 
     private void DrawAgentBridge(SettingsPageContext context) => DrawCheckbox(context, "Enable local agent test bridge",
-        "Dev-only named-pipe bridge. It exposes reviewed state and semantic UI controls without directly controlling the game client.",
+        "Off by default. Local, current-user named-pipe bridge for agent testing. It exposes reviewed state and semantic UI controls without directly controlling the game client.",
         () => config.EnableAgentBridge, value => config.EnableAgentBridge = value);
 
     private void DrawTesting(SettingsPageContext context)
