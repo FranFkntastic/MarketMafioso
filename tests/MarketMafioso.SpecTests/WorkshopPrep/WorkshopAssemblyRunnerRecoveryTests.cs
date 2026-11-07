@@ -337,6 +337,31 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
     }
 
     [Fact]
+    public void A_crash_behind_an_unpaced_step_halts_before_the_next_dispatch()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(true, "Project is open."));
+        ui.SubmitMaterialResults.Enqueue(new(false, "Opened request item selector.", ActionTaken: true));
+        ui.SubmitMaterialResults.Enqueue(new(false, "Selected request item.", ActionTaken: true));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+        ui.FaultOnNextSubmit = "The game crashed while handling Selected request item selector.";
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
+        Assert.Single(ui.SubmitMaterialResults);
+    }
+
+    [Fact]
     public void Repeating_an_unanswered_action_backs_off_before_retrying()
     {
         var clock = new ManualTimeProvider();
@@ -618,8 +643,18 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         public WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry) =>
             OpenProjectResults.Dequeue();
 
-        public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry) =>
-            SubmitMaterialResults.Dequeue();
+        public string? FaultOnNextSubmit { get; set; }
+
+        public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry)
+        {
+            if (FaultOnNextSubmit != null)
+            {
+                NativeFaults.Enqueue(FaultOnNextSubmit);
+                FaultOnNextSubmit = null;
+            }
+
+            return SubmitMaterialResults.Dequeue();
+        }
 
         public WorkshopAssemblyActionResult RecoverStalledMaterialRequest()
         {

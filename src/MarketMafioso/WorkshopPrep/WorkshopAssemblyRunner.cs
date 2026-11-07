@@ -36,6 +36,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private readonly WorkshopAssemblyActionGuard actionGuard = new();
     private DateTimeOffset lastStationInteractAt = DateTimeOffset.MinValue;
     private DateTimeOffset lastNativeFaultPollAt = DateTimeOffset.MinValue;
+    private bool actionSinceNativeFaultPoll;
     private DateTimeOffset? postMortemAt;
     private string? postMortemReason;
     private bool inspectOnly;
@@ -120,6 +121,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         continueAt = DateTimeOffset.MinValue;
         lastStationInteractAt = DateTimeOffset.MinValue;
         lastNativeFaultPollAt = DateTimeOffset.MinValue;
+        actionSinceNativeFaultPoll = false;
         inspectOnly = inspect;
         inspectionReadyAt = null;
         skippedProjects.Clear();
@@ -211,11 +213,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         if (activePlan == null)
             throw new InvalidOperationException("Workshop assembly plan is unavailable.");
 
-        // Paced actions are at least 250 ms apart, so a 100 ms throttle on the log
-        // tail still guarantees a crash check between any two actions.
-        if (Now - lastNativeFaultPollAt >= NativeFaultPollInterval)
+        // Answered material steps fire on consecutive frames, so check the log tail
+        // before every dispatch that follows an action; idle ticks are throttled.
+        if (actionSinceNativeFaultPoll || Now - lastNativeFaultPollAt >= NativeFaultPollInterval)
         {
             lastNativeFaultPollAt = Now;
+            actionSinceNativeFaultPoll = false;
             var fault = uiAutomation.PollNativeFault();
             if (fault != null)
                 throw new WorkshopAssemblyHaltException(DescribeFaultContext() + fault);
@@ -703,6 +706,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         if (!result.ActionTaken)
             return;
 
+        actionSinceNativeFaultPoll = true;
         var isRepeat = !result.IsWaiting && actionGuard.NoteAction(Progress.State, result.Message);
         if (alwaysPace || result.IsWaiting || isRepeat)
             continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
