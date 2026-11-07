@@ -5,6 +5,77 @@ namespace MarketMafioso.SpecTests.MarketAcquisition;
 public sealed class MarketAcquisitionSortedPrefixPlannerTests
 {
     [Fact]
+    public void EarlyDeparture_DrainsOwnedResponseBeforeNextItemCanBrowse()
+    {
+        var fixture = CreateFixture();
+        var gate = new MarketBoardBrowseOperationGate();
+        Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, 5059, out _));
+        Assert.True(gate.TryClaimActivation(MarketBoardBrowseOwner.MarketAcquisition, 5059, out _));
+        gate.ObserveRequest(5059, true);
+        gate.ObserveHeader(0, 20);
+        gate.ObservePage(10, 0, 7, 7, Enumerable.Repeat(5059u, 10).ToArray());
+        var oldBrowse = gate.Snapshot;
+        var oldRead = PrefixRead(Enumerable.Repeat(120u, 10).ToArray()) with
+        {
+            BrowseOperationId = oldBrowse.OperationId,
+        };
+        Assert.True(MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+            fixture.Request, fixture.Plan, fixture.Subtask, "Siren", oldRead, 0, 0, oldBrowse, out _));
+
+        var nextRequest = fixture.Request with { ItemId = 5067, ItemName = "Rose Gold Ingot" };
+        var nextSubtask = fixture.Subtask with { ItemId = 5067, ItemName = "Rose Gold Ingot", LineId = "line:next" };
+        var nextPlan = fixture.Plan with
+        {
+            WorldBatches = [fixture.Plan.WorldBatches.Single() with { ItemSubtasks = [nextSubtask] }],
+        };
+        Assert.False(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, 5067, out var busy));
+        Assert.False(MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+            nextRequest, nextPlan, nextSubtask, "Siren", oldRead, 0, 0, busy, out _));
+
+        // Late pages and history still belong to the previous item, not the next one.
+        gate.ObservePage(0, 10, 7, 7, Enumerable.Repeat(5059u, 10).ToArray());
+        Assert.False(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, 5067, out _));
+        gate.ObserveHistory(5059, true);
+        Assert.True(gate.Snapshot.IsComplete);
+        Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, 5067, out var nextBrowse));
+        Assert.NotEqual(oldBrowse.OperationId, nextBrowse.OperationId);
+        Assert.True(gate.TryClaimActivation(MarketBoardBrowseOwner.MarketAcquisition, 5067, out _));
+        gate.ObserveRequest(5067, true);
+        gate.ObserveHeader(0, 20);
+        gate.ObservePage(10, 0, 8, 8, Enumerable.Repeat(5067u, 10).ToArray());
+        var nextRead = oldRead with
+        {
+            ItemId = 5067,
+            BrowseOperationId = nextBrowse.OperationId,
+            Listings = oldRead.Listings.Select(row => row with { ItemId = 5067, RawItemId = 5067 }).ToArray(),
+        };
+        Assert.True(MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+            nextRequest, nextPlan, nextSubtask, "Siren", nextRead, 0, 0, gate.Snapshot, out _));
+    }
+
+    [Theory]
+    [InlineData("item")]
+    [InlineData("world")]
+    [InlineData("generation")]
+    [InlineData("owner")]
+    [InlineData("terminal")]
+    [InlineData("missing")]
+    public void UnrelatedPrefix_IsPendingRatherThanAPlanOrException(string mismatch)
+    {
+        var fixture = CreateFixture();
+        var read = PrefixRead(120, 130);
+        MarketBoardBrowseSnapshot? browse = Browse();
+        if (mismatch == "item") read = read with { ItemId = 5067 };
+        if (mismatch == "world") read = read with { WorldName = "Fenrir" };
+        if (mismatch == "generation") read = read with { BrowseOperationId = "browse:previous" };
+        if (mismatch == "owner") browse = browse with { Owner = MarketBoardBrowseOwner.MarketListingAcquisition };
+        if (mismatch == "terminal") browse = browse with { Phase = MarketBoardBrowsePhase.Completed };
+        if (mismatch == "missing") browse = null;
+        Assert.False(MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+            fixture.Request, fixture.Plan, fixture.Subtask, "Siren", read, 0, 0, browse, out _));
+    }
+
+    [Fact]
     public void PrefixBeyondPriceCeiling_IsConclusiveWithoutRemainingPages()
     {
         var fixture = CreateFixture();
@@ -18,6 +89,7 @@ public sealed class MarketAcquisitionSortedPrefixPlannerTests
             read,
             alreadyPurchasedQuantity: 0,
             alreadySpentGil: 0,
+            Browse(),
             out var candidatePlan);
 
         Assert.True(conclusive);
@@ -39,6 +111,7 @@ public sealed class MarketAcquisitionSortedPrefixPlannerTests
             PrefixRead(80, 120),
             0,
             0,
+            Browse(),
             out _);
 
         Assert.False(conclusive);
@@ -57,6 +130,7 @@ public sealed class MarketAcquisitionSortedPrefixPlannerTests
             PrefixRead(80, 90),
             0,
             0,
+            Browse(),
             out _);
 
         Assert.False(conclusive);
@@ -75,6 +149,7 @@ public sealed class MarketAcquisitionSortedPrefixPlannerTests
             PrefixRead(130, 120),
             0,
             0,
+            Browse(),
             out _);
 
         Assert.False(conclusive);
@@ -183,6 +258,14 @@ public sealed class MarketAcquisitionSortedPrefixPlannerTests
         };
         return (request, plan, subtask);
     }
+
+    private static MarketBoardBrowseSnapshot Browse() => new()
+    {
+        OperationId = "browse:prefix",
+        Owner = MarketBoardBrowseOwner.MarketAcquisition,
+        ItemId = 5059,
+        Phase = MarketBoardBrowsePhase.AwaitingPagesAndHistory,
+    };
 
     private static MarketBoardReadResult PrefixRead(params uint[] prices) =>
         new()

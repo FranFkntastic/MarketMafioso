@@ -1277,7 +1277,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var operationResult = ObserveItemSearchOperation(operation, searchResult);
             if (operationResult.Disposition == MarketAcquisitionRouteOperationDisposition.Pending)
             {
-                if (TryRecordConclusiveListingPrefix(operation, claimed, activeLine, currentWorld))
+                if (TryRecordConclusiveListingPrefix(operation, claimed, activeLine, currentWorld, searchResult.BrowseEvidence))
                     return;
 
                 state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
@@ -1309,7 +1309,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionRouteOperationSnapshot operation,
         MarketAcquisitionClaimView claimed,
         MarketAcquisitionRequestView activeLine,
-        string currentWorld)
+        string currentWorld,
+        MarketBoardBrowseSnapshot? browse)
     {
         if (!MarketAcquisitionResearchModePolicy.AllowsConclusivePrefixDeparture(operation.Context))
             return false;
@@ -1332,6 +1333,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 prefixRead,
                 totals.PurchasedQuantity,
                 totals.SpentGil,
+                browse,
                 out var prefixPlan))
         {
             return false;
@@ -1373,6 +1375,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
 
         evidence.RecordProbeVisit(currentWorld, activeLine, activeSubtask, prefixPlan, claimed.Id, state.ProgressNonce);
+        // Decision completion is not native request cancellation. Leave the browse
+        // gate owning late pages/history; the next search waits on BrowseBusy until
+        // transport completion or the existing bounded inactivity timeout.
         ClearMarketBoardAutomationState();
         ReportRouteProgress();
         EvaluateExactAcquisitionRouteCompletion();
