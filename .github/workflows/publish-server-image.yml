@@ -26,6 +26,21 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Read pinned Franthropy revision
+        id: franthropy
+        shell: pwsh
+        run: |
+          [xml]$pin = Get-Content eng/Franthropy.Version.props
+          $revision = ([string]$pin.Project.PropertyGroup.FranthropyPackageVersion).Replace('0.1.0-commit.', '')
+          if ($revision -notmatch '^[0-9a-f]{40}$') { throw 'Invalid Franthropy package pin.' }
+          "revision=$revision" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          repository: FranFkntastic/Franthropy
+          ref: ${{ steps.franthropy.outputs.revision }}
+          path: franthropy
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 

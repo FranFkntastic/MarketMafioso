@@ -7,6 +7,7 @@
     <UsesFranthropy>true</UsesFranthropy>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="$(FranthropyFilteringProject)" />
+    <PackageReference Include="Franthropy.Filtering" Version="[$(FranthropyPackageVersion)]" Condition="'$(FranthropySource)' == 'Package'" />
+    <ProjectReference Include="$(FranthropyRoot)/src/Franthropy.Filtering/Franthropy.Filtering.csproj" Condition="'$(FranthropySource)' == 'Local'" />
   </ItemGroup>
 </Project>

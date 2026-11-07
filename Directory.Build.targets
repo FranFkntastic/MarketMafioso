@@ -1,28 +1,7 @@
 <Project>
-  <Target Name="ValidateUnifiedFranthropyRoot"
-          BeforeTargets="PrepareForBuild"
-          Condition="'$(UsesFranthropy)' == 'true'">
-    <Error Condition="!Exists('$(FranthropyRootFullPath)\src')"
-           Text="Franthropy was not found at '$(FranthropyRootFullPath)'. Clone Franthropy beside MarketMafioso or set -p:FranthropyRoot=&quot;path\to\Franthropy&quot;." />
-    <Error Condition="'$(FranthropyDalamudProjectFullPath)' != '$(ExpectedFranthropyDalamudProject)'"
-           Text="FranthropyDalamudProject resolves outside FranthropyRoot. Set only FranthropyRoot so every Franthropy dependency comes from one checkout." />
-    <Error Condition="'$(FranthropyFilteringProjectFullPath)' != '$(ExpectedFranthropyFilteringProject)'"
-           Text="FranthropyFilteringProject resolves outside FranthropyRoot. Set only FranthropyRoot so every Franthropy dependency comes from one checkout." />
-    <Error Condition="'$(FranthropyFfxivProjectFullPath)' != '$(ExpectedFranthropyFfxivProject)'"
-           Text="FranthropyFfxivProject resolves outside FranthropyRoot. Set only FranthropyRoot so every Franthropy dependency comes from one checkout." />
-    <Error Condition="'$(FranthropyObservationsProjectFullPath)' != '$(ExpectedFranthropyObservationsProject)'"
-           Text="FranthropyObservationsProject resolves outside FranthropyRoot. Set only FranthropyRoot so every Franthropy dependency comes from one checkout." />
-    <Error Condition="'$(FranthropyWebProjectFullPath)' != '$(ExpectedFranthropyWebProject)'"
-           Text="FranthropyWebProject resolves outside FranthropyRoot. Set only FranthropyRoot so every Franthropy dependency comes from one checkout." />
-    <Error Condition="!Exists('$(ExpectedFranthropyDalamudProject)')"
-           Text="Franthropy.Dalamud was not found beneath FranthropyRoot '$(FranthropyRootFullPath)'." />
-    <Error Condition="!Exists('$(ExpectedFranthropyFilteringProject)')"
-           Text="Franthropy.Filtering was not found beneath FranthropyRoot '$(FranthropyRootFullPath)'." />
-    <Error Condition="!Exists('$(ExpectedFranthropyFfxivProject)')"
-           Text="Franthropy.FFXIV was not found beneath FranthropyRoot '$(FranthropyRootFullPath)'." />
-    <Error Condition="!Exists('$(ExpectedFranthropyObservationsProject)')"
-           Text="Franthropy.Observations was not found beneath FranthropyRoot '$(FranthropyRootFullPath)'." />
-    <Error Condition="!Exists('$(ExpectedFranthropyWebProject)')"
-           Text="Franthropy.Web was not found beneath FranthropyRoot '$(FranthropyRootFullPath)'." />
+  <Target Name="ValidateFranthropySource" BeforeTargets="CollectPackageReferences;PrepareForBuild">
+    <Error Condition="'$(FranthropySource)' != 'Package' and '$(FranthropySource)' != 'Local'" Text="FranthropySource must be Package or Local." />
+    <Error Condition="'$(FranthropySource)' == 'Local' and ('$(FranthropyRoot)' == '' or !Exists('$(FranthropyRoot)/src'))" Text="Local Franthropy requires an explicit FranthropyRoot containing src." />
+    <Error Condition="'$(FranthropySource)' == 'Package' and '$(FranthropyRoot)' != ''" Text="FranthropyRoot requires explicit FranthropySource=Local." />
   </Target>
 </Project>

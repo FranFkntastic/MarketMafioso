@@ -17,8 +17,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
-    <ProjectReference Include="$(FranthropyFfxivProject)" />
-    <ProjectReference Include="$(FranthropyWebProject)" />
+    <PackageReference Include="Franthropy.FFXIV" Version="[$(FranthropyPackageVersion)]" Condition="'$(FranthropySource)' == 'Package'" />
+    <ProjectReference Include="$(FranthropyRoot)/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj" Condition="'$(FranthropySource)' == 'Local'" />
+    <PackageReference Include="Franthropy.Web" Version="[$(FranthropyPackageVersion)]" Condition="'$(FranthropySource)' == 'Package'" />
+    <ProjectReference Include="$(FranthropyRoot)/src/Franthropy.Web/Franthropy.Web.csproj" Condition="'$(FranthropySource)' == 'Local'" />
   </ItemGroup>
 
 </Project>

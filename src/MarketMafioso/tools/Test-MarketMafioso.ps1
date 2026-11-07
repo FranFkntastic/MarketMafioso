@@ -5,9 +5,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-. (Join-Path $PSScriptRoot 'Resolve-PinnedFranthropyRoot.ps1')
-$worktreePath = Resolve-PinnedFranthropyRoot -MarketMafiosoRepoRoot $repoRoot
-$franthropyProperty = "-p:FranthropyRoot=$worktreePath"
 $projects = @(
     @('tests\MarketMafioso.SpecTests\MarketMafioso.SpecTests.csproj', $null),
     @('tests\MarketMafioso.ContractTests\MarketMafioso.ContractTests.csproj', $null)
@@ -20,7 +17,7 @@ if ($LASTEXITCODE -ne 0) {
 
 foreach ($entry in $projects) {
     $project = Join-Path $repoRoot $entry[0]
-    $arguments = @('test', $project, '--configuration', $Configuration, '-p:SkipDevPluginSync=true', $franthropyProperty)
+    $arguments = @('test', $project, '--configuration', $Configuration, '-p:SkipDevPluginSync=true')
     if ($entry[1]) {
         $arguments += @('--filter', $entry[1])
     }
@@ -30,18 +27,13 @@ foreach ($entry in $projects) {
     }
 }
 
-$assemblyChecks = @(
-    @("src\Franthropy.Dalamud\bin\$Configuration\net10.0-windows\Franthropy.Dalamud.dll", "tests\MarketMafioso.SpecTests\bin\$Configuration\net10.0-windows7.0\Franthropy.Dalamud.dll"),
-    @("src\Franthropy.Filtering\bin\$Configuration\net10.0\Franthropy.Filtering.dll", "tests\MarketMafioso.SpecTests\bin\$Configuration\net10.0-windows7.0\Franthropy.Filtering.dll"),
-    @("src\Franthropy.FFXIV\bin\$Configuration\net10.0\Franthropy.FFXIV.dll", "tests\MarketMafioso.ContractTests\bin\$Configuration\net10.0-windows7.0\Franthropy.FFXIV.dll"),
-    @("src\Franthropy.Web\bin\$Configuration\net10.0\Franthropy.Web.dll", "tests\MarketMafioso.ContractTests\bin\$Configuration\net10.0-windows7.0\Franthropy.Web.dll")
-)
-foreach ($check in $assemblyChecks) {
-    $pinnedAssembly = Join-Path $worktreePath $check[0]
-    $testAssembly = Join-Path $repoRoot $check[1]
-    if (-not (Test-Path -LiteralPath $pinnedAssembly) -or -not (Test-Path -LiteralPath $testAssembly) -or
-        (Get-FileHash -LiteralPath $pinnedAssembly -Algorithm SHA256).Hash -ne
-        (Get-FileHash -LiteralPath $testAssembly -Algorithm SHA256).Hash) {
-        throw "Test assembly '$testAssembly' does not match pinned Franthropy output '$pinnedAssembly'."
+[xml]$pin = Get-Content (Join-Path $repoRoot 'eng/Franthropy.Version.props')
+$expectedCommit = ([string]$pin.Project.PropertyGroup.FranthropyPackageVersion).Replace('0.1.0-commit.', '')
+$assemblies = @(Get-ChildItem (Join-Path $repoRoot 'tests') -Recurse -Filter 'Franthropy.*.dll' |
+    Where-Object { $_.FullName -like "*\bin\$Configuration\*" })
+if ($assemblies.Count -eq 0) { throw 'No Franthropy test outputs found.' }
+foreach ($assembly in $assemblies) {
+    if ([Diagnostics.FileVersionInfo]::GetVersionInfo($assembly.FullName).ProductVersion -cne $expectedCommit) {
+        throw "Test dependency identity mismatch: $($assembly.FullName)"
     }
 }

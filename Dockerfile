@@ -1,5 +1,11 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
+ENV FranthropySource=Local
+ENV FranthropyRoot=/src/franthropy
+
+COPY Directory.Build.props Directory.Build.targets ./
+COPY eng/Franthropy.Version.props eng/
+COPY franthropy/ franthropy/
 
 COPY MarketMafioso.sln ./
 COPY src/MarketMafioso.Contracts/MarketMafioso.Contracts.csproj src/MarketMafioso.Contracts/

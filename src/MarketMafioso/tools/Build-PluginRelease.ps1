@@ -9,11 +9,8 @@ $projectDir = Split-Path -Parent $PSScriptRoot
 $srcDir = Split-Path -Parent $projectDir
 $repoRoot = Split-Path -Parent $srcDir
 $projectPath = Join-Path $projectDir "MarketMafioso.csproj"
-. (Join-Path $PSScriptRoot 'Resolve-PinnedFranthropyRoot.ps1')
-$franthropyRoot = Resolve-PinnedFranthropyRoot -MarketMafiosoRepoRoot $repoRoot
 $releaseDir = Join-Path $projectDir "bin\Release"
 $releaseArchive = Join-Path $releaseDir "MarketMafioso\latest.zip"
-$releaseFranthropy = Join-Path $franthropyRoot "src\Franthropy.Dalamud\bin\Release\net10.0-windows\Franthropy.Dalamud.dll"
 $copiedFranthropy = Join-Path $releaseDir "Franthropy.Dalamud.dll"
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
@@ -55,28 +52,29 @@ function Get-StreamSha256 {
 }
 
 $mmfState = Get-RepositoryState -Path $repoRoot
-$franthropyState = Get-RepositoryState -Path $franthropyRoot
+[xml]$pin = Get-Content (Join-Path $repoRoot 'eng/Franthropy.Version.props')
+$expectedCommit = ([string]$pin.Project.PropertyGroup.FranthropyPackageVersion).Replace('0.1.0-commit.', '')
+$franthropyState = [pscustomobject]@{ Commit = $expectedCommit; Dirty = $false }
 if (-not $AllowDirty -and ($mmfState.Dirty -or $franthropyState.Dirty)) {
     throw "Release inputs must be clean. Commit MMF and Franthropy first, or use -AllowDirty for a local verification build."
 }
 
 Write-Host "Building the MarketMafioso plugin release directly so sibling projects inherit Release configuration."
-& dotnet build $projectPath -c Release -t:Rebuild -p:SkipDevPluginSync=true -p:UseSharedCompilation=false "-p:FranthropyRoot=$franthropyRoot"
+& dotnet build $projectPath -c Release -t:Rebuild -p:SkipDevPluginSync=true -p:UseSharedCompilation=false
 if ($LASTEXITCODE -ne 0) {
     throw "MarketMafioso Release build failed with exit code $LASTEXITCODE."
 }
 
-foreach ($requiredPath in @($releaseArchive, $releaseFranthropy, $copiedFranthropy)) {
+foreach ($requiredPath in @($releaseArchive, $copiedFranthropy)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Expected release artifact was not found: $requiredPath"
     }
 }
 
-$sourceFranthropyHash = (Get-FileHash -LiteralPath $releaseFranthropy -Algorithm SHA256).Hash
-$copiedFranthropyHash = (Get-FileHash -LiteralPath $copiedFranthropy -Algorithm SHA256).Hash
-if ($sourceFranthropyHash -ne $copiedFranthropyHash) {
-    throw "Packaged Franthropy copy does not match its Release output. Source=$sourceFranthropyHash Copy=$copiedFranthropyHash"
+if ([Diagnostics.FileVersionInfo]::GetVersionInfo($copiedFranthropy).ProductVersion -cne $expectedCommit) {
+    throw 'Release Franthropy informational version does not match the package pin.'
 }
+$sourceFranthropyHash = (Get-FileHash -LiteralPath $copiedFranthropy -Algorithm SHA256).Hash
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [System.IO.Compression.ZipFile]::OpenRead($releaseArchive)

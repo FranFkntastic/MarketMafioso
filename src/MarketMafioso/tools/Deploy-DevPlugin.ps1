@@ -19,7 +19,6 @@ $workspaceRoot = Split-Path -Parent $repoRoot
 $projectPath = Join-Path -Path $projectDir -ChildPath "MarketMafioso.csproj"
 $syncScript = Join-Path -Path $PSScriptRoot -ChildPath "Sync-DevPlugin.ps1"
 $defaultConfigPath = Join-Path -Path $projectDir -ChildPath "dev-plugin.local.json"
-. (Join-Path $PSScriptRoot 'Resolve-PinnedFranthropyRoot.ps1')
 
 function Resolve-ConfigPath {
     param(
@@ -92,14 +91,12 @@ try {
     Write-Host "Deploying MarketMafioso dev plugin from $branch@$commit"
 
     if (-not $SkipBuild) {
-        $franthropyRoot = Resolve-PinnedFranthropyRoot -MarketMafiosoRepoRoot $workspaceRoot
         $buildArguments = @(
             'build',
             $projectPath,
             '-c', $effectiveConfiguration,
             '-p:UseSharedCompilation=false',
-            '-p:SkipDevPluginSync=true',
-            "-p:FranthropyRoot=$franthropyRoot"
+            '-p:SkipDevPluginSync=true'
         )
         & dotnet @buildArguments
         if ($LASTEXITCODE -ne 0) {
