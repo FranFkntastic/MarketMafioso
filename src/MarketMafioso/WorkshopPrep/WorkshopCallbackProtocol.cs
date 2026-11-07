@@ -37,9 +37,13 @@ internal static class WorkshopCallbackProtocol
     internal static void RequireOwner(nint capturedAddon, nint currentAddon, uint addonId, uint agentAddonId,
         nint receiver, nint expectedReceiver)
     {
-        if (capturedAddon == 0 || capturedAddon != currentAddon || addonId == 0 || addonId != agentAddonId ||
-            receiver == 0 || receiver != expectedReceiver)
-            throw new InvalidOperationException("Workshop callback ownership or native handler changed; no callback was sent.");
+        // Name the failed check: a bare refusal after a patch is undiagnosable.
+        var reason = capturedAddon == 0 || capturedAddon != currentAddon ? "addon instance changed"
+            : addonId == 0 || addonId != agentAddonId ? $"addon id {addonId} is not owned by agent addon {agentAddonId}"
+            : receiver == 0 || receiver != expectedReceiver ? $"agent receiver 0x{receiver:X} is not validated receiver 0x{expectedReceiver:X}"
+            : null;
+        if (reason != null)
+            throw new InvalidOperationException($"Workshop callback ownership or native handler changed ({reason}); no callback was sent.");
     }
 
     internal static void RequireCraftingLogSchema(ReadOnlySpan<AtkValue> values)
