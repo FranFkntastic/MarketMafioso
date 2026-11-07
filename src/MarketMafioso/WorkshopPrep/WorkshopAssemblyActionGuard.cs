@@ -24,7 +24,9 @@ internal sealed class WorkshopAssemblyActionGuard
         lastAction = null;
     }
 
-    public void NoteAction(WorkshopAssemblyRunnerState state, string message)
+    // Returns true when this action repeats the previous one: the game hasn't
+    // answered it yet, so the caller should back off before trying again.
+    public bool NoteAction(WorkshopAssemblyRunnerState state, string message)
     {
         actionsInState++;
         identicalActions = string.Equals(message, lastAction, StringComparison.Ordinal) ? identicalActions + 1 : 1;
@@ -41,6 +43,8 @@ internal sealed class WorkshopAssemblyActionGuard
             throw new WorkshopAssemblyHaltException(
                 $"Workshop assembly took {actionsInState} UI actions in {state} without moving on (last: {message}). Halted before driving the game further.");
         }
+
+        return identicalActions > 1;
     }
 
     public void NoteStationReopen(string reason)

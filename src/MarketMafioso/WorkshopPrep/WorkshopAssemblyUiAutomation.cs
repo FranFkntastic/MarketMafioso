@@ -80,7 +80,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         return uiDriver.TrySkipCutscene() switch
         {
             WorkshopCutsceneSkipState.CutsceneActive =>
-                new(false, "Waiting for workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true),
+                new(false, "Waiting for workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true, IsWaiting: true),
             WorkshopCutsceneSkipState.PromptSelected =>
                 new(false, "Selected workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true),
             _ => new(false, "No skippable workshop cutscene prompt is visible."),

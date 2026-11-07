@@ -237,7 +237,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 {
                     ["requiresWorkshopReopen"] = cutsceneResult.RequiresWorkshopReopen.ToString(),
                 });
-            NoteAction(cutsceneResult);
+            NoteAction(cutsceneResult, alwaysPace: true);
             if (cutsceneResult.RequiresWorkshopReopen)
                 SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, cutsceneResult.Message);
 
@@ -304,7 +304,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         if (openResult.ActionTaken)
         {
             lastStationInteractAt = Now;
-            NoteAction(openResult);
+            NoteAction(openResult, alwaysPace: true);
             Progress = BuildProgress(WorkshopAssemblyRunnerState.WaitingForFabricationStation, openResult.Message);
             return;
         }
@@ -322,7 +322,9 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var result = uiAutomation.TryOpenProject(entry);
         activeMaterialItemId = result.ActiveMaterialItemId;
         RecordActionResult("open-project", entry, result);
-        NoteAction(result);
+        // Crafting-log navigation stays paced: it is a handful of actions per
+        // project, and re-firing it is what crashed the game on Nov 6.
+        NoteAction(result, alwaysPace: true);
         if (result.RequiresWorkshopReopen)
         {
             activeMaterialItemId = null;
@@ -350,7 +352,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         var result = uiAutomation.TryReachCraftingLog();
         RecordActionResult("inspect-crafting-log", activePlan!.Entries[0], result);
-        NoteAction(result);
+        NoteAction(result, alwaysPace: true);
         if (!result.Success)
         {
             inspectionReadyAt = null;
@@ -690,15 +692,20 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         RecordForensicsAndSchedulePostMortem("failed");
     }
 
-    // Only real UI actions count: pace the next tick so one action can never
-    // re-fire every frame, and feed the repeat guard.
-    private void NoteAction(WorkshopAssemblyActionResult result)
+    // Only real UI actions count. In the material loop a step the game answered
+    // moves straight on, as it always did (pacing every step there doubled
+    // contribution time). An action that
+    // repeats the last one hasn't been answered, so it backs off and feeds the
+    // repeat guard. Waiting on the game (a cutscene playing) is paced but is not
+    // an action, so it never trips the guard.
+    private void NoteAction(WorkshopAssemblyActionResult result, bool alwaysPace = false)
     {
         if (!result.ActionTaken)
             return;
 
-        continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
-        actionGuard.NoteAction(Progress.State, result.Message);
+        var isRepeat = !result.IsWaiting && actionGuard.NoteAction(Progress.State, result.Message);
+        if (alwaysPace || result.IsWaiting || isRepeat)
+            continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
     }
 
     // Snapshot the game state when a run ends badly, then again a few seconds

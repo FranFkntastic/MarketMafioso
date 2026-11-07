@@ -312,6 +312,89 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
     }
 
     [Fact]
+    public void Steps_the_game_answered_move_on_without_waiting()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(true, "Project is open."));
+        ui.SubmitMaterialResults.Enqueue(new(false, "Opened request item selector.", ActionTaken: true));
+        ui.SubmitMaterialResults.Enqueue(new(false, "Selected request item.", ActionTaken: true));
+        ui.SubmitMaterialResults.Enqueue(new(false, "Handed over request item.", ActionTaken: true));
+        ui.SubmitMaterialResults.Enqueue(new(false, "Waiting for confirmation."));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        for (var index = 0; index < 5; index++)
+            frameworkDriver.Tick(framework);
+
+        // Nov 7: pacing every step added ~1 s to each contribution.
+        Assert.Single(ui.SubmitMaterialResults);
+        Assert.True(runner.IsRunning);
+    }
+
+    [Fact]
+    public void Repeating_an_unanswered_action_backs_off_before_retrying()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(true, "Project is open."));
+        for (var index = 0; index < 3; index++)
+            ui.SubmitMaterialResults.Enqueue(new(false, "Opened request item selector.", ActionTaken: true));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        for (var index = 0; index < 6; index++)
+            frameworkDriver.Tick(framework);
+
+        Assert.Single(ui.SubmitMaterialResults);
+
+        clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
+        frameworkDriver.Tick(framework);
+
+        Assert.Empty(ui.SubmitMaterialResults);
+    }
+
+    [Fact]
+    public void Waiting_out_a_phase_cutscene_never_trips_the_repeat_guard()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        for (var index = 0; index < 40; index++)
+        {
+            ui.CutsceneResults.Enqueue(new(
+                false,
+                "Waiting for workshop cutscene skip prompt.",
+                ActionTaken: true,
+                RequiresWorkshopReopen: true,
+                IsWaiting: true));
+        }
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        for (var index = 0; index < 40; index++)
+        {
+            frameworkDriver.Tick(framework);
+            clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
+        }
+
+        Assert.Empty(ui.CutsceneResults);
+        Assert.True(runner.IsRunning);
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForFabricationStation, runner.Progress.State);
+    }
+
+    [Fact]
     public void Station_is_not_reinteracted_before_the_retry_delay()
     {
         var clock = new ManualTimeProvider();
@@ -520,7 +603,10 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         public bool IsFabricationStationUiReady() => FabricationStationReady;
 
-        public WorkshopAssemblyActionResult TrySkipCutscene() => new(false, "No cutscene.");
+        public Queue<WorkshopAssemblyActionResult> CutsceneResults { get; } = [];
+
+        public WorkshopAssemblyActionResult TrySkipCutscene() =>
+            CutsceneResults.Count == 0 ? new(false, "No cutscene.") : CutsceneResults.Dequeue();
 
         public WorkshopAssemblyActionResult TryOpenFabricationStation()
         {

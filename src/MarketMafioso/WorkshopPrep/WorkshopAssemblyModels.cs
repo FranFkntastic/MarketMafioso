@@ -67,7 +67,8 @@ public sealed record WorkshopAssemblyActionResult(
     bool HasPendingMaterialRequest = false,
     uint? ActiveMaterialItemId = null,
     uint? ActiveMaterialStepsComplete = null,
-    bool IsProjectUnavailable = false);
+    bool IsProjectUnavailable = false,
+    bool IsWaiting = false);
 
 public sealed record WorkshopAssemblyPreflightResult(
     bool CanStart,
