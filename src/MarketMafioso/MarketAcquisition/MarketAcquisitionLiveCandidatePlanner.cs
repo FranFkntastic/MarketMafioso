@@ -14,11 +14,27 @@ public static class MarketAcquisitionLiveCandidatePlanner
         MarketBoardReadResult prefixRead,
         uint alreadyPurchasedQuantity,
         uint alreadySpentGil,
+        MarketBoardBrowseSnapshot? browse,
         out MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
         ArgumentNullException.ThrowIfNull(prefixRead);
 
         candidatePlan = new MarketAcquisitionLiveCandidatePlan();
+        // A fresh prefix belongs to a browse, not necessarily to the route's next item.
+        // Keep the old transport owned while it drains; never turn its rows into a
+        // decision (or a validation exception) for the new search.
+        if (browse is not { IsActive: true, Owner: MarketBoardBrowseOwner.MarketAcquisition } ||
+            browse.ItemId != request.ItemId ||
+            activeSubtask.ItemId != request.ItemId ||
+            prefixRead.ItemId != request.ItemId ||
+            string.IsNullOrWhiteSpace(browse.OperationId) ||
+            !string.Equals(prefixRead.BrowseOperationId, browse.OperationId, StringComparison.Ordinal) ||
+            !string.Equals(prefixRead.WorldName, currentWorld, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(activeSubtask.WorldName, currentWorld, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         if (prefixRead.ReadState != MarketBoardListingReadState.FreshPartial ||
             !prefixRead.Status.Equals("VerifiedListingPrefix", StringComparison.Ordinal) ||
             prefixRead.Listings.Count == 0 ||
