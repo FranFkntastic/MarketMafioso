@@ -1,11 +1,101 @@
 using MarketMafioso.Automation.MarketBoard;
+using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.SpecTests.MarketAcquisition;
 
 public sealed class MarketAcquisitionSortedPrefixPlannerTests
 {
     [Fact]
-    public void EarlyDeparture_DrainsOwnedResponseBeforeNextItemCanBrowse()
+    public void PrefixAbsence_CannotBecomeAPurchaseReceipt()
+    {
+        var read = PrefixRead(80, 120);
+        var candidate = MarketBoardPurchaseCandidate.FromLiveListing(read.Listings[0]);
+        var missing = read with { Listings = [read.Listings[1]] };
+        var now = DateTimeOffset.UtcNow;
+        var session = MarketBoardPurchaseSession.Start(candidate, now, TimeSpan.FromSeconds(15))
+            .RecordConfirmationAttempt(new() { Status = "ConfirmationSubmitted" }, now, TimeSpan.FromSeconds(30));
+        Assert.NotEqual("Completed", session.RecordFreshRead(missing, now).Status);
+        Assert.False(MarketBoardPurchasePlanner.RevalidateCandidate(candidate, missing).CanAttemptPurchase);
+    }
+
+    [Fact]
+    public void AllPagesBeforeHistory_ProjectionRetainsPrefixSemantics()
+    {
+        var fixture = CreateFixture();
+        var read = PrefixRead(80, 120) with { ReportedListingCount = 2 };
+        read = MarketBoardPurchaseSnapshotProjector.ApplyConfirmedPurchase(read,
+            MarketBoardPurchaseCandidate.FromLiveListing(read.Listings[0]));
+        Assert.Equal(MarketBoardListingReadState.FreshPartial, read.ReadState);
+        Assert.True(MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+            fixture.Request, fixture.Plan, fixture.Subtask, "Siren", read, 1, 80, Browse(), out var plan));
+        Assert.True(plan.PriceRangeExhausted);
+        Assert.False(read.IsBrowseVerified);
+    }
+
+    [Fact]
+    public void MixedPrefix_PurchaseProjectionKeepsCutoffAndNeverResurrectsPurchasedRows()
+    {
+        var fixture = CreateFixture();
+        var read = PrefixRead(80, 100, 120);
+        var accumulator = new MarketBoardListingReadAccumulator();
+        uint purchased = 0, spent = 0;
+        foreach (var price in new uint[] { 80, 100 })
+        {
+            read = accumulator.Merge(read);
+            Assert.Equal("VerifiedListingPrefix", read.Status);
+            Assert.True(MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+                fixture.Request, fixture.Plan, fixture.Subtask, "Siren", read, purchased, spent, Browse(), out var plan));
+            var candidate = Assert.IsType<MarketBoardPurchaseCandidate>(MarketBoardPurchasePlanner.SelectFirstFreshSafeCandidate(plan, read));
+            Assert.Equal(price, candidate.UnitPrice);
+            Assert.True(MarketBoardPurchasePlanner.RevalidateCandidate(candidate, read).CanAttemptPurchase);
+            read = MarketBoardPurchaseSnapshotProjector.ApplyConfirmedPurchase(read, candidate);
+            purchased += candidate.Quantity;
+            spent += candidate.TotalGil;
+            Assert.DoesNotContain(read.Listings, row => row.ListingId == candidate.ListingId);
+        }
+        read = accumulator.Merge(read);
+        Assert.True(MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+            fixture.Request, fixture.Plan, fixture.Subtask, "Siren", read, purchased, spent, Browse(), out var exhausted));
+        Assert.True(exhausted.PriceRangeExhausted);
+        Assert.Equal(0u, exhausted.WouldBuyQuantity);
+        Assert.Equal(18, read.ReportedListingCount);
+        Assert.Single(read.Listings);
+        Assert.True(read.HasIncompleteCoverage);
+        Assert.False(read.IsBrowseVerified);
+    }
+
+    [Theory]
+    [InlineData("gil")]
+    [InlineData("quality")]
+    [InlineData("quantity")]
+    [InlineData("overage")]
+    public void ConclusivePrefix_DoesNotRelaxPurchaseLimits(string limit)
+    {
+        var fixture = CreateFixture();
+        var request = fixture.Request;
+        var read = PrefixRead(80, 120);
+        if (limit == "gil") request = request with { MaxTotalGil = 79 };
+        if (limit == "quality") request = request with { HqPolicy = "HqOnly" };
+        if (limit == "quantity") request = request with { QuantityMode = "AllBelowThreshold", Quantity = 1 };
+        if (limit == "overage") request = request with { Quantity = 1, MaximumOverage = 0 };
+        if (limit is "quantity" or "overage")
+            read = read with { Listings = read.Listings.Select(row => row with { Quantity = 2 }).ToArray() };
+        Assert.True(MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+            request, fixture.Plan, fixture.Subtask, "Siren", read, 0, 0, Browse(), out var plan));
+        Assert.Equal(0u, plan.WouldBuyQuantity);
+        Assert.True(plan.PriceRangeExhausted);
+    }
+
+    [Fact]
+    public void PriceExactlyAtCeiling_DoesNotProveTheRemainingRange()
+    {
+        var fixture = CreateFixture();
+        Assert.False(MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+            fixture.Request, fixture.Plan, fixture.Subtask, "Siren", PrefixRead(80, 100), 0, 0, Browse(), out _));
+    }
+
+    [Fact]
+    public void WithoutNativeClose_ResponseMustDrainBeforeNextItemCanBrowse()
     {
         var fixture = CreateFixture();
         var gate = new MarketBoardBrowseOperationGate();
@@ -69,7 +159,7 @@ public sealed class MarketAcquisitionSortedPrefixPlannerTests
         if (mismatch == "world") read = read with { WorldName = "Fenrir" };
         if (mismatch == "generation") read = read with { BrowseOperationId = "browse:previous" };
         if (mismatch == "owner") browse = browse with { Owner = MarketBoardBrowseOwner.MarketListingAcquisition };
-        if (mismatch == "terminal") browse = browse with { Phase = MarketBoardBrowsePhase.Completed };
+        if (mismatch == "terminal") browse = browse with { Phase = MarketBoardBrowsePhase.Retired };
         if (mismatch == "missing") browse = null;
         Assert.False(MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
             fixture.Request, fixture.Plan, fixture.Subtask, "Siren", read, 0, 0, browse, out _));
@@ -99,7 +189,7 @@ public sealed class MarketAcquisitionSortedPrefixPlannerTests
     }
 
     [Fact]
-    public void PrefixContainingEligibleListing_WaitsForCompleteBrowse()
+    public void PrefixContainingEligibleListing_PlansPurchaseWithoutRemainingPages()
     {
         var fixture = CreateFixture();
 
@@ -112,9 +202,14 @@ public sealed class MarketAcquisitionSortedPrefixPlannerTests
             0,
             0,
             Browse(),
-            out _);
+            out var plan);
 
-        Assert.False(conclusive);
+        Assert.True(conclusive);
+        Assert.True(plan.PriceRangeExhausted);
+        Assert.Equal(1u, plan.WouldBuyQuantity);
+        Assert.Equal(80u, plan.WouldSpendGil);
+        Assert.Equal(MarketBoardListingReadState.FreshPartial, plan.ListingReadState);
+        Assert.Equal(20, plan.ReportedListingCount);
     }
 
     [Fact]

@@ -94,6 +94,8 @@ public interface IMarketAcquisitionMarketBoardIo
     MarketBoardReadResult ReadCurrentListings(string currentWorld);
     MarketBoardInputCapture CaptureInputState();
     void AbandonBrowse(string reason);
+    MarketBoardBrowseSnapshot BrowseSnapshot { get; }
+    bool CloseBrowse(string operationId);
 }
 
 public sealed record MarketAcquisitionApproachLease

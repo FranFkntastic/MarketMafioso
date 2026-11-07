@@ -21,6 +21,7 @@ public enum MarketBoardBrowsePhase
     AwaitingHistory,
     Completed,
     Failed,
+    Retired,
 }
 
 public sealed record MarketBoardBrowseSnapshot
@@ -59,11 +60,12 @@ public sealed record MarketBoardBrowseSnapshot
     public bool IsActive =>
         Phase is not MarketBoardBrowsePhase.Idle
             and not MarketBoardBrowsePhase.Completed
-            and not MarketBoardBrowsePhase.Failed;
+            and not MarketBoardBrowsePhase.Failed
+            and not MarketBoardBrowsePhase.Retired;
 
     public bool IsComplete => Phase == MarketBoardBrowsePhase.Completed;
     public bool IsFailed => Phase == MarketBoardBrowsePhase.Failed;
-    public bool IsTerminal => IsComplete || IsFailed;
+    public bool IsTerminal => IsComplete || IsFailed || Phase == MarketBoardBrowsePhase.Retired;
 }
 
 public interface IMarketBoardBrowseRuntime
@@ -87,6 +89,9 @@ public interface IMarketBoardBrowseRuntime
         string operationId,
         string reason,
         out MarketBoardBrowseSnapshot snapshot);
+
+    // The runtime must observe native result closure before retiring ownership.
+    bool RequestClose(MarketBoardBrowseOwner owner, string operationId) => false;
 }
 
 internal interface IHeadlessMarketBoardBrowseRuntime : IMarketBoardBrowseRuntime
@@ -132,6 +137,8 @@ internal sealed class MarketBoardBrowseOperationGate
     private long operationSequence;
     private MarketBoardBrowseSnapshot snapshot = MarketBoardBrowseSnapshot.Idle;
     private readonly HashSet<byte> continuationTokens = [];
+    private readonly HashSet<byte> retiredRequestIds = [];
+    private readonly Dictionary<uint, DateTimeOffset> retiredPendingHistory = [];
 
     public MarketBoardBrowseOperationGate(
         Func<DateTimeOffset>? getUtcNow = null,
@@ -194,6 +201,24 @@ internal sealed class MarketBoardBrowseOperationGate
             if (snapshot.IsActive)
             {
                 result = snapshot;
+                return false;
+            }
+            if (snapshot.FailureCode == "BrowseCloseFailed")
+            {
+                result = snapshot;
+                return false;
+            }
+
+            // History has no request id. A same-item retry cannot attribute it to
+            // a new generation until the previous response has been accounted for.
+            if (retiredPendingHistory.TryGetValue(itemId, out var historyDeadline))
+            {
+                result = snapshot with
+                {
+                    Phase = getUtcNow() < historyDeadline ? MarketBoardBrowsePhase.AwaitingHistory : MarketBoardBrowsePhase.Failed,
+                    FailureCode = getUtcNow() < historyDeadline ? null : "RetiredHistoryUnresolved",
+                    Message = "Waiting for the retired same-item history response before starting a fresh browse.",
+                };
                 return false;
             }
 
@@ -307,6 +332,55 @@ internal sealed class MarketBoardBrowseOperationGate
         }
     }
 
+    public bool TryRetireAfterResultClosed(
+        MarketBoardBrowseOwner owner,
+        string operationId,
+        bool resultClosed,
+        out MarketBoardBrowseSnapshot result)
+    {
+        lock (sync)
+        {
+            if (!resultClosed || owner != MarketBoardBrowseOwner.MarketAcquisition || snapshot.Owner != owner ||
+                snapshot.OperationId != operationId || !snapshot.HeaderObserved ||
+                snapshot.HeaderStatus != 0 || (snapshot.IsFailed && snapshot.FailureCode != "BrowseCloseFailed"))
+            {
+                result = snapshot;
+                return false;
+            }
+
+            if (snapshot.Phase != MarketBoardBrowsePhase.Retired)
+            {
+                if (snapshot.RequestId is { } requestId)
+                    retiredRequestIds.Add(requestId);
+                if (!snapshot.HistoryObserved)
+                    retiredPendingHistory[snapshot.ItemId] = getUtcNow() + MarketBoardBrowseTimeoutPolicy.InactivityTimeout;
+                snapshot = snapshot with
+                {
+                    Phase = MarketBoardBrowsePhase.Retired,
+                    FailureCode = null,
+                    Message = "Native item results closed; browse retired without claiming full listing coverage.",
+                };
+            }
+            result = snapshot;
+            return true;
+        }
+    }
+
+    public bool IsRetiredPage(byte requestId)
+    {
+        lock (sync)
+            return retiredRequestIds.Contains(requestId);
+    }
+
+    public void ObserveResultCloseTimeout(string operationId)
+    {
+        lock (sync)
+        {
+            if (snapshot.OperationId == operationId && snapshot.Phase != MarketBoardBrowsePhase.Retired)
+                Fail("BrowseCloseFailed", "Native item-results closure did not complete within five seconds.");
+        }
+    }
+
     public bool TryClaimActivation(
         MarketBoardBrowseOwner owner,
         uint itemId,
@@ -390,10 +464,14 @@ internal sealed class MarketBoardBrowseOperationGate
         }
     }
 
-    public void ObserveHeader(uint status, uint listingCount)
+    public void ObserveHeader(uint status, uint listingCount, byte? nativeRequestId = null)
     {
         lock (sync)
         {
+            // Native/manual consumers also reuse the request byte. Never retain
+            // a suppression fence across a successfully accepted new header.
+            if (status == 0 && listingCount > 0 && nativeRequestId is { } currentId)
+                retiredRequestIds.Remove(currentId);
             if (!snapshot.IsActive)
                 return;
 
@@ -452,6 +530,7 @@ internal sealed class MarketBoardBrowseOperationGate
             var expectedPageCount = checked((int)((listingCount + ListingsPerPage - 1) / ListingsPerPage));
             snapshot = snapshot with
             {
+                RequestId = nativeRequestId,
                 HeaderObserved = true,
                 HeaderStatus = status,
                 ExpectedListingCount = checked((int)listingCount),
@@ -479,6 +558,9 @@ internal sealed class MarketBoardBrowseOperationGate
         ArgumentNullException.ThrowIfNull(itemIds);
         lock (sync)
         {
+            // Classify known retired traffic before validating the active lifecycle.
+            if (retiredRequestIds.Contains(requestId))
+                return;
             if (!snapshot.IsActive)
                 return;
 
@@ -608,6 +690,8 @@ internal sealed class MarketBoardBrowseOperationGate
     {
         lock (sync)
         {
+            if (retiredPendingHistory.Remove(itemId))
+                return;
             if (!snapshot.IsActive)
                 return;
 

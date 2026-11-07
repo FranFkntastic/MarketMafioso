@@ -9,7 +9,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
     public static bool TryBuildConclusiveSortedPrefixPlan(
         MarketAcquisitionRequestView request,
         MarketAcquisitionPlan plan,
-        MarketAcquisitionWorldItemSubtask activeSubtask,
+        MarketAcquisitionWorldItemSubtask? activeSubtask,
         string currentWorld,
         MarketBoardReadResult prefixRead,
         uint alreadyPurchasedQuantity,
@@ -21,16 +21,16 @@ public static class MarketAcquisitionLiveCandidatePlanner
 
         candidatePlan = new MarketAcquisitionLiveCandidatePlan();
         // A fresh prefix belongs to a browse, not necessarily to the route's next item.
-        // Keep the old transport owned while it drains; never turn its rows into a
-        // decision (or a validation exception) for the new search.
-        if (browse is not { IsActive: true, Owner: MarketBoardBrowseOwner.MarketAcquisition } ||
+        // Never turn another browse's rows into a decision for the new search.
+        if (browse is not { Owner: MarketBoardBrowseOwner.MarketAcquisition } ||
+            (!browse.IsActive && !browse.IsComplete) ||
             browse.ItemId != request.ItemId ||
-            activeSubtask.ItemId != request.ItemId ||
+            (activeSubtask != null && activeSubtask.ItemId != request.ItemId) ||
             prefixRead.ItemId != request.ItemId ||
             string.IsNullOrWhiteSpace(browse.OperationId) ||
             !string.Equals(prefixRead.BrowseOperationId, browse.OperationId, StringComparison.Ordinal) ||
             !string.Equals(prefixRead.WorldName, currentWorld, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(activeSubtask.WorldName, currentWorld, StringComparison.OrdinalIgnoreCase))
+            (activeSubtask != null && !string.Equals(activeSubtask.WorldName, currentWorld, StringComparison.OrdinalIgnoreCase)))
         {
             return false;
         }
@@ -38,7 +38,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
         if (prefixRead.ReadState != MarketBoardListingReadState.FreshPartial ||
             !prefixRead.Status.Equals("VerifiedListingPrefix", StringComparison.Ordinal) ||
             prefixRead.Listings.Count == 0 ||
-            prefixRead.Listings.Count >= prefixRead.ReportedListingCount)
+            prefixRead.Listings.Count > prefixRead.ReportedListingCount)
         {
             return false;
         }
@@ -55,7 +55,9 @@ public static class MarketAcquisitionLiveCandidatePlanner
         if (previousPrice <= request.MaxUnitPrice)
             return false;
 
-        var partialPlan = BuildCandidatePlan(
+        var partialPlan = activeSubtask == null
+            ? BuildCandidatePlan(request, plan, currentWorld, prefixRead, alreadyPurchasedQuantity, alreadySpentGil)
+            : BuildCandidatePlan(
             request,
             plan,
             activeSubtask,
@@ -63,14 +65,14 @@ public static class MarketAcquisitionLiveCandidatePlanner
             prefixRead,
             alreadyPurchasedQuantity,
             alreadySpentGil);
-        if (partialPlan.WouldBuyQuantity > 0)
-            return false;
-
         candidatePlan = partialPlan with
         {
-            Status = MarketAcquisitionLiveCandidateStatuses.NoSafeListings,
+            PriceRangeExhausted = true,
+            Status = ResolveStatus(NormalizeQuantityMode(request.QuantityMode), request.Quantity,
+                checked(alreadyPurchasedQuantity + partialPlan.WouldBuyQuantity),
+                partialPlan.WouldBuyQuantity, partialPlan.Rows, null),
             Message =
-                $"The verified cheapest-first prefix crossed the {request.MaxUnitPrice:N0} gil ceiling at {previousPrice:N0} gil after {prefixRead.Listings.Count:N0}/{prefixRead.ReportedListingCount:N0} listings; remaining pages cannot contain an eligible price, so the route may leave without waiting for full listing coverage.",
+                $"The verified cheapest-first prefix crossed the {request.MaxUnitPrice:N0} gil ceiling at {previousPrice:N0} gil after {prefixRead.Listings.Count:N0}/{prefixRead.ReportedListingCount:N0} listings; remaining pages cannot contain an eligible price. {partialPlan.WouldBuyQuantity:N0} eligible units remain to purchase.",
         };
         return true;
     }

@@ -53,6 +53,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool purchaseEvidenceRouteBlocked;
     private readonly Dictionary<string, uint> initialOnHandByLine = new(StringComparer.Ordinal);
     private string? activeLinePurchaseWorld;
+    private bool activeSearchAllowsPriceCutoff = true;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -1317,7 +1318,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         var plan = runner.ActivePlan;
         var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
-        if (plan == null || activeSubtask == null)
+        if (plan == null)
             return false;
 
         var prefixRead = marketBoard.ReadCurrentListings(currentWorld);
@@ -1353,7 +1354,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     ["expectedPages"] = prefixRead.BrowseExpectedPageCount.ToString(),
                     ["readableListings"] = prefixRead.ReadableListingCount.ToString(),
                     ["reportedListings"] = prefixRead.ReportedListingCount.ToString(),
-                    ["remainingBrowseDisposition"] = "RouteMayAdvanceWithoutFullListingCoverage",
+                    ["remainingBrowseDisposition"] = prefixPlan.WouldBuyQuantity > 0 ? "PurchaseEligiblePrefix" : "CloseNativeItemResults",
                 },
             },
             clock.UtcNow,
@@ -1362,12 +1363,17 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             throw new InvalidOperationException(operationResult.Message);
 
         runner.RecordRouteOperationSnapshot(operationResult.Snapshot);
-        UpdateStatus(runner.BeginProbe($"Arrived on {currentWorld}. The verified cheapest listings already exceed the configured ceiling for {FormatItem(activeLine)}."));
+        UpdateStatus(runner.BeginProbe($"Arrived on {currentWorld}. The eligible price range is fully observed for {FormatItem(activeLine)}."));
         state.MarketBoardReadResult = prefixRead;
         state.MarketBoardReconciliation = null;
         state.LiveCandidatePlan = prefixPlan;
 
-        var probeResult = runner.RecordProbe(currentWorld, prefixPlan);
+        if (!state.EvidenceRefreshOnly && activeSubtask != null &&
+            EnforceExactAcquisitionCandidateAuthority(activeSubtask, prefixPlan) is not null)
+            return true;
+        if (prefixPlan.WouldBuyQuantity == 0 || state.EvidenceRefreshOnly)
+            ClosePriceCompleteBrowse(prefixRead);
+        var probeResult = runner.RecordProbe(currentWorld, prefixPlan, allowPurchases: !state.EvidenceRefreshOnly);
         if (!probeResult.Success)
         {
             UpdateStatus(FailRoute(probeResult.Message));
@@ -1375,9 +1381,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
 
         evidence.RecordProbeVisit(currentWorld, activeLine, activeSubtask, prefixPlan, claimed.Id, state.ProgressNonce);
-        // Decision completion is not native request cancellation. Leave the browse
-        // gate owning late pages/history; the next search waits on BrowseBusy until
-        // transport completion or the existing bounded inactivity timeout.
         ClearMarketBoardAutomationState();
         ReportRouteProgress();
         EvaluateExactAcquisitionRouteCompletion();
@@ -1398,6 +1401,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return active;
         }
 
+        activeSearchAllowsPriceCutoff = !exhaustiveResearchModeProvider();
         var operation = operationExecutor.Begin(new MarketAcquisitionRouteOperationStart
         {
             OperationId = $"{state.ProgressNonce}:item-search:{++operationSequence}",
@@ -1414,7 +1418,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ["itemId"] = activeLine.ItemId.ToString(),
                 ["itemName"] = activeLine.ItemName,
                 [MarketAcquisitionResearchModePolicy.ContextKey] =
-                    MarketAcquisitionResearchModePolicy.Capture(exhaustiveResearchModeProvider()),
+                    MarketAcquisitionResearchModePolicy.Capture(!activeSearchAllowsPriceCutoff),
             },
         });
         runner.RecordRouteOperationSnapshot(operation);
@@ -1542,7 +1546,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionLiveCandidatePlan candidatePlan,
         bool requireRunningRoute = true)
     {
-        if ((requireRunningRoute && !runner.IsRunning) ||
+        if (candidatePlan.PriceRangeExhausted || (requireRunningRoute && !runner.IsRunning) ||
             !listingReadAccumulator.TryBeginContinuation(readResult, candidatePlan, out var continuation))
             return false;
 
@@ -1666,9 +1670,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         var freshRead = ReadPurchaseListings(activeLine, currentWorld);
         state.MarketBoardReadResult = freshRead;
-        if (freshRead.Status is not ("Ready" or "NoListings"))
+        var totals = ResolveActiveRouteLinePurchaseTotals(activeStop.ActiveItemSubtask);
+        var candidateRead = activeStop.ActiveItemSubtask is null
+            ? freshRead
+            : ExcludeSunkExactAcquisitionListings(freshRead);
+        var priceComplete = TryBuildPriceCompletePlan(activeLine, plan, activeStop.ActiveItemSubtask,
+            currentWorld, candidateRead, totals, out var prefixPlan);
+        if (!priceComplete && freshRead.Status is not ("Ready" or "NoListings"))
         {
-            if (!freshRead.IsFresh)
+            if (!freshRead.IsFresh || freshRead.Status == "VerifiedListingPrefix")
             {
                 runner.RecordListingReadPending(currentWorld, freshRead);
                 state.AcquisitionStatus = $"Waiting for fresh market listings. {freshRead.Message}";
@@ -1679,11 +1689,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             throw new InvalidOperationException(freshRead.Message);
         }
 
-        var totals = ResolveActiveRouteLinePurchaseTotals(activeStop.ActiveItemSubtask);
-        var candidateRead = activeStop.ActiveItemSubtask is null
-            ? freshRead
-            : ExcludeSunkExactAcquisitionListings(freshRead);
-        state.LiveCandidatePlan = activeStop.ActiveItemSubtask == null
+        state.LiveCandidatePlan = priceComplete ? prefixPlan : activeStop.ActiveItemSubtask == null
             ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, currentWorld, freshRead, totals.PurchasedQuantity, totals.SpentGil)
             : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, activeStop.ActiveItemSubtask, currentWorld, candidateRead, totals.PurchasedQuantity, totals.SpentGil);
         if (TryContinueVisibleListingRead(currentWorld, freshRead, state.LiveCandidatePlan))
@@ -1765,13 +1771,37 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             activeLine.ItemName,
             MarketBoardItemSearchIntent.RequireFreshBrowse,
             state.PurchaseRecoveryPreviousBrowseOperationId);
-        if (!search.ReadyForListings)
+        if (search.BrowseEvidence?.IsFailed == true)
+            throw new InvalidOperationException(search.Message);
+        var recoveredRead = marketBoard.ReadCurrentListings(currentWorld);
+        var recoveredPriceComplete = search.BrowseEvidence?.OperationId != state.PurchaseRecoveryPreviousBrowseOperationId &&
+            TryBuildPriceCompletePlan(activeLine, runner.ActivePlan!, runner.ActiveStop?.ActiveItemSubtask,
+                currentWorld, recoveredRead, ResolveActiveRouteLinePurchaseTotals(runner.ActiveStop?.ActiveItemSubtask), out _);
+        if (!search.ReadyForListings && !recoveredPriceComplete)
             return CreatePurchaseRecoveryPendingRead(activeLine.ItemId, currentWorld, search);
 
         state.PurchaseRecoveryRefreshRequired = false;
         state.PurchaseRecoveryPreviousBrowseOperationId = null;
         listingReadAccumulator.Clear();
-        return listingReadAccumulator.Merge(marketBoard.ReadCurrentListings(currentWorld));
+        return listingReadAccumulator.Merge(recoveredRead);
+    }
+
+    private bool TryBuildPriceCompletePlan(
+        MarketAcquisitionRequestView line, MarketAcquisitionPlan plan,
+        MarketAcquisitionWorldItemSubtask? subtask, string world, MarketBoardReadResult read,
+        MarketAcquisitionRouteLinePurchaseTotals totals, out MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        candidatePlan = new();
+        return activeSearchAllowsPriceCutoff &&
+            MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
+                line, plan, subtask, world, read, totals.PurchasedQuantity, totals.SpentGil,
+                marketBoard.BrowseSnapshot, out candidatePlan);
+    }
+
+    private void ClosePriceCompleteBrowse(MarketBoardReadResult read)
+    {
+        if (!marketBoard.CloseBrowse(read.BrowseOperationId))
+            throw new InvalidOperationException("The price-complete browse could not close its owned native item results.");
     }
 
     private static MarketBoardReadResult CreatePurchaseRecoveryPendingRead(
@@ -2074,7 +2104,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             exactAcquisitionAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate, runner.ActivePlan);
             var checkpointRequested = ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
             state.UseProjectedMarketBoardSnapshot =
-                state.MarketBoardReadResult is { IsFresh: true, Status: "Ready" or "NoListings" };
+                state.MarketBoardReadResult is { IsFresh: true, Status: "Ready" or "NoListings" or "VerifiedListingPrefix" };
             ClearMarketBoardAutomationState();
             if (checkpointRequested)
                 PauseForShardCheckpoint();
@@ -2105,6 +2135,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CompleteActiveWorldPurchaseBatch(string currentWorld)
     {
+        if (state.LiveCandidatePlan?.PriceRangeExhausted == true && state.MarketBoardReadResult is { } priceCompleteRead)
+            ClosePriceCompleteBrowse(priceCompleteRead);
         evidence.Flush();
         var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
         if (activeSubtask != null)
