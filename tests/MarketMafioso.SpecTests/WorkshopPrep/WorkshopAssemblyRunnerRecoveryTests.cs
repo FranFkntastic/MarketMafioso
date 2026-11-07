@@ -67,6 +67,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
+        clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
         frameworkDriver.Tick(framework);
         Assert.Equal(WorkshopAssemblyRunnerState.WaitingForContributionLockout, runner.Progress.State);
 
@@ -140,6 +141,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
+        clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
         frameworkDriver.Tick(framework);
         Assert.Equal(WorkshopAssemblyRunnerState.WaitingForContributionLockout, runner.Progress.State);
 
@@ -230,6 +232,160 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         Assert.Equal(0, runner.Progress.CompletedProjects);
     }
 
+    [Fact]
+    public void Native_crash_in_a_game_ui_handler_halts_the_run_on_the_next_tick()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(false, "Selected crafting log category.", ActionTaken: true));
+        ui.OpenProjectResults.Enqueue(new(false, "Selected crafting log category.", ActionTaken: true));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        Assert.Equal(1, ui.BeginRunCount);
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+
+        ui.NativeFaults.Enqueue("The game crashed inside a UI event handler 1 time(s).");
+        clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
+        frameworkDriver.Tick(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
+        Assert.Contains("crashed inside a UI event handler", runner.Progress.Message);
+        Assert.Single(ui.OpenProjectResults);
+        Assert.True(ui.EndRunCount >= 1);
+        Assert.Equal(1, ui.CaptureForensicsCount);
+    }
+
+    [Fact]
+    public void Paced_action_is_not_refired_on_the_next_frame()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(false, "Selected crafting log category.", ActionTaken: true));
+        ui.OpenProjectResults.Enqueue(new(false, "Selected crafting log category.", ActionTaken: true));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+
+        Assert.Single(ui.OpenProjectResults);
+        Assert.True(runner.IsRunning);
+    }
+
+    [Fact]
+    public void Identical_ui_action_repeated_without_a_response_halts_the_run()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        for (var index = 0; index < 6; index++)
+            ui.OpenProjectResults.Enqueue(new(false, "Selected crafting log category.", ActionTaken: true));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+        for (var index = 0; index < 6 && runner.IsRunning; index++)
+        {
+            frameworkDriver.Tick(framework);
+            clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
+        }
+
+        Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
+        Assert.Contains("repeated the same UI action", runner.Progress.Message);
+        Assert.Equal(2, ui.OpenProjectResults.Count);
+    }
+
+    [Fact]
+    public void Station_is_not_reinteracted_before_the_retry_delay()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            StationResult = new(false, "Interacted with fabrication station.", ActionTaken: true),
+        };
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        for (var index = 0; index < 6; index++)
+        {
+            frameworkDriver.Tick(framework);
+            clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
+        }
+
+        Assert.Equal(1, ui.StationInteractCount);
+
+        clock.Advance(WorkshopAssemblyTiming.StationInteractRetryDelay);
+        frameworkDriver.Tick(framework);
+
+        Assert.Equal(2, ui.StationInteractCount);
+        Assert.True(runner.IsRunning);
+    }
+
+    [Fact]
+    public void Preflight_blocker_refuses_to_start_and_touches_nothing()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+            PreflightBlocker = "The character is already occupied in an event.",
+        };
+
+        using var runner = CreateRunner(framework, ui, clock);
+        var result = runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+
+        Assert.False(result.Success);
+        Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
+        Assert.False(runner.IsRunning);
+        Assert.Equal(0, ui.BeginRunCount);
+        Assert.Equal(0, ui.ResetCount);
+    }
+
+    [Fact]
+    public void Failed_run_captures_game_state_now_and_again_after_the_follow_up_delay()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.NativeFaults.Enqueue("crash");
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+        Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
+        Assert.Equal(1, ui.CaptureForensicsCount);
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        frameworkDriver.Tick(framework);
+        Assert.Equal(1, ui.CaptureForensicsCount);
+
+        clock.Advance(TimeSpan.FromSeconds(5));
+        frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
+        Assert.Equal(2, ui.CaptureForensicsCount);
+    }
+
     private static WorkshopAssemblyRunner CreateRunner(
         IFramework framework,
         IWorkshopAssemblyUiAutomation ui,
@@ -238,7 +394,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
             framework,
             ProxyLog.Create(),
             ui,
-            Path.GetTempPath(),
+            Path.Combine(Path.GetTempPath(), "mmf-assembly-runner-tests"),
             timeProvider: clock);
 
     private static WorkshopAssemblyPlan BuildPlan() => new(
@@ -249,12 +405,19 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
     {
         public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
         public bool FabricationStationReady { get; init; }
+        public WorkshopAssemblyActionResult StationResult { get; init; } = new(false, "Station unavailable.");
+        public string? PreflightBlocker { get; init; }
+        public Queue<string> NativeFaults { get; } = [];
         public Queue<WorkshopAssemblyActionResult> OpenProjectResults { get; } = [];
         public Queue<WorkshopAssemblyActionResult> SubmitMaterialResults { get; } = [];
         public Queue<WorkshopAssemblyActionResult> ProgressResults { get; } = [];
 
         public int ResetCount { get; private set; }
         public int RecoverStalledRequestCount { get; private set; }
+        public int StationInteractCount { get; private set; }
+        public int BeginRunCount { get; private set; }
+        public int EndRunCount { get; private set; }
+        public int CaptureForensicsCount { get; private set; }
 
         public void ResetState() => ResetCount++;
 
@@ -262,7 +425,12 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         public WorkshopAssemblyActionResult TrySkipCutscene() => new(false, "No cutscene.");
 
-        public WorkshopAssemblyActionResult TryOpenFabricationStation() => new(false, "Station unavailable.");
+        public WorkshopAssemblyActionResult TryOpenFabricationStation()
+        {
+            if (StationResult.ActionTaken)
+                StationInteractCount++;
+            return StationResult;
+        }
 
         public WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry) =>
             OpenProjectResults.Dequeue();
@@ -289,6 +457,20 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
             ProgressResults.Dequeue();
 
         public string DescribeUiState() => "test";
+
+        public void BeginRun() => BeginRunCount++;
+
+        public void EndRun() => EndRunCount++;
+
+        public string? PollNativeFault() => NativeFaults.Count == 0 ? null : NativeFaults.Dequeue();
+
+        public string? CheckPreflight() => PreflightBlocker;
+
+        public string CaptureForensics()
+        {
+            CaptureForensicsCount++;
+            return "forensics";
+        }
 
         public void Dispose() { }
     }

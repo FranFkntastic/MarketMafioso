@@ -13,6 +13,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         WorkshopAssemblyUiDriver.MaterialDeliveryAddonNames;
 
     private readonly WorkshopAssemblyUiDriver uiDriver;
+    private readonly WorkshopNativeFaultMonitor faultMonitor;
     private readonly IPluginLog log;
     private WorkshopAssemblyDiagnostics diagnostics = WorkshopAssemblyDiagnostics.Disabled;
     private uint? pendingContributionItemId;
@@ -26,9 +27,11 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         ICondition condition,
         ISigScanner sigScanner,
         IAgentLifecycle agentLifecycle,
-        ExternalAutomationCoordinator externalAutomationCoordinator)
+        ExternalAutomationCoordinator externalAutomationCoordinator,
+        WorkshopNativeFaultMonitor faultMonitor)
     {
         this.log = log;
+        this.faultMonitor = faultMonitor;
         uiDriver = new WorkshopAssemblyUiDriver(
             gameGui,
             log,
@@ -38,6 +41,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             sigScanner,
             agentLifecycle,
             externalAutomationCoordinator,
+            faultMonitor,
             source => SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.MaterialContribution, source));
     }
 
@@ -87,6 +91,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                 new(false, $"Waiting for fabrication station UI. Target system is unavailable. {DescribeUiState()}"),
             WorkshopFabricationStationOpenState.Interacted =>
                 new(false, $"Opened nearby fabrication station {result.StationName}.", ActionTaken: true),
+            WorkshopFabricationStationOpenState.CharacterBusy =>
+                new(false, $"Waiting: the character is occupied in an event with no workshop window open, so the station was not touched. {DescribeUiState()}"),
             _ => new(false, $"Waiting for fabrication station UI. No nearby fabrication station target was found. {DescribeUiState()}"),
         };
     }
@@ -419,6 +425,30 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             ActiveMaterialItemId: material.ItemId,
             ActiveMaterialStepsComplete: material.StepsComplete);
     }
+
+    public void BeginRun() => faultMonitor.Arm();
+
+    public void EndRun() => faultMonitor.Disarm();
+
+    public string? PollNativeFault() => faultMonitor.Poll()?.Describe();
+
+    public string? CheckPreflight()
+    {
+        var closed = uiDriver.CloseLeftoverHiddenWorkshopWindows();
+        if (closed.Count > 0)
+            log.Warning("[MarketMafioso] Closed hidden workshop windows left over from an earlier run: {Windows}", string.Join(", ", closed));
+
+        if (uiDriver.IsCharacterBusyWithoutWorkshopUi())
+        {
+            return "The character is already occupied in an event with no workshop window open, so assembly was not started. " +
+                   "Finish or cancel what the character is doing first; if it cannot move or log out, the client needs a restart. " +
+                   DescribeUiState();
+        }
+
+        return null;
+    }
+
+    public string CaptureForensics() => uiDriver.CaptureForensics();
 
     public string DescribeUiState()
     {

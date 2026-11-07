@@ -6,6 +6,7 @@ public static class WorkshopAssemblyTiming
 {
     public static readonly TimeSpan AddonTimeout = TimeSpan.FromSeconds(10);
     public static readonly TimeSpan UiInteractionDelay = TimeSpan.FromMilliseconds(250);
+    public static readonly TimeSpan StationInteractRetryDelay = TimeSpan.FromSeconds(2);
     public static readonly TimeSpan PostContributionLockout = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan EstimatedProjectOpen = TimeSpan.FromSeconds(2);
     public static readonly TimeSpan EstimatedContributionStep = PostContributionLockout + TimeSpan.FromMilliseconds(650);

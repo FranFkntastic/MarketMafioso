@@ -230,7 +230,8 @@ public sealed class Plugin : IDalamudPlugin
                 new ExternalAutomationCoordinator(
                     new DalamudPluginDataStore(PluginInterface),
                     Log,
-                    new DalamudPandoraFeatureControl(PluginInterface))),
+                    new DalamudPandoraFeatureControl(PluginInterface)),
+                new WorkshopNativeFaultMonitor(AgentLifecycle, Log, ResolveDalamudLogPath())),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"),
             entry =>
             {
@@ -793,6 +794,21 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return (true, null);
+    }
+
+    // pluginConfigs\MarketMafioso -> pluginConfigs -> launcher root, which holds dalamud.log
+    // for this profile (multibox profiles each have their own root).
+    private static string? ResolveDalamudLogPath()
+    {
+        try
+        {
+            var root = Directory.GetParent(PluginInterface.GetPluginConfigDirectory())?.Parent;
+            return root == null ? null : Path.Combine(root.FullName, "dalamud.log");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     private static unsafe bool IsRetainerSessionActive() =>
