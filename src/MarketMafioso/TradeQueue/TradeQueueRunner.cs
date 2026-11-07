@@ -11,6 +11,9 @@ public sealed class TradeQueueRunner : IDisposable
 {
     private static readonly TimeSpan OpenTradeTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan InventoryPreparationTimeout = TimeSpan.FromSeconds(30);
+    // Backstop above the quality-lowering automation's own per-step deadline; refreshed on every
+    // observed step of progress so multi-stack conversions are not cut short.
+    private static readonly TimeSpan QualityNormalizationStallTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan OfferItemsTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PartnerTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
@@ -44,6 +47,8 @@ public sealed class TradeQueueRunner : IDisposable
     private string checkpointQueueSignature = string.Empty;
     private string? runId;
     private bool normalizeHighQualityItemsForRun = true;
+    private TradeQueueStartOptions startOptions = new();
+    private (ItemQualityLoweringAutomationState State, uint? ItemId, int Remaining)? qualityProgress;
 
     public TradeQueueRunner(
         IList<TradeQueueItem> queue,
@@ -119,7 +124,22 @@ public sealed class TradeQueueRunner : IDisposable
         }
     }
 
-    public TradeQueueStartResult Start()
+    /// <summary>
+    /// The plan from the most recent start refused for missing or stale HQ-to-NQ approval, including a
+    /// start deferred until inventory became authoritative; cleared by the next Start.
+    /// </summary>
+    public TradeQueueQualityLoweringPreview? PendingQualityLoweringApproval { get; private set; }
+
+    /// <summary>Computes, without side effects, which HQ stacks a normalizing run would lower now.</summary>
+    public TradeQueueQualityLoweringPreview? PreviewQualityLowering()
+    {
+        var observation = io.ObserveTradeableInventory();
+        return observation.IsAuthoritative
+            ? TradeQueueQualityLoweringPreview.Build(queue, observation.Stacks)
+            : null;
+    }
+
+    public TradeQueueStartResult Start(TradeQueueStartOptions? options = null)
     {
         if (IsActive)
             return new(false, "Trade queue is already running.");
@@ -129,20 +149,22 @@ public sealed class TradeQueueRunner : IDisposable
         if (!hasSelectedPartner)
             return RejectStart(null, "Select or focus-target the player who should receive this queue.");
 
-        return Start(selectedPartner);
+        return Start(selectedPartner, options);
     }
 
-    public TradeQueueStartResult Start(TradeQueuePartner selectedPartner)
+    public TradeQueueStartResult Start(TradeQueuePartner selectedPartner, TradeQueueStartOptions? options = null)
     {
         if (IsActive)
             return new(false, "Trade queue is already running.");
+        PendingQualityLoweringApproval = null;
         if (!io.TryGetExecutionReadiness(out var readinessError))
             return RejectStart(selectedPartner, readinessError);
         if (!io.PartnerIsAvailable(selectedPartner))
             return RejectStart(selectedPartner, $"{selectedPartner.Name} @ {selectedPartner.HomeWorldName} is not an exact visible trade recipient.");
 
         partner = selectedPartner;
-        normalizeHighQualityItemsForRun = policy.NormalizeHighQualityItems;
+        startOptions = options ?? new();
+        normalizeHighQualityItemsForRun = startOptions.NormalizeHighQualityItems ?? policy.NormalizeHighQualityItems;
         var observation = io.ObserveTradeableInventory();
         if (!observation.IsAuthoritative)
         {
@@ -161,7 +183,10 @@ public sealed class TradeQueueRunner : IDisposable
         return StartFromAuthoritativeInventory(observation.Stacks);
     }
 
-    private TradeQueueStartResult RejectStart(TradeQueuePartner? recipient, string reason)
+    private TradeQueueStartResult RejectStart(
+        TradeQueuePartner? recipient,
+        string reason,
+        TradeQueueQualityLoweringPreview? approvalRequired = null)
     {
         var attemptId = Guid.NewGuid().ToString("N");
         var preserveCheckpoint = HasResumeCheckpoint;
@@ -181,7 +206,8 @@ public sealed class TradeQueueRunner : IDisposable
             "[MarketMafioso] Trade Queue start rejected attempt={AttemptId} recipient={Recipient}@{World} stage=preflight remainingLines={RemainingLines} remainingUnits={RemainingUnits} reason={Reason}",
             attemptId, recipient?.Name ?? "unselected", recipient?.HomeWorldName ?? "",
             queue.Count, Snapshot.RemainingUnitCount, reason);
-        return new(false, reason);
+        PendingQualityLoweringApproval = approvalRequired;
+        return new(false, reason, approvalRequired);
     }
 
     private TradeQueueStartResult StartFromAuthoritativeInventory(
@@ -209,6 +235,26 @@ public sealed class TradeQueueRunner : IDisposable
             return RejectStart(currentPartner, validation.Message);
         }
 
+        if (normalizeHighQualityItemsForRun)
+        {
+            var preview = TradeQueueQualityLoweringPreview.Build(queue, inventory);
+            if (!preview.Success)
+                return RejectStart(currentPartner, preview.Message);
+            if (preview.RequiresLowering &&
+                !string.Equals(preview.Signature, startOptions.ApprovedQualityLoweringSignature, StringComparison.Ordinal))
+            {
+                log.Information(
+                    "[MarketMafioso] Trade Queue requires HQ-to-NQ approval recipient={Recipient} approved={Approved} current={Current} plan={Plan}",
+                    currentPartner.Name, startOptions.ApprovedQualityLoweringSignature ?? "none", preview.Signature, preview.Describe());
+                return RejectStart(
+                    currentPartner,
+                    startOptions.ApprovedQualityLoweringSignature is null
+                        ? $"Confirm the HQ-to-NQ conversion before trading: {preview.Describe()}"
+                        : $"The HQ-to-NQ conversion changed since it was confirmed; review it again: {preview.Describe()}",
+                    preview);
+            }
+        }
+
         var isResume = CanResumeWith(currentPartner);
         if (!isResume)
         {
@@ -233,25 +279,18 @@ public sealed class TradeQueueRunner : IDisposable
                     : $"Started Trade Queue for {currentPartner.Name}.");
         }
 
-        var qualitySnapshot = qualityLowering.Begin(
-            queue
-                .Where(item => item.ItemId != TradeQueuePlanner.GilItemId)
-                .GroupBy(item => item.ItemId)
-                .Select(group => new ItemQualityLoweringRequirement(
-                    group.Key,
-                    group.First().ItemName,
-                    checked(group.Sum(item => item.Quantity))))
-                .ToArray());
+        var qualitySnapshot = qualityLowering.Begin(TradeQueueQualityLoweringPreview.BuildRequirements(queue));
         if (qualitySnapshot.State == ItemQualityLoweringAutomationState.Failed)
         {
             Finish(TradeQueueExecutionState.Failed, qualitySnapshot.Message);
             return new(false, qualitySnapshot.Message);
         }
 
+        qualityProgress = (qualitySnapshot.State, qualitySnapshot.ActiveItemId, qualitySnapshot.RemainingHighQualityUnits);
         SetActive(
             TradeQueueExecutionState.NormalizingQuality,
             qualitySnapshot.Message,
-            null);
+            QualityNormalizationStallTimeout);
 
         return new(
             true,
@@ -281,7 +320,10 @@ public sealed class TradeQueueRunner : IDisposable
             }
 
             var now = clock();
-            if (deadline != default && now > deadline)
+            // Quality normalization judges its own stall after advancing, so progress made since the
+            // previous tick always counts before the backstop fires.
+            if (deadline != default && now > deadline &&
+                Snapshot.State != TradeQueueExecutionState.NormalizingQuality)
             {
                 if (Snapshot.State == TradeQueueExecutionState.OfferingItems &&
                     now < batchRecoveryDeadline && io.IsTradeOpen)
@@ -423,6 +465,20 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         }
 
+        var progress = (result.State, result.ActiveItemId, result.RemainingHighQualityUnits);
+        var now = clock();
+        if (progress != qualityProgress)
+        {
+            qualityProgress = progress;
+            deadline = now + QualityNormalizationStallTimeout;
+        }
+        else if (deadline != default && now > deadline)
+        {
+            Fail(
+                $"Quality normalization made no progress for {QualityNormalizationStallTimeout.TotalSeconds:N0}s. " +
+                $"Last observation: {result.Message}");
+            return;
+        }
         Snapshot = Snapshot with { Message = result.Message };
     }
 

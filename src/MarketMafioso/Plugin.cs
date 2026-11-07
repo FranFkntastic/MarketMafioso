@@ -266,7 +266,9 @@ public sealed class Plugin : IDalamudPlugin
             tradeQueueIo,
             new Franthropy.Dalamud.Automation.Inventory.DalamudItemQualityLoweringAutomation(
                 GameGui,
-                DalamudTradeQueueIo.SupportedInventories),
+                DalamudTradeQueueIo.SupportedInventories,
+                Log,
+                Condition),
             tradeAutomationCoordinator,
             Log,
             Configuration.TradeQueuePolicy,

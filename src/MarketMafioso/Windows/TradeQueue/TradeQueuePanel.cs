@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using FFXIVClientStructs.FFXIV.Client.Game;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.TradeQueue;
@@ -20,6 +21,8 @@ internal sealed class TradeQueuePanel
     [
         new("recipientName", AgentBridgeActionArgumentKind.String),
         new("homeWorld", AgentBridgeActionArgumentKind.String),
+        new("approveQualityLowering", AgentBridgeActionArgumentKind.String, Required: false),
+        new("preserveHighQuality", AgentBridgeActionArgumentKind.Boolean, Required: false),
     ]);
     private static readonly AgentBridgeActionArgumentSchema BulkQuantitySchema = new(
         [new("quantity", AgentBridgeActionArgumentKind.Integer, Minimum: 0)]);
@@ -40,6 +43,12 @@ internal sealed class TradeQueuePanel
     private int editingQuantityValue;
     private uint? queuedQuantityAdvanceItemId;
     private IReadOnlyList<TradeQueueInventoryStack> lastAuthoritativeInventory = [];
+    private bool inventoryIsAuthoritative;
+    private TradeQueuePartner? qualityConfirmationPartner;
+    private TradeQueuePartner? deferredStartPartner;
+    private bool openQualityConfirmation;
+    private bool closeQualityConfirmation;
+    private string? qualityConfirmationStatus;
     private string receiverStatus = "No incoming trade action has been invoked.";
 
     public TradeQueuePanel(
@@ -123,6 +132,7 @@ internal sealed class TradeQueuePanel
             "Select quantities from current tradeable inventory, target the recipient, and trade exact five-slot batches.");
 
         var observation = io.ObserveTradeableInventory();
+        inventoryIsAuthoritative = observation.IsAuthoritative;
         if (observation.IsAuthoritative)
         {
             lastAuthoritativeInventory = observation.Stacks;
@@ -187,6 +197,7 @@ internal sealed class TradeQueuePanel
         DrawInventoryTable(rows);
         ImGui.Spacing();
         DrawExecutionControls(inventory);
+        DrawQualityLoweringConfirmation(inventory);
         DrawTimingControls();
     }
 
@@ -744,15 +755,24 @@ internal sealed class TradeQueuePanel
                 startLabel,
                 validation.Success && hasPartner))
         {
-            runner.Start();
+            BeginStart(partner, inventory);
         }
         var availablePartners = io.GetAvailablePartners();
+        var loweringValue = string.Empty;
+        if (config.TradeQueuePolicy.NormalizeHighQualityItems && inventoryIsAuthoritative && validation.Success)
+        {
+            var lowering = TradeQueueQualityLoweringPreview.Build(config.TradeQueueItems, inventory);
+            loweringValue = lowering.RequiresLowering
+                ? $"; hqToNq={lowering.Describe()}; approveQualityLowering={lowering.Signature}"
+                : "; hqToNq=none";
+        }
         RegisterLastAction(
             "trade-queue.start-exact",
             "Start Trade Queue for an exact nearby recipient",
             validation.Success && availablePartners.Count > 0,
             $"queue={config.TradeQueueItems.Count:N0} lines/{config.TradeQueueItems.Sum(item => item.Quantity):N0} units; " +
-            $"nearby={string.Join(", ", availablePartners.Select(candidate => $"{candidate.Name} @ {candidate.HomeWorldName}"))}",
+            $"nearby={string.Join(", ", availablePartners.Select(candidate => $"{candidate.Name} @ {candidate.HomeWorldName}"))}" +
+            loweringValue,
             ExactRecipientSchema,
             arguments => StartExactRecipient(arguments));
 
@@ -819,11 +839,246 @@ internal sealed class TradeQueuePanel
                 $"{recipientName} @ {homeWorld} is not an exact, targetable nearby player.");
         }
 
-        var result = runner.Start(partner);
+        var approval = arguments.Value.TryGetProperty("approveQualityLowering", out var approvalProperty) &&
+                       approvalProperty.ValueKind == System.Text.Json.JsonValueKind.String
+            ? approvalProperty.GetString()
+            : null;
+        var preserveHighQuality = arguments.Value.TryGetProperty("preserveHighQuality", out var preserveProperty) &&
+                                  preserveProperty.ValueKind == System.Text.Json.JsonValueKind.True;
+        var result = runner.Start(
+            partner,
+            new TradeQueueStartOptions(
+                NormalizeHighQualityItems: preserveHighQuality ? false : null,
+                ApprovedQualityLoweringSignature: approval));
+        if (result.QualityLoweringApprovalRequired is { } required)
+        {
+            return AgentBridgeUiActionResult.Fail(
+                $"{result.Message} Retry with approveQualityLowering=\"{required.Signature}\" to permanently lower these stacks, " +
+                "or preserveHighQuality=true to trade them as HQ for this run only.",
+                required);
+        }
+
         return result.Success
             ? AgentBridgeUiActionResult.Ok(result.Message, runner.Snapshot.RunId, runner.Snapshot)
             : AgentBridgeUiActionResult.Fail(result.Message, runner.Snapshot);
     }
+
+    private void BeginStart(TradeQueuePartner partner, IReadOnlyList<TradeQueueInventoryStack> inventory)
+    {
+        qualityConfirmationStatus = null;
+        if (config.TradeQueuePolicy.NormalizeHighQualityItems &&
+            inventoryIsAuthoritative &&
+            TradeQueueQualityLoweringPreview.Build(config.TradeQueueItems, inventory).RequiresLowering)
+        {
+            qualityConfirmationPartner = partner;
+            openQualityConfirmation = true;
+            return;
+        }
+
+        // The runner re-checks and refuses unapproved lowering, including after a deferred inventory check.
+        var result = runner.Start(partner);
+        if (result.QualityLoweringApprovalRequired is not null)
+        {
+            qualityConfirmationPartner = partner;
+            openQualityConfirmation = true;
+        }
+        else if (result.Success && runner.Snapshot.State == TradeQueueExecutionState.PreparingInventory)
+        {
+            deferredStartPartner = partner;
+        }
+    }
+
+    private AgentBridgeUiActionResult StartFromQualityConfirmation(TradeQueueStartOptions options)
+    {
+        var partner = qualityConfirmationPartner;
+        if (partner is null)
+        {
+            closeQualityConfirmation = true;
+            return AgentBridgeUiActionResult.Fail("No recipient is waiting on HQ-to-NQ confirmation.");
+        }
+
+        var result = runner.Start(partner, options);
+        if (result.QualityLoweringApprovalRequired is not null)
+        {
+            // Inventory moved under the dialog; keep it open so the refreshed list gets a fresh look.
+            qualityConfirmationStatus = "Inventory changed since this list was shown. Review the updated list.";
+            return AgentBridgeUiActionResult.Fail(result.Message, result.QualityLoweringApprovalRequired);
+        }
+
+        closeQualityConfirmation = true;
+        qualityConfirmationPartner = null;
+        return result.Success
+            ? AgentBridgeUiActionResult.Ok(result.Message, runner.Snapshot.RunId, runner.Snapshot)
+            : AgentBridgeUiActionResult.Fail(result.Message, runner.Snapshot);
+    }
+
+    private void DrawQualityLoweringConfirmation(IReadOnlyList<TradeQueueInventoryStack> inventory)
+    {
+        const string popupId = "Lower HQ items to NQ?##TradeQueueQualityLowering";
+        if (deferredStartPartner is not null && !runner.IsActive)
+        {
+            if (runner.PendingQualityLoweringApproval is not null)
+            {
+                qualityConfirmationPartner = deferredStartPartner;
+                openQualityConfirmation = true;
+            }
+
+            deferredStartPartner = null;
+        }
+
+        if (openQualityConfirmation)
+        {
+            openQualityConfirmation = false;
+            closeQualityConfirmation = false;
+            ImGui.OpenPopup(popupId);
+        }
+
+        var viewport = ImGui.GetMainViewport();
+        ImGui.SetNextWindowPos(
+            viewport.WorkPos + (viewport.WorkSize * 0.5f),
+            ImGuiCond.Appearing,
+            new Vector2(0.5f, 0.5f));
+        if (!ImGui.BeginPopupModal(popupId, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+
+        if (closeQualityConfirmation || runner.IsActive)
+        {
+            closeQualityConfirmation = false;
+            ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+            return;
+        }
+
+        // Recomputed every frame so the list always matches what Start would execute right now.
+        var partner = qualityConfirmationPartner;
+        var preview = inventoryIsAuthoritative
+            ? TradeQueueQualityLoweringPreview.Build(config.TradeQueueItems, inventory)
+            : null;
+        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + 520f);
+        ImGui.TextWrapped(
+            $"Trading with {partner?.Name ?? "the recipient"} will first lower these HQ items to NQ. " +
+            "This cannot be undone.");
+        ImGui.Spacing();
+        if (preview is null)
+        {
+            ImGui.TextColored(MainWindow.ColMuted, "Checking current inventory...");
+        }
+        else if (!preview.Success)
+        {
+            ImGui.TextColored(MainWindow.ColWarning, preview.Message);
+        }
+        else if (!preview.RequiresLowering)
+        {
+            ImGui.TextColored(MainWindow.ColSuccess, "Normal-quality stock now covers the queue; nothing will be lowered.");
+        }
+        else
+        {
+            DrawQualityLoweringTable(preview);
+            if (preview.ExcessConvertedUnits > 0)
+            {
+                ImGui.Spacing();
+                ImGui.TextColored(
+                    MainWindow.ColWarning,
+                    $"The game lowers whole stacks, so {preview.ExcessConvertedUnits:N0} HQ unit(s) beyond what is queued " +
+                    "will also become NQ and stay in your inventory.");
+            }
+        }
+
+        if (!string.IsNullOrEmpty(qualityConfirmationStatus))
+            ImGui.TextColored(MainWindow.ColWarning, qualityConfirmationStatus);
+        ImGui.PopTextWrapPos();
+
+        ImGui.Spacing();
+        var canConfirm = partner is not null && preview is { Success: true };
+        var signature = preview?.Signature;
+        var confirmLabel = preview is { RequiresLowering: true } ? "Lower to NQ and Trade" : "Trade";
+        if (ImGuiUi.Button($"{confirmLabel}##TradeQueueQualityConfirm", canConfirm))
+            StartFromQualityConfirmation(new(ApprovedQualityLoweringSignature: signature));
+        RegisterLastAction(
+            "trade-queue.quality-lowering.confirm",
+            "Permanently lower the listed HQ stacks to NQ, then trade",
+            canConfirm,
+            preview?.Describe(),
+            arguments: null,
+            _ => StartFromQualityConfirmation(new(ApprovedQualityLoweringSignature: signature)));
+
+        ImGui.SameLine();
+        var canPreserve = partner is not null;
+        if (ImGuiUi.Button("Trade HQ as HQ##TradeQueueQualityPreserve", canPreserve))
+            StartFromQualityConfirmation(new(NormalizeHighQualityItems: false));
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("This run only. The HQ-to-NQ setting stays on for future runs.");
+        RegisterLastAction(
+            "trade-queue.quality-lowering.preserve-hq",
+            "Trade HQ items as HQ for this run only",
+            canPreserve,
+            partner?.Name,
+            arguments: null,
+            _ => StartFromQualityConfirmation(new(NormalizeHighQualityItems: false)));
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Cancel##TradeQueueQualityCancel", true))
+        {
+            qualityConfirmationPartner = null;
+            ImGui.CloseCurrentPopup();
+        }
+        RegisterLastAction(
+            "trade-queue.quality-lowering.cancel",
+            "Cancel without lowering quality or trading",
+            enabled: true,
+            partner?.Name,
+            arguments: null,
+            _ =>
+            {
+                qualityConfirmationPartner = null;
+                closeQualityConfirmation = true;
+                return AgentBridgeUiActionResult.Ok("Trade Queue start canceled; no quality was lowered.");
+            });
+        ImGui.EndPopup();
+    }
+
+    private static void DrawQualityLoweringTable(TradeQueueQualityLoweringPreview preview)
+    {
+        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit;
+        if (!ImGui.BeginTable("##TradeQueueQualityLoweringPreview", 5, flags))
+            return;
+
+        ImGui.TableSetupColumn("Item");
+        ImGui.TableSetupColumn("Location");
+        ImGui.TableSetupColumn("Lowered");
+        ImGui.TableSetupColumn("For queue");
+        ImGui.TableSetupColumn("Extra");
+        ImGui.TableHeadersRow();
+        foreach (var step in preview.Steps)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(step.ItemName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(DescribeLocation(step.Container, step.SlotIndex));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(step.ConvertedUnits.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(step.RequiredUnits.ToString("N0"));
+            ImGui.TableNextColumn();
+            if (step.ExcessConvertedUnits > 0)
+                ImGui.TextColored(MainWindow.ColWarning, step.ExcessConvertedUnits.ToString("N0"));
+            else
+                ImGui.TextColored(MainWindow.ColMuted, "-");
+        }
+
+        ImGui.EndTable();
+    }
+
+    internal static string DescribeLocation(InventoryType container, int slotIndex) => container switch
+    {
+        InventoryType.Inventory1 => $"Bag 1, slot {slotIndex + 1}",
+        InventoryType.Inventory2 => $"Bag 2, slot {slotIndex + 1}",
+        InventoryType.Inventory3 => $"Bag 3, slot {slotIndex + 1}",
+        InventoryType.Inventory4 => $"Bag 4, slot {slotIndex + 1}",
+        InventoryType.Crystals => "Crystals",
+        _ => $"{container}, slot {slotIndex + 1}",
+    };
 
     private AgentBridgeUiActionResult InvokeReceiverReady()
     {
