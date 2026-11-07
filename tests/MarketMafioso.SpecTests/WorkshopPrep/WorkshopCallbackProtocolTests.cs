@@ -44,6 +44,24 @@ public sealed class WorkshopCallbackProtocolTests
         Assert.Throws<InvalidOperationException>(() => WorkshopCallbackProtocol.RequireOwner(captured, current, addonId, ownerId, receiver, expected));
 
     [Fact]
+    public void DalamudLifecycleWrapperIsUnwrappedButOtherDetoursAreStillRejected()
+    {
+        const int native = 0x2000, lifecycleWrapper = 0x7000, foreignDetour = 0x8000;
+        // Dalamud's registered lifecycle table: the original receiver is what counts.
+        WorkshopCallbackProtocol.RequireOwner(0x1000, 0x1000, 7, 7,
+            WorkshopCallbackProtocol.ResolveAgentReceiver(lifecycleWrapper, native), native);
+        // Unwrapped table: unchanged behavior.
+        WorkshopCallbackProtocol.RequireOwner(0x1000, 0x1000, 7, 7,
+            WorkshopCallbackProtocol.ResolveAgentReceiver(native, 0), native);
+        // A detour Dalamud did not register is not unwrapped.
+        Assert.Throws<InvalidOperationException>(() => WorkshopCallbackProtocol.RequireOwner(0x1000, 0x1000, 7, 7,
+            WorkshopCallbackProtocol.ResolveAgentReceiver(foreignDetour, 0), native));
+        // Dalamud wrapping a table whose original handler changed is still refused.
+        Assert.Throws<InvalidOperationException>(() => WorkshopCallbackProtocol.RequireOwner(0x1000, 0x1000, 7, 7,
+            WorkshopCallbackProtocol.ResolveAgentReceiver(lifecycleWrapper, foreignDetour), native));
+    }
+
+    [Fact]
     public void SwappedRecipeCommandRoutesAreRejected() =>
         Assert.Throws<InvalidOperationException>(() => WorkshopNativeCallbackCapability.RequireRecipeRoutes(0x1000, 0x10ef, 0x1251, 0x1065, 0x1251, 0x1065));
 

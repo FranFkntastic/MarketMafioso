@@ -41,6 +41,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     ];
 
     private readonly IGameGui gameGui;
+    private readonly IAgentLifecycle agentLifecycle;
     private readonly IPluginLog log;
     private readonly IObjectTable objectTable;
     private readonly ITargetManager targetManager;
@@ -58,10 +59,12 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         ITargetManager targetManager,
         ICondition condition,
         ISigScanner sigScanner,
+        IAgentLifecycle agentLifecycle,
         ExternalAutomationCoordinator externalAutomationCoordinator,
         Action<string> onMaterialRequestConfirmed)
     {
         this.gameGui = gameGui;
+        this.agentLifecycle = agentLifecycle;
         this.log = log;
         this.objectTable = objectTable;
         this.targetManager = targetManager;
@@ -599,12 +602,20 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         var addon = GetCraftingLogAddon();
         var agent = AgentModule.Instance()->GetAgentByInternalId(AgentId.CompanyCraftRecipeNoteBook);
         WorkshopCallbackProtocol.RequireOwner(captured.AddonAddress, (nint)addon, addon == null ? 0u : (uint)addon->Id,
-            agent == null ? 0 : agent->AddonId,
-            agent == null || agent->VirtualTable == null ? 0 : (nint)agent->VirtualTable->ReceiveEvent, expectedReceiver);
+            agent == null ? 0 : agent->AddonId, ResolveAgentReceiver(agent), expectedReceiver);
         if (addon->AtkValues == null)
             throw new InvalidOperationException("Workshop recipe values are unavailable; no callback was sent.");
         WorkshopCallbackProtocol.RequireCraftingLogSchema(new ReadOnlySpan<AtkValue>(addon->AtkValues, addon->AtkValuesCount));
         return addon;
+    }
+
+    private unsafe nint ResolveAgentReceiver(AgentInterface* agent)
+    {
+        if (agent == null || agent->VirtualTable == null)
+            return 0;
+        var original = (AgentInterface.AgentInterfaceVirtualTable*)agentLifecycle.GetOriginalVirtualTable((nint)agent->VirtualTable);
+        return WorkshopCallbackProtocol.ResolveAgentReceiver(
+            (nint)agent->VirtualTable->ReceiveEvent, original == null ? 0 : (nint)original->ReceiveEvent);
     }
 
     private unsafe AtkUnitBase* RequireMaterialDelivery(WorkshopMaterialDeliverySnapshot captured)
@@ -614,8 +625,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         var addon = GetMaterialDeliveryAddon();
         var agent = AgentCompanyCraftMaterial.Instance();
         WorkshopCallbackProtocol.RequireOwner(captured.AddonAddress, (nint)addon, addon == null ? 0u : (uint)addon->Id,
-            agent == null ? 0 : agent->AddonId,
-            agent == null || agent->VirtualTable == null ? 0 : (nint)agent->VirtualTable->ReceiveEvent, expectedReceiver);
+            agent == null ? 0 : agent->AddonId, ResolveAgentReceiver((AgentInterface*)agent), expectedReceiver);
         var current = ReadCraftState(addon);
         if (current == null || current.ResultItem != captured.CraftState.ResultItem ||
             current.StepsComplete != captured.CraftState.StepsComplete || current.StepsTotal != captured.CraftState.StepsTotal)

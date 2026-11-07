@@ -25,6 +25,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         ITargetManager targetManager,
         ICondition condition,
         ISigScanner sigScanner,
+        IAgentLifecycle agentLifecycle,
         ExternalAutomationCoordinator externalAutomationCoordinator)
     {
         this.log = log;
@@ -35,6 +36,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             targetManager,
             condition,
             sigScanner,
+            agentLifecycle,
             externalAutomationCoordinator,
             source => SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.MaterialContribution, source));
     }

@@ -34,6 +34,12 @@ internal static class WorkshopCallbackProtocol
             throw UnsupportedPayload();
     }
 
+    // Dalamud's agent lifecycle replaces agent vtables with copies whose
+    // ReceiveEvent wraps the original. Only that registered wrapper is unwrapped;
+    // any other detour stays visible and is refused by RequireOwner.
+    internal static nint ResolveAgentReceiver(nint tableReceiver, nint lifecycleOriginalReceiver) =>
+        lifecycleOriginalReceiver != 0 ? lifecycleOriginalReceiver : tableReceiver;
+
     internal static void RequireOwner(nint capturedAddon, nint currentAddon, uint addonId, uint agentAddonId,
         nint receiver, nint expectedReceiver)
     {
