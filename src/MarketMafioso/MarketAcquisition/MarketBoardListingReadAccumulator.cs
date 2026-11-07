@@ -23,7 +23,10 @@ public sealed class MarketBoardListingReadAccumulator
     {
         ArgumentNullException.ThrowIfNull(readResult);
 
-        if (!readResult.IsFresh || readResult.ItemId == 0 || !readResult.IsListingCountTruncated)
+        // A packet-correlated leading prefix is already cumulative. Accumulating it
+        // would lose its ordering/status and could resurrect purchased rows.
+        if (readResult.Status == "VerifiedListingPrefix" ||
+            !readResult.IsFresh || readResult.ItemId == 0 || !readResult.IsListingCountTruncated)
         {
             Clear();
             return readResult;

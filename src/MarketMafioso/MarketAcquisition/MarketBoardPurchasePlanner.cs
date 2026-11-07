@@ -51,7 +51,9 @@ public static class MarketBoardPurchasePlanner
                 "Guarded purchase candidate does not contain a real market-board listing identity.");
         }
 
-        if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
+        if (!freshRead.IsFresh ||
+            (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase) &&
+             !freshRead.Status.Equals("VerifiedListingPrefix", StringComparison.Ordinal)))
         {
             return MarketBoardPurchaseRevalidation.Fail(
                 freshRead.Status,
@@ -78,6 +80,10 @@ public static class MarketBoardPurchasePlanner
             listing.RetainerId.Equals(candidate.RetainerId, StringComparison.Ordinal));
         if (sameIdentity == null)
         {
+            // Presence in a correlated prefix can authorize selection. Absence
+            // alone must never become a purchase receipt from incomplete data.
+            if (freshRead.Status == "VerifiedListingPrefix")
+                return MarketBoardPurchaseRevalidation.Fail("ListingListNotReady", "The guarded listing is not present in the observed prefix.");
             return MarketBoardPurchaseRevalidation.Fail(
                 "ListingMissing",
                 "Fresh live listing read no longer contains the guarded purchase candidate.");

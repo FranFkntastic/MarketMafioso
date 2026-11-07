@@ -134,6 +134,9 @@ public sealed class DalamudMarketAcquisitionMarketBoardIo : IMarketAcquisitionMa
     }
 
     public bool IsMarketBoardReady() => approachService.IsMarketBoardReady();
+    public MarketBoardBrowseSnapshot BrowseSnapshot => browseRuntime.Snapshot;
+    public bool CloseBrowse(string operationId) =>
+        browseRuntime.RequestClose(MarketBoardBrowseOwner.MarketAcquisition, operationId);
     public MarketBoardItemSearchResult SearchItem(
         uint itemId,
         string? itemName,

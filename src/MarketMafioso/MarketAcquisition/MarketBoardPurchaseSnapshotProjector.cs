@@ -43,11 +43,13 @@ internal static class MarketBoardPurchaseSnapshotProjector
 
         return snapshot with
         {
-            Status = remaining.Length == 0 ? "NoListings" : "Ready",
+            Status = snapshot.Status == "VerifiedListingPrefix"
+                ? "VerifiedListingPrefix"
+                : remaining.Length == 0 ? "NoListings" : "Ready",
             Message = remaining.Length == 0
                 ? $"Confirmed purchase removed listing {candidate.ListingId}; no remembered listings remain."
                 : $"Confirmed purchase removed listing {candidate.ListingId}; continuing from {remaining.Length:N0} remembered listing(s).",
-            ReadState = isListingCountTruncated
+            ReadState = snapshot.Status == "VerifiedListingPrefix" || isListingCountTruncated
                 ? MarketBoardListingReadState.FreshPartial
                 : MarketBoardListingReadState.FreshComplete,
             ReportedListingCount = reportedListingCount,

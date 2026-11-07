@@ -48,7 +48,7 @@ public sealed class MarketBoardListingReader
         }
 
         var canReadVerifiedPrefix =
-            !browse.IsTerminal &&
+            browse.IsActive &&
             browse.HeaderObserved &&
             browse.HeaderStatus == 0 &&
             browse.FirstPageObserved &&

@@ -60,15 +60,22 @@ public sealed class MarketBoardItemSearchDriver
         var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
 
         var observedBrowse = browseRuntime.Snapshot;
+        if (owner == MarketBoardBrowseOwner.MarketAcquisition && IsOwnedBrowse(observedBrowse, owner, itemId) &&
+            observedBrowse.IsActive && intent == MarketBoardItemSearchIntent.RequireFreshBrowse &&
+            observedBrowse.OperationId == previousOperationId)
+        {
+            browseRuntime.RequestClose(owner, observedBrowse.OperationId);
+            observedBrowse = browseRuntime.Snapshot;
+        }
         if (IsOwnedBrowse(observedBrowse, owner, itemId))
         {
             var isPreviousTerminal =
                 intent == MarketBoardItemSearchIntent.RequireFreshBrowse &&
                 observedBrowse.IsTerminal &&
                 string.Equals(observedBrowse.OperationId, previousOperationId, StringComparison.Ordinal);
-            if (!observedBrowse.IsTerminal ||
+            if (observedBrowse.Phase != MarketBoardBrowsePhase.Retired && (!observedBrowse.IsTerminal ||
                 (!isPreviousTerminal &&
-                 !string.Equals(lastReturnedTerminalOperationId, observedBrowse.OperationId, StringComparison.Ordinal)))
+                 !string.Equals(lastReturnedTerminalOperationId, observedBrowse.OperationId, StringComparison.Ordinal))))
             {
                 if (observedBrowse.IsTerminal)
                     lastReturnedTerminalOperationId = observedBrowse.OperationId;
@@ -182,12 +189,14 @@ public sealed class MarketBoardItemSearchDriver
             };
         }
 
-        if (TryOpenExactItemResult(addon, agent, itemId, owner, details))
+        if (TryOpenExactItemResult(addon, agent, itemId, owner, details, out var blockedBrowse))
         {
             ClearSubmittedSearch();
             var browse = browseRuntime.Snapshot;
             return BuildBrowseResult(searchText, browse, details);
         }
+        if (blockedBrowse != null)
+            return BuildBrowseResult(searchText, blockedBrowse, details);
 
         if (details.TryGetValue("itemResultSelectStatus", out var selectionStatus) &&
             selectionStatus is "ResultRendererNotReady" or "ResultInteractionDisabled")
@@ -332,7 +341,7 @@ public sealed class MarketBoardItemSearchDriver
         uint openResultItemId,
         MarketBoardItemSearchIntent intent = MarketBoardItemSearchIntent.PresentOrBrowse,
         string? previousOperationId = null) =>
-        browse.IsTerminal &&
+        browse.IsTerminal && browse.Phase != MarketBoardBrowsePhase.Retired &&
         IsOwnedBrowse(browse, owner, requestedItemId) &&
         resultVisible &&
         IsOpenListingResultForRequestedItem(requestedItemId, openResultItemId) &&
@@ -640,8 +649,10 @@ public sealed class MarketBoardItemSearchDriver
         AgentItemSearch* agent,
         uint itemId,
         MarketBoardBrowseOwner owner,
-        IDictionary<string, string?> details)
+        IDictionary<string, string?> details,
+        out MarketBoardBrowseSnapshot? blockedBrowse)
     {
+        blockedBrowse = null;
         if (agent == null)
         {
             details["itemResultSelectStatus"] = "AgentUnavailable";
@@ -693,6 +704,7 @@ public sealed class MarketBoardItemSearchDriver
 
             if (!browseRuntime.TryBegin(owner, itemId, out var armed))
             {
+                blockedBrowse = armed;
                 details["itemResultSelectStatus"] = "BrowseOwnershipUnavailable";
                 details["browseOperationId"] = armed.OperationId;
                 details["browseOwner"] = armed.Owner?.ToString();

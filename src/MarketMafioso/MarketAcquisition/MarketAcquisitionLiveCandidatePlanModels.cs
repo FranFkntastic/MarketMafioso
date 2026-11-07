@@ -4,6 +4,7 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed record MarketAcquisitionLiveCandidatePlan
 {
+    public bool PriceRangeExhausted { get; init; }
     public string Status { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
     public MarketBoardListingReadState ListingReadState { get; init; } = MarketBoardListingReadState.FreshComplete;
