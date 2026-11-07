@@ -169,6 +169,25 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
 
     public bool IsCraftingLogVisible => IsAddonReady(CompanyCraftRecipeNoteBookAddon);
 
+    public unsafe string DescribeCraftingLogInternals()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(CompanyCraftRecipeNoteBookAddon, 1);
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.CompanyCraftRecipeNoteBook);
+        return WorkshopCraftingLogInspector.Describe(addon, agent);
+    }
+
+    public unsafe bool CloseCraftingLog()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(CompanyCraftRecipeNoteBookAddon, 1);
+        if (addon == null || !addon->IsVisible)
+            return false;
+
+        using (faultMonitor.Dispatch("crafting-log.close"))
+            addon->Close(true);
+        return true;
+    }
+
     private static unsafe string DescribeCraftingLogLayout(AtkUnitBase* addon)
     {
         var count = addon->AtkValuesCount;

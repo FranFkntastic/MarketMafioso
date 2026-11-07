@@ -12,6 +12,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private const int RetainedDiagnosticLogs = 30;
     private static readonly TimeSpan PostMortemDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan NativeFaultPollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan CraftingLogSettleDelay = TimeSpan.FromMilliseconds(1500);
 
     private readonly IFramework framework;
     private readonly IPluginLog log;
@@ -35,6 +36,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private DateTimeOffset lastNativeFaultPollAt = DateTimeOffset.MinValue;
     private DateTimeOffset? postMortemAt;
     private string? postMortemReason;
+    private bool inspectOnly;
+    private DateTimeOffset? inspectionReadyAt;
 
     public WorkshopAssemblyRunner(
         IFramework framework,
@@ -65,6 +68,22 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     public WorkshopAssemblyActionResult Start(WorkshopAssemblyPlan plan, bool enableDiagnostics = false)
     {
+        _ = enableDiagnostics;
+        return StartCore(plan, inspect: false);
+    }
+
+    // Opens the company crafting log, dumps it, and closes it again without
+    // selecting anything. Safe on any character: it never sends a category.
+    public WorkshopAssemblyActionResult StartCraftingLogInspection(IReadOnlyList<WorkshopAssemblyQueueEntry> context)
+    {
+        var entries = context.Count > 0
+            ? context
+            : [new WorkshopAssemblyQueueEntry(0, 0, 0, 0, "Crafting log inspection", 1, [], 0, 1)];
+        return StartCore(new WorkshopAssemblyPlan(entries, []), inspect: true);
+    }
+
+    private WorkshopAssemblyActionResult StartCore(WorkshopAssemblyPlan plan, bool inspect)
+    {
         if (HasActiveRun)
             return new(false, "Workshop assembly is already running.");
 
@@ -81,7 +100,6 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         // Always on: the runs that wedge the character are never the ones somebody
         // remembered to start with diagnostics. Old logs are pruned instead.
-        _ = enableDiagnostics;
         diagnostics = CreateDiagnostics();
         uiAutomation.Diagnostics = diagnostics;
         LastDiagnosticFilePath = diagnostics.FilePath;
@@ -96,6 +114,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         continueAt = DateTimeOffset.MinValue;
         lastStationInteractAt = DateTimeOffset.MinValue;
         lastNativeFaultPollAt = DateTimeOffset.MinValue;
+        inspectOnly = inspect;
+        inspectionReadyAt = null;
         actionGuard.Reset();
         uiAutomation.ResetState();
         uiAutomation.BeginRun();
@@ -110,8 +130,10 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 ["totalMaterialRows"] = plan.TotalMaterials.Count.ToString(),
             });
         framework.Update += OnFrameworkUpdate;
-        log.Information("[MarketMafioso] Native workshop assembly started.");
-        return new(true, "Native workshop assembly started.");
+        log.Information(inspect
+            ? "[MarketMafioso] Workshop crafting log inspection started."
+            : "[MarketMafioso] Native workshop assembly started.");
+        return new(true, inspect ? "Workshop crafting log inspection started." : "Native workshop assembly started.");
     }
 
     public WorkshopAssemblyActionResult Pause()
@@ -220,6 +242,10 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 TickWaitingForFabricationStation();
                 break;
 
+            case WorkshopAssemblyRunnerState.OpeningProject when inspectOnly:
+                TickInspectingCraftingLog();
+                break;
+
             case WorkshopAssemblyRunnerState.OpeningProject:
                 TickOpeningProject(entry);
                 break;
@@ -297,6 +323,36 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         }
 
         HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.OpeningProject, result);
+    }
+
+    private void TickInspectingCraftingLog()
+    {
+        var result = uiAutomation.TryReachCraftingLog();
+        RecordActionResult("inspect-crafting-log", activePlan!.Entries[0], result);
+        NoteAction(result);
+        if (!result.Success)
+        {
+            inspectionReadyAt = null;
+            HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.OpeningProject, result);
+            return;
+        }
+
+        // The window reports ready a little before every list in it is filled.
+        inspectionReadyAt ??= Now + CraftingLogSettleDelay;
+        if (Now < inspectionReadyAt)
+        {
+            Progress = BuildProgress(WorkshopAssemblyRunnerState.OpeningProject, "Letting the workshop crafting log settle before inspecting it.");
+            return;
+        }
+
+        var path = uiAutomation.WriteCraftingLogInspection(activePlan.Entries);
+        uiAutomation.CloseCraftingLog();
+        framework.Update -= OnFrameworkUpdate;
+        uiAutomation.ResetState();
+        var message = $"Workshop crafting log inspected: {path}";
+        SetState(WorkshopAssemblyRunnerState.Complete, message);
+        log.Information("[MarketMafioso] {Message}", message);
+        RecordForensicsAndSchedulePostMortem("finished inspecting the crafting log");
     }
 
     private void TickSubmittingMaterial(WorkshopAssemblyQueueEntry entry)

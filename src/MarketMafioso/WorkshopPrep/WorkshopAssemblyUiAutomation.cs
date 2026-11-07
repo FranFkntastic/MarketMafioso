@@ -450,6 +450,40 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public string CaptureForensics() => uiDriver.CaptureForensics();
 
+    public WorkshopAssemblyActionResult TryReachCraftingLog()
+    {
+        if (uiDriver.ReadCraftingLog() != null)
+            return new(true, "The workshop crafting log is open.");
+
+        if (uiDriver.IsCraftingLogVisible)
+            return new(false, $"Waiting for the workshop crafting log to load. {DescribeUiState()}");
+
+        if (uiDriver.TrySelectString(text => text == "View company crafting log."))
+            return new(false, "Selected company crafting log.", ActionTaken: true);
+
+        return new(false, $"Waiting for the workshop menu to offer the company crafting log. {DescribeUiState()}");
+    }
+
+    public string WriteCraftingLogInspection(IReadOnlyList<WorkshopAssemblyQueueEntry> entries)
+    {
+        var report = new System.Text.StringBuilder();
+        report.AppendLine($"Workshop crafting log inspection {DateTimeOffset.Now:O}");
+        report.AppendLine("queued projects:");
+        foreach (var entry in entries.Where(x => x.WorkshopItemId != 0))
+            report.AppendLine($"  {entry.WorkshopItemId} {entry.ProjectName}: draft={entry.DraftId} category={entry.CategoryId} type={entry.TypeId}");
+        report.AppendLine();
+        report.AppendLine(uiDriver.DescribeCraftingLogInternals());
+
+        var path = Diagnostics.FilePath is { } logPath
+            ? System.IO.Path.ChangeExtension(logPath, ".craftlog.txt")
+            : System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"mmf-craftlog-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.txt");
+        System.IO.File.WriteAllText(path, report.ToString());
+        Diagnostics.Record("crafting-log-inspection", "Wrote workshop crafting log inspection.", new Dictionary<string, string?> { ["path"] = path });
+        return path;
+    }
+
+    public bool CloseCraftingLog() => uiDriver.CloseCraftingLog();
+
     public string DescribeUiState()
     {
         return uiDriver.DescribeUiState(pendingConfirmationKind);

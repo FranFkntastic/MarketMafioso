@@ -411,6 +411,7 @@ public class MainWindow : Window, IDisposable
             () => workshopStatus,
             status => workshopStatus = status,
             StartWorkshopAssembly,
+            InspectWorkshopCraftingLog,
             AgentReviewRegistry);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
@@ -2543,6 +2544,29 @@ public class MainWindow : Window, IDisposable
         {
             workshopStatus = $"Unable to start workshop assembly. {ex.Message}";
             log.Warning(ex, "[MarketMafioso] Native workshop assembly preflight failed.");
+        }
+    }
+
+    private void InspectWorkshopCraftingLog()
+    {
+        try
+        {
+            IReadOnlyList<WorkshopAssemblyQueueEntry> context = [];
+            try
+            {
+                context = WorkshopAssemblyPlanBuilder.Build(config.WorkshopPrepQueue, workshopCatalog.GetProjects()).Entries;
+            }
+            catch (InvalidOperationException)
+            {
+                // An empty or stale queue only loses the draft context in the report.
+            }
+
+            workshopStatus = workshopAssemblyRunner.StartCraftingLogInspection(context).Message;
+        }
+        catch (Exception ex)
+        {
+            workshopStatus = $"Unable to inspect the workshop crafting log. {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Workshop crafting log inspection failed to start.");
         }
     }
 

@@ -386,6 +386,35 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         Assert.Equal(2, ui.CaptureForensicsCount);
     }
 
+    [Fact]
+    public void Crafting_log_inspection_dumps_and_closes_without_selecting_anything()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(false, "Must never be used by an inspection.", ActionTaken: true));
+        ui.ReachCraftingLogResults.Enqueue(new(false, "Selected company crafting log.", ActionTaken: true));
+        for (var index = 0; index < 20; index++)
+            ui.ReachCraftingLogResults.Enqueue(new(true, "The workshop crafting log is open."));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        Assert.True(runner.StartCraftingLogInspection([]).Success);
+        for (var index = 0; index < 12 && runner.IsRunning; index++)
+        {
+            frameworkDriver.Tick(framework);
+            clock.Advance(TimeSpan.FromMilliseconds(300));
+        }
+
+        Assert.Equal(WorkshopAssemblyRunnerState.Complete, runner.Progress.State);
+        Assert.Contains("inspection.txt", runner.Progress.Message);
+        Assert.Equal(1, ui.InspectionWriteCount);
+        Assert.Equal(1, ui.CloseCraftingLogCount);
+        Assert.Single(ui.OpenProjectResults);
+    }
+
     private static WorkshopAssemblyRunner CreateRunner(
         IFramework framework,
         IWorkshopAssemblyUiAutomation ui,
@@ -470,6 +499,25 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         {
             CaptureForensicsCount++;
             return "forensics";
+        }
+
+        public Queue<WorkshopAssemblyActionResult> ReachCraftingLogResults { get; } = [];
+        public int InspectionWriteCount { get; private set; }
+        public int CloseCraftingLogCount { get; private set; }
+
+        public WorkshopAssemblyActionResult TryReachCraftingLog() =>
+            ReachCraftingLogResults.Count == 0 ? new(false, "Waiting for crafting log.") : ReachCraftingLogResults.Dequeue();
+
+        public string WriteCraftingLogInspection(IReadOnlyList<WorkshopAssemblyQueueEntry> entries)
+        {
+            InspectionWriteCount++;
+            return "inspection.txt";
+        }
+
+        public bool CloseCraftingLog()
+        {
+            CloseCraftingLogCount++;
+            return true;
         }
 
         public void Dispose() { }

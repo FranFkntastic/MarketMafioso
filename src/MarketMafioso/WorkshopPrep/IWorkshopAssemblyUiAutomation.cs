@@ -41,4 +41,11 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
     string? CheckPreflight();
 
     string CaptureForensics();
+
+    // Crafting-log inspection: open the log without selecting anything, dump it.
+    WorkshopAssemblyActionResult TryReachCraftingLog();
+
+    string WriteCraftingLogInspection(System.Collections.Generic.IReadOnlyList<WorkshopAssemblyQueueEntry> entries);
+
+    bool CloseCraftingLog();
 }

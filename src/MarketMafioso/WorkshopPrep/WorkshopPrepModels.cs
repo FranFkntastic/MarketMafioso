@@ -28,7 +28,8 @@ public sealed record WorkshopProjectDefinition(
     uint CategoryId = 0,
     uint TypeId = 0,
     int EstimatedContributionSteps = 0,
-    int EstimatedPhaseCount = 1);
+    int EstimatedPhaseCount = 1,
+    uint DraftId = 0);
 
 public sealed record WorkshopMaterialRequirement(
     uint ItemId,
