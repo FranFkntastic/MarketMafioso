@@ -14,7 +14,9 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     private readonly WorkshopAssemblyUiDriver uiDriver;
     private readonly WorkshopNativeFaultMonitor faultMonitor;
+    private readonly ExternalAutomationCoordinator externalAutomationCoordinator;
     private readonly IPluginLog log;
+    private bool cutsceneSkipRequired;
     private WorkshopAssemblyDiagnostics diagnostics = WorkshopAssemblyDiagnostics.Disabled;
     private uint? pendingContributionItemId;
     private WorkshopAssemblyPendingConfirmationKind pendingConfirmationKind;
@@ -36,6 +38,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     {
         this.log = log;
         this.faultMonitor = faultMonitor;
+        this.externalAutomationCoordinator = externalAutomationCoordinator;
         uiDriver = new WorkshopAssemblyUiDriver(
             gameGui,
             log,
@@ -77,10 +80,22 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyActionResult TrySkipCutscene()
     {
-        return uiDriver.TrySkipCutscene() switch
+        var state = uiDriver.TrySkipCutscene();
+        if (state == WorkshopCutsceneSkipState.CutsceneActive && cutsceneSkipRequired)
+        {
+            // TextAdvance does the skipping. Lift MMF's own hand-in pause on it and
+            // re-assert control in case TextAdvance reloaded mid-run; waiting the
+            // cutscene out instead is not acceptable, so losing control ends the run.
+            externalAutomationCoordinator.RestoreTextAdvance();
+            var reason = externalAutomationCoordinator.AcquireTextAdvanceCutsceneSkip();
+            if (reason != null)
+                throw new InvalidOperationException($"TextAdvance stopped skipping workshop cutscenes: {reason}");
+        }
+
+        return state switch
         {
             WorkshopCutsceneSkipState.CutsceneActive =>
-                new(false, "Waiting for workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true, IsWaiting: true),
+                new(false, "Waiting for TextAdvance to skip the workshop cutscene.", ActionTaken: true, RequiresWorkshopReopen: true, IsWaiting: true),
             WorkshopCutsceneSkipState.PromptSelected =>
                 new(false, "Selected workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true),
             _ => new(false, "No skippable workshop cutscene prompt is visible."),
@@ -509,9 +524,26 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             ActiveMaterialStepsComplete: material.StepsComplete);
     }
 
-    public void BeginRun() => faultMonitor.Arm();
+    public string? BeginRun(bool requireCutsceneSkip)
+    {
+        if (requireCutsceneSkip)
+        {
+            var reason = externalAutomationCoordinator.AcquireTextAdvanceCutsceneSkip();
+            if (reason != null)
+                return $"Workshop assembly needs TextAdvance to skip the phase cutscenes, but {reason}";
+        }
 
-    public void EndRun() => faultMonitor.Disarm();
+        cutsceneSkipRequired = requireCutsceneSkip;
+        faultMonitor.Arm();
+        return null;
+    }
+
+    public void EndRun()
+    {
+        faultMonitor.Disarm();
+        cutsceneSkipRequired = false;
+        externalAutomationCoordinator.ReleaseTextAdvanceCutsceneSkip();
+    }
 
     public string? PollNativeFault() => faultMonitor.Poll()?.Describe();
 

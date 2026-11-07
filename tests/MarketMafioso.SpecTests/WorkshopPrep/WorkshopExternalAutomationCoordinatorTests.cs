@@ -152,6 +152,91 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
         Assert.True(pandora.Enabled);
     }
 
+    [Fact]
+    public void Cutscene_skip_takes_TextAdvance_control_for_cutscenes_only()
+    {
+        var textAdvance = new FakeTextAdvanceControl();
+        using var coordinator = new ExternalAutomationCoordinator(
+            new FakePluginDataStore([]), TestPluginLog.Create(), textAdvanceControl: textAdvance);
+
+        Assert.Null(coordinator.AcquireTextAdvanceCutsceneSkip());
+
+        var (requester, config) = Assert.Single(textAdvance.Enables);
+        Assert.Equal("MarketMafioso", requester);
+        Assert.True(config.EnableCutsceneEsc);
+        Assert.True(config.EnableCutsceneSkipConfirm);
+        // Everything else is forced off so TextAdvance never competes with MMF's
+        // own request hand-ins or talks through workshop menus.
+        Assert.False(config.EnableRequestHandin);
+        Assert.False(config.EnableRequestFill);
+        Assert.False(config.EnableTalkSkip);
+        Assert.False(config.EnableQuestAccept);
+        Assert.False(config.EnableQuestComplete);
+        Assert.False(config.EnableRewardPick);
+        Assert.False(config.EnableAutoInteract);
+    }
+
+    [Fact]
+    public void Cutscene_skip_is_released_once_and_on_dispose()
+    {
+        var textAdvance = new FakeTextAdvanceControl();
+        var coordinator = new ExternalAutomationCoordinator(
+            new FakePluginDataStore([]), TestPluginLog.Create(), textAdvanceControl: textAdvance);
+
+        coordinator.ReleaseTextAdvanceCutsceneSkip();
+        Assert.Empty(textAdvance.Disables);
+
+        coordinator.AcquireTextAdvanceCutsceneSkip();
+        coordinator.AcquireTextAdvanceCutsceneSkip();
+        coordinator.ReleaseTextAdvanceCutsceneSkip();
+        coordinator.ReleaseTextAdvanceCutsceneSkip();
+        Assert.Equal(new[] { "MarketMafioso" }, textAdvance.Disables);
+
+        coordinator.AcquireTextAdvanceCutsceneSkip();
+        coordinator.Dispose();
+        Assert.Equal(2, textAdvance.Disables.Count);
+    }
+
+    [Fact]
+    public void Cutscene_skip_explains_when_TextAdvance_is_missing_or_busy()
+    {
+        var missing = new FakeTextAdvanceControl { Throw = true };
+        using var withoutTextAdvance = new ExternalAutomationCoordinator(
+            new FakePluginDataStore([]), TestPluginLog.Create(), textAdvanceControl: missing);
+        Assert.Contains("not loaded", withoutTextAdvance.AcquireTextAdvanceCutsceneSkip());
+        withoutTextAdvance.ReleaseTextAdvanceCutsceneSkip();
+        Assert.Empty(missing.Disables);
+
+        var busy = new FakeTextAdvanceControl { Grant = false };
+        using var withBusyTextAdvance = new ExternalAutomationCoordinator(
+            new FakePluginDataStore([]), TestPluginLog.Create(), textAdvanceControl: busy);
+        Assert.Contains("another plugin", withBusyTextAdvance.AcquireTextAdvanceCutsceneSkip());
+        withBusyTextAdvance.ReleaseTextAdvanceCutsceneSkip();
+        Assert.Empty(busy.Disables);
+    }
+
+    private sealed class FakeTextAdvanceControl : ITextAdvanceExternalControl
+    {
+        public bool Grant { get; init; } = true;
+        public bool Throw { get; init; }
+        public List<(string Requester, TextAdvanceExternalTerritoryConfig Config)> Enables { get; } = [];
+        public List<string> Disables { get; } = [];
+
+        public bool Enable(string requester, TextAdvanceExternalTerritoryConfig config)
+        {
+            if (Throw)
+                throw new InvalidOperationException("IPC not ready.");
+            Enables.Add((requester, config));
+            return Grant;
+        }
+
+        public bool Disable(string requester)
+        {
+            Disables.Add(requester);
+            return true;
+        }
+    }
+
     private sealed class FakePluginDataStore(
         HashSet<string> stopRequests,
         string expectedKey = "TextAdvance.StopRequests") : IPluginDataStore

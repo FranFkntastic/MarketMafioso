@@ -29,9 +29,12 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
 
     string DescribeUiState();
 
-    // Arms the native-crash fuse for the duration of a run.
-    void BeginRun();
+    // Arms the native-crash fuse for the duration of a run and, when asked, takes
+    // TextAdvance control so phase cutscenes are skipped. Returns why the run
+    // cannot begin (nothing is armed or held then), or null.
+    string? BeginRun(bool requireCutsceneSkip);
 
+    // Disarms the fuse and releases TextAdvance.
     void EndRun();
 
     // Non-null when the game crashed inside a UI handler since the last poll.

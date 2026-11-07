@@ -105,6 +105,15 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return new(false, blocker);
         }
 
+        // Inspection never contributes, so it never hits a phase cutscene.
+        var beginBlocker = uiAutomation.BeginRun(requireCutsceneSkip: !inspect);
+        if (beginBlocker != null)
+        {
+            log.Warning("[MarketMafioso] Workshop assembly refused to start. {Reason}", beginBlocker);
+            Progress = BuildProgress(WorkshopAssemblyRunnerState.Failed, beginBlocker);
+            return new(false, beginBlocker);
+        }
+
         // Always on: the runs that wedge the character are never the ones somebody
         // remembered to start with diagnostics. Old logs are pruned instead.
         diagnostics = CreateDiagnostics();
@@ -129,7 +138,6 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         wrapUpMessage = null;
         actionGuard.Reset();
         uiAutomation.ResetState();
-        uiAutomation.BeginRun();
         SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, "Waiting for fabrication station UI.");
         diagnostics.Record(
             "plan",
@@ -166,6 +174,13 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         if (!IsPaused)
             return new(false, "Workshop assembly is not paused.");
 
+        var blocker = uiAutomation.BeginRun(requireCutsceneSkip: !inspectOnly);
+        if (blocker != null)
+        {
+            log.Warning("[MarketMafioso] Workshop assembly stayed paused. {Reason}", blocker);
+            return new(false, blocker);
+        }
+
         var resumeState = stateBeforePause == WorkshopAssemblyRunnerState.Paused ||
             stateBeforePause == WorkshopAssemblyRunnerState.Idle
             ? WorkshopAssemblyRunnerState.WaitingForFabricationStation
@@ -173,7 +188,6 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
         SetState(resumeState, "Workshop assembly resumed.");
         diagnostics.Record("resumed", "Workshop assembly resumed by user.");
-        uiAutomation.BeginRun();
         framework.Update += OnFrameworkUpdate;
         log.Information("[MarketMafioso] Native workshop assembly resumed by user.");
         return new(true, "Workshop assembly resumed.");

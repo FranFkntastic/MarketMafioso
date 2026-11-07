@@ -39,8 +39,57 @@ internal sealed class DalamudPandoraFeatureControl(IDalamudPluginInterface plugi
         setFeatureEnabled.InvokeAction(internalFeatureName, enabled);
 }
 
+// Mirror of TextAdvance's ExternalTerritoryConfig; Dalamud IPC converts it by field
+// name. true/false forces a feature while MMF holds control, null keeps the user's.
+internal sealed class TextAdvanceExternalTerritoryConfig
+{
+    public bool? EnableQuestAccept;
+    public bool? EnableQuestComplete;
+    public bool? EnableRewardPick;
+    public bool? EnableRequestHandin;
+    public bool? EnableCutsceneEsc;
+    public bool? EnableCutsceneSkipConfirm;
+    public bool? EnableTalkSkip;
+    public bool? EnableRequestFill;
+    public bool? EnableAutoInteract;
+}
+
+internal interface ITextAdvanceExternalControl
+{
+    bool Enable(string requester, TextAdvanceExternalTerritoryConfig config);
+
+    bool Disable(string requester);
+}
+
+internal sealed class DalamudTextAdvanceExternalControl(IDalamudPluginInterface pluginInterface) : ITextAdvanceExternalControl
+{
+    private readonly ICallGateSubscriber<string, TextAdvanceExternalTerritoryConfig, bool> enable =
+        pluginInterface.GetIpcSubscriber<string, TextAdvanceExternalTerritoryConfig, bool>("TextAdvance.EnableExternalControl");
+    private readonly ICallGateSubscriber<string, bool> disable =
+        pluginInterface.GetIpcSubscriber<string, bool>("TextAdvance.DisableExternalControl");
+
+    public bool Enable(string requester, TextAdvanceExternalTerritoryConfig config) => enable.InvokeFunc(requester, config);
+
+    public bool Disable(string requester) => disable.InvokeFunc(requester);
+}
+
 public sealed class ExternalAutomationCoordinator : IDisposable
 {
+    // TextAdvance skips the cutscene (Esc, then confirms the skip prompt) and does
+    // nothing else, whatever the user's own TextAdvance territory setup says.
+    internal static TextAdvanceExternalTerritoryConfig CutsceneSkipOnly => new()
+    {
+        EnableCutsceneEsc = true,
+        EnableCutsceneSkipConfirm = true,
+        EnableQuestAccept = false,
+        EnableQuestComplete = false,
+        EnableRewardPick = false,
+        EnableRequestHandin = false,
+        EnableRequestFill = false,
+        EnableTalkSkip = false,
+        EnableAutoInteract = false,
+    };
+
     private const string TextAdvanceStopRequests = "TextAdvance.StopRequests";
     private const string YesAlreadyStopRequests = "YesAlready.StopRequests";
     private const string DropboxStopRequests = "Dropbox.StopRequests";
@@ -50,6 +99,8 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     private readonly IPluginDataStore pluginDataStore;
     private readonly IPluginLog log;
     private readonly IPandoraFeatureControl? pandoraFeatureControl;
+    private readonly ITextAdvanceExternalControl? textAdvanceControl;
+    private bool textAdvanceCutsceneSkipHeld;
     private bool textAdvanceSuppressed;
     private bool tradeAutoConfirmSuppressed;
     private bool retainTradeSuppressionOnDispose;
@@ -59,11 +110,61 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     internal ExternalAutomationCoordinator(
         IPluginDataStore pluginDataStore,
         IPluginLog log,
-        IPandoraFeatureControl? pandoraFeatureControl = null)
+        IPandoraFeatureControl? pandoraFeatureControl = null,
+        ITextAdvanceExternalControl? textAdvanceControl = null)
     {
         this.pluginDataStore = pluginDataStore;
         this.log = log;
         this.pandoraFeatureControl = pandoraFeatureControl;
+        this.textAdvanceControl = textAdvanceControl;
+    }
+
+    // Takes TextAdvance external control so it skips workshop cutscenes. Safe to
+    // call again while held (re-asserts control). Returns why it could not, or null.
+    public string? AcquireTextAdvanceCutsceneSkip()
+    {
+        if (textAdvanceControl == null)
+            return "TextAdvance control is not available in this build.";
+
+        bool granted;
+        try
+        {
+            granted = textAdvanceControl.Enable(StopRequestOwner, CutsceneSkipOnly);
+        }
+        catch (Exception ex)
+        {
+            textAdvanceCutsceneSkipHeld = false;
+            log.Verbose(ex, "[MarketMafioso] TextAdvance external control IPC is unavailable.");
+            return "TextAdvance is not loaded. Install or enable it in the plugin installer.";
+        }
+
+        if (!granted)
+        {
+            textAdvanceCutsceneSkipHeld = false;
+            return "another plugin is controlling TextAdvance right now. Let it finish first.";
+        }
+
+        if (!textAdvanceCutsceneSkipHeld)
+            log.Debug("[MarketMafioso] Took TextAdvance external control to skip workshop cutscenes.");
+        textAdvanceCutsceneSkipHeld = true;
+        return null;
+    }
+
+    public void ReleaseTextAdvanceCutsceneSkip()
+    {
+        if (!textAdvanceCutsceneSkipHeld || textAdvanceControl == null)
+            return;
+
+        textAdvanceCutsceneSkipHeld = false;
+        try
+        {
+            if (textAdvanceControl.Disable(StopRequestOwner))
+                log.Debug("[MarketMafioso] Released TextAdvance external control.");
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] Could not release TextAdvance external control.");
+        }
     }
 
     public void SuppressTextAdvance()
@@ -190,6 +291,7 @@ public sealed class ExternalAutomationCoordinator : IDisposable
 
     public void Dispose()
     {
+        ReleaseTextAdvanceCutsceneSkip();
         RestoreTextAdvance();
         RestoreWorkshopRequestAutomation();
         if (!retainTradeSuppressionOnDispose)
