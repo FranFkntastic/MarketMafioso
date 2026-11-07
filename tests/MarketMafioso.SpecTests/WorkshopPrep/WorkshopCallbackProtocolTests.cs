@@ -1,4 +1,5 @@
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using MarketMafioso.Automation.Runtime;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.SpecTests.WorkshopPrep;
@@ -43,12 +44,43 @@ public sealed class WorkshopCallbackProtocolTests
         Assert.Throws<InvalidOperationException>(() => WorkshopCallbackProtocol.RequireOwner(captured, current, addonId, ownerId, receiver, expected));
 
     [Fact]
+    public void DalamudLifecycleWrapperIsUnwrappedButOtherDetoursAreStillRejected()
+    {
+        const int native = 0x2000, lifecycleWrapper = 0x7000, foreignDetour = 0x8000;
+        // Dalamud's registered lifecycle table: the original receiver is what counts.
+        WorkshopCallbackProtocol.RequireOwner(0x1000, 0x1000, 7, 7,
+            WorkshopCallbackProtocol.ResolveAgentReceiver(lifecycleWrapper, native), native);
+        // Unwrapped table: unchanged behavior.
+        WorkshopCallbackProtocol.RequireOwner(0x1000, 0x1000, 7, 7,
+            WorkshopCallbackProtocol.ResolveAgentReceiver(native, 0), native);
+        // A detour Dalamud did not register is not unwrapped.
+        Assert.Throws<InvalidOperationException>(() => WorkshopCallbackProtocol.RequireOwner(0x1000, 0x1000, 7, 7,
+            WorkshopCallbackProtocol.ResolveAgentReceiver(foreignDetour, 0), native));
+        // Dalamud wrapping a table whose original handler changed is still refused.
+        Assert.Throws<InvalidOperationException>(() => WorkshopCallbackProtocol.RequireOwner(0x1000, 0x1000, 7, 7,
+            WorkshopCallbackProtocol.ResolveAgentReceiver(lifecycleWrapper, foreignDetour), native));
+    }
+
+    [Fact]
     public void SwappedRecipeCommandRoutesAreRejected() =>
         Assert.Throws<InvalidOperationException>(() => WorkshopNativeCallbackCapability.RequireRecipeRoutes(0x1000, 0x10ef, 0x1251, 0x1065, 0x1251, 0x1065));
 
     [Fact]
     public void ArgumentContractFromAnUnrelatedFunctionIsRejected() =>
         Assert.Throws<InvalidOperationException>(() => WorkshopNativeCallbackCapability.RequireWithin(0x1000, 0x1800, 0x600));
+
+    [Fact]
+    public void RecurringJumpTableIdiomResolvesOnlyInsideTheDispatchHandler()
+    {
+        // Mirrors the live client: the switch idiom matches eight times, once at dispatch+0x45.
+        nint dispatch = 0x579210;
+        nint[] matches = [0x165a0c, 0x579255, 0xbfb3b4, 0xf7a5ce, 0x10acc69, 0x10ae1c3, 0x1a6ec2c, 0x1d4d14b];
+        Assert.Equal(dispatch + 0x45, NativeCapability.ResolveUnique(
+            WorkshopNativeCallbackCapability.MatchesWithin(matches, dispatch, 0x100), "switch"));
+        Assert.ThrowsAny<Exception>(() => NativeCapability.ResolveUnique(
+            WorkshopNativeCallbackCapability.MatchesWithin([0x1000, dispatch + 0x45, dispatch + 0x80], dispatch, 0x100), "switch"));
+        Assert.Empty(WorkshopNativeCallbackCapability.MatchesWithin(matches, 0, 0x100));
+    }
 
     [Fact]
     public void ChangedCategoryHandlerIsRejected() =>

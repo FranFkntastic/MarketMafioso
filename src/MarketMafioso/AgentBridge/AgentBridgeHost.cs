@@ -83,14 +83,12 @@ public sealed class AgentBridgeHost : IDisposable
 
     public void Tick()
     {
-#if DEBUG
+        // Opt-in at runtime (default off) so Release deployments stay verifiable
+        // and drivable; the pipe is current-user only and token-authenticated.
         if (config.EnableAgentBridge)
             host.Start();
         else
             host.Stop();
-#else
-        host.Stop();
-#endif
     }
 
     public void Dispose() => host.Dispose();
