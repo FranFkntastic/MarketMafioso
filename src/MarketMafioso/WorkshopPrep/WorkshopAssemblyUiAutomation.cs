@@ -158,6 +158,9 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             return new(false, $"Selected workshop category/type for {entry.ProjectName}.", ActionTaken: true);
         }
 
+        if (uiDriver.IsCraftingLogVisible)
+            return new(false, $"Waiting for the workshop crafting log to load before opening {entry.ProjectName}. {DescribeUiState()}");
+
         if (uiDriver.TrySelectString(text => text == "View company crafting log."))
             return new(false, "Selected company crafting log.", ActionTaken: true);
 

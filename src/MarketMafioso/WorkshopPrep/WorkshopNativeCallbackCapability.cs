@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.Runtime;
@@ -39,7 +40,11 @@ internal sealed class WorkshopNativeCallbackCapability(ISigScanner scanner)
         var projectRoute = NativeCapability.ResolveUnique(scanner, ProjectRouteSignature, "Workshop project command route");
         RequireWithin(dispatch, project, 0x600);
         RequireWithin(dispatch, category, 0x600);
-        var branch = NativeCapability.ResolveUnique(scanner, RecipeSwitchSignature, "Workshop operation dispatch table");
+        // The jump-table idiom is compiler boilerplate that recurs across the
+        // binary, so uniqueness is only meaningful inside the dispatch handler.
+        var branch = NativeCapability.ResolveUnique(
+            MatchesWithin(scanner.ScanAllText(RecipeSwitchSignature), dispatch, 0x100),
+            "Workshop operation dispatch table");
         RequireWithin(dispatch, branch, 0x100);
         var imageBase = branch + 18 + Marshal.ReadInt32(branch + 14);
         if (imageBase != scanner.Module.BaseAddress)
@@ -80,6 +85,15 @@ internal sealed class WorkshopNativeCallbackCapability(ISigScanner scanner)
         if (commandOneTarget != projectRoute || commandTwoTarget != categoryArgument || commandOneTarget > projectArgument ||
             projectArgument - commandOneTarget > 0x160)
             throw new InvalidOperationException("Workshop recipe commands no longer select the validated project/category argument paths.");
+    }
+
+    internal static IReadOnlyList<nint> MatchesWithin(IReadOnlyList<nint> matches, nint entry, int length)
+    {
+        var scoped = new List<nint>();
+        foreach (var match in matches)
+            if (entry != 0 && match >= entry && match - entry < length)
+                scoped.Add(match);
+        return scoped;
     }
 
     internal static void RequireWithin(nint entry, nint instruction, int length)

@@ -132,9 +132,37 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     public unsafe WorkshopCraftingLogSnapshot? ReadCraftingLog()
     {
         var addon = GetCraftingLogAddon();
-        return addon == null
-            ? null
-            : new WorkshopCraftingLogSnapshot((nint)addon, ReadVisibleCraftingLogItems(addon));
+        if (addon == null)
+            return null;
+
+        // The addon reports ready a frame or two before its recipe values are
+        // populated. Treat a mismatched layout as "still loading" here; the
+        // callback paths re-validate strictly before anything is dispatched.
+        try
+        {
+            return new WorkshopCraftingLogSnapshot((nint)addon, ReadVisibleCraftingLogItems(addon));
+        }
+        catch (InvalidOperationException)
+        {
+            Diagnostics.Record(
+                "crafting-log-loading",
+                "Workshop crafting log values do not match the recipe schema yet.",
+                new Dictionary<string, string?> { ["layout"] = DescribeCraftingLogLayout(addon) });
+            return null;
+        }
+    }
+
+    public bool IsCraftingLogVisible => IsAddonReady(CompanyCraftRecipeNoteBookAddon);
+
+    private static unsafe string DescribeCraftingLogLayout(AtkUnitBase* addon)
+    {
+        var count = addon->AtkValuesCount;
+        if (addon->AtkValues == null)
+            return $"count={count} values=null";
+        var types = new List<string>();
+        for (var index = 13; index < Math.Min((int)count, 22); index++)
+            types.Add($"{index}:{addon->AtkValues[index].Type}");
+        return $"count={count} {string.Join(' ', types)}";
     }
 
     public unsafe void SelectCraftCategory(WorkshopCraftingLogSnapshot craftingLog, WorkshopAssemblyQueueEntry entry)
