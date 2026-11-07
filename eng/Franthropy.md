@@ -1,5 +1,15 @@
 # Franthropy build dependency
 
+Outside contributors can clone https://github.com/FranFkntastic/Franthropy,
+check out the full commit after `0.1.0-commit.` in
+`eng/Franthropy.Version.props`, and build with
+`dotnet build -c Release -p:FranthropySource=Local -p:FranthropyRoot=<absolute-source-root>`.
+Pass the same properties to tests. This source route requires no private feed.
+
+For `docker build`, place that pinned checkout in `franthropy/` under the
+build context. The Dockerfile uses explicit source mode; hosted image builds
+check out this dependency automatically.
+
 The exact package pin is owned by `eng/Franthropy.Version.props`.
 Populate the private local feed before restoring. Its default is
 `$(LOCALAPPDATA)/Franthropy/packages`; override with
