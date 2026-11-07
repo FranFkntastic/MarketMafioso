@@ -40,7 +40,8 @@ public sealed record WorkshopAssemblyQueueEntry(
     IReadOnlyList<WorkshopMaterialRequirement> Materials,
     int EstimatedContributionSteps,
     int EstimatedPhaseCount,
-    uint DraftId = 0);
+    uint DraftId = WorkshopDraftUnlocks.NoDraft,
+    string? DraftName = null);
 
 public sealed record WorkshopAssemblyPlan(
     IReadOnlyList<WorkshopAssemblyQueueEntry> Entries,
@@ -65,7 +66,8 @@ public sealed record WorkshopAssemblyActionResult(
     bool IsContributionConfirmed = false,
     bool HasPendingMaterialRequest = false,
     uint? ActiveMaterialItemId = null,
-    uint? ActiveMaterialStepsComplete = null);
+    uint? ActiveMaterialStepsComplete = null,
+    bool IsProjectUnavailable = false);
 
 public sealed record WorkshopAssemblyPreflightResult(
     bool CanStart,

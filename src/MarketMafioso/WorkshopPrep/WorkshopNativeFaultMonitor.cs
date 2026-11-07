@@ -14,7 +14,12 @@ internal sealed record WorkshopNativeFault(int FaultCount, string? LastOperation
     public string Describe()
     {
         var events = AgentEvents.Count == 0 ? "none recorded" : string.Join(" | ", AgentEvents);
-        return $"The game crashed inside a UI event handler {FaultCount} time(s) (Dalamud swallowed it) right after MMF dispatched '{LastOperation ?? "nothing"}'. " +
+        // Opening a category the FC has no schematic for is the one crash with a
+        // known, common cause: say so before the technical detail.
+        var hint = LastOperation?.StartsWith("crafting-log.category", StringComparison.Ordinal) == true
+            ? "The Free Company probably hasn't unlocked the schematic for this project, so the game's crafting log choked on its category. "
+            : string.Empty;
+        return hint + $"The game crashed inside a UI event handler {FaultCount} time(s) (Dalamud swallowed it) right after MMF dispatched '{LastOperation ?? "nothing"}'. " +
                $"Workshop assembly halted on the first crash to protect the character. Agent events during MMF dispatch: {events}";
     }
 }

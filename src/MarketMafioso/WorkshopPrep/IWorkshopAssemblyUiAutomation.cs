@@ -48,4 +48,8 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
     string WriteCraftingLogInspection(System.Collections.Generic.IReadOnlyList<WorkshopAssemblyQueueEntry> entries);
 
     bool CloseCraftingLog();
+
+    // End-of-run tidy-up: answers "Nothing." on the idle fabrication station menu.
+    // ActionTaken = dismissed it; Success = no workshop window left to close.
+    WorkshopAssemblyActionResult TryDismissStationMenu();
 }

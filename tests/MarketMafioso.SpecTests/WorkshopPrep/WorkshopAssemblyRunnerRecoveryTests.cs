@@ -256,6 +256,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
         Assert.Contains("crashed inside a UI event handler", runner.Progress.Message);
+        Assert.Contains("While opening Test project:", runner.Progress.Message);
         Assert.Single(ui.OpenProjectResults);
         Assert.True(ui.EndRunCount >= 1);
         Assert.Equal(1, ui.CaptureForensicsCount);
@@ -415,6 +416,73 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         Assert.Single(ui.OpenProjectResults);
     }
 
+    [Fact]
+    public void Locked_projects_are_skipped_and_the_rest_of_the_plan_runs()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(false, "Skipping Shark-class Bow: locked.", IsProjectUnavailable: true));
+        ui.OpenProjectResults.Enqueue(new(true, "Project is open."));
+        ui.SubmitMaterialResults.Enqueue(new(true, "Retrieved.", ActionTaken: true, IsProjectComplete: true));
+        ui.OpenProjectResults.Enqueue(new(false, "Skipping Shark-class Stern: locked.", IsProjectUnavailable: true));
+        var plan = new WorkshopAssemblyPlan(
+            [
+                new WorkshopAssemblyQueueEntry(530, 1, 1, 18, "Shark-class Bow", 1, [], 1, 1, 24, "submersible prototype I"),
+                new WorkshopAssemblyQueueEntry(10, 2, 0, 1, "Wheel Stand", 1, [], 1, 1),
+                new WorkshopAssemblyQueueEntry(529, 3, 1, 17, "Shark-class Stern", 2, [], 1, 1, 24, "submersible prototype I"),
+            ],
+            []);
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(plan);
+        for (var index = 0; index < 12 && runner.IsRunning; index++)
+        {
+            frameworkDriver.Tick(framework);
+            clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
+        }
+
+        Assert.Equal(WorkshopAssemblyRunnerState.Complete, runner.Progress.State);
+        Assert.Contains("Skipped 2 project(s)", runner.Progress.Message);
+        Assert.Contains("Shark-class Bow", runner.Progress.Message);
+        Assert.Contains("Shark-class Stern x2", runner.Progress.Message);
+        Assert.Equal(1, runner.Progress.CompletedProjects);
+        Assert.Equal(1, runner.Progress.TotalProjects);
+        Assert.Empty(ui.OpenProjectResults);
+        Assert.Equal(1, ui.CloseCraftingLogCount);
+        Assert.Equal(1, ui.DismissStationMenuCount);
+    }
+
+    [Fact]
+    public void Plan_with_only_locked_projects_assembles_nothing_and_closes_the_log()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+        };
+        ui.OpenProjectResults.Enqueue(new(false, "Skipping Test project: locked.", IsProjectUnavailable: true));
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        for (var index = 0; index < 8 && runner.IsRunning; index++)
+        {
+            frameworkDriver.Tick(framework);
+            clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
+        }
+
+        Assert.Equal(WorkshopAssemblyRunnerState.Complete, runner.Progress.State);
+        Assert.StartsWith("Nothing was assembled", runner.Progress.Message);
+        Assert.Equal(1, ui.DismissStationMenuCount);
+        Assert.Equal(0, runner.Progress.TotalProjects);
+        Assert.Equal(1, ui.CloseCraftingLogCount);
+        Assert.True(ui.EndRunCount >= 1);
+    }
+
     private static WorkshopAssemblyRunner CreateRunner(
         IFramework framework,
         IWorkshopAssemblyUiAutomation ui,
@@ -518,6 +586,14 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         {
             CloseCraftingLogCount++;
             return true;
+        }
+
+        public int DismissStationMenuCount { get; private set; }
+
+        public WorkshopAssemblyActionResult TryDismissStationMenu()
+        {
+            DismissStationMenuCount++;
+            return new(true, "Closed the fabrication station menu.", ActionTaken: true);
         }
 
         public void Dispose() { }

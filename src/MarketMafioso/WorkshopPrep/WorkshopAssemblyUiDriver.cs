@@ -177,6 +177,42 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         return WorkshopCraftingLogInspector.Describe(addon, agent);
     }
 
+    // The FC's unlocked schematics live at agent+0x38 (one bit per draft row);
+    // the addon mirrors the low dword in value 2. Both must agree or the read is
+    // discarded: a wrong "locked" answer would silently skip a craftable project.
+    public unsafe WorkshopDraftUnlocks? ReadDraftUnlocks(WorkshopCraftingLogSnapshot craftingLog)
+    {
+        var addon = GetCraftingLogAddon();
+        if (addon == null || (nint)addon != craftingLog.AddonAddress || addon->AtkValues == null || addon->AtkValuesCount <= 2)
+            return null;
+
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.CompanyCraftRecipeNoteBook);
+        if (agent == null || !agent->IsAgentActive())
+            return null;
+
+        var mirror = addon->AtkValues[2];
+        uint? lowWord = mirror.Type == AtkValueType.UInt ? mirror.UInt : null;
+        var agentMask = *(ulong*)((byte*)agent + DraftUnlockMaskOffset);
+        var unlocks = WorkshopDraftUnlocks.TryCreate(agentMask, lowWord);
+        if (unlocks == null)
+        {
+            Diagnostics.Record(
+                "draft-unlocks-unverified",
+                "Could not verify the Free Company's unlocked schematics.",
+                new Dictionary<string, string?>
+                {
+                    ["agentMask"] = agentMask.ToString("X16"),
+                    ["addonValue2Type"] = mirror.Type.ToString(),
+                    ["addonValue2"] = lowWord?.ToString("X8"),
+                });
+        }
+
+        return unlocks;
+    }
+
+    private const int DraftUnlockMaskOffset = 0x38;
+
     public unsafe bool CloseCraftingLog()
     {
         var addon = gameGui.GetAddonByName<AtkUnitBase>(CompanyCraftRecipeNoteBookAddon, 1);
@@ -465,6 +501,31 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             });
         log.Warning("[MarketMafioso] {Message}", message);
         return new(message, phase, requestPresent, requestReady, contextMenuPresent, contextMenuReady);
+    }
+
+    public unsafe bool IsSelectStringVisible
+    {
+        get
+        {
+            var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
+            return addon != null && IsAddonReady(&addon->AtkUnitBase);
+        }
+    }
+
+    public unsafe bool TryDismissIdleStationMenu()
+    {
+        var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
+        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
+            return false;
+
+        var popup = addon->PopupMenu.PopupMenu;
+        var entries = new List<string>();
+        for (var index = 0; index < popup.EntryCount; index++)
+            entries.Add(popup.EntryNames[index].ToString());
+        if (!WorkshopAssemblyPromptPolicy.IsIdleStationMenu(entries))
+            return false;
+
+        return TrySelectString(text => text == WorkshopAssemblyPromptPolicy.NothingEntry);
     }
 
     public unsafe bool TrySelectString(Predicate<string> predicate)

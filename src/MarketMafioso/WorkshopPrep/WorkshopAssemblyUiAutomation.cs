@@ -18,6 +18,10 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     private WorkshopAssemblyDiagnostics diagnostics = WorkshopAssemblyDiagnostics.Disabled;
     private uint? pendingContributionItemId;
     private WorkshopAssemblyPendingConfirmationKind pendingConfirmationKind;
+    private uint? categorySelectedForItemId;
+    private long categorySelectedAtMs;
+    private int categorySelectAttempts;
+    private const int MaxCategorySelectAttempts = 2;
 
     public WorkshopAssemblyUiAutomation(
         IGameGui gameGui,
@@ -59,6 +63,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     {
         pendingContributionItemId = null;
         pendingConfirmationKind = WorkshopAssemblyPendingConfirmationKind.None;
+        categorySelectedForItemId = null;
         uiDriver.ResetRequestState();
     }
 
@@ -137,6 +142,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         {
             if (craftingLog.VisibleItems.Any(x => x.WorkshopItemId == entry.WorkshopItemId))
             {
+                categorySelectedForItemId = null;
                 uiDriver.SelectCraft(craftingLog, entry);
                 Diagnostics.Record(
                     "select-project",
@@ -153,7 +159,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             if (entry.CategoryId == 0 || entry.TypeId == 0)
                 return new(false, $"Workshop project {entry.ProjectName} cannot be selected because category/type data is missing. {DescribeUiState()}");
 
+            var unavailable = CheckProjectAvailable(craftingLog, entry);
+            if (unavailable != null)
+                return unavailable;
+
             uiDriver.SelectCraftCategory(craftingLog, entry);
+            categorySelectedForItemId = entry.WorkshopItemId;
+            categorySelectedAtMs = Environment.TickCount64;
+            categorySelectAttempts++;
             Diagnostics.Record(
                 "select-category",
                 "Selected workshop category/type.",
@@ -169,10 +182,80 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         if (uiDriver.IsCraftingLogVisible)
             return new(false, $"Waiting for the workshop crafting log to load before opening {entry.ProjectName}. {DescribeUiState()}");
 
-        if (uiDriver.TrySelectString(text => text == "View company crafting log."))
+        if (uiDriver.TrySelectString(text => text == WorkshopAssemblyPromptPolicy.ViewCraftingLogEntry))
             return new(false, "Selected company crafting log.", ActionTaken: true);
 
         return new(false, $"Workshop project {entry.ProjectName} cannot be opened. {DescribeUiState()}");
+    }
+
+    // Selecting a category whose schematic the FC lacks crashes the game's
+    // crafting log handler, so locked projects are refused before any callback.
+    // Returns null when the category may be selected now.
+    private WorkshopAssemblyActionResult? CheckProjectAvailable(
+        WorkshopCraftingLogSnapshot craftingLog,
+        WorkshopAssemblyQueueEntry entry)
+    {
+        var draftName = string.IsNullOrWhiteSpace(entry.DraftName) ? $"draft {entry.DraftId}" : entry.DraftName;
+        if (categorySelectedForItemId == entry.WorkshopItemId)
+        {
+            if (Environment.TickCount64 - categorySelectedAtMs < (long)WorkshopAssemblyTiming.CategoryListingTimeout.TotalMilliseconds)
+                return new(false, $"Waiting for {entry.ProjectName} to appear in the company crafting log.");
+
+            // One retry covers a select the game dropped; after that, re-selecting
+            // would only loop until the repeat guard halts the whole run.
+            if (categorySelectAttempts >= MaxCategorySelectAttempts)
+            {
+                categorySelectedForItemId = null;
+                Diagnostics.Record(
+                    "project-not-listed",
+                    "Workshop project is not listed after selecting its category.",
+                    new Dictionary<string, string?>
+                    {
+                        ["project"] = entry.ProjectName,
+                        ["workshopItemId"] = entry.WorkshopItemId.ToString(),
+                        ["attempts"] = categorySelectAttempts.ToString(),
+                        ["visibleItems"] = string.Join(",", craftingLog.VisibleItems.Select(x => x.WorkshopItemId)),
+                    });
+                return new(
+                    false,
+                    $"Skipping {entry.ProjectName}: it isn't listed in the company crafting log after selecting its category (the Free Company may not have the {draftName} schematic).",
+                    IsProjectUnavailable: true);
+            }
+        }
+        else
+        {
+            categorySelectAttempts = 0;
+        }
+
+        if (entry.DraftId == WorkshopDraftUnlocks.NoDraft)
+            return null;
+
+        var unlocks = uiDriver.ReadDraftUnlocks(craftingLog);
+        var unlocked = unlocks?.IsUnlocked(entry.DraftId);
+        Diagnostics.Record(
+            "draft-check",
+            unlocked switch
+            {
+                true => "The Free Company has unlocked this project's schematic.",
+                false => "The Free Company has not unlocked this project's schematic.",
+                null => "This project's schematic unlock could not be verified; proceeding under the crash guard.",
+            },
+            new Dictionary<string, string?>
+            {
+                ["project"] = entry.ProjectName,
+                ["draftId"] = entry.DraftId.ToString(),
+                ["draftName"] = entry.DraftName,
+                ["unlockMask"] = unlocks?.Mask.ToString("X16"),
+            });
+
+        if (unlocked != false)
+            return null;
+
+        categorySelectedForItemId = null;
+        return new(
+            false,
+            $"Skipping {entry.ProjectName}: the Free Company hasn't unlocked the {draftName} schematic.",
+            IsProjectUnavailable: true);
     }
 
     private WorkshopAssemblyActionResult? TrySelectActiveProjectAction(WorkshopAssemblyQueueEntry entry)
@@ -458,7 +541,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         if (uiDriver.IsCraftingLogVisible)
             return new(false, $"Waiting for the workshop crafting log to load. {DescribeUiState()}");
 
-        if (uiDriver.TrySelectString(text => text == "View company crafting log."))
+        if (uiDriver.TrySelectString(text => text == WorkshopAssemblyPromptPolicy.ViewCraftingLogEntry))
             return new(false, "Selected company crafting log.", ActionTaken: true);
 
         return new(false, $"Waiting for the workshop menu to offer the company crafting log. {DescribeUiState()}");
@@ -483,6 +566,17 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     }
 
     public bool CloseCraftingLog() => uiDriver.CloseCraftingLog();
+
+    public WorkshopAssemblyActionResult TryDismissStationMenu()
+    {
+        if (uiDriver.IsCraftingLogVisible)
+            return new(false, "Waiting for the company crafting log to close.");
+        if (uiDriver.TryDismissIdleStationMenu())
+            return new(true, "Closed the fabrication station menu.", ActionTaken: true);
+        return uiDriver.IsSelectStringVisible
+            ? new(false, "A workshop menu other than the idle station menu is open; leaving it alone.")
+            : new(true, "No workshop menu is open.");
+    }
 
     public string DescribeUiState()
     {

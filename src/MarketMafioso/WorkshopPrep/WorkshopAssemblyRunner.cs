@@ -13,6 +13,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private static readonly TimeSpan PostMortemDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan NativeFaultPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan CraftingLogSettleDelay = TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan WrapUpMinimumWait = TimeSpan.FromMilliseconds(600);
+    private static readonly TimeSpan WrapUpTimeout = TimeSpan.FromSeconds(3);
 
     private readonly IFramework framework;
     private readonly IPluginLog log;
@@ -37,6 +39,10 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private DateTimeOffset? postMortemAt;
     private string? postMortemReason;
     private bool inspectOnly;
+    private readonly List<string> skippedProjects = new();
+    private int skippedQuantity;
+    private string? wrapUpMessage;
+    private DateTimeOffset wrapUpStartedAt;
     private DateTimeOffset? inspectionReadyAt;
 
     public WorkshopAssemblyRunner(
@@ -116,6 +122,9 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         lastNativeFaultPollAt = DateTimeOffset.MinValue;
         inspectOnly = inspect;
         inspectionReadyAt = null;
+        skippedProjects.Clear();
+        skippedQuantity = 0;
+        wrapUpMessage = null;
         actionGuard.Reset();
         uiAutomation.ResetState();
         uiAutomation.BeginRun();
@@ -209,7 +218,13 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             lastNativeFaultPollAt = Now;
             var fault = uiAutomation.PollNativeFault();
             if (fault != null)
-                throw new WorkshopAssemblyHaltException(fault);
+                throw new WorkshopAssemblyHaltException(DescribeFaultContext() + fault);
+        }
+
+        if (wrapUpMessage != null)
+        {
+            TickWrapUp();
+            return;
         }
 
         var cutsceneResult = uiAutomation.TrySkipCutscene();
@@ -316,6 +331,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return;
         }
 
+        if (result.IsProjectUnavailable)
+        {
+            SkipActiveEntry(entry, result.Message);
+            return;
+        }
+
         if (result.Success)
         {
             SetState(WorkshopAssemblyRunnerState.SubmittingMaterial, result.Message);
@@ -346,13 +367,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         }
 
         var path = uiAutomation.WriteCraftingLogInspection(activePlan.Entries);
-        uiAutomation.CloseCraftingLog();
-        framework.Update -= OnFrameworkUpdate;
-        uiAutomation.ResetState();
-        var message = $"Workshop crafting log inspected: {path}";
-        SetState(WorkshopAssemblyRunnerState.Complete, message);
-        log.Information("[MarketMafioso] {Message}", message);
-        RecordForensicsAndSchedulePostMortem("finished inspecting the crafting log");
+        BeginWrapUp($"Workshop crafting log inspected: {path}");
     }
 
     private void TickSubmittingMaterial(WorkshopAssemblyQueueEntry entry)
@@ -572,15 +587,97 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         SetState(WorkshopAssemblyRunnerState.OpeningProject, message);
     }
 
-    private void Complete()
+    // A project the Free Company cannot craft (usually a schematic it has not
+    // unlocked) is left out and the rest of the plan carries on.
+    private void SkipActiveEntry(WorkshopAssemblyQueueEntry entry, string message)
+    {
+        var remaining = Math.Max(0, entry.Quantity - activeEntryCompletedQuantity);
+        skippedProjects.Add(remaining == 1 ? entry.ProjectName : $"{entry.ProjectName} x{remaining}");
+        skippedQuantity += remaining;
+        diagnostics.Record("project-skipped", message, BuildActiveDetails(entry));
+        log.Warning("[MarketMafioso] {Message}", message);
+        actionGuard.NoteProgress();
+        activeEntryIndex++;
+        activeEntryCompletedQuantity = 0;
+        activeMaterialItemId = null;
+        stalledMaterialRequestRecoveryCount = 0;
+        if (activePlan != null && activeEntryIndex >= activePlan.Entries.Count)
+        {
+            Complete();
+            return;
+        }
+
+        stateStartedAt = Now;
+        actionGuard.EnterState();
+        Progress = BuildProgress(WorkshopAssemblyRunnerState.OpeningProject, message);
+    }
+
+    private void Complete() => BeginWrapUp(BuildCompletionMessage());
+
+    // Leave the character free to move: close the crafting log (a skipped last
+    // entry leaves it up), then answer "Nothing." on the idle station menu that
+    // reappears behind it. Never blocks completion for longer than the timeout.
+    private void BeginWrapUp(string message)
+    {
+        wrapUpMessage = message;
+        wrapUpStartedAt = Now;
+        if (uiAutomation.CloseCraftingLog())
+            continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
+        Progress = BuildProgress(Progress.State, "Closing the workshop menus.");
+    }
+
+    private void TickWrapUp()
+    {
+        var result = uiAutomation.TryDismissStationMenu();
+        if (result.ActionTaken)
+            diagnostics.Record("wrap-up", result.Message);
+
+        var settled = result.ActionTaken || (result.Success && Now - wrapUpStartedAt >= WrapUpMinimumWait);
+        if (!settled && Now - wrapUpStartedAt < WrapUpTimeout)
+            return;
+
+        if (!settled)
+            diagnostics.Record("wrap-up", $"Gave up tidying the workshop menus. {result.Message}");
+        FinishRun(wrapUpMessage ?? "Workshop assembly complete.");
+    }
+
+    private void FinishRun(string message)
     {
         framework.Update -= OnFrameworkUpdate;
-        uiAutomation.EndRun();
+        wrapUpMessage = null;
         uiAutomation.ResetState();
-        SetState(WorkshopAssemblyRunnerState.Complete, "Workshop assembly complete.");
-        diagnostics.Complete("Workshop assembly complete.");
+        SetState(WorkshopAssemblyRunnerState.Complete, message);
+        if (inspectOnly)
+        {
+            log.Information("[MarketMafioso] {Message}", message);
+            RecordForensicsAndSchedulePostMortem("finished inspecting the crafting log");
+            return;
+        }
+
+        uiAutomation.EndRun();
+        diagnostics.Complete(message);
         CloseDiagnostics();
-        log.Information("[MarketMafioso] Native workshop assembly complete.");
+        log.Information("[MarketMafioso] Native workshop assembly complete. {Message}", message);
+    }
+
+    private string BuildCompletionMessage()
+    {
+        if (skippedProjects.Count == 0)
+            return "Workshop assembly complete.";
+
+        var skipped = string.Join(", ", skippedProjects);
+        var assembled = (activePlan?.Entries.Sum(x => x.Quantity) ?? 0) - skippedQuantity;
+        return assembled <= 0
+            ? $"Nothing was assembled: the Free Company can't craft any queued project yet (usually a schematic it hasn't unlocked). Skipped: {skipped}."
+            : $"Workshop assembly complete. Skipped {skippedProjects.Count} project(s) the Free Company can't craft yet (usually a schematic it hasn't unlocked): {skipped}.";
+    }
+
+    private string DescribeFaultContext()
+    {
+        var entry = activePlan?.Entries.ElementAtOrDefault(activeEntryIndex);
+        return entry == null || inspectOnly || Progress.State != WorkshopAssemblyRunnerState.OpeningProject
+            ? string.Empty
+            : $"While opening {entry.ProjectName}: ";
     }
 
     private void Fail(string message, Exception ex)
@@ -754,8 +851,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var entry = activePlan?.Entries.ElementAtOrDefault(activeEntryIndex);
         var completedProjects = activePlan == null
             ? 0
-            : activePlan.Entries.Take(activeEntryIndex).Sum(x => x.Quantity) + activeEntryCompletedQuantity;
-        var totalProjects = activePlan?.Entries.Sum(x => x.Quantity) ?? 0;
+            : activePlan.Entries.Take(activeEntryIndex).Sum(x => x.Quantity) - skippedQuantity + activeEntryCompletedQuantity;
+        var totalProjects = (activePlan?.Entries.Sum(x => x.Quantity) ?? 0) - skippedQuantity;
 
         return new WorkshopAssemblyProgress(
             state,

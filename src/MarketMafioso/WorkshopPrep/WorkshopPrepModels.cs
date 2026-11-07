@@ -29,7 +29,8 @@ public sealed record WorkshopProjectDefinition(
     uint TypeId = 0,
     int EstimatedContributionSteps = 0,
     int EstimatedPhaseCount = 1,
-    uint DraftId = 0);
+    uint DraftId = WorkshopDraftUnlocks.NoDraft,
+    string? DraftName = null);
 
 public sealed record WorkshopMaterialRequirement(
     uint ItemId,
