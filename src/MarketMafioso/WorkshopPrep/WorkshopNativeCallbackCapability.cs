@@ -16,6 +16,7 @@ internal sealed class WorkshopNativeCallbackCapability(ISigScanner scanner)
     internal const string ProjectArgumentSignature = "48 8D 4D 40 E8 ?? ?? ?? ?? 89 47 40 44 8B C8 4C 8B 57 48";
     internal const string ProjectRouteSignature = "48 83 7F 28 00 0F 84 ?? ?? ?? ?? 85 DB 0F 8E ?? ?? ?? ?? BE ?? ?? ?? ?? 48 8D 44 24 ?? 8B CE 33 DB";
     internal const string CategoryArgumentSignature = "48 8D 4D 20 E8 ?? ?? ?? ?? 48 8D 4D 30 8B D8 E8 ?? ?? ?? ?? 44 8B C0 8B D3 48 8B CF E8 ?? ?? ?? ?? 83 4F 30 01";
+    // sig-sweep: scoped. Compiler switch boilerplate; unique only within the dispatch handler.
     internal const string RecipeSwitchSignature = "FF C8 83 F8 06 0F 87 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? 48 98 8B 8C 82 ?? ?? ?? ?? 48 03 CA FF E1";
     internal const string MaterialReceiverSignature = "40 55 53 56 57 41 54 41 56 41 57 48 8D 6C 24 ?? 48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 ?? 33 C0 48 8B F9 0F B6 89 98 00 00 00 0F 57 C0";
     internal const string MaterialRowSignature = "48 8D 4B 10 E8 ?? ?? ?? ?? 44 0F B6 C0 88 87 99 00 00 00 C6 44 24 ?? 01 42 8B 8C 87 9C 00 00 00";
