@@ -4,6 +4,16 @@ namespace MarketMafioso.WorkshopPrep;
 
 internal static class WorkshopAssemblyPromptPolicy
 {
+    public const string ViewCraftingLogEntry = "View company crafting log.";
+    public const string NothingEntry = "Nothing.";
+
+    // The station menu with no project in progress: only safe to dismiss when
+    // nothing else (contribute, advance, collect) is on offer.
+    public static bool IsIdleStationMenu(System.Collections.Generic.IReadOnlyList<string> entries)
+    {
+        return entries.Count == 2 && entries[0] == ViewCraftingLogEntry && entries[1] == NothingEntry;
+    }
+
     public static bool IsContributeItemsPrompt(string text)
     {
         return text.StartsWith("Contribute ", StringComparison.Ordinal) &&

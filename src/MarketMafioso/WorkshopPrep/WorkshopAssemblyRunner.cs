@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Dalamud.Plugin.Services;
 
@@ -8,6 +9,12 @@ namespace MarketMafioso.WorkshopPrep;
 public sealed class WorkshopAssemblyRunner : IDisposable
 {
     private const int MaxStalledMaterialRequestRecoveries = 3;
+    private const int RetainedDiagnosticLogs = 30;
+    private static readonly TimeSpan PostMortemDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan NativeFaultPollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan CraftingLogSettleDelay = TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan WrapUpMinimumWait = TimeSpan.FromMilliseconds(600);
+    private static readonly TimeSpan WrapUpTimeout = TimeSpan.FromSeconds(3);
 
     private readonly IFramework framework;
     private readonly IPluginLog log;
@@ -26,6 +33,18 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private uint? pendingProgressStepsComplete;
     private int stalledMaterialRequestRecoveryCount;
     private WorkshopAssemblyRunnerState stateBeforePause = WorkshopAssemblyRunnerState.Idle;
+    private readonly WorkshopAssemblyActionGuard actionGuard = new();
+    private DateTimeOffset lastStationInteractAt = DateTimeOffset.MinValue;
+    private DateTimeOffset lastNativeFaultPollAt = DateTimeOffset.MinValue;
+    private bool actionSinceNativeFaultPoll;
+    private DateTimeOffset? postMortemAt;
+    private string? postMortemReason;
+    private bool inspectOnly;
+    private readonly List<string> skippedProjects = new();
+    private int skippedQuantity;
+    private string? wrapUpMessage;
+    private DateTimeOffset wrapUpStartedAt;
+    private DateTimeOffset? inspectionReadyAt;
 
     public WorkshopAssemblyRunner(
         IFramework framework,
@@ -56,13 +75,39 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     public WorkshopAssemblyActionResult Start(WorkshopAssemblyPlan plan, bool enableDiagnostics = false)
     {
+        _ = enableDiagnostics;
+        return StartCore(plan, inspect: false);
+    }
+
+    // Opens the company crafting log, dumps it, and closes it again without
+    // selecting anything. Safe on any character: it never sends a category.
+    public WorkshopAssemblyActionResult StartCraftingLogInspection(IReadOnlyList<WorkshopAssemblyQueueEntry> context)
+    {
+        var entries = context.Count > 0
+            ? context
+            : [new WorkshopAssemblyQueueEntry(0, 0, 0, 0, "Crafting log inspection", 1, [], 0, 1)];
+        return StartCore(new WorkshopAssemblyPlan(entries, []), inspect: true);
+    }
+
+    private WorkshopAssemblyActionResult StartCore(WorkshopAssemblyPlan plan, bool inspect)
+    {
         if (HasActiveRun)
             return new(false, "Workshop assembly is already running.");
 
-        diagnostics.Dispose();
-        diagnostics = enableDiagnostics
-            ? WorkshopAssemblyDiagnostics.CreateEnabled(diagnosticsDirectory, Now)
-            : WorkshopAssemblyDiagnostics.Disabled;
+        CancelPostMortem();
+        CloseDiagnostics();
+
+        var blocker = uiAutomation.CheckPreflight();
+        if (blocker != null)
+        {
+            log.Warning("[MarketMafioso] Workshop assembly refused to start. {Reason} Forensics: {Forensics}", blocker, CaptureForensicsSafely());
+            Progress = BuildProgress(WorkshopAssemblyRunnerState.Failed, blocker);
+            return new(false, blocker);
+        }
+
+        // Always on: the runs that wedge the character are never the ones somebody
+        // remembered to start with diagnostics. Old logs are pruned instead.
+        diagnostics = CreateDiagnostics();
         uiAutomation.Diagnostics = diagnostics;
         LastDiagnosticFilePath = diagnostics.FilePath;
         activePlan = plan;
@@ -74,7 +119,17 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         stalledMaterialRequestRecoveryCount = 0;
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
         continueAt = DateTimeOffset.MinValue;
+        lastStationInteractAt = DateTimeOffset.MinValue;
+        lastNativeFaultPollAt = DateTimeOffset.MinValue;
+        actionSinceNativeFaultPoll = false;
+        inspectOnly = inspect;
+        inspectionReadyAt = null;
+        skippedProjects.Clear();
+        skippedQuantity = 0;
+        wrapUpMessage = null;
+        actionGuard.Reset();
         uiAutomation.ResetState();
+        uiAutomation.BeginRun();
         SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, "Waiting for fabrication station UI.");
         diagnostics.Record(
             "plan",
@@ -86,8 +141,10 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 ["totalMaterialRows"] = plan.TotalMaterials.Count.ToString(),
             });
         framework.Update += OnFrameworkUpdate;
-        log.Information("[MarketMafioso] Native workshop assembly started.");
-        return new(true, "Native workshop assembly started.");
+        log.Information(inspect
+            ? "[MarketMafioso] Workshop crafting log inspection started."
+            : "[MarketMafioso] Native workshop assembly started.");
+        return new(true, inspect ? "Workshop crafting log inspection started." : "Native workshop assembly started.");
     }
 
     public WorkshopAssemblyActionResult Pause()
@@ -97,6 +154,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         stateBeforePause = Progress.State;
         framework.Update -= OnFrameworkUpdate;
+        uiAutomation.EndRun();
         SetState(WorkshopAssemblyRunnerState.Paused, "Workshop assembly paused.");
         diagnostics.Record("paused", "Workshop assembly paused by user.");
         log.Information("[MarketMafioso] Native workshop assembly paused by user.");
@@ -115,6 +173,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
         SetState(resumeState, "Workshop assembly resumed.");
         diagnostics.Record("resumed", "Workshop assembly resumed by user.");
+        uiAutomation.BeginRun();
         framework.Update += OnFrameworkUpdate;
         log.Information("[MarketMafioso] Native workshop assembly resumed by user.");
         return new(true, "Workshop assembly resumed.");
@@ -130,8 +189,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         uiAutomation.ResetState();
         SetState(WorkshopAssemblyRunnerState.Stopped, "Workshop assembly stopped by user.");
         diagnostics.Record("stopped", "Workshop assembly stopped by user.");
-        CloseDiagnostics();
         log.Information("[MarketMafioso] Native workshop assembly stopped by user.");
+        RecordForensicsAndSchedulePostMortem("stopped by user");
     }
 
     private void OnFrameworkUpdate(IFramework _)
@@ -154,6 +213,23 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         if (activePlan == null)
             throw new InvalidOperationException("Workshop assembly plan is unavailable.");
 
+        // Answered material steps fire on consecutive frames, so check the log tail
+        // before every dispatch that follows an action; idle ticks are throttled.
+        if (actionSinceNativeFaultPoll || Now - lastNativeFaultPollAt >= NativeFaultPollInterval)
+        {
+            lastNativeFaultPollAt = Now;
+            actionSinceNativeFaultPoll = false;
+            var fault = uiAutomation.PollNativeFault();
+            if (fault != null)
+                throw new WorkshopAssemblyHaltException(DescribeFaultContext() + fault);
+        }
+
+        if (wrapUpMessage != null)
+        {
+            TickWrapUp();
+            return;
+        }
+
         var cutsceneResult = uiAutomation.TrySkipCutscene();
         if (cutsceneResult.ActionTaken)
         {
@@ -164,10 +240,10 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 {
                     ["requiresWorkshopReopen"] = cutsceneResult.RequiresWorkshopReopen.ToString(),
                 });
+            NoteAction(cutsceneResult, alwaysPace: true);
             if (cutsceneResult.RequiresWorkshopReopen)
                 SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, cutsceneResult.Message);
 
-            continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
             return;
         }
 
@@ -182,6 +258,10 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         {
             case WorkshopAssemblyRunnerState.WaitingForFabricationStation:
                 TickWaitingForFabricationStation();
+                break;
+
+            case WorkshopAssemblyRunnerState.OpeningProject when inspectOnly:
+                TickInspectingCraftingLog();
                 break;
 
             case WorkshopAssemblyRunnerState.OpeningProject:
@@ -214,10 +294,20 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return;
         }
 
+        // Keep checking readiness every tick, but give the game time to answer an
+        // interact before trying again (the old loop re-interacted every 250 ms forever).
+        if (Now - lastStationInteractAt < WorkshopAssemblyTiming.StationInteractRetryDelay)
+        {
+            if (Now - stateStartedAt > WorkshopAssemblyTiming.AddonTimeout)
+                throw new InvalidOperationException("The fabrication station did not open after interacting with it.");
+            return;
+        }
+
         var openResult = uiAutomation.TryOpenFabricationStation();
         if (openResult.ActionTaken)
         {
-            continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
+            lastStationInteractAt = Now;
+            NoteAction(openResult, alwaysPace: true);
             Progress = BuildProgress(WorkshopAssemblyRunnerState.WaitingForFabricationStation, openResult.Message);
             return;
         }
@@ -235,11 +325,20 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var result = uiAutomation.TryOpenProject(entry);
         activeMaterialItemId = result.ActiveMaterialItemId;
         RecordActionResult("open-project", entry, result);
+        // Crafting-log navigation stays paced: it is a handful of actions per
+        // project, and re-firing it is what crashed the game on Nov 6.
+        NoteAction(result, alwaysPace: true);
         if (result.RequiresWorkshopReopen)
         {
             activeMaterialItemId = null;
             continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
             SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, result.Message);
+            return;
+        }
+
+        if (result.IsProjectUnavailable)
+        {
+            SkipActiveEntry(entry, result.Message);
             return;
         }
 
@@ -250,6 +349,30 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         }
 
         HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.OpeningProject, result);
+    }
+
+    private void TickInspectingCraftingLog()
+    {
+        var result = uiAutomation.TryReachCraftingLog();
+        RecordActionResult("inspect-crafting-log", activePlan!.Entries[0], result);
+        NoteAction(result, alwaysPace: true);
+        if (!result.Success)
+        {
+            inspectionReadyAt = null;
+            HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.OpeningProject, result);
+            return;
+        }
+
+        // The window reports ready a little before every list in it is filled.
+        inspectionReadyAt ??= Now + CraftingLogSettleDelay;
+        if (Now < inspectionReadyAt)
+        {
+            Progress = BuildProgress(WorkshopAssemblyRunnerState.OpeningProject, "Letting the workshop crafting log settle before inspecting it.");
+            return;
+        }
+
+        var path = uiAutomation.WriteCraftingLogInspection(activePlan.Entries);
+        BeginWrapUp($"Workshop crafting log inspected: {path}");
     }
 
     private void TickSubmittingMaterial(WorkshopAssemblyQueueEntry entry)
@@ -263,6 +386,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         }
 
         RecordActionResult("submit-material", entry, result);
+        NoteAction(result);
         if (result.IsProjectComplete)
         {
             CompleteActiveProject(entry, result.Message);
@@ -333,6 +457,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var result = uiAutomation.TryConfirmContribution();
         activeMaterialItemId = result.ActiveMaterialItemId;
         RecordActionResult("confirm-contribution", entry, result);
+        NoteAction(result);
         if (result.IsProjectComplete)
         {
             CompleteActiveProject(entry, result.Message);
@@ -414,6 +539,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        actionGuard.NoteProgress();
         diagnostics.Record(
             "lockout-end",
             "Post-contribution lockout elapsed and material progress was observed.",
@@ -443,6 +569,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private void CompleteActiveProject(WorkshopAssemblyQueueEntry entry, string message)
     {
         onProjectRetrieved(entry);
+        actionGuard.NoteProgress();
         activeEntryCompletedQuantity++;
         stalledMaterialRequestRecoveryCount = 0;
         activeMaterialItemId = null;
@@ -465,14 +592,97 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         SetState(WorkshopAssemblyRunnerState.OpeningProject, message);
     }
 
-    private void Complete()
+    // A project the Free Company cannot craft (usually a schematic it has not
+    // unlocked) is left out and the rest of the plan carries on.
+    private void SkipActiveEntry(WorkshopAssemblyQueueEntry entry, string message)
+    {
+        var remaining = Math.Max(0, entry.Quantity - activeEntryCompletedQuantity);
+        skippedProjects.Add(remaining == 1 ? entry.ProjectName : $"{entry.ProjectName} x{remaining}");
+        skippedQuantity += remaining;
+        diagnostics.Record("project-skipped", message, BuildActiveDetails(entry));
+        log.Warning("[MarketMafioso] {Message}", message);
+        actionGuard.NoteProgress();
+        activeEntryIndex++;
+        activeEntryCompletedQuantity = 0;
+        activeMaterialItemId = null;
+        stalledMaterialRequestRecoveryCount = 0;
+        if (activePlan != null && activeEntryIndex >= activePlan.Entries.Count)
+        {
+            Complete();
+            return;
+        }
+
+        stateStartedAt = Now;
+        actionGuard.EnterState();
+        Progress = BuildProgress(WorkshopAssemblyRunnerState.OpeningProject, message);
+    }
+
+    private void Complete() => BeginWrapUp(BuildCompletionMessage());
+
+    // Leave the character free to move: close the crafting log (a skipped last
+    // entry leaves it up), then answer "Nothing." on the idle station menu that
+    // reappears behind it. Never blocks completion for longer than the timeout.
+    private void BeginWrapUp(string message)
+    {
+        wrapUpMessage = message;
+        wrapUpStartedAt = Now;
+        if (uiAutomation.CloseCraftingLog())
+            continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
+        Progress = BuildProgress(Progress.State, "Closing the workshop menus.");
+    }
+
+    private void TickWrapUp()
+    {
+        var result = uiAutomation.TryDismissStationMenu();
+        if (result.ActionTaken)
+            diagnostics.Record("wrap-up", result.Message);
+
+        var settled = result.ActionTaken || (result.Success && Now - wrapUpStartedAt >= WrapUpMinimumWait);
+        if (!settled && Now - wrapUpStartedAt < WrapUpTimeout)
+            return;
+
+        if (!settled)
+            diagnostics.Record("wrap-up", $"Gave up tidying the workshop menus. {result.Message}");
+        FinishRun(wrapUpMessage ?? "Workshop assembly complete.");
+    }
+
+    private void FinishRun(string message)
     {
         framework.Update -= OnFrameworkUpdate;
+        wrapUpMessage = null;
         uiAutomation.ResetState();
-        SetState(WorkshopAssemblyRunnerState.Complete, "Workshop assembly complete.");
-        diagnostics.Complete("Workshop assembly complete.");
+        SetState(WorkshopAssemblyRunnerState.Complete, message);
+        if (inspectOnly)
+        {
+            log.Information("[MarketMafioso] {Message}", message);
+            RecordForensicsAndSchedulePostMortem("finished inspecting the crafting log");
+            return;
+        }
+
+        uiAutomation.EndRun();
+        diagnostics.Complete(message);
         CloseDiagnostics();
-        log.Information("[MarketMafioso] Native workshop assembly complete.");
+        log.Information("[MarketMafioso] Native workshop assembly complete. {Message}", message);
+    }
+
+    private string BuildCompletionMessage()
+    {
+        if (skippedProjects.Count == 0)
+            return "Workshop assembly complete.";
+
+        var skipped = string.Join(", ", skippedProjects);
+        var assembled = (activePlan?.Entries.Sum(x => x.Quantity) ?? 0) - skippedQuantity;
+        return assembled <= 0
+            ? $"Nothing was assembled: the Free Company can't craft any queued project yet (usually a schematic it hasn't unlocked). Skipped: {skipped}."
+            : $"Workshop assembly complete. Skipped {skippedProjects.Count} project(s) the Free Company can't craft yet (usually a schematic it hasn't unlocked): {skipped}.";
+    }
+
+    private string DescribeFaultContext()
+    {
+        var entry = activePlan?.Entries.ElementAtOrDefault(activeEntryIndex);
+        return entry == null || inspectOnly || Progress.State != WorkshopAssemblyRunnerState.OpeningProject
+            ? string.Empty
+            : $"While opening {entry.ProjectName}: ";
     }
 
     private void Fail(string message, Exception ex)
@@ -481,14 +691,116 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         uiAutomation.ResetState();
         SetState(WorkshopAssemblyRunnerState.Failed, message);
         diagnostics.Fail(message, ex);
+        log.Error(ex, "[MarketMafioso] Native workshop assembly failed. {Message}", message);
+        RecordForensicsAndSchedulePostMortem("failed");
+    }
+
+    // Only real UI actions count. In the material loop a step the game answered
+    // moves straight on, as it always did (pacing every step there doubled
+    // contribution time). An action that
+    // repeats the last one hasn't been answered, so it backs off and feeds the
+    // repeat guard. Waiting on the game (a cutscene playing) is paced but is not
+    // an action, so it never trips the guard.
+    private void NoteAction(WorkshopAssemblyActionResult result, bool alwaysPace = false)
+    {
+        if (!result.ActionTaken)
+            return;
+
+        actionSinceNativeFaultPoll = true;
+        var isRepeat = !result.IsWaiting && actionGuard.NoteAction(Progress.State, result.Message);
+        if (alwaysPace || result.IsWaiting || isRepeat)
+            continueAt = Now + WorkshopAssemblyTiming.UiInteractionDelay;
+    }
+
+    // Snapshot the game state when a run ends badly, then again a few seconds
+    // later: the second capture shows whether the character is left wedged.
+    private void RecordForensicsAndSchedulePostMortem(string reason)
+    {
+        uiAutomation.EndRun();
+        var forensics = CaptureForensicsSafely();
+        diagnostics.Record("forensics", $"Game state when the run {reason}.", new Dictionary<string, string?> { ["state"] = forensics });
+        log.Warning("[MarketMafioso] Workshop assembly {Reason}; game state: {Forensics}", reason, forensics);
+
+        CancelPostMortem();
+        postMortemReason = reason;
+        postMortemAt = Now + PostMortemDelay;
+        framework.Update += OnPostMortemUpdate;
+    }
+
+    private void OnPostMortemUpdate(IFramework _)
+    {
+        if (postMortemAt == null || Now < postMortemAt)
+            return;
+
+        var forensics = CaptureForensicsSafely();
+        var reason = postMortemReason ?? "ended";
+        diagnostics.Record("forensics-followup", $"Game state {PostMortemDelay.TotalSeconds:F0}s after the run {reason}.", new Dictionary<string, string?> { ["state"] = forensics });
+        log.Warning("[MarketMafioso] Workshop assembly follow-up ({Reason}, +{Seconds}s); game state: {Forensics}", reason, PostMortemDelay.TotalSeconds, forensics);
+        CancelPostMortem();
         CloseDiagnostics();
-        log.Error(ex, "[MarketMafioso] Native workshop assembly failed.");
+    }
+
+    private void CancelPostMortem()
+    {
+        framework.Update -= OnPostMortemUpdate;
+        postMortemAt = null;
+        postMortemReason = null;
+    }
+
+    private string CaptureForensicsSafely()
+    {
+        try
+        {
+            return uiAutomation.CaptureForensics();
+        }
+        catch (Exception ex)
+        {
+            return $"forensics unavailable: {ex.GetType().Name}: {ex.Message}";
+        }
+    }
+
+    private WorkshopAssemblyDiagnostics CreateDiagnostics()
+    {
+        try
+        {
+            PruneDiagnosticLogs();
+            return WorkshopAssemblyDiagnostics.CreateEnabled(diagnosticsDirectory, Now);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log.Warning(ex, "[MarketMafioso] Workshop assembly diagnostics could not be opened; running without a log file.");
+            return WorkshopAssemblyDiagnostics.Disabled;
+        }
+    }
+
+    private void PruneDiagnosticLogs()
+    {
+        if (!Directory.Exists(diagnosticsDirectory))
+            return;
+
+        var stale = new DirectoryInfo(diagnosticsDirectory)
+            .GetFiles("assembly-*.log")
+            .OrderByDescending(x => x.LastWriteTimeUtc)
+            .Skip(RetainedDiagnosticLogs - 1);
+        foreach (var file in stale)
+        {
+            try
+            {
+                file.Delete();
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 
     private void SetState(WorkshopAssemblyRunnerState state, string message)
     {
         if (Progress.State != state)
         {
+            if (state == WorkshopAssemblyRunnerState.WaitingForFabricationStation && IsRunning)
+                actionGuard.NoteStationReopen(message);
+            actionGuard.EnterState();
             stateStartedAt = Now;
             diagnostics.Record(
                 "state",
@@ -550,8 +862,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var entry = activePlan?.Entries.ElementAtOrDefault(activeEntryIndex);
         var completedProjects = activePlan == null
             ? 0
-            : activePlan.Entries.Take(activeEntryIndex).Sum(x => x.Quantity) + activeEntryCompletedQuantity;
-        var totalProjects = activePlan?.Entries.Sum(x => x.Quantity) ?? 0;
+            : activePlan.Entries.Take(activeEntryIndex).Sum(x => x.Quantity) - skippedQuantity + activeEntryCompletedQuantity;
+        var totalProjects = (activePlan?.Entries.Sum(x => x.Quantity) ?? 0) - skippedQuantity;
 
         return new WorkshopAssemblyProgress(
             state,
@@ -569,6 +881,9 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     public void Dispose()
     {
         framework.Update -= OnFrameworkUpdate;
+        CancelPostMortem();
+        uiAutomation.EndRun();
+        CloseDiagnostics();
         uiAutomation.Dispose();
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
@@ -20,7 +21,7 @@ namespace MarketMafioso.WorkshopPrep;
 
 internal sealed class WorkshopAssemblyUiDriver : IDisposable
 {
-    private const byte MaxFabricationStationDistance = 8;
+    private const float MaxFabricationStationDistance = 8f;
     private const string SelectStringAddon = "SelectString";
     private const string CutSceneSelectStringAddon = "CutSceneSelectString";
     private const string RequestAddon = "Request";
@@ -49,6 +50,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     private readonly ExternalAutomationCoordinator externalAutomationCoordinator;
     private readonly Action<string> onMaterialRequestConfirmed;
     private readonly WorkshopNativeCallbackCapability callbackCapability;
+    private readonly WorkshopNativeFaultMonitor faultMonitor;
     private uint? pendingContributionItemId;
     private readonly WorkshopRequestTurnInStateMachine requestTurnIn = new();
 
@@ -61,8 +63,10 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         ISigScanner sigScanner,
         IAgentLifecycle agentLifecycle,
         ExternalAutomationCoordinator externalAutomationCoordinator,
+        WorkshopNativeFaultMonitor faultMonitor,
         Action<string> onMaterialRequestConfirmed)
     {
+        this.faultMonitor = faultMonitor;
         this.gameGui = gameGui;
         this.agentLifecycle = agentLifecycle;
         this.log = log;
@@ -97,7 +101,8 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
             return IsCutsceneActive() ? WorkshopCutsceneSkipState.CutsceneActive : WorkshopCutsceneSkipState.NoPrompt;
 
-        addon->AtkUnitBase.FireCallbackInt(0);
+        using (faultMonitor.Dispatch("cutscene-skip"))
+            addon->AtkUnitBase.FireCallbackInt(0);
         Diagnostics.Record("cutscene-skip", "Selected workshop cutscene skip prompt.");
         log.Verbose("[MarketMafioso] Selected workshop cutscene skip prompt.");
         return WorkshopCutsceneSkipState.PromptSelected;
@@ -105,6 +110,12 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
 
     public unsafe WorkshopFabricationStationOpenResult TryOpenFabricationStation()
     {
+        // Never interact with a station while the character is already in an
+        // event with no workshop UI to show for it: that is the wedged state, and
+        // more interacts only pile onto it.
+        if (IsCharacterBusyWithoutWorkshopUi())
+            return new(WorkshopFabricationStationOpenState.CharacterBusy);
+
         var station = FindFabricationStation();
         if (station == null)
             return new(WorkshopFabricationStationOpenState.NotFound);
@@ -114,7 +125,9 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             return new(WorkshopFabricationStationOpenState.TargetSystemUnavailable);
 
         targetManager.Target = station;
-        var result = targetSystem->InteractWithObject((ClientGameObject*)station.Address, true);
+        ulong result;
+        using (faultMonitor.Dispatch("station-interact"))
+            result = targetSystem->InteractWithObject((ClientGameObject*)station.Address, true);
         Diagnostics.Record(
             "open-station",
             "Interacted with nearby fabrication station.",
@@ -124,8 +137,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
                 ["objectKind"] = station.ObjectKind.ToString(),
                 ["gameObjectId"] = station.GameObjectId.ToString("X"),
                 ["baseId"] = station.BaseId.ToString(),
-                ["distanceX"] = station.YalmDistanceX.ToString(),
-                ["distanceZ"] = station.YalmDistanceZ.ToString(),
+                ["distance"] = DistanceToPlayer(station)?.ToString("0.00") ?? "unavailable",
                 ["result"] = result.ToString(),
             });
         log.Verbose($"[MarketMafioso] Interacted with fabrication station {station.Name.TextValue} ({station.GameObjectId:X}).");
@@ -157,6 +169,61 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
 
     public bool IsCraftingLogVisible => IsAddonReady(CompanyCraftRecipeNoteBookAddon);
 
+    public unsafe string DescribeCraftingLogInternals()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(CompanyCraftRecipeNoteBookAddon, 1);
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.CompanyCraftRecipeNoteBook);
+        return WorkshopCraftingLogInspector.Describe(addon, agent);
+    }
+
+    // The FC's unlocked schematics live at agent+0x38 (one bit per draft row);
+    // the addon mirrors the low dword in value 2. Both must agree or the read is
+    // discarded: a wrong "locked" answer would silently skip a craftable project.
+    public unsafe WorkshopDraftUnlocks? ReadDraftUnlocks(WorkshopCraftingLogSnapshot craftingLog)
+    {
+        var addon = GetCraftingLogAddon();
+        if (addon == null || (nint)addon != craftingLog.AddonAddress || addon->AtkValues == null || addon->AtkValuesCount <= 2)
+            return null;
+
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.CompanyCraftRecipeNoteBook);
+        if (agent == null || !agent->IsAgentActive())
+            return null;
+
+        var mirror = addon->AtkValues[2];
+        uint? lowWord = mirror.Type == AtkValueType.UInt ? mirror.UInt : null;
+        var agentMask = *(ulong*)((byte*)agent + DraftUnlockMaskOffset);
+        var unlocks = WorkshopDraftUnlocks.TryCreate(agentMask, lowWord);
+        if (unlocks == null)
+        {
+            Diagnostics.Record(
+                "draft-unlocks-unverified",
+                "Could not verify the Free Company's unlocked schematics.",
+                new Dictionary<string, string?>
+                {
+                    ["agentMask"] = agentMask.ToString("X16"),
+                    ["addonValue2Type"] = mirror.Type.ToString(),
+                    ["addonValue2"] = lowWord?.ToString("X8"),
+                });
+        }
+
+        return unlocks;
+    }
+
+    private const int DraftUnlockMaskOffset = 0x38;
+
+    public unsafe bool CloseCraftingLog()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(CompanyCraftRecipeNoteBookAddon, 1);
+        if (addon == null || !addon->IsVisible)
+            return false;
+
+        using (faultMonitor.Dispatch("crafting-log.close"))
+            addon->Close(true);
+        return true;
+    }
+
     private static unsafe string DescribeCraftingLogLayout(AtkUnitBase* addon)
     {
         var count = addon->AtkValuesCount;
@@ -185,7 +252,8 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             new() { Type = 0, Int = 0 },
         };
         WorkshopCallbackProtocol.RequirePayload(WorkshopCallbackOperation.Category, new ReadOnlySpan<AtkValue>(values, 8));
-        addon->FireCallback(8, values, true);
+        using (faultMonitor.Dispatch($"crafting-log.category {entry.CategoryId}/{entry.TypeId}"))
+            addon->FireCallback(8, values, true);
     }
 
     public unsafe void SelectCraft(WorkshopCraftingLogSnapshot craftingLog, WorkshopAssemblyQueueEntry entry)
@@ -204,7 +272,8 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             new() { Type = 0, Int = 0 },
         };
         WorkshopCallbackProtocol.RequirePayload(WorkshopCallbackOperation.Project, new ReadOnlySpan<AtkValue>(values, 8));
-        addon->FireCallback(8, values, true);
+        using (faultMonitor.Dispatch($"crafting-log.project {entry.WorkshopItemId}"))
+            addon->FireCallback(8, values, true);
     }
 
     public unsafe WorkshopMaterialDeliverySnapshot? ReadMaterialDelivery()
@@ -247,7 +316,8 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         {
             externalAutomationCoordinator.SuppressWorkshopRequestAutomation();
             externalAutomationCoordinator.SuppressTextAdvance();
-            addon->FireCallback(4, values, true);
+            using (faultMonitor.Dispatch($"material.contribute index={materialIndex} item={item.ItemId}"))
+                addon->FireCallback(4, values, true);
         }
         catch { ClearMaterialRequest(); throw; }
     }
@@ -261,7 +331,8 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             new() { Type = AtkValueType.Int, Int = -1 },
         };
         WorkshopCallbackProtocol.RequirePayload(WorkshopCallbackOperation.Close, new ReadOnlySpan<AtkValue>(values, 1));
-        addon->FireCallback(1, values, true);
+        using (faultMonitor.Dispatch("material.close"))
+            addon->FireCallback(1, values, true);
     }
 
     public static unsafe bool HasItemInSingleSlot(uint itemId, uint count)
@@ -324,7 +395,8 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
                         new() { Type = AtkValueType.UInt, UInt = (uint)WorkshopRequestTurnInProtocol.OpenItemSelectorPayload[2] },
                         new() { Type = AtkValueType.UInt, UInt = (uint)WorkshopRequestTurnInProtocol.OpenItemSelectorPayload[3] },
                     };
-                    request->AtkUnitBase.FireCallback(4, values, true);
+                    using (faultMonitor.Dispatch("request.open-item-selector"))
+                        request->AtkUnitBase.FireCallback(4, values, true);
                     break;
                 }
 
@@ -338,12 +410,14 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
                         new() { Type = AtkValueType.UInt, UInt = (uint)WorkshopRequestTurnInProtocol.SelectEligibleItemPayload[3] },
                         new() { Type = AtkValueType.UInt, UInt = (uint)WorkshopRequestTurnInProtocol.SelectEligibleItemPayload[4] },
                     };
-                    contextMenu->AtkUnitBase.FireCallback(5, values, true);
+                    using (faultMonitor.Dispatch("request.select-eligible-item"))
+                        contextMenu->AtkUnitBase.FireCallback(5, values, true);
                     break;
                 }
 
             case WorkshopRequestTurnInAction.HandOver:
-                request->HandOverButton->ClickAddonButton(&request->AtkUnitBase);
+                using (faultMonitor.Dispatch("request.hand-over"))
+                    request->HandOverButton->ClickAddonButton(&request->AtkUnitBase);
                 onMaterialRequestConfirmed($"handed over request item for material {pendingContributionItemId}");
                 break;
         }
@@ -400,11 +474,14 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         var requestReady = request != null && IsAddonReady(&request->AtkUnitBase);
         var contextMenuReady = contextMenu != null && IsAddonReady(&contextMenu->AtkUnitBase);
 
-        if (contextMenu != null)
-            contextMenu->AtkUnitBase.Close(true);
+        using (faultMonitor.Dispatch("request.recover-close"))
+        {
+            if (contextMenu != null)
+                contextMenu->AtkUnitBase.Close(true);
 
-        if (request != null)
-            request->AtkUnitBase.Close(true);
+            if (request != null)
+                request->AtkUnitBase.Close(true);
+        }
 
         ClearMaterialRequest();
         var message = requestPresent || contextMenuPresent
@@ -426,6 +503,31 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         return new(message, phase, requestPresent, requestReady, contextMenuPresent, contextMenuReady);
     }
 
+    public unsafe bool IsSelectStringVisible
+    {
+        get
+        {
+            var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
+            return addon != null && IsAddonReady(&addon->AtkUnitBase);
+        }
+    }
+
+    public unsafe bool TryDismissIdleStationMenu()
+    {
+        var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
+        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
+            return false;
+
+        var popup = addon->PopupMenu.PopupMenu;
+        var entries = new List<string>();
+        for (var index = 0; index < popup.EntryCount; index++)
+            entries.Add(popup.EntryNames[index].ToString());
+        if (!WorkshopAssemblyPromptPolicy.IsIdleStationMenu(entries))
+            return false;
+
+        return TrySelectString(text => text == WorkshopAssemblyPromptPolicy.NothingEntry);
+    }
+
     public unsafe bool TrySelectString(Predicate<string> predicate)
     {
         var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
@@ -439,7 +541,8 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             if (string.IsNullOrWhiteSpace(text) || !predicate(text))
                 continue;
 
-            addon->AtkUnitBase.FireCallbackInt(index);
+            using (faultMonitor.Dispatch($"select-string {index}:{text}"))
+                addon->AtkUnitBase.FireCallbackInt(index);
             log.Verbose($"[MarketMafioso] Selected workshop menu entry {index}: {text}");
             Diagnostics.Record(
                 "select-string",
@@ -495,7 +598,8 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
             return false;
 
-        addon->AtkUnitBase.FireCallbackInt(choice);
+        using (faultMonitor.Dispatch($"select-yesno {choice}:{text}"))
+            addon->AtkUnitBase.FireCallbackInt(choice);
         log.Verbose($"[MarketMafioso] Selected workshop confirmation {choice}: {text}");
         Diagnostics.Record(
             "select-yesno",
@@ -551,8 +655,123 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             : $"{state} {string.Join(" ", details.Select(x => $"{x}."))}";
     }
 
+    private static readonly ConditionFlag[] EventOccupancyFlags =
+    [
+        ConditionFlag.Occupied,
+        ConditionFlag.Occupied30,
+        ConditionFlag.OccupiedInEvent,
+        ConditionFlag.OccupiedInQuestEvent,
+        ConditionFlag.Occupied33,
+        ConditionFlag.Occupied38,
+        ConditionFlag.Occupied39,
+        ConditionFlag.OccupiedSummoningBell,
+    ];
+
+    private static readonly string[] LeftoverWorkshopWindowNames = [RequestAddon, ContextIconMenuAddon];
+
+    public bool IsCharacterEventOccupied => condition.Any(EventOccupancyFlags);
+
+    public unsafe bool IsCharacterBusyWithoutWorkshopUi()
+    {
+        if (!IsCharacterEventOccupied || IsCutsceneActive())
+            return false;
+
+        return !IsFabricationStationUiReady(hasPendingConfirmation: true) &&
+               !IsAddonReady(RequestAddon) &&
+               !IsAddonReady(ContextIconMenuAddon) &&
+               !IsAddonReady(CutSceneSelectStringAddon);
+    }
+
+    // Hand-in windows left loaded but hidden by an earlier run (Primary showed a
+    // hidden ContextIconMenu at its failure). Closing them is the same addon-level
+    // close the stalled-request recovery already uses.
+    public unsafe IReadOnlyList<string> CloseLeftoverHiddenWorkshopWindows()
+    {
+        var closed = new List<string>();
+        foreach (var name in LeftoverWorkshopWindowNames)
+        {
+            var addon = gameGui.GetAddonByName<AtkUnitBase>(name, 1);
+            if (addon == null || addon->IsVisible)
+                continue;
+
+            using (faultMonitor.Dispatch($"preflight.close-hidden {name}"))
+                addon->Close(true);
+            closed.Add(name);
+        }
+
+        if (closed.Count > 0)
+        {
+            Diagnostics.Record(
+                "preflight-cleanup",
+                "Closed hidden workshop windows left over from an earlier run.",
+                new Dictionary<string, string?> { ["closed"] = string.Join(", ", closed) });
+        }
+
+        return closed;
+    }
+
+    // Everything needed to explain a lockup after the fact, without anyone having
+    // to be at the keyboard while the character is stuck.
+    public unsafe string CaptureForensics()
+    {
+        var lines = new List<string>();
+        try
+        {
+            var active = condition.AsReadOnlySet().OrderBy(x => (int)x).Select(x => $"{x}({(int)x})");
+            lines.Add($"conditions: {string.Join(", ", active)}");
+            lines.Add($"eventOccupied={IsCharacterEventOccupied} busyWithoutWorkshopUi={IsCharacterBusyWithoutWorkshopUi()} cutscene={IsCutsceneActive()}");
+
+            var player = objectTable.LocalPlayer;
+            lines.Add(player == null
+                ? "player: unavailable"
+                : $"player: pos={player.Position:0.00} id={player.GameObjectId:X}");
+            var target = targetManager.Target;
+            lines.Add(target == null
+                ? "target: none"
+                : $"target: {target.Name.TextValue} kind={target.ObjectKind} id={target.GameObjectId:X} distance={DistanceToPlayer(target)?.ToString("0.00") ?? "?"}");
+            var station = FindFabricationStation();
+            lines.Add(station == null
+                ? "nearest station: none in reach"
+                : $"nearest station: id={station.GameObjectId:X} distance={DistanceToPlayer(station)?.ToString("0.00") ?? "?"}");
+
+            var unitManager = RaptureAtkUnitManager.Instance();
+            if (unitManager != null)
+            {
+                lines.Add($"focused: {DescribeUnitList(&unitManager->AtkUnitManager.FocusedUnitsList, visibleOnly: false)}");
+                lines.Add($"loaded: {DescribeUnitList(&unitManager->AtkUnitManager.AllLoadedUnitsList, visibleOnly: false)}");
+            }
+
+            lines.Add($"fault monitor: {faultMonitor.Status}");
+            var events = faultMonitor.RecentDispatchAgentEvents;
+            lines.Add($"recent dispatch agent events: {(events.Count == 0 ? "none" : string.Join(" | ", events.TakeLast(8)))}");
+        }
+        catch (Exception ex)
+        {
+            lines.Add($"forensics incomplete: {ex.GetType().Name}: {ex.Message}");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static unsafe string DescribeUnitList(AtkUnitList* list, bool visibleOnly)
+    {
+        var names = new List<string>();
+        var count = Math.Min((int)list->Count, list->Entries.Length);
+        for (var index = 0; index < count; index++)
+        {
+            var unit = list->Entries[index].Value;
+            if (unit == null || (visibleOnly && !unit->IsVisible))
+                continue;
+
+            names.Add($"{unit->NameString}({(unit->IsVisible ? "v" : "h")}{(unit->IsReady ? "r" : "-")})");
+        }
+
+        return names.Count == 0 ? "none" : string.Join(" ", names);
+    }
+
     public void Dispose()
     {
+        faultMonitor.Dispose();
         externalAutomationCoordinator.Dispose();
     }
 
@@ -563,24 +782,27 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
                condition[ConditionFlag.WatchingCutscene78];
     }
 
+    // Dalamud's YalmDistanceX/Z no longer report distance for event objects (they read 0),
+    // which let an out-of-reach station on another floor win. Use real positions instead.
     private IGameObject? FindFabricationStation()
     {
-        if (IsFabricationStationObject(targetManager.Target))
-            return targetManager.Target;
+        var player = objectTable.LocalPlayer;
+        if (player == null)
+            return null;
 
-        return objectTable
-            .Where(IsFabricationStationObject)
-            .OrderBy(x => x.YalmDistanceX + x.YalmDistanceZ)
-            .FirstOrDefault();
+        return WorkshopFabricationStationSelection.SelectNearest(
+            objectTable.Where(IsFabricationStationObject),
+            player.Position,
+            x => x.Position,
+            MaxFabricationStationDistance);
     }
+
+    private float? DistanceToPlayer(IGameObject gameObject) =>
+        objectTable.LocalPlayer is { } player ? Vector3.Distance(player.Position, gameObject.Position) : null;
 
     private static bool IsFabricationStationObject(IGameObject? gameObject)
     {
         if (gameObject == null || !gameObject.IsTargetable)
-            return false;
-
-        if (gameObject.YalmDistanceX > MaxFabricationStationDistance ||
-            gameObject.YalmDistanceZ > MaxFabricationStationDistance)
             return false;
 
         if (gameObject.ObjectKind is not (ObjectKind.EventObj or ObjectKind.HousingEventObject or ObjectKind.ReactionEventObject))
@@ -767,6 +989,7 @@ internal enum WorkshopFabricationStationOpenState
     NotFound,
     TargetSystemUnavailable,
     Interacted,
+    CharacterBusy,
 }
 
 internal sealed record WorkshopFabricationStationOpenResult(

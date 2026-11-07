@@ -34,7 +34,9 @@ public static class WorkshopAssemblyPlanBuilder
                 queueItem.Quantity,
                 project.Materials,
                 project.EstimatedContributionSteps,
-                project.EstimatedPhaseCount));
+                project.EstimatedPhaseCount,
+                project.DraftId,
+                project.DraftName));
 
             foreach (var material in project.Materials)
             {

@@ -109,6 +109,8 @@ public sealed class WorkshopProjectCatalog
             sequence.CompanyCraftDraftCategory.RowId,
             sequence.CompanyCraftType.RowId,
             contributionSteps,
-            Math.Max(1, phaseCount));
+            Math.Max(1, phaseCount),
+            sequence.CompanyCraftDraft.RowId,
+            sequence.CompanyCraftDraft.ValueNullable?.Name.ToString());
     }
 }

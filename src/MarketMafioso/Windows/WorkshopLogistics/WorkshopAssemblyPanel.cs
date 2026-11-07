@@ -13,6 +13,7 @@ internal sealed class WorkshopAssemblyPanel
     private readonly Func<string> getWorkshopStatus;
     private readonly Action<string> setWorkshopStatus;
     private readonly Action<bool> startWorkshopAssembly;
+    private readonly Action inspectCraftingLog;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public WorkshopAssemblyPanel(
@@ -20,12 +21,14 @@ internal sealed class WorkshopAssemblyPanel
         Func<string> getWorkshopStatus,
         Action<string> setWorkshopStatus,
         Action<bool> startWorkshopAssembly,
+        Action inspectCraftingLog,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.workshopAssemblyRunner = workshopAssemblyRunner ?? throw new ArgumentNullException(nameof(workshopAssemblyRunner));
         this.getWorkshopStatus = getWorkshopStatus ?? throw new ArgumentNullException(nameof(getWorkshopStatus));
         this.setWorkshopStatus = setWorkshopStatus ?? throw new ArgumentNullException(nameof(setWorkshopStatus));
         this.startWorkshopAssembly = startWorkshopAssembly ?? throw new ArgumentNullException(nameof(startWorkshopAssembly));
+        this.inspectCraftingLog = inspectCraftingLog ?? throw new ArgumentNullException(nameof(inspectCraftingLog));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
@@ -123,6 +126,12 @@ internal sealed class WorkshopAssemblyPanel
             !workshopAssemblyRunner.HasActiveRun && hasPrepQueue,
             workshopAssemblyRunner.Progress.Message,
             () => startWorkshopAssembly(true));
+        RegisterAction(
+            "workshop-logistics.assembly.inspect-crafting-log",
+            "Inspect the workshop crafting log without assembling",
+            !workshopAssemblyRunner.HasActiveRun,
+            workshopAssemblyRunner.Progress.Message,
+            inspectCraftingLog);
 
         if (ImGui.BeginPopup("WorkshopAssemblyStartMenu"))
         {
@@ -131,6 +140,9 @@ internal sealed class WorkshopAssemblyPanel
 
             if (ImGuiUi.MenuItem("Start With Diagnostics", hasPrepQueue))
                 startWorkshopAssembly(true);
+
+            if (ImGuiUi.MenuItem("Inspect Crafting Log", true))
+                inspectCraftingLog();
 
             ImGui.EndPopup();
         }
