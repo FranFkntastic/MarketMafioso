@@ -469,6 +469,84 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
     }
 
     [Fact]
+    public void Assembly_refuses_to_start_when_cutscenes_cannot_be_skipped()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation
+        {
+            FabricationStationReady = true,
+            BeginRunBlocker = "Workshop assembly needs TextAdvance to skip the phase cutscenes, but TextAdvance is not loaded.",
+        };
+
+        using var runner = CreateRunner(framework, ui, clock);
+        var result = runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+
+        Assert.False(result.Success);
+        Assert.Contains("TextAdvance", result.Message);
+        Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
+        Assert.Contains("TextAdvance", runner.Progress.Message);
+        Assert.False(runner.IsRunning);
+        Assert.Equal(new[] { true }, ui.BeginRunRequiredCutsceneSkip);
+        Assert.Equal(0, ui.ResetCount);
+    }
+
+    [Fact]
+    public void Crafting_log_inspection_does_not_need_cutscene_skipping()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, _) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation { FabricationStationReady = true };
+
+        using var runner = CreateRunner(framework, ui, clock);
+        Assert.True(runner.StartCraftingLogInspection([]).Success);
+
+        Assert.Equal(new[] { false }, ui.BeginRunRequiredCutsceneSkip);
+    }
+
+    [Fact]
+    public void Resume_stays_paused_when_cutscenes_cannot_be_skipped()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, _) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation { FabricationStationReady = true };
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        Assert.True(runner.Pause().Success);
+
+        ui.BeginRunBlocker = "Workshop assembly needs TextAdvance to skip the phase cutscenes, but another plugin is controlling TextAdvance right now.";
+        var result = runner.Resume();
+
+        Assert.False(result.Success);
+        Assert.Contains("another plugin", result.Message);
+        Assert.True(runner.IsPaused);
+        Assert.Equal(new[] { true, true }, ui.BeginRunRequiredCutsceneSkip);
+
+        ui.BeginRunBlocker = null;
+        Assert.True(runner.Resume().Success);
+        Assert.True(runner.IsRunning);
+    }
+
+    [Fact]
+    public void Losing_cutscene_skipping_mid_run_fails_the_run_instead_of_waiting()
+    {
+        var clock = new ManualTimeProvider();
+        var (framework, frameworkDriver) = FrameworkDriver.Create();
+        var ui = new FakeWorkshopAssemblyUiAutomation { FabricationStationReady = true };
+        ui.CutsceneFailure = "TextAdvance stopped skipping workshop cutscenes: TextAdvance is not loaded.";
+
+        using var runner = CreateRunner(framework, ui, clock);
+        runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
+        Assert.Contains("TextAdvance stopped skipping", runner.Progress.Message);
+        Assert.True(ui.EndRunCount >= 1);
+    }
+
+    [Fact]
     public void Failed_run_captures_game_state_now_and_again_after_the_follow_up_delay()
     {
         var clock = new ManualTimeProvider();
@@ -630,8 +708,11 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         public Queue<WorkshopAssemblyActionResult> CutsceneResults { get; } = [];
 
+        public string? CutsceneFailure { get; set; }
+
         public WorkshopAssemblyActionResult TrySkipCutscene() =>
-            CutsceneResults.Count == 0 ? new(false, "No cutscene.") : CutsceneResults.Dequeue();
+            CutsceneFailure != null ? throw new InvalidOperationException(CutsceneFailure)
+            : CutsceneResults.Count == 0 ? new(false, "No cutscene.") : CutsceneResults.Dequeue();
 
         public WorkshopAssemblyActionResult TryOpenFabricationStation()
         {
@@ -676,7 +757,18 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         public string DescribeUiState() => "test";
 
-        public void BeginRun() => BeginRunCount++;
+        public string? BeginRunBlocker { get; set; }
+        public List<bool> BeginRunRequiredCutsceneSkip { get; } = [];
+
+        public string? BeginRun(bool requireCutsceneSkip)
+        {
+            BeginRunRequiredCutsceneSkip.Add(requireCutsceneSkip);
+            if (BeginRunBlocker != null)
+                return BeginRunBlocker;
+
+            BeginRunCount++;
+            return null;
+        }
 
         public void EndRun() => EndRunCount++;
 

@@ -230,7 +230,8 @@ public sealed class Plugin : IDalamudPlugin
                 new ExternalAutomationCoordinator(
                     new DalamudPluginDataStore(PluginInterface),
                     Log,
-                    new DalamudPandoraFeatureControl(PluginInterface)),
+                    new DalamudPandoraFeatureControl(PluginInterface),
+                    new DalamudTextAdvanceExternalControl(PluginInterface)),
                 new WorkshopNativeFaultMonitor(AgentLifecycle, Log, ResolveDalamudLogPath())),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"),
             entry =>
