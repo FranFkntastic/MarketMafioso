@@ -26,23 +26,22 @@ internal sealed class MarketAcquisitionSettingsPages
         Descriptors =
         [
             new("market.operation", "Market Acquisition / Operation", DrawOperation, 30, IsUnlocked,
-                ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases", "retainer listing refresh", "Universalis"]),
+                ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases"]),
             new("market.diagnostics", "Market Acquisition / Diagnostics", DrawDiagnostics, 31, IsUnlocked,
                 ["route diagnostic packages", "route log", "observed listings", "purchase records", "archive", "retention", "hot shelf", "keep raw", "exhaustive research", "early leaving"]),
+            new("retainer-listings.refresh", "Retainer Listings / Price Refresh", DrawRetainerListingRefresh, 32, IsUnlocked,
+                ["retainer listing refresh", "Universalis", "remote market board", "background", "retainer menu", "force retry"]),
         ];
     }
 
     public IReadOnlyList<SettingsPageDescriptor> Descriptors { get; }
 
-    private void DrawOperation(SettingsPageContext context)
+    private void DrawRetainerListingRefresh(SettingsPageContext context)
     {
-        DrawCheckbox(context, "Enable listing purchases",
-            "Allows acquisition commands and integrations to open the market board and purchase confirmed listings.",
-            () => config.EnableMarketListingPurchases, value => config.EnableMarketListingPurchases = value);
         DrawCheckbox(
             context,
             "Refresh listed items when observed",
-            "When retainer listings are captured, quietly refresh every distinct item currently listed by this character. Healthy refreshes stay in the background; deferred or blocked work remains visible in Status.",
+            "After changed retainer listings are observed and the retainer menu closes, refresh their market-board data in the background for Universalis uploaders. This does not purchase items or change your listing prices. Deferred or blocked work remains visible in Status.",
             () => config.EnableRetainerListingRefresh,
             value => config.EnableRetainerListingRefresh = value);
         if (config.EnableRetainerListingRefresh &&
@@ -67,6 +66,13 @@ internal sealed class MarketAcquisitionSettingsPages
             }
             ImGui.Spacing();
         }
+    }
+
+    private void DrawOperation(SettingsPageContext context)
+    {
+        DrawCheckbox(context, "Enable listing purchases",
+            "Allows acquisition commands and integrations to open the market board and purchase confirmed listings.",
+            () => config.EnableMarketListingPurchases, value => config.EnableMarketListingPurchases = value);
         DrawCheckbox(context, "Check every batch item on each visited world",
             "Default on. While already on a world, MarketMafioso checks other unfinished items from the same claimed batch.",
             () => config.EnableOpportunisticWorldChecks, value => config.EnableOpportunisticWorldChecks = value);
@@ -162,7 +168,7 @@ internal sealed class MarketAcquisitionSettingsPages
         if (ImGui.SmallButton("Force retry"))
             forceRetryRetainerListingRefresh(item.ItemId);
         reviewRegistry.Register(
-            $"settings.market.operation.retainer-listing-refresh.{item.ItemId}.force-retry",
+            $"settings.retainer-listings.refresh.{item.ItemId}.force-retry",
             $"Force retry {FormatItem(item)}",
             AgentBridgeUiControlKind.Button,
             ImGui.GetItemRectMin(),
@@ -171,7 +177,7 @@ internal sealed class MarketAcquisitionSettingsPages
             selected: false,
             value: item.LastCode,
             arguments: null,
-            surfaceId: "settings.market.operation",
+            surfaceId: "settings.retainer-listings.refresh",
             mutating: true,
             completionOperationKind: null,
             _ => forceRetryRetainerListingRefresh(item.ItemId)
