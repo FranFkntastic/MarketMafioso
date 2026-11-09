@@ -79,8 +79,14 @@ public sealed class SqliteSchemaMigrator
         var invalidActorRepair = await RepairInvalidLocalSellerOwnerSemanticsAsync(connection, transaction, cancellationToken);
         var characterRepair = await RepairIncompleteCharacterIdentitiesAsync(connection, transaction, cancellationToken);
         await CreateNormalizedCharacterIdentityIndexAsync(connection, transaction, cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "characters", "inventory_identity_id", "INTEGER NULL", cancellationToken);
         await SeedInventoryCurrentHeadsAsync(connection, transaction, cancellationToken);
         await CreateInventoryCurrentHeadIndexAsync(connection, transaction, cancellationToken);
+        await ExecuteAsync(connection, transaction, """
+            CREATE INDEX IF NOT EXISTS ix_inventory_owners_retainer_identity
+            ON inventory_owners(retainer_id, snapshot_id) WHERE owner_type = 'retainer';
+            """, cancellationToken);
+        await InventoryCharacterLineage.RepairAsync(connection, transaction, cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
         await BackfillCurrentSemanticHashesAsync(cancellationToken);
@@ -346,7 +352,10 @@ public sealed class SqliteSchemaMigrator
                         SELECT 1
                         FROM snapshots existing
                         WHERE existing.account_id = snapshots.account_id
-                          AND existing.character_id = snapshots.character_id
+                          AND existing.character_id IN (
+                              SELECT c.id FROM characters c
+                              WHERE c.account_id = snapshots.account_id AND COALESCE(c.inventory_identity_id, c.id) = (
+                                  SELECT COALESCE(inventory_identity_id, id) FROM characters WHERE id = snapshots.character_id))
                           AND existing.is_current = 1)
                     THEN is_current
                     WHEN (SELECT newest_position FROM ranked WHERE ranked.id = snapshots.id) = 1

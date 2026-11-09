@@ -41,6 +41,8 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
             WHERE account_id = $accountId
               AND home_world IS NOT NULL
               AND trim(home_world) <> ''
+              AND (inventory_identity_id IS NULL OR EXISTS (
+                  SELECT 1 FROM snapshots s WHERE s.character_id = characters.id AND s.is_current = 1))
             ORDER BY last_seen_at_utc DESC, character_name COLLATE NOCASE
             """;
         command.Parameters.AddWithValue("$accountId", accountId);
@@ -164,7 +166,10 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
               """
             : """
               SELECT id FROM snapshots
-              WHERE account_id = $accountId AND character_id = $characterId AND is_current = 1
+              WHERE account_id = $accountId AND is_current = 1 AND character_id IN (
+                  SELECT c.id FROM characters c WHERE c.account_id = $accountId
+                    AND COALESCE(c.inventory_identity_id, c.id) = (
+                        SELECT COALESCE(inventory_identity_id, id) FROM characters WHERE id = $characterId AND account_id = $accountId))
               ORDER BY received_at_utc DESC
               LIMIT 1
               """;

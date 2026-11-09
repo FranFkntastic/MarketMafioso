@@ -33,6 +33,10 @@ internal sealed class InventoryReportWritePersistence(
             receivedAt,
             cancellationToken);
 
+        if (characterId is not null)
+            await InventoryCharacterLineage.LinkAsync(connection, transaction, accountId, characterId.Value,
+                report.Retainers.Select(retainer => retainer.RetainerId), cancellationToken);
+
         var current = characterId is null
             ? null
             : await ReadCurrentHeadAsync(connection, transaction, accountId, characterId.Value, cancellationToken);
@@ -48,7 +52,8 @@ internal sealed class InventoryReportWritePersistence(
         }
 
         var semanticHash = InventorySemanticFingerprint.Compute(report);
-        if (current is not null && IsOlderObservation(report.Timestamp, current.ReportTimestamp))
+        if (current is not null && IsOlderObservation(report.Timestamp, current.ReportTimestamp,
+                current.CharacterId != characterId))
         {
             await TouchCurrentDeliveryAsync(
                 connection,
@@ -549,10 +554,14 @@ internal sealed class InventoryReportWritePersistence(
                 s.semantic_revision,
                 s.semantic_hash,
                 s.report_timestamp,
-                (SELECT COUNT(*) FROM inventory_owners o WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer')
+                (SELECT COUNT(*) FROM inventory_owners o WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer'),
+                s.character_id
             FROM snapshots s
             WHERE s.account_id = $accountId
-              AND s.character_id = $characterId
+              AND s.character_id IN (
+                  SELECT c.id FROM characters c
+                  WHERE c.account_id = $accountId AND COALESCE(c.inventory_identity_id, c.id) = (
+                      SELECT COALESCE(inventory_identity_id, id) FROM characters WHERE id = $characterId AND account_id = $accountId))
               AND s.is_current = 1
             LIMIT 1;
             """;
@@ -566,13 +575,14 @@ internal sealed class InventoryReportWritePersistence(
             reader.GetInt64(1),
             reader.IsDBNull(2) ? null : reader.GetString(2),
             reader.GetString(3),
-            reader.GetInt32(4));
+            reader.GetInt32(4),
+            reader.GetInt64(5));
     }
 
-    private static bool IsOlderObservation(string incomingTimestamp, string currentTimestamp) =>
+    private static bool IsOlderObservation(string incomingTimestamp, string currentTimestamp, bool rejectEqual = false) =>
         DateTimeOffset.TryParse(incomingTimestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var incoming) &&
         DateTimeOffset.TryParse(currentTimestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var current) &&
-        incoming < current;
+        (incoming < current || rejectEqual && incoming == current);
 
     private static async Task TouchCurrentDeliveryAsync(
         SqliteConnection connection,
@@ -670,7 +680,8 @@ internal sealed class InventoryReportWritePersistence(
         long SemanticRevision,
         string? SemanticHash,
         string ReportTimestamp,
-        int RetainerCount);
+        int RetainerCount,
+        long CharacterId);
 
     private static async Task InsertOwnerAsync(
         SqliteConnection connection,
