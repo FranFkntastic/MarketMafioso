@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Ipc.Exceptions;
 using Franthropy.Dalamud.Travel;
 
 namespace MarketMafioso.ProfileLogin;
@@ -54,12 +56,31 @@ public interface ICharacterLoginDriver
     LifestreamLoginSubmissionResult TryBegin(string characterName, string homeWorld, bool changeCharacter);
 }
 
-public sealed class DalamudCharacterLoginDriver(DalamudLifestreamLogin inner) : ICharacterLoginDriver
+public sealed class DalamudCharacterLoginDriver(DalamudLifestreamLogin inner, Func<bool> providerLoaded) : ICharacterLoginDriver
 {
-    public LifestreamLoginSubmissionResult TryBegin(string characterName, string homeWorld, bool changeCharacter) =>
-        LifestreamLoginRequest.TryCreate(characterName, homeWorld, out var request, out var error)
-            ? changeCharacter ? inner.TryChangeCharacter(request!) : inner.TryBegin(request!)
-            : new(false, "InvalidRequest", error);
+    public LifestreamLoginSubmissionResult TryBegin(string characterName, string homeWorld, bool changeCharacter)
+    {
+        if (!LifestreamLoginRequest.TryCreate(characterName, homeWorld, out var request, out var error))
+            return new(false, "InvalidRequest", error);
+        // On a cold launch this plugin usually loads before Lifestream has registered its IPC. Nothing has been
+        // submitted at that point, so it is a wait, not the ambiguous mid-submission failure IpcFailure stands for.
+        if (!providerLoaded())
+            return new(false, "NotReady", "Lifestream has not finished loading yet.");
+        return changeCharacter ? inner.TryChangeCharacter(request!) : inner.TryBegin(request!);
+    }
+
+    /// <summary>Side-effect-free check that Lifestream's login IPC is registered in this process.</summary>
+    public static bool IsLifestreamLoaded(IDalamudPluginInterface pluginInterface)
+    {
+        try
+        {
+            pluginInterface.GetIpcSubscriber<bool>(DalamudLifestreamLogin.CanAutoLoginChannel).InvokeFunc();
+            return true;
+        }
+        catch (IpcNotReadyError) { return false; }
+        // Any other failure is left for the submission itself to classify.
+        catch { return true; }
+    }
 }
 
 public sealed class ProfileLoginCoordinator

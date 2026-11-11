@@ -64,6 +64,16 @@
                Condition="Exists('$(OutputPath)$(AssemblyName)')" />
   </Target>
 
+  <!-- XIV Profile Manager only offers direct login when this manifest names the exact DLL beside it. Emitting it
+       with every build keeps the pair together however the output folder is deployed. -->
+  <Target Name="WriteProfileManagerCapabilityManifest" AfterTargets="Build" BeforeTargets="SyncToDevPlugins">
+    <GetFileHash Files="$(TargetPath)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Hash" PropertyName="_ProfileManagerPluginSha256" />
+    </GetFileHash>
+    <WriteLinesToFile File="$(TargetDir)$(AssemblyName).profile-manager-capabilities.json" Overwrite="true"
+                      Lines="{&quot;SchemaVersion&quot;:1,&quot;PluginInternalName&quot;:&quot;$(AssemblyName)&quot;,&quot;PluginSha256&quot;:&quot;$(_ProfileManagerPluginSha256)&quot;,&quot;DirectCharacterLoginProtocolVersions&quot;:[1,2]}" />
+  </Target>
+
   <Target Name="SyncToDevPlugins" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug' and '$(SkipDevPluginSync)' != 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\tools\Sync-DevPlugin.ps1&quot; -SourceDir &quot;$(TargetDir).&quot; -DestDir &quot;$(DevPluginDeployDir)&quot; -PluginName &quot;$(AssemblyName)&quot;" />
   </Target>

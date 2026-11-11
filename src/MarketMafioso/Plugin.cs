@@ -114,7 +114,8 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         profileLoginCoordinator = new ProfileLoginCoordinator(
             PluginInterface.GetPluginConfigDirectory(),
-            new DalamudCharacterLoginDriver(new DalamudLifestreamLogin(PluginInterface)),
+            new DalamudCharacterLoginDriver(new DalamudLifestreamLogin(PluginInterface),
+                () => DalamudCharacterLoginDriver.IsLifestreamLoaded(PluginInterface)),
             () =>
             {
                 var player = ObjectTable.LocalPlayer;
