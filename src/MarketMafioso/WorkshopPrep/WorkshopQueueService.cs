@@ -119,6 +119,41 @@ public static class WorkshopQueueService
         return new(true, $"Duplicated frozen workshop queue {source.Name}.", frozen.Id);
     }
 
+    /// <summary>
+    /// Adds a shared saved job as a new entry. It never replaces an existing saved job or touches
+    /// the active queue; a name collision gets a numbered suffix instead.
+    /// </summary>
+    public static WorkshopQueueOperationResult ImportFrozenQueue(
+        Configuration config,
+        string name,
+        IEnumerable<WorkshopPrepQueueItem> items,
+        DateTime nowUtc)
+    {
+        var normalizedName = name.Trim();
+        if (normalizedName.Length == 0)
+            return new(false, "Frozen queue name is required.");
+
+        var clonedItems = CloneItems(items);
+        if (clonedItems.Count == 0)
+            return new(false, "Saved job contains no projects.");
+
+        var uniqueName = normalizedName;
+        for (var suffix = 2; HasDuplicateName(config, uniqueName, exceptId: null); suffix++)
+            uniqueName = $"{normalizedName} ({suffix})";
+
+        var frozen = new WorkshopFrozenQueue
+        {
+            Id = Guid.NewGuid(),
+            Name = uniqueName,
+            CreatedAt = nowUtc,
+            UpdatedAt = nowUtc,
+            Items = clonedItems,
+        };
+
+        config.FrozenWorkshopQueues.Add(frozen);
+        return new(true, $"Imported saved job {uniqueName}.", frozen.Id);
+    }
+
     public static WorkshopQueueOperationResult DeleteFrozenQueue(Configuration config, Guid queueId)
     {
         var frozen = FindFrozenQueue(config, queueId);

@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Windowing;
 using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.WorkshopPrep;
@@ -21,6 +23,9 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
     private string newQueueNameInput = string.Empty;
     private Guid? pendingLoadQueueId;
     private Guid? pendingDeleteQueueId;
+    private readonly FileDialogManager fileDialogs = new();
+    private string shareStatus = string.Empty;
+    private bool shareStatusIsError;
     private readonly CompanionWindowActivationState activation = new();
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
@@ -65,6 +70,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         ImGui.Spacing();
         DrawBrowserLayout(queues);
         DrawConfirmations();
+        fileDialogs.Draw();
     }
 
     private void DrawSearchAndCreate()
@@ -86,6 +92,19 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGuiUi.Button("Save Current As New", actions.CanEditQueue && config.WorkshopPrepQueue.Count > 0))
             actions.NewFromCurrent(newQueueNameInput);
+
+        if (ImGuiUi.Button("Import from Clipboard", actions.CanEditQueue))
+            ImportFromClipboard();
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Import from File...", actions.CanEditQueue))
+            fileDialogs.OpenFileDialog("Import Workshop Saved Job", WorkshopSavedJobShare.FileExtension, ImportFromFile);
+
+        if (shareStatus.Length > 0)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(shareStatusIsError ? ColWarning : ColSuccess, shareStatus);
+        }
 
         ImGui.SetNextItemWidth(-1);
         ImGui.InputText("Search##workshopSavedJobSearch", ref search, 256);
@@ -257,6 +276,21 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         if (ImGuiUi.Button("Duplicate", actions.CanEditQueue))
             actions.Duplicate(queue.Id, duplicateNameInput);
 
+        if (ImGui.Button("Copy to Clipboard"))
+            CopyToClipboard(queue);
+
+        ImGui.SameLine();
+        if (ImGui.Button("Export to File..."))
+        {
+            var queueId = queue.Id;
+            fileDialogs.SaveFileDialog(
+                "Export Workshop Saved Job",
+                WorkshopSavedJobShare.FileExtension,
+                WorkshopSavedJobShare.BuildFileName(queue.Name),
+                WorkshopSavedJobShare.FileExtension,
+                (confirmed, path) => ExportToFile(queueId, confirmed, path));
+        }
+
         if (ImGuiUi.Button("Load", actions.CanEditQueue))
             RequestLoad(queue.Id);
 
@@ -278,6 +312,96 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         selectedQueueId = queue.Id;
         renameInput = queue.Name;
         duplicateNameInput = $"{queue.Name} copy";
+    }
+
+    private void CopyToClipboard(WorkshopFrozenQueue queue)
+    {
+        ImGui.SetClipboardText(WorkshopSavedJobShare.Export(queue, workshopCatalog.GetProjects(), DateTime.UtcNow));
+        SetShareStatus($"Copied saved job {queue.Name}.", isError: false);
+    }
+
+    private void ExportToFile(Guid queueId, bool confirmed, string path)
+    {
+        if (!confirmed || string.IsNullOrWhiteSpace(path))
+            return;
+
+        var queue = config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == queueId);
+        if (queue == null)
+        {
+            SetShareStatus("Saved job no longer exists.", isError: true);
+            return;
+        }
+
+        try
+        {
+            File.WriteAllText(path, WorkshopSavedJobShare.Export(queue, workshopCatalog.GetProjects(), DateTime.UtcNow));
+            SetShareStatus($"Exported saved job {queue.Name}.", isError: false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            SetShareStatus($"Export failed: {ex.Message}", isError: true);
+        }
+    }
+
+    private void ImportFromClipboard()
+    {
+        string? text;
+        try
+        {
+            text = ImGui.GetClipboardText();
+        }
+        catch (Exception)
+        {
+            text = null;
+        }
+
+        Import(text);
+    }
+
+    private void ImportFromFile(bool confirmed, string path)
+    {
+        if (!confirmed || string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            if (new FileInfo(path).Length > WorkshopSavedJobShare.MaxTextLength * 4L)
+            {
+                SetShareStatus("That file is too large to be a workshop saved job.", isError: true);
+                return;
+            }
+
+            Import(File.ReadAllText(path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            SetShareStatus($"Import failed: {ex.Message}", isError: true);
+        }
+    }
+
+    private void Import(string? text)
+    {
+        if (!actions.CanEditQueue)
+        {
+            SetShareStatus("Saved jobs cannot change while an assembly run is active.", isError: true);
+            return;
+        }
+
+        var result = actions.Import(text);
+        SetShareStatus(result.Message, isError: !result.Success);
+        if (!result.Success || result.QueueId is not { } importedId)
+            return;
+
+        search = string.Empty;
+        var imported = config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == importedId);
+        if (imported != null)
+            SelectQueue(imported);
+    }
+
+    private void SetShareStatus(string message, bool isError)
+    {
+        shareStatus = message;
+        shareStatusIsError = isError;
     }
 
     private void RequestLoad(Guid queueId)
@@ -379,7 +503,8 @@ public sealed record WorkshopFrozenQueueBrowserActions(
     Action<Guid, string> Rename,
     Action<Guid, string> Duplicate,
     Action<Guid> Delete,
-    Action<string> NewFromCurrent)
+    Action<string> NewFromCurrent,
+    Func<string?, WorkshopQueueOperationResult> Import)
 {
     public bool CanEditQueue => CanEditQueueProvider();
 }
