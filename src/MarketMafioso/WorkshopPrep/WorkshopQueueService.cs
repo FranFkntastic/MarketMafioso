@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace MarketMafioso.WorkshopPrep;
 
-public sealed record WorkshopQueueOperationResult(bool Success, string Message, Guid? QueueId = null);
+public sealed record WorkshopQueueOperationResult(bool Success, string Message, Guid? QueueId = null, string? Name = null);
 
 public enum WorkshopFrozenQueueState
 {
@@ -151,7 +151,23 @@ public static class WorkshopQueueService
         };
 
         config.FrozenWorkshopQueues.Add(frozen);
-        return new(true, $"Imported saved job {uniqueName}.", frozen.Id);
+        return new(true, $"Imported saved job {uniqueName}.", frozen.Id, uniqueName);
+    }
+
+    /// <summary>
+    /// Validates shared saved-job text and stores it as a new saved job. Shared by the clipboard,
+    /// file, and IPC imports so all of them apply the same validation, limits, and collision naming.
+    /// </summary>
+    public static WorkshopQueueOperationResult ImportSavedJob(
+        Configuration config,
+        string? text,
+        IReadOnlyList<WorkshopProjectDefinition> projects,
+        DateTime nowUtc)
+    {
+        var parsed = WorkshopSavedJobShare.Parse(text, projects);
+        return parsed.Success
+            ? ImportFrozenQueue(config, parsed.Name, parsed.Items, nowUtc)
+            : new(false, parsed.Message);
     }
 
     public static WorkshopQueueOperationResult DeleteFrozenQueue(Configuration config, Guid queueId)

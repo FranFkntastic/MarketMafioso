@@ -222,10 +222,10 @@ internal sealed class WorkshopPrepQueuePanel
 
     public WorkshopQueueOperationResult ImportSavedJob(string? text)
     {
-        var parsed = WorkshopSavedJobShare.Parse(text, workshopCatalog.GetProjects());
-        var result = parsed.Success
-            ? WorkshopQueueService.ImportFrozenQueue(config, parsed.Name, parsed.Items, DateTime.UtcNow)
-            : new WorkshopQueueOperationResult(false, parsed.Message);
+        // Mirrors the disabled import buttons so IPC callers get the same rule as the window.
+        var result = CanEditQueue
+            ? WorkshopQueueService.ImportSavedJob(config, text, workshopCatalog.GetProjects(), DateTime.UtcNow)
+            : new WorkshopQueueOperationResult(false, "Cannot import saved jobs while workshop assembly is active.");
         ApplyFrozenQueueResult(result);
         return result;
     }

@@ -1253,6 +1253,9 @@ public class MainWindow : Window, IDisposable
         IsOpen = true;
     }
 
+    public WorkshopQueueOperationResult ImportWorkshopSavedJob(string? text) =>
+        workshopPrepQueue.ImportSavedJob(text);
+
     private bool CanStageMarketAcquisition() =>
         IsMarketAcquisitionUnlocked() &&
         !acquisitionWorkspace.IsBusy &&
