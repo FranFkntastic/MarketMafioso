@@ -7,6 +7,22 @@ namespace MarketMafioso.SpecTests.ProfileLogin;
 public sealed class ProfileLoginCoordinatorTests
 {
     [Fact]
+    public void DriverWithoutRegisteredProvider_WaitsWithoutCallingLogin()
+    {
+        var driver = new DalamudCharacterLoginDriver(null!, () => false);
+        var result = driver.TryBegin("Eriana Ning", "Siren", false);
+        Assert.False(result.Success);
+        Assert.Equal("NotReady", result.Code);
+    }
+
+    [Fact]
+    public void InvalidDriverRequest_DoesNotEvenProbeProvider()
+    {
+        var driver = new DalamudCharacterLoginDriver(null!, () => throw new InvalidOperationException("must not probe"));
+        Assert.Equal("InvalidRequest", driver.TryBegin("", "", false).Code);
+    }
+
+    [Fact]
     public void NotReadyThenSubmitted_DispatchesExactlyOnce()
     {
         using var fixture = new Fixture();
