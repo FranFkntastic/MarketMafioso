@@ -220,6 +220,16 @@ internal sealed class WorkshopPrepQueuePanel
         ApplyFrozenQueueResult(WorkshopQueueService.FreezeCurrentQueue(config, name, DateTime.UtcNow), clearName: false);
     }
 
+    public WorkshopQueueOperationResult ImportSavedJob(string? text)
+    {
+        var parsed = WorkshopSavedJobShare.Parse(text, workshopCatalog.GetProjects());
+        var result = parsed.Success
+            ? WorkshopQueueService.ImportFrozenQueue(config, parsed.Name, parsed.Items, DateTime.UtcNow)
+            : new WorkshopQueueOperationResult(false, parsed.Message);
+        ApplyFrozenQueueResult(result);
+        return result;
+    }
+
     private void DrawHeaderActions()
     {
         var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;

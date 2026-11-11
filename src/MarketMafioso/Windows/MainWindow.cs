@@ -429,7 +429,8 @@ public class MainWindow : Window, IDisposable
                 workshopPrepQueue.RenameFrozenQueue,
                 workshopPrepQueue.DuplicateFrozenQueue,
                 workshopPrepQueue.DeleteFrozenQueue,
-                workshopPrepQueue.SaveCurrentQueueAsNew));
+                workshopPrepQueue.SaveCurrentQueueAsNew,
+                workshopPrepQueue.ImportSavedJob));
         frozenQueueBrowser = FrozenQueueBrowser;
         var acquisitionRequestBuilderCraftAppraisal = CreateAcquisitionRequestBuilderCraftAppraisalController();
         acquisitionRequestBuilder = new MarketAcquisitionRequestBuilderPanel(
