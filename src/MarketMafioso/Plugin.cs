@@ -83,6 +83,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly QuartermasterIpcClient quartermaster;
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
+    private readonly WorkshopSavedJobIpcProvider workshopSavedJobIpc;
     private readonly MarketAcquisitionItemContextMenu marketAcquisitionItemContextMenu;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
@@ -302,6 +303,7 @@ public sealed class Plugin : IDalamudPlugin
             Log,
             workshopRestock);
         exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
+        workshopSavedJobIpc = new WorkshopSavedJobIpcProvider(PluginInterface, Framework, mainWindow.ImportWorkshopSavedJob);
         marketAcquisitionItemContextMenu = new MarketAcquisitionItemContextMenu(
             ContextMenu,
             GameGui,
@@ -846,6 +848,7 @@ public sealed class Plugin : IDalamudPlugin
         StopTimer();
         marketAcquisitionItemContextMenu.Dispose();
         exactAcquisitionIpc.Dispose();
+        workshopSavedJobIpc.Dispose();
         agentBridge.Dispose();
 
         PluginInterface.UiBuilder.Draw -= DrawUI;

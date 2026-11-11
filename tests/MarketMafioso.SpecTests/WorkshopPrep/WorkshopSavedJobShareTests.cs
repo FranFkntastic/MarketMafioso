@@ -100,6 +100,64 @@ public sealed class WorkshopSavedJobShareTests
         Assert.Equal(4, config.FrozenWorkshopQueues[1].Items[0].Quantity);
     }
 
+    [Fact]
+    public void ImportSavedJob_StoresValidJobWithoutLoadingIt()
+    {
+        var config = new Configuration();
+        config.WorkshopPrepQueue.Add(new WorkshopPrepQueueItem { WorkshopItemId = 1001, Quantity = 7 });
+
+        var result = WorkshopQueueService.ImportSavedJob(
+            config,
+            WorkshopSavedJobShare.Export(CreateQueue(), CreateProjects(), Now),
+            CreateProjects(),
+            Now);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal("Shark's Fleet", result.Name);
+        var saved = Assert.Single(config.FrozenWorkshopQueues);
+        Assert.Equal(result.QueueId, saved.Id);
+        Assert.Equal("Shark's Fleet", saved.Name);
+        Assert.Equal([(1001u, 2), (1000u, 16)], saved.Items.Select(x => (x.WorkshopItemId, x.Quantity)));
+        Assert.Null(config.ActiveFrozenWorkshopQueueId);
+        Assert.Equal(7, Assert.Single(config.WorkshopPrepQueue).Quantity);
+    }
+
+    [Fact]
+    public void ImportSavedJob_RejectsInvalidTextWithMessageAndStoresNothing()
+    {
+        var config = new Configuration();
+
+        var result = WorkshopQueueService.ImportSavedJob(
+            config,
+            Document("""{"workshopItemId":4242,"name":"Future Hull","quantity":1}"""),
+            CreateProjects(),
+            Now);
+
+        Assert.False(result.Success);
+        Assert.Null(result.Name);
+        Assert.Null(result.QueueId);
+        Assert.Contains("Future Hull (#4242)", result.Message);
+        Assert.Empty(config.FrozenWorkshopQueues);
+    }
+
+    [Fact]
+    public void ImportSavedJob_RenamesOnNameCollisionAndReportsFinalName()
+    {
+        var config = new Configuration();
+        config.FrozenWorkshopQueues.Add(CreateQueue());
+        var text = WorkshopSavedJobShare.Export(CreateQueue(), CreateProjects(), Now);
+
+        var second = WorkshopQueueService.ImportSavedJob(config, text, CreateProjects(), Now);
+        var third = WorkshopQueueService.ImportSavedJob(config, text, CreateProjects(), Now);
+
+        Assert.Equal("Shark's Fleet (2)", second.Name);
+        Assert.Equal("Shark's Fleet (3)", third.Name);
+        Assert.Contains("Shark's Fleet (3)", third.Message);
+        Assert.Equal(
+            ["Shark's Fleet", "Shark's Fleet (2)", "Shark's Fleet (3)"],
+            config.FrozenWorkshopQueues.Select(x => x.Name));
+    }
+
     private static string Document(string items) =>
         $$"""{"format":"marketmafioso.workshop-saved-job","version":1,"name":"Shared","items":[{{items}}]}""";
 
