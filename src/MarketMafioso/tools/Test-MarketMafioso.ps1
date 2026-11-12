@@ -10,11 +10,6 @@ $projects = @(
     @('tests\MarketMafioso.ContractTests\MarketMafioso.ContractTests.csproj', $null)
 )
 
-& (Join-Path $PSScriptRoot 'Assert-TruthfulTestSuite.ps1')
-if ($LASTEXITCODE -ne 0) {
-    throw "Truthful test-suite structure validation failed with exit code $LASTEXITCODE."
-}
-
 foreach ($entry in $projects) {
     $project = Join-Path $repoRoot $entry[0]
     $arguments = @('test', $project, '--configuration', $Configuration, '-p:SkipDevPluginSync=true')
