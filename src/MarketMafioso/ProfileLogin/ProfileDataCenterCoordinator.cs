@@ -118,8 +118,17 @@ public sealed class ProfileDataCenterCoordinator(string configDirectory, Dalamud
           {
             var requestBytes = Bytes(Path.Combine(item.Path, "request.json"));
             var request = JsonSerializer.Deserialize<DataCenterConnectionRequest>(requestBytes, Json)!;
+            // Shared configuration is discoverable by several clients. Only the exact bound
+            // process lifetime may create, update, or retire this operation's evidence.
+            var binding = Read<DataCenterProcessBinding>(Path.Combine(item.Path, "process-binding.json"));
+            if (binding is null || binding.SchemaVersion != 1 || binding.ProfileId != request.ProfileId ||
+                binding.OperationId != request.OperationId || binding.ExpectedProcessId != Environment.ProcessId ||
+                binding.ExpectedProcessStartUtc != processStart)
+            { deferred.Add(item.Path); continue; }
             var receiptPath = Path.Combine(item.Path, "receipt.json");
             var previous = Read<DataCenterConnectionReceipt>(receiptPath);
+            if (previous is not null && (previous.ProcessId != Environment.ProcessId || previous.ProcessStartUtc != processStart))
+            { deferred.Add(item.Path); continue; }
             var hash = Convert.ToHexString(SHA256.HashData(requestBytes));
             // Never replace an unreadable receipt: it may contain a persisted dispatch intent.
             if (previous is null && File.Exists(receiptPath)) { deferred.Add(item.Path); continue; }
@@ -146,13 +155,6 @@ public sealed class ProfileDataCenterCoordinator(string configDirectory, Dalamud
                 (!cancellation.TryGetProperty("ProfileId", out var cancelledProfile) || cancelledProfile.GetString() == request.ProfileId) &&
                 (!cancellation.TryGetProperty("RequestSha256", out var cancelledHash) || cancelledHash.GetString() == hash))
             { Save("Blocked", "OwnerCancelled"); Retire(item.Path); continue; }
-            var binding = Read<DataCenterProcessBinding>(Path.Combine(item.Path, "process-binding.json"));
-            if (binding is null)
-            {
-                if (now > request.CompletionExpiresAtUtc) { Save("Failed", "StartupDeadline"); Retire(item.Path); }
-                deferred.Add(item.Path);
-                continue; // An unbound request never owns the lobby.
-            }
             if (now > binding.CompletionExpiresAtUtc) { Save("Failed", "CompletionDeadline"); Retire(item.Path); continue; }
             if (active.Any(candidate => candidate.Path != item.Path && !retired.Contains(candidate.Path) &&
                 candidate.Request is { SchemaVersion: 1 } otherRequest && otherRequest.ProfileId == request.ProfileId &&
@@ -236,6 +238,12 @@ public sealed class ProfileDataCenterCoordinator(string configDirectory, Dalamud
             if ((File.GetAttributes(old) & FileAttributes.ReparsePoint) != 0) continue;
             var request = Read<DataCenterConnectionRequest>(Path.Combine(old, "request.json"));
             var receipt = Read<DataCenterConnectionReceipt>(Path.Combine(old, "receipt.json"));
+            var binding = Read<DataCenterProcessBinding>(Path.Combine(old, "process-binding.json"));
+            if (binding is null || request is null || binding.SchemaVersion != 1 ||
+                binding.ProfileId != request.ProfileId || binding.OperationId != request.OperationId ||
+                binding.ExpectedProcessId != Environment.ProcessId ||
+                binding.ExpectedProcessStartUtc != processStart || receipt is null ||
+                receipt.ProcessId != Environment.ProcessId || receipt.ProcessStartUtc != processStart) continue;
             if (request is not null && receipt is not null && receipt.DispatchIntent is null && Terminal(receipt.Phase) &&
                 request.OperationId == Path.GetFileName(old) && receipt.OperationId == request.OperationId &&
                 receipt.ProfileId == request.ProfileId && receipt.RequestSha256 == Convert.ToHexString(SHA256.HashData(Bytes(Path.Combine(old, "request.json")))))
