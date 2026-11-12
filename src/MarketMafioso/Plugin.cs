@@ -114,7 +114,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         profileDataCenterCoordinator = new ProfileDataCenterCoordinator(
-            PluginInterface.GetPluginConfigDirectory(), new DalamudDataCenterConnection(DataManager, ClientState, ObjectTable));
+            PluginInterface.GetPluginConfigDirectory(), new DalamudDataCenterConnection(DataManager, ClientState, ObjectTable, GameGui));
         profileLoginCoordinator = new ProfileLoginCoordinator(
             PluginInterface.GetPluginConfigDirectory(),
             new DalamudCharacterLoginDriver(new DalamudLifestreamLogin(PluginInterface),
