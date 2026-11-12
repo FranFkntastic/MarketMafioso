@@ -54,7 +54,7 @@ public sealed partial class TradeQueueRunnerTests
         var log = TestPluginLog.Create(out var recording);
         using var runner = new TradeQueueRunner(queue, new(), () => saves++, io, quality, coordinator, log);
 
-        var result = exactRecipient ? runner.Start(new(1, "Recipient", 2, "Siren")) : runner.Start();
+        var result = exactRecipient ? runner.Start(new TradeQueuePartner(1, "Recipient", 2, "Siren")) : runner.Start();
 
         Assert.False(result.Success);
         Assert.Equal(reason, result.Message);
@@ -1315,7 +1315,8 @@ public sealed partial class TradeQueueRunnerTests
 
     private sealed class FakeQualityLowering(
         bool failOnBegin = false,
-        int activeAdvances = 0) : IItemQualityLoweringAutomation
+        int activeAdvances = 0,
+        string? stalledAt = null) : IItemQualityLoweringAutomation
     {
         private int remainingActiveAdvances = activeAdvances;
 
@@ -1358,6 +1359,13 @@ public sealed partial class TradeQueueRunnerTests
                     null,
                     0,
                     false);
+                return Snapshot;
+            }
+
+            if (stalledAt != null)
+            {
+                // Same state, item, and remaining units every tick: active but going nowhere.
+                Snapshot = new(ItemQualityLoweringAutomationState.Preparing, stalledAt, null, 0, true);
                 return Snapshot;
             }
 

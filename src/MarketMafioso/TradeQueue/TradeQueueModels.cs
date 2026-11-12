@@ -98,7 +98,14 @@ public sealed class TradeQueueRecoveryState
     public uint PartnerEntityId { get; set; }
 }
 
-public sealed record TradeQueueStartResult(bool Success, string Message);
+/// <param name="QualityLoweringApprovalRequired">
+/// Set when Start refused because this run would lower HQ items without a matching approval;
+/// carries the current plan so the caller can show it and retry with its signature.
+/// </param>
+public sealed record TradeQueueStartResult(
+    bool Success,
+    string Message,
+    TradeQueueQualityLoweringPreview? QualityLoweringApprovalRequired = null);
 
 public enum TradeQueueValidationCode
 {
