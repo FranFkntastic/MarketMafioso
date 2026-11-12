@@ -72,14 +72,18 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
                 group.Select(item => item.ItemName).First(name => !string.IsNullOrWhiteSpace(name)),
                 group.Sum(item => item.Required),
                 Math.Min(group.Sum(item => item.Shortage), snapshot.Retainers
-                    .SelectMany(retainer => retainer.Bags).SelectMany(bag => bag.Items)
-                    .Where(item => item.ItemId == group.Key).Sum(item => checked((int)item.Quantity)))))
+                    .Sum(retainer => ReconciledStock(retainer, group.Key, group.SelectMany(item => item.QuartermasterRetainers))))))
             .Where(item => item.ShortageQuantity > 0)
             .OrderBy(item => item.ItemId)
             .ToImmutableArray();
         if (items.IsDefaultOrEmpty)
         {
-            LastStatus = "No workshop shortages need retrieval from Quartermaster.";
+            LastStatus = availability.Any(item => item.Shortage > 0 &&
+                snapshot.Retainers.Any(retainer => !QuartermasterStockCoverage.CoversItem(retainer, item.ItemId) ||
+                    item.QuartermasterRetainers.Any(candidate => candidate.RetainerId == retainer.RetainerId &&
+                        candidate.ObservedAtUtc > retainer.ObservedAtUtc && !candidate.StockVerified)))
+                ? "Retainer stock unverified: Quartermaster has no covered stock for these shortages. Last observations are retained; stock is unknown, not absent."
+                : "No workshop shortages need retrieval from Quartermaster.";
             return false;
         }
 
@@ -459,6 +463,21 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
 
     private static string ScopeKey(QuartermasterOwnerScope owner) =>
         $"{owner.LocalContentId!.Value.ToString(CultureInfo.InvariantCulture)}:{owner.HomeWorldId!.Value.ToString(CultureInfo.InvariantCulture)}";
+
+    private static int ReconciledStock(QuartermasterRetainerSnapshot retainer, uint itemId,
+        IEnumerable<QuartermasterRetainerCandidate> candidates)
+    {
+        if (!QuartermasterStockCoverage.CoversItem(retainer, itemId))
+            return 0;
+        var quantity = retainer.Bags.SelectMany(bag => bag.Items)
+            .Where(item => item.ItemId == itemId).Sum(item => checked((int)item.Quantity));
+        var latest = candidates.Where(candidate => candidate.RetainerId == retainer.RetainerId)
+            .OrderBy(candidate => candidate.ObservedAtUtc).LastOrDefault();
+        // A newer direct zero or withdrawn coverage must not be overridden by older RQ bags.
+        return latest is not null && latest.ObservedAtUtc > retainer.ObservedAtUtc
+            ? latest.StockVerified ? Math.Min(quantity, latest.Quantity) : 0
+            : quantity;
+    }
 
     private static string BuildSignature(
         QuartermasterOwnerScope owner,

@@ -54,10 +54,14 @@ public sealed record WorkshopMaterialAvailability(
 {
     public int StockDifferential => PlayerInventory + QuartermasterStock - Required;
     public int RetrievableStock { get; init; }
+    /// <summary>Historical quantity, including uncovered sources; never a retrieval authorization.</summary>
+    public int LastKnownRetainerStock { get; init; }
+    /// <summary>When true, TotalMissing is an upper bound after verified stock, not proof of absence.</summary>
+    public bool StockUnverified { get; init; }
     public string? RetrievalUnavailableReason { get; init; }
     public string? RetrievalNotice => RetrievalUnavailableReason ??
         (QuartermasterStock > RetrievableStock
-            ? $"{QuartermasterStock - RetrievableStock:N0} seen on retainers, not yet in Quartermaster's cache — visit the bell to refresh."
+            ? $"{QuartermasterStock - RetrievableStock:N0} verified on retainers but not covered by Quartermaster's current snapshot."
             : null);
 }
 
@@ -65,4 +69,7 @@ public sealed record QuartermasterRetainerCandidate(
     ulong RetainerId,
     string RetainerName,
     DateTimeOffset ObservedAtUtc,
-    int Quantity);
+    int Quantity)
+{
+    public bool StockVerified { get; init; } = true;
+}
