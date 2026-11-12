@@ -71,7 +71,7 @@
       <Output TaskParameter="Hash" PropertyName="_ProfileManagerPluginSha256" />
     </GetFileHash>
     <WriteLinesToFile File="$(TargetDir)$(AssemblyName).profile-manager-capabilities.json" Overwrite="true"
-                      Lines="{&quot;SchemaVersion&quot;:1,&quot;PluginInternalName&quot;:&quot;$(AssemblyName)&quot;,&quot;PluginSha256&quot;:&quot;$(_ProfileManagerPluginSha256)&quot;,&quot;DirectCharacterLoginProtocolVersions&quot;:[1,2]}" />
+                      Lines="{&quot;SchemaVersion&quot;:1,&quot;PluginInternalName&quot;:&quot;$(AssemblyName)&quot;,&quot;PluginSha256&quot;:&quot;$(_ProfileManagerPluginSha256)&quot;,&quot;DirectCharacterLoginProtocolVersions&quot;:[1,2],&quot;DataCenterConnectionProtocolVersions&quot;:[1]}" />
   </Target>
 
   <Target Name="SyncToDevPlugins" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug' and '$(SkipDevPluginSync)' != 'true'">
