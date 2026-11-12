@@ -269,7 +269,7 @@ public sealed class WorkshopMaterialManifestExportService
         IReadOnlyList<WorkshopMaterialAvailability> availability, WorkshopMaterialManifestQuantityMode quantityMode)
     {
         if (quantityMode != WorkshopMaterialManifestQuantityMode.TotalMissing) return null;
-        var unknown = availability.Where(item => item.StockUnverified && item.Shortage > 0)
+        var unknown = availability.Where(item => item.StockUnverified && item.TotalMissing > 0)
             .Select(item => item.ItemName).Distinct().ToArray();
         return unknown.Length == 0 ? null : new(false, WorkshopMaterialManifestExportSeverity.Warning,
             "Total missing is unknown while retainer stock is unverified. Inventory missing can export the player-only shortage instead.",

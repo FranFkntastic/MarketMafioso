@@ -56,6 +56,7 @@ function Write-ProfileManagerCapabilityManifest {
         PluginInternalName = $InternalName
         PluginSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $AssemblyPath).Hash
         DirectCharacterLoginProtocolVersions = @(1, 2)
+        DataCenterConnectionProtocolVersions = @(1)
     }
     try {
         $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
