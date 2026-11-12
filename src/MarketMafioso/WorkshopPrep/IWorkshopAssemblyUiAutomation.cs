@@ -4,6 +4,8 @@ namespace MarketMafioso.WorkshopPrep;
 
 public interface IWorkshopAssemblyUiAutomation : IDisposable
 {
+    void BeginPreparationRun() { }
+    void NotePreparationProgress() { }
     WorkshopAssemblyDiagnostics Diagnostics { get; set; }
 
     void ResetState();
@@ -17,6 +19,10 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
     WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry);
 
     WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry);
+
+    WorkshopAssemblyActionResult TryPrepareMaterials(System.Collections.Generic.IReadOnlyList<WorkshopAssemblyQueueEntry> remainingEntries) =>
+        new(false, "Assembly inventory preparation is unavailable from this automation provider.",
+            MaterialBlocker: WorkshopMaterialBlocker.NativePreparationUnavailable);
 
     WorkshopAssemblyActionResult RecoverStalledMaterialRequest();
 

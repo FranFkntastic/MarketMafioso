@@ -4,6 +4,7 @@ using System.Linq;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.Runtime;
+using Franthropy.Dalamud.Automation.Inventory;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -17,6 +18,11 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     private readonly ExternalAutomationCoordinator externalAutomationCoordinator;
     private readonly IPluginLog log;
     private bool cutsceneSkipRequired;
+    private bool runActive;
+    private readonly WorkshopAssemblyInventoryPreparation preparation;
+    private WorkshopCraftState? preparationCraft;
+    private bool preparing;
+    private string? preparationExit;
     private WorkshopAssemblyDiagnostics diagnostics = WorkshopAssemblyDiagnostics.Disabled;
     private uint? pendingContributionItemId;
     private WorkshopAssemblyPendingConfirmationKind pendingConfirmationKind;
@@ -34,11 +40,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         ISigScanner sigScanner,
         IAgentLifecycle agentLifecycle,
         ExternalAutomationCoordinator externalAutomationCoordinator,
-        WorkshopNativeFaultMonitor faultMonitor)
+        WorkshopNativeFaultMonitor faultMonitor,
+        IGameInteropProvider interopProvider,
+        IDataManager dataManager)
     {
         this.log = log;
         this.faultMonitor = faultMonitor;
         this.externalAutomationCoordinator = externalAutomationCoordinator;
+        preparation = new(new DalamudInventoryMover(sigScanner, interopProvider, dataManager), dataManager);
         uiDriver = new WorkshopAssemblyUiDriver(
             gameGui,
             log,
@@ -62,8 +71,15 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
     }
 
+    public void BeginPreparationRun() => preparation.BeginRun();
+    public void NotePreparationProgress() => preparation.NoteProgress();
+
     public void ResetState()
     {
+        preparation.Suspend();
+        preparationCraft = null;
+        preparing = false;
+        preparationExit = null;
         pendingContributionItemId = null;
         pendingConfirmationKind = WorkshopAssemblyPendingConfirmationKind.None;
         categorySelectedForItemId = null;
@@ -356,11 +372,11 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             if (item.Finished || item.StepsComplete >= item.StepsTotal || !requiredMaterialIds.Contains(item.ItemId))
                 continue;
 
-            if (!WorkshopAssemblyUiDriver.HasItemInSingleSlot(item.ItemId, item.ItemCountPerStep))
+            var inventory = WorkshopAssemblyInventoryPreparation.CheckContribution(item.ItemId, item.ItemName, item.ItemCountPerStep);
+            if (!inventory.Success)
             {
-                return new(
-                    false,
-                    $"Player inventory does not contain {item.ItemCountPerStep}x {item.ItemName} in one slot for workshop contribution.");
+                if (inventory.MaterialBlocker == WorkshopMaterialBlocker.Fragmented) preparation.Require(item);
+                return inventory;
             }
 
             uiDriver.BeginMaterialContribution(materialDelivery, index, item);
@@ -388,6 +404,75 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
         return new(false, $"No unfinished queued material was found for {entry.ProjectName}. {DescribeUiState()}");
     }
+
+    public WorkshopAssemblyActionResult TryPrepareMaterials(IReadOnlyList<WorkshopAssemblyQueueEntry> remainingEntries)
+    {
+        if (!runActive)
+            return new(false, "Assembly no longer owns inventory preparation.");
+        if (!preparing)
+        {
+            preparationCraft = uiDriver.ReadMaterialDelivery()?.CraftState;
+            // Read-only evaluation first: suitable stock must not cause an
+            // unnecessary station exit, hook installation, or inventory move.
+            var preview = preparation.Evaluate(remainingEntries, preparationCraft, Diagnostics, () => false);
+            if (preview.MaterialBlocker != WorkshopMaterialBlocker.Fragmented)
+                return preview;
+            var availability = preparation.Preflight();
+            if (!availability.Success) return availability;
+            preparation.BeginRecovery(string.Join(";", remainingEntries.Select(x => $"{x.WorkshopItemId}:{x.Quantity}")) +
+                (preparationCraft == null ? "" : $"|{preparationCraft.ResultItem}:{preparationCraft.StepsComplete}:" +
+                    string.Join(",", preparationCraft.Items.Select(x => $"{x.ItemId}:{x.ItemCountPerStep}:{x.StepsComplete}:{x.StepsTotal}"))));
+            preparing = true;
+            preparationExit = null;
+        }
+        if (pendingContributionItemId != null)
+        {
+            if (pendingConfirmationKind == WorkshopAssemblyPendingConfirmationKind.MaterialContribution &&
+                uiDriver.TryGetSelectYesNoPrompt(out var prompt) &&
+                WorkshopAssemblyPromptPolicy.IsPromptAllowedForPendingConfirmation(pendingConfirmationKind, prompt) &&
+                uiDriver.TrySelectYesNo(1, prompt, pendingConfirmationKind))
+                return PreparationWait("Declined interrupted material confirmation; will reread native progress after recovery.", true);
+            // A paused request may still be open. Cancel its UI, then reread
+            // authoritative project progress on reentry; never infer a hand-in.
+            RecoverStalledMaterialRequest();
+            return PreparationWait("Closing interrupted material request before inventory recovery.", true);
+        }
+        var delivery = uiDriver.ReadMaterialDelivery();
+        if (delivery != null)
+        {
+            if (preparationExit == "material") return PreparationWait("Waiting for material delivery to close.");
+            preparationCraft = delivery.CraftState;
+            preparationExit = "material";
+            uiDriver.CloseMaterialDelivery(delivery);
+            return PreparationWait("Leaving material delivery before preparing all assembly materials.", true);
+        }
+        if (uiDriver.IsCraftingLogVisible)
+        {
+            if (preparationExit == "log") return PreparationWait("Waiting for company crafting log to close.");
+            preparationExit = "log";
+            CloseCraftingLog();
+            return PreparationWait("Closing company crafting log for inventory preparation.", true);
+        }
+        if (preparationExit == "station" && uiDriver.IsSelectStringVisible)
+            return PreparationWait("Waiting for fabrication station dismissal.");
+        if (uiDriver.TryLeaveStationForPreparation())
+        {
+            preparationExit = "station";
+            return PreparationWait("Leaving fabrication station for batched inventory preparation.", true);
+        }
+        if (!DalamudInventoryMover.CanMove)
+            return PreparationWait("Waiting for native inventory movement permission after station exit.");
+        var result = preparation.Evaluate(remainingEntries, preparationCraft, Diagnostics, () => runActive);
+        if (result.Success)
+        {
+            preparing = false;
+            preparationCraft = null;
+        }
+        return result;
+    }
+
+    private static WorkshopAssemblyActionResult PreparationWait(string message, bool action = false) =>
+        new(false, message, ActionTaken: action, IsWaiting: true, MaterialBlocker: WorkshopMaterialBlocker.InventoryUnknown);
 
     public WorkshopAssemblyActionResult RecoverStalledMaterialRequest()
     {
@@ -479,11 +564,23 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         var materialDelivery = uiDriver.ReadMaterialDelivery();
         if (materialDelivery == null)
         {
+            if (uiDriver.HasSelectStringEntry(text =>
+                    WorkshopAssemblyPromptPolicy.IsAdvancePhaseEntry(text) ||
+                    WorkshopAssemblyPromptPolicy.IsCompleteConstructionEntry(text) ||
+                    WorkshopAssemblyPromptPolicy.IsCollectFinishedProductEntry(text)))
+            {
+                // These actions are offered only after every contribution in
+                // the phase has completed. Unlike the general contribute menu,
+                // they establish progress without reopening material delivery.
+                return new(true, $"Observed completed workshop phase for {entry.ProjectName}.",
+                    ActiveMaterialItemId: materialItemId);
+            }
             if (uiDriver.HasSelectStringEntry(WorkshopAssemblyPromptPolicy.IsPostContributionMenuEntry))
             {
                 return new(
-                    true,
-                    $"Observed workshop menu after contributing material {materialItemId}.",
+                    false,
+                    $"Workshop menu observed; reopening material delivery to verify contribution {materialItemId} progress.",
+                    RequiresWorkshopReopen: true,
                     ActiveMaterialItemId: materialItemId,
                     ActiveMaterialStepsComplete: previousStepsComplete);
             }
@@ -535,11 +632,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
         cutsceneSkipRequired = requireCutsceneSkip;
         faultMonitor.Arm();
+        runActive = true;
         return null;
     }
 
     public void EndRun()
     {
+        runActive = false;
+        preparation.Suspend();
         faultMonitor.Disarm();
         cutsceneSkipRequired = false;
         externalAutomationCoordinator.ReleaseTextAdvanceCutsceneSkip();
@@ -617,6 +717,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public void Dispose()
     {
+        runActive = false;
+        preparation.Dispose();
         uiDriver.Dispose();
     }
 

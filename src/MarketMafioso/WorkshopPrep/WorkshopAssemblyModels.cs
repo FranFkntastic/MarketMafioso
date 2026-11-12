@@ -18,6 +18,7 @@ public enum WorkshopAssemblyRunnerState
     Complete,
     Stopped,
     Failed,
+    PreparingMaterials,
 }
 
 internal enum WorkshopAssemblyPendingConfirmationKind
@@ -41,7 +42,14 @@ public sealed record WorkshopAssemblyQueueEntry(
     int EstimatedContributionSteps,
     int EstimatedPhaseCount,
     uint DraftId = WorkshopDraftUnlocks.NoDraft,
-    string? DraftName = null);
+    string? DraftName = null)
+{
+    public IReadOnlyList<WorkshopContributionBatch> ContributionSchedule { get; init; } = [];
+}
+
+public sealed record WorkshopContributionBatch(int Phase, uint ItemId, string ItemName, int Quantity, int Count, int StackCapacity);
+
+public enum WorkshopMaterialBlocker { None, InventoryUnknown, Shortage, Fragmented, NativePreparationUnavailable }
 
 public sealed record WorkshopAssemblyPlan(
     IReadOnlyList<WorkshopAssemblyQueueEntry> Entries,
@@ -68,7 +76,8 @@ public sealed record WorkshopAssemblyActionResult(
     uint? ActiveMaterialItemId = null,
     uint? ActiveMaterialStepsComplete = null,
     bool IsProjectUnavailable = false,
-    bool IsWaiting = false);
+    bool IsWaiting = false,
+    WorkshopMaterialBlocker MaterialBlocker = WorkshopMaterialBlocker.None);
 
 public sealed record WorkshopAssemblyPreflightResult(
     bool CanStart,

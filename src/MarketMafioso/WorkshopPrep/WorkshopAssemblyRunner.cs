@@ -33,6 +33,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private uint? pendingProgressStepsComplete;
     private int stalledMaterialRequestRecoveryCount;
     private WorkshopAssemblyRunnerState stateBeforePause = WorkshopAssemblyRunnerState.Idle;
+    private DateTimeOffset stateStartedBeforePause;
+    private int progressReopenAttempts;
     private readonly WorkshopAssemblyActionGuard actionGuard = new();
     private DateTimeOffset lastStationInteractAt = DateTimeOffset.MinValue;
     private DateTimeOffset lastNativeFaultPollAt = DateTimeOffset.MinValue;
@@ -125,6 +127,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         activeMaterialItemId = null;
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        progressReopenAttempts = 0;
         stalledMaterialRequestRecoveryCount = 0;
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
         continueAt = DateTimeOffset.MinValue;
@@ -138,7 +141,9 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         wrapUpMessage = null;
         actionGuard.Reset();
         uiAutomation.ResetState();
-        SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, "Waiting for fabrication station UI.");
+        uiAutomation.BeginPreparationRun();
+        SetState(inspect ? WorkshopAssemblyRunnerState.WaitingForFabricationStation : WorkshopAssemblyRunnerState.PreparingMaterials,
+            inspect ? "Waiting for fabrication station UI." : "Preparing assembly materials...");
         diagnostics.Record(
             "plan",
             "Workshop assembly plan loaded.",
@@ -161,6 +166,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return new(false, "Workshop assembly is not running.");
 
         stateBeforePause = Progress.State;
+        stateStartedBeforePause = stateStartedAt;
         framework.Update -= OnFrameworkUpdate;
         uiAutomation.EndRun();
         SetState(WorkshopAssemblyRunnerState.Paused, "Workshop assembly paused.");
@@ -186,7 +192,9 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             ? WorkshopAssemblyRunnerState.WaitingForFabricationStation
             : stateBeforePause;
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
-        SetState(resumeState, "Workshop assembly resumed.");
+        SetState(resumeState, "Workshop assembly resumed; retaining pending confirmation, lockout and progress checks.");
+        if (resumeState == WorkshopAssemblyRunnerState.WaitingForContributionLockout)
+            stateStartedAt = stateStartedBeforePause;
         diagnostics.Record("resumed", "Workshop assembly resumed by user.");
         framework.Update += OnFrameworkUpdate;
         log.Information("[MarketMafioso] Native workshop assembly resumed by user.");
@@ -270,6 +278,10 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var entry = activePlan.Entries[activeEntryIndex];
         switch (Progress.State)
         {
+            case WorkshopAssemblyRunnerState.PreparingMaterials:
+                TickPreparingMaterials();
+                break;
+
             case WorkshopAssemblyRunnerState.WaitingForFabricationStation:
                 TickWaitingForFabricationStation();
                 break;
@@ -298,6 +310,31 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, "Waiting for fabrication station UI.");
                 break;
         }
+    }
+
+    private void TickPreparingMaterials()
+    {
+        var remaining = activePlan!.Entries.Skip(activeEntryIndex).ToArray();
+        if (remaining.Length != 0)
+            remaining[0] = remaining[0] with { Quantity = remaining[0].Quantity - activeEntryCompletedQuantity };
+        var result = uiAutomation.TryPrepareMaterials(remaining);
+        if (result.MaterialBlocker == WorkshopMaterialBlocker.InventoryUnknown)
+        {
+            // Inventory loading is asynchronous, unlike known fragmentation.
+            // Pace retries and use the existing bounded state deadline.
+            continueAt = Now + NativeFaultPollInterval;
+            if (result.ActionTaken) diagnostics.Record("material-preparation", result.Message);
+            // Native ack/reconciliation owns its own bounded window. Do not let
+            // the menu's ten-second deadline preempt it, but bound this journey.
+            if (Now - stateStartedAt > TimeSpan.FromMinutes(2))
+                throw new InvalidOperationException(result.Message);
+            Progress = BuildProgress(WorkshopAssemblyRunnerState.PreparingMaterials, "Preparing assembly materials...");
+            return;
+        }
+        if (!result.Success)
+            throw new InvalidOperationException(result.Message);
+        diagnostics.Record("material-preparation", result.Message);
+        SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, "Rereading fabrication station progress.");
     }
 
     private void TickWaitingForFabricationStation()
@@ -342,6 +379,11 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         // Crafting-log navigation stays paced: it is a handful of actions per
         // project, and re-firing it is what crashed the game on Nov 6.
         NoteAction(result, alwaysPace: true);
+        if (result.IsProjectComplete)
+        {
+            CompleteActiveProject(entry, result.Message);
+            return;
+        }
         if (result.RequiresWorkshopReopen)
         {
             activeMaterialItemId = null;
@@ -358,7 +400,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         if (result.Success)
         {
-            SetState(WorkshopAssemblyRunnerState.SubmittingMaterial, result.Message);
+            SetState(pendingProgressMaterialItemId != null ? WorkshopAssemblyRunnerState.WaitingForContributionLockout :
+                WorkshopAssemblyRunnerState.SubmittingMaterial, result.Message);
             return;
         }
 
@@ -393,6 +436,20 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         var result = uiAutomation.TrySubmitNextMaterial(entry);
         activeMaterialItemId = result.ActiveMaterialItemId;
+        if (result.MaterialBlocker == WorkshopMaterialBlocker.Fragmented)
+        {
+            diagnostics.Record("fragmented-material", result.Message, BuildActiveDetails(entry));
+            SetState(WorkshopAssemblyRunnerState.PreparingMaterials, "Preparing assembly materials...");
+            return;
+        }
+        if (result.MaterialBlocker == WorkshopMaterialBlocker.Shortage)
+            throw new InvalidOperationException(result.Message);
+        if (result.MaterialBlocker == WorkshopMaterialBlocker.InventoryUnknown)
+        {
+            continueAt = Now + NativeFaultPollInterval;
+            HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.SubmittingMaterial, result);
+            return;
+        }
         if (result.ActionTaken && result.ActiveMaterialItemId != null && result.ActiveMaterialStepsComplete != null)
         {
             pendingProgressMaterialItemId = result.ActiveMaterialItemId;
@@ -489,6 +546,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     private void StartContributionLockout(WorkshopAssemblyActionResult result)
     {
+        progressReopenAttempts = 0;
         stalledMaterialRequestRecoveryCount = 0;
         continueAt = Now + WorkshopAssemblyTiming.PostContributionLockout;
         diagnostics.Record(
@@ -522,8 +580,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         RecordActionResult("lockout-wait", entry, result);
         if (result.RequiresWorkshopReopen)
         {
-            pendingProgressMaterialItemId = null;
-            pendingProgressStepsComplete = null;
+            if (++progressReopenAttempts > 2)
+                throw new InvalidOperationException($"Contribution progress could not be reconciled after automatic station reentry. {result.Message}");
             activeMaterialItemId = null;
             SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, result.Message);
             return;
@@ -537,13 +595,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                     "progress-reconcile",
                     "Workshop material progress remained unchanged; reopening the fabrication station to reconcile authoritative state.",
                     BuildActiveDetails(entry));
-                pendingProgressMaterialItemId = null;
-                pendingProgressStepsComplete = null;
-                activeMaterialItemId = null;
+                if (++progressReopenAttempts > 2)
+                    throw new InvalidOperationException($"Authoritative contribution progress did not advance for {entry.ProjectName} after automatic reconciliation; no further submission sent. {result.Message}");
                 uiAutomation.ResetState();
-                SetState(
-                    WorkshopAssemblyRunnerState.WaitingForFabricationStation,
-                    $"Workshop material progress remained unchanged for {entry.ProjectName}; reopening the fabrication station.");
+                activeMaterialItemId = null;
+                SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation,
+                    $"Reopening {entry.ProjectName} to reconcile pending contribution progress.");
                 return;
             }
 
@@ -553,6 +610,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        uiAutomation.NotePreparationProgress();
         actionGuard.NoteProgress();
         diagnostics.Record(
             "lockout-end",
@@ -582,11 +640,15 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     private void CompleteActiveProject(WorkshopAssemblyQueueEntry entry, string message)
     {
+        uiAutomation.NotePreparationProgress();
         onProjectRetrieved(entry);
         actionGuard.NoteProgress();
         activeEntryCompletedQuantity++;
         stalledMaterialRequestRecoveryCount = 0;
         activeMaterialItemId = null;
+        pendingProgressMaterialItemId = null;
+        pendingProgressStepsComplete = null;
+        progressReopenAttempts = 0;
         if (activeEntryCompletedQuantity >= entry.Quantity)
         {
             activeEntryIndex++;
@@ -603,7 +665,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             "project-complete",
             message,
             BuildActiveDetails(entry));
-        SetState(WorkshopAssemblyRunnerState.OpeningProject, message);
+        SetState(WorkshopAssemblyRunnerState.PreparingMaterials, "Preparing assembly materials...");
     }
 
     // A project the Free Company cannot craft (usually a schematic it has not
@@ -613,6 +675,9 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var remaining = Math.Max(0, entry.Quantity - activeEntryCompletedQuantity);
         skippedProjects.Add(remaining == 1 ? entry.ProjectName : $"{entry.ProjectName} x{remaining}");
         skippedQuantity += remaining;
+        pendingProgressMaterialItemId = null;
+        pendingProgressStepsComplete = null;
+        progressReopenAttempts = 0;
         diagnostics.Record("project-skipped", message, BuildActiveDetails(entry));
         log.Warning("[MarketMafioso] {Message}", message);
         actionGuard.NoteProgress();
