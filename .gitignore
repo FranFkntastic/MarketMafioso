@@ -54,4 +54,3 @@ MarketMafioso/dev-plugin.local.json
 
 # Logs
 *.log
-!tests/MarketMafioso.Tests/Fixtures/**/route.log

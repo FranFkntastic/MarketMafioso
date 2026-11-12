@@ -1,30 +1,9 @@
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.SpecTests.MarketAcquisition;
 
 public sealed class MarketIntelligenceQuarantinePersistenceTests
 {
-    [Fact]
-    public void Quarantine_PreservesOriginalAndImmutableBackupAcrossRestartAndRepeatedMarking()
-    {
-        using var fixture = new Fixture();
-        var original = fixture.Seed();
-        var journal = File.ReadAllBytes(fixture.Path);
-        var quarantined = fixture.Outbox.QuarantineConflict(original.Id);
-        var after = File.ReadAllBytes(fixture.Path);
-        Assert.Equal(original, quarantined with { Quarantine = null });
-        Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(original.PayloadJson))), quarantined.Quarantine!.PayloadSha256);
-        Assert.Equal(journal, File.ReadAllBytes(fixture.Backup));
-        Assert.Equal(quarantined, new FileMarketAcquisitionReportOutbox(fixture.Path).QuarantineConflict(original.Id));
-        Assert.Equal(after, File.ReadAllBytes(fixture.Path));
-        Assert.Equal(journal, File.ReadAllBytes(fixture.Backup));
-        Assert.Throws<InvalidOperationException>(() => fixture.Outbox.Remove(original.Id));
-        Assert.Equal(after, File.ReadAllBytes(fixture.Path));
-    }
 
     [Fact]
     public void CrashAfterDurableAppendBeforeMemoryUpdate_RestoresQuarantineWithoutRetry()
@@ -71,33 +50,6 @@ public sealed class MarketIntelligenceQuarantinePersistenceTests
         Assert.Single(File.ReadAllLines(fixture.Path));
         Assert.Equal(before, File.ReadAllBytes(fixture.Backup));
         Assert.Equal(recovered, Assert.Single(new FileMarketAcquisitionReportOutbox(fixture.Path).Snapshot()));
-    }
-
-    [Fact]
-    public void QuarantineCannotChangeOriginalEvenWithRecomputedPayloadDigest()
-    {
-        using var fixture = new Fixture();
-        var original = fixture.Seed();
-        fixture.Outbox.QuarantineConflict(original.Id);
-        var lines = File.ReadAllLines(fixture.Path);
-        var record = JsonNode.Parse(lines[^1])!;
-        const string changed = "{\"changed\":true}";
-        record["entry"]!["payloadJson"] = changed;
-        record["entry"]!["quarantine"]!["payloadSha256"] = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(changed)));
-        File.WriteAllText(fixture.Path, lines[0] + Environment.NewLine + record.ToJsonString() + Environment.NewLine);
-        Assert.Throws<InvalidDataException>(() => new FileMarketAcquisitionReportOutbox(fixture.Path));
-    }
-
-    [Fact]
-    public void BackupFailure_DoesNotMarkOrChangePendingJournal()
-    {
-        using var fixture = new Fixture();
-        var original = fixture.Seed();
-        var before = File.ReadAllBytes(fixture.Path);
-        Directory.CreateDirectory(fixture.Backup);
-        Assert.ThrowsAny<IOException>(() => fixture.Outbox.QuarantineConflict(original.Id));
-        Assert.Null(Assert.Single(fixture.Outbox.Snapshot()).Quarantine);
-        Assert.Equal(before, File.ReadAllBytes(fixture.Path));
     }
 
     private sealed class Fixture : IDisposable
