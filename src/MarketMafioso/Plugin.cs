@@ -234,7 +234,8 @@ public sealed class Plugin : IDalamudPlugin
                     Log,
                     new DalamudPandoraFeatureControl(PluginInterface),
                     new DalamudTextAdvanceExternalControl(PluginInterface)),
-                new WorkshopNativeFaultMonitor(AgentLifecycle, Log, ResolveDalamudLogPath())),
+                new WorkshopNativeFaultMonitor(AgentLifecycle, Log, ResolveDalamudLogPath()),
+                GameInteropProvider, DataManager),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"),
             entry =>
             {

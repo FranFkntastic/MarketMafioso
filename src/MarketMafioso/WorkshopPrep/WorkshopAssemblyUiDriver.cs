@@ -512,6 +512,16 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         }
     }
 
+    public bool TryLeaveStationForPreparation()
+    {
+        // Never select cancel-project or advance/collect while leaving. Match
+        // only the non-mutating dismissal in an identified workshop menu.
+        if (!HasSelectStringEntry(WorkshopAssemblyPromptPolicy.IsPostContributionMenuEntry) &&
+            !HasSelectStringEntry(text => text == WorkshopAssemblyPromptPolicy.ViewCraftingLogEntry))
+            return false;
+        return TrySelectString(text => text == WorkshopAssemblyPromptPolicy.NothingEntry);
+    }
+
     public unsafe bool TryDismissIdleStationMenu()
     {
         var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);

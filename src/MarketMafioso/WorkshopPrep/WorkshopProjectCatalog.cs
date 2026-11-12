@@ -64,13 +64,14 @@ public sealed class WorkshopProjectCatalog
     {
         var processRows = sequence.CompanyCraftPart
             .Where(part => part.RowId != 0)
-            .SelectMany(part => part.Value.CompanyCraftProcess)
-            .SelectMany(process => Enumerable.Range(0, process.Value.SupplyItem.Count)
+            .SelectMany((part, phase) => part.Value.CompanyCraftProcess.Select(process => new { process, phase }))
+            .SelectMany(row => Enumerable.Range(0, row.process.Value.SupplyItem.Count)
                 .Select(index => new
                 {
-                    SupplyItemId = process.Value.SupplyItem[index].RowId,
-                    SetQuantity = process.Value.SetQuantity[index],
-                    SetsRequired = process.Value.SetsRequired[index],
+                    Phase = row.phase,
+                    SupplyItemId = row.process.Value.SupplyItem[index].RowId,
+                    SetQuantity = row.process.Value.SetQuantity[index],
+                    SetsRequired = row.process.Value.SetsRequired[index],
                 }))
             .Where(x => x.SupplyItemId > 0 &&
                         x.SetQuantity > 0 &&
@@ -111,6 +112,11 @@ public sealed class WorkshopProjectCatalog
             contributionSteps,
             Math.Max(1, phaseCount),
             sequence.CompanyCraftDraft.RowId,
-            sequence.CompanyCraftDraft.ValueNullable?.Name.ToString());
+            sequence.CompanyCraftDraft.ValueNullable?.Name.ToString())
+        {
+            ContributionSchedule = processRows.Select(row => new WorkshopContributionBatch(
+                row.Phase, supplyItems[row.SupplyItemId].RowId, supplyItems[row.SupplyItemId].Name.ToString(),
+                row.SetQuantity, row.SetsRequired, checked((int)supplyItems[row.SupplyItemId].StackSize))).ToArray(),
+        };
     }
 }

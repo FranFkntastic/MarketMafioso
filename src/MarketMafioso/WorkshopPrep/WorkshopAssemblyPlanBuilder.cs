@@ -36,7 +36,10 @@ public static class WorkshopAssemblyPlanBuilder
                 project.EstimatedContributionSteps,
                 project.EstimatedPhaseCount,
                 project.DraftId,
-                project.DraftName));
+                project.DraftName)
+            {
+                ContributionSchedule = project.ContributionSchedule,
+            });
 
             foreach (var material in project.Materials)
             {

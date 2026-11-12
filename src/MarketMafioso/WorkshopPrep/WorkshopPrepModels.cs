@@ -30,7 +30,10 @@ public sealed record WorkshopProjectDefinition(
     int EstimatedContributionSteps = 0,
     int EstimatedPhaseCount = 1,
     uint DraftId = WorkshopDraftUnlocks.NoDraft,
-    string? DraftName = null);
+    string? DraftName = null)
+{
+    public IReadOnlyList<WorkshopContributionBatch> ContributionSchedule { get; init; } = [];
+}
 
 public sealed record WorkshopMaterialRequirement(
     uint ItemId,
