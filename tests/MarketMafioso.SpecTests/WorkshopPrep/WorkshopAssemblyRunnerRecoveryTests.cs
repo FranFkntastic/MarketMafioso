@@ -23,6 +23,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         runner.Start(BuildPlan());
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
         Assert.Equal(WorkshopAssemblyRunnerState.SubmittingMaterial, runner.Progress.State);
 
         clock.Advance(TimeSpan.FromSeconds(9));
@@ -67,6 +68,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
         clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
         frameworkDriver.Tick(framework);
         Assert.Equal(WorkshopAssemblyRunnerState.WaitingForContributionLockout, runner.Progress.State);
@@ -97,6 +99,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
         Assert.Equal(WorkshopAssemblyRunnerState.OpeningProject, runner.Progress.State);
 
@@ -141,6 +144,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
         clock.Advance(WorkshopAssemblyTiming.UiInteractionDelay);
         frameworkDriver.Tick(framework);
         Assert.Equal(WorkshopAssemblyRunnerState.WaitingForContributionLockout, runner.Progress.State);
@@ -181,6 +185,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
 
         clock.Advance(WorkshopAssemblyTiming.AddonTimeout + TimeSpan.FromMilliseconds(1));
         frameworkDriver.Tick(framework);
@@ -217,6 +222,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         for (var attempt = 0; attempt < 4; attempt++)
         {
             frameworkDriver.Tick(framework);
@@ -246,6 +252,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         Assert.Equal(1, ui.BeginRunCount);
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
@@ -280,6 +287,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
 
         Assert.Single(ui.OpenProjectResults);
         Assert.True(runner.IsRunning);
@@ -299,6 +307,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
         for (var index = 0; index < 6 && runner.IsRunning; index++)
         {
@@ -328,6 +337,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         for (var index = 0; index < 5; index++)
             frameworkDriver.Tick(framework);
 
@@ -353,6 +363,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         runner.Start(BuildPlan());
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
         ui.FaultOnNextSubmit = "The game crashed while handling Selected request item selector.";
         frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
@@ -376,6 +387,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         for (var index = 0; index < 6; index++)
             frameworkDriver.Tick(framework);
 
@@ -408,6 +420,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         for (var index = 0; index < 40; index++)
         {
             frameworkDriver.Tick(framework);
@@ -431,6 +444,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         for (var index = 0; index < 6; index++)
         {
             frameworkDriver.Tick(framework);
@@ -540,6 +554,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
         frameworkDriver.Tick(framework);
+        frameworkDriver.Tick(framework);
 
         Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
         Assert.Contains("TextAdvance stopped skipping", runner.Progress.Message);
@@ -559,6 +574,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         frameworkDriver.Tick(framework);
         Assert.Equal(WorkshopAssemblyRunnerState.Failed, runner.Progress.State);
         Assert.Equal(1, ui.CaptureForensicsCount);
@@ -625,6 +641,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(plan);
+        frameworkDriver.Tick(framework);
         for (var index = 0; index < 12 && runner.IsRunning; index++)
         {
             frameworkDriver.Tick(framework);
@@ -655,6 +672,7 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
 
         using var runner = CreateRunner(framework, ui, clock);
         runner.Start(BuildPlan());
+        frameworkDriver.Tick(framework);
         for (var index = 0; index < 8 && runner.IsRunning; index++)
         {
             frameworkDriver.Tick(framework);
@@ -705,6 +723,9 @@ public sealed class WorkshopAssemblyRunnerRecoveryTests
         public void ResetState() => ResetCount++;
 
         public bool IsFabricationStationUiReady() => FabricationStationReady;
+
+        public WorkshopAssemblyActionResult TryPrepareMaterials(IReadOnlyList<WorkshopAssemblyQueueEntry> remainingEntries) =>
+            new(true, "Fixture inventory is already prepared.");
 
         public Queue<WorkshopAssemblyActionResult> CutsceneResults { get; } = [];
 

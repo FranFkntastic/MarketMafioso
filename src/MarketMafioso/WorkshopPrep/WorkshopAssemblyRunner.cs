@@ -598,6 +598,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 if (++progressReopenAttempts > 2)
                     throw new InvalidOperationException($"Authoritative contribution progress did not advance for {entry.ProjectName} after automatic reconciliation; no further submission sent. {result.Message}");
                 uiAutomation.ResetState();
+                activeMaterialItemId = null;
                 SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation,
                     $"Reopening {entry.ProjectName} to reconcile pending contribution progress.");
                 return;
