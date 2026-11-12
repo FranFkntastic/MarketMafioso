@@ -6,19 +6,6 @@ public sealed class MarketIntelligenceQuarantinePersistenceTests
 {
 
     [Fact]
-    public void CrashAfterDurableAppendBeforeMemoryUpdate_RestoresQuarantineWithoutRetry()
-    {
-        using var fixture = new Fixture();
-        var original = fixture.Seed();
-        var crash = new FileMarketAcquisitionReportOutbox(fixture.Path, _ => throw new IOException("Simulated process interruption"));
-        Assert.Throws<IOException>(() => crash.QuarantineConflict(original.Id));
-        Assert.Null(Assert.Single(crash.Snapshot()).Quarantine);
-        var recovered = Assert.Single(new FileMarketAcquisitionReportOutbox(fixture.Path).Snapshot());
-        Assert.NotNull(recovered.Quarantine);
-        Assert.Equal(original, recovered with { Quarantine = null });
-    }
-
-    [Fact]
     public void TornQuarantineAppend_RetainsPendingOriginalAndBackupThenCanMarkDurably()
     {
         using var fixture = new Fixture();

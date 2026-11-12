@@ -75,6 +75,22 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.Equal("Maduin", Assert.Single(await fixture.Store.GetLatestByCharacterAsync([fixture.AccountId], CancellationToken.None)).Report.HomeWorld);
     }
 
+    [Fact]
+    public async Task HomeWorldTransfer_DoesNotMergeNamesZeroIdsOrAccounts()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var otherAccount = await fixture.CreateAccountAsync("Other");
+        foreach (var (account, world, id) in new[]
+                 { (fixture.AccountId, "Siren", 123UL), (fixture.AccountId, "Balmung", 456UL),
+                   (fixture.AccountId, "Gilgamesh", 0UL), (fixture.AccountId, "Faerie", 0UL), (otherAccount, "Maduin", 123UL) })
+            await fixture.Store.SaveAsync(account, CreateReport("Same Name", world, 42) with
+            {
+                Retainers = [Retainer("Same Retainer", id, "Same Name", world, 12)],
+            }, null, null, CancellationToken.None);
+        Assert.Equal(4, (await fixture.Store.GetLatestByCharacterAsync([fixture.AccountId], CancellationToken.None)).Count);
+        Assert.Single(await fixture.Store.GetLatestByCharacterAsync([otherAccount], CancellationToken.None));
+    }
+
     private static InventoryReport CreateReport(string characterName, string homeWorld, uint itemId) =>
         new()
         {
@@ -184,6 +200,20 @@ public sealed class InventoryReportStoreSqliteTests
                 Store = new InventoryReportStore(connectionFactory, configuration, NullLogger<InventoryReportStore>.Instance),
                 AccountId = accountId,
             };
+        }
+
+        public async Task<long> CreateAccountAsync(string displayName)
+        {
+            await using var connection = await connectionFactory.OpenConnectionAsync(CancellationToken.None);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO accounts (display_name, created_at_utc)
+                VALUES ($displayName, $createdAt);
+                SELECT last_insert_rowid();
+                """;
+            command.Parameters.AddWithValue("$displayName", displayName);
+            command.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
+            return (long)(await command.ExecuteScalarAsync(CancellationToken.None))!;
         }
 
         public Task<Microsoft.Data.Sqlite.SqliteConnection> OpenConnectionAsync() =>

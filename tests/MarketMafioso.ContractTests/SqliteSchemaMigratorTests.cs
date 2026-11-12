@@ -52,6 +52,37 @@ public sealed class SqliteSchemaMigratorTests
         Assert.Equal("2026-08-11T03:00:00Z", await ScalarStringAsync(verify, "SELECT last_seen_at_utc FROM characters WHERE id = 10"));
     }
 
+    [Fact]
+    public async Task MigrateAsync_PreservesAmbiguousIncompleteIdentityForDiagnostics()
+    {
+        var databasePath = CreateDatabasePath();
+        var factory = CreateFactory(databasePath);
+        var migrator = new SqliteSchemaMigrator(factory, NullLogger<SqliteSchemaMigrator>.Instance);
+        await migrator.MigrateAsync(CancellationToken.None);
+
+        await using (var connection = await factory.OpenConnectionAsync(CancellationToken.None))
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                INSERT INTO accounts (id, display_name, created_at_utc) VALUES (1, 'Default', '2026-08-11T00:00:00Z');
+                INSERT INTO characters (account_id, character_name, home_world, first_seen_at_utc, last_seen_at_utc)
+                VALUES
+                    (1, 'Same Name', 'Siren', '2026-08-11T01:00:00Z', '2026-08-11T01:00:00Z'),
+                    (1, 'Same Name', 'Cactuar', '2026-08-11T01:00:00Z', '2026-08-11T01:00:00Z'),
+                    (1, 'Same Name', NULL, '2026-08-11T01:00:00Z', '2026-08-11T01:00:00Z');
+                INSERT INTO dashboard_preferences (owner_kind, owner_key, scope, preferences_json, updated_at_utc)
+                VALUES ('user', '1', 'dashboard', json_object('defaultCharacterId', last_insert_rowid()), '2026-08-11T03:00:00Z');
+                """;
+            await command.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+
+        await migrator.MigrateAsync(CancellationToken.None);
+
+        await using var verify = await factory.OpenConnectionAsync(CancellationToken.None);
+        Assert.Equal(3, await ScalarLongAsync(verify, "SELECT count(*) FROM characters"));
+        Assert.Null(await ScalarNullableLongAsync(verify, "SELECT json_extract(preferences_json, '$.defaultCharacterId') FROM dashboard_preferences"));
+    }
+
     private static SqliteConnectionFactory CreateFactory(string databasePath, IConfiguration? configuration = null)
     {
         configuration ??= CreateConfiguration(databasePath);
@@ -92,6 +123,14 @@ public sealed class SqliteSchemaMigratorTests
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         return (long)(await command.ExecuteScalarAsync(CancellationToken.None))!;
+    }
+
+    private static async Task<long?> ScalarNullableLongAsync(SqliteConnection connection, string sql)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        var value = await command.ExecuteScalarAsync(CancellationToken.None);
+        return value is null or DBNull ? null : (long)value;
     }
 
     private sealed class TestHostEnvironment(string contentRootPath) : IHostEnvironment
