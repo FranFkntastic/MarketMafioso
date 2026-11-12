@@ -106,7 +106,7 @@ public sealed class WorkshopVendorProcurementPlanner
             var selected = candidate is not null &&
                            draft.VendorNeed > 0 &&
                            (includedItems.Contains(draft.Availability.ItemId) ||
-                            (!craftable && !excludedItems.Contains(draft.Availability.ItemId)));
+                            (!draft.Availability.StockUnverified && !craftable && !excludedItems.Contains(draft.Availability.ItemId)));
             var approved = approvedQuantities.TryGetValue(draft.Availability.ItemId, out var configured)
                 ? Math.Clamp(configured, 0, draft.VendorNeed)
                 : draft.VendorNeed;

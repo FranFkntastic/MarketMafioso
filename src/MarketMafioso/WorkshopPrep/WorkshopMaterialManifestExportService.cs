@@ -107,6 +107,7 @@ public sealed class WorkshopMaterialManifestExportService
         DateTime exportedAt,
         string? nameOverride)
     {
+        if (UnverifiedExport(availability, quantityMode) is { } unverified) return unverified;
         var materials = BuildExportMaterials(availability, quantityMode);
         if (materials.Count == 0)
             return Info("No missing workshop materials to export.");
@@ -132,6 +133,7 @@ public sealed class WorkshopMaterialManifestExportService
         DateTime exportedAt,
         IWorkshopMaterialCraftRecipeResolver recipeResolver)
     {
+        if (UnverifiedExport(availability, quantityMode) is { } unverified) return unverified;
         var materials = BuildExportMaterials(availability, quantityMode);
         if (materials.Count == 0)
             return Info("No missing workshop materials to export.");
@@ -190,6 +192,7 @@ public sealed class WorkshopMaterialManifestExportService
     {
         ArgumentNullException.ThrowIfNull(recipeResolver);
         ArgumentNullException.ThrowIfNull(catalog);
+        if (UnverifiedExport(availability, quantityMode) is { } unverified) return unverified;
         var materials = BuildExportMaterials(availability, quantityMode);
         if (materials.Count == 0)
             return Info("No missing workshop materials to export.");
@@ -260,6 +263,17 @@ public sealed class WorkshopMaterialManifestExportService
             string.Empty,
             0,
             []);
+    }
+
+    private static WorkshopMaterialManifestExportResult? UnverifiedExport(
+        IReadOnlyList<WorkshopMaterialAvailability> availability, WorkshopMaterialManifestQuantityMode quantityMode)
+    {
+        if (quantityMode != WorkshopMaterialManifestQuantityMode.TotalMissing) return null;
+        var unknown = availability.Where(item => item.StockUnverified && item.TotalMissing > 0)
+            .Select(item => item.ItemName).Distinct().ToArray();
+        return unknown.Length == 0 ? null : new(false, WorkshopMaterialManifestExportSeverity.Warning,
+            "Total missing is unknown while retainer stock is unverified. Inventory missing can export the player-only shortage instead.",
+            string.Empty, 0, unknown);
     }
 
     private static List<WorkshopMaterialAvailability> BuildExportMaterials(

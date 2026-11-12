@@ -61,10 +61,17 @@ public sealed record QuartermasterRetainerSnapshot(
     ImmutableArray<QuartermasterBagSnapshot> Bags,
     ImmutableArray<QuartermasterListingSnapshot> Listings)
 {
+    public QuartermasterStockCoverageFlags? StockCoverage { get; init; }
     public ImmutableArray<string> RequestedSources { get; init; } = [];
     public ImmutableArray<string> ObservedSources { get; init; } = [];
     public DateTimeOffset? GilObservedAtUtc { get; init; }
     public DateTimeOffset? ListingsObservedAtUtc { get; init; }
+}
+
+public sealed record QuartermasterStockCoverageFlags
+{
+    public bool? Ordinary { get; init; }
+    public bool? Crystals { get; init; }
 }
 
 public sealed record QuartermasterSnapshot(
@@ -277,6 +284,7 @@ internal sealed class QuartermasterOwnerWire
 
 internal sealed class QuartermasterRetainerWire
 {
+    public QuartermasterStockCoverageFlags? StockCoverage { get; init; }
     public ulong RetainerId { get; init; }
     public string? RetainerName { get; init; }
     public string? ObservedAtUtc { get; init; }

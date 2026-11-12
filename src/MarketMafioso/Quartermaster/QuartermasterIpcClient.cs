@@ -765,6 +765,7 @@ public sealed class QuartermasterIpcClient : IDisposable
             {
                 RequestedSources = NormalizeSources(retainerWire.RequestedSources),
                 ObservedSources = NormalizeSources(retainerWire.ObservedSources),
+                StockCoverage = retainerWire.StockCoverage,
                 GilObservedAtUtc = gilObservedAt,
                 ListingsObservedAtUtc = listingsObservedAt,
             });

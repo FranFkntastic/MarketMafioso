@@ -209,7 +209,9 @@ internal sealed class WorkshopMaterialPanel
             return WorkshopMaterialStockState.Ready;
         return ResolveAccessibleStock(line) >= line.Availability.Required
             ? WorkshopMaterialStockState.RetainerRequired
-            : WorkshopMaterialStockState.Missing;
+            : line.Availability.StockUnverified
+                ? WorkshopMaterialStockState.Unverified
+                : WorkshopMaterialStockState.Missing;
     }
 
     internal static long ResolveAccessibleStock(WorkshopMaterialProcurement line) =>
@@ -222,7 +224,9 @@ internal sealed class WorkshopMaterialPanel
         Tuple.Create((int)ResolveStockState(line), ResolveStockDifferential(line));
 
     internal static string BuildStockText(WorkshopMaterialProcurement line) =>
-        $"{ResolveAccessibleStock(line):N0} / {line.Availability.Required:N0}";
+        line.Availability.StockUnverified
+            ? $"{ResolveAccessibleStock(line):N0}+ / {line.Availability.Required:N0} (stock unverified)"
+            : $"{ResolveAccessibleStock(line):N0} / {line.Availability.Required:N0}";
 
     internal static IReadOnlyList<WorkshopMaterialProcurement> OrderForDisplay(
         IEnumerable<WorkshopMaterialProcurement> lines) =>
@@ -310,6 +314,7 @@ internal sealed class WorkshopMaterialPanel
         {
             WorkshopMaterialStockState.Ready => MarketMafiosoUiTheme.Success,
             WorkshopMaterialStockState.RetainerRequired => MarketMafiosoUiTheme.Warning,
+            WorkshopMaterialStockState.Unverified => MarketMafiosoUiTheme.Warning,
             _ => MarketMafiosoUiTheme.Error,
         };
 
@@ -737,6 +742,7 @@ internal sealed class WorkshopMaterialPanel
 internal enum WorkshopMaterialStockState
 {
     Missing,
+    Unverified,
     RetainerRequired,
     Ready,
 }

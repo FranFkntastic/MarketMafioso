@@ -37,7 +37,8 @@ public static class WorkshopMaterialAvailabilityService
             itemId => reports.Select(retainer => new QuartermasterRetainerCandidate(
                     retainer.RetainerId, retainer.RetainerName, InventoryObservedAt(retainer),
                     retainer.Bags.SelectMany(bag => bag.Items).Where(item => item.ItemId == itemId)
-                        .Sum(item => checked((int)item.Quantity))))
+                        .Sum(item => checked((int)item.Quantity)))
+                    { StockVerified = QuartermasterStockCoverage.CoversItem(retainer.Storage.ObservedSources, itemId) })
                 .Concat(fallbackRetainers
                 .Select(retainer => new QuartermasterRetainerCandidate(
                     retainer.RetainerId,
@@ -45,22 +46,26 @@ public static class WorkshopMaterialAvailabilityService
                     retainer.ObservedAtUtc,
                     retainer.Bags.SelectMany(bag => bag.Items)
                         .Where(item => item.ItemId == itemId)
-                        .Sum(item => checked((int)item.Quantity)))))
+                        .Sum(item => checked((int)item.Quantity)))
+                    { StockVerified = QuartermasterStockCoverage.CoversItem(retainer, itemId) }))
                 .GroupBy(candidate => candidate.RetainerId)
                 // RQ wins ties. Keep zero observations until after source selection.
                 .Select(group => group.OrderBy(candidate => candidate.ObservedAtUtc).Last())
-                .Where(candidate => candidate.Quantity > 0)
                 .OrderByDescending(candidate => candidate.Quantity)
                 .ToList());
         return merged.Select(item => item with
         {
-            RetrievableStock = item.QuartermasterRetainers.Sum(candidate =>
+            RetrievableStock = item.QuartermasterRetainers.Where(candidate => candidate.StockVerified).Sum(candidate =>
                 Math.Min(candidate.Quantity, fallbackRetainers
-                    .Where(retainer => retainer.RetainerId == candidate.RetainerId)
+                    .Where(retainer => retainer.RetainerId == candidate.RetainerId &&
+                        QuartermasterStockCoverage.CoversItem(retainer, item.ItemId))
                     .SelectMany(retainer => retainer.Bags).SelectMany(bag => bag.Items)
                     .Where(stock => stock.ItemId == item.ItemId).Sum(stock => checked((int)stock.Quantity)))),
-            RetrievalUnavailableReason = hasSnapshot ? null :
-                "Retainer retrieval unavailable: no owner-matched Quartermaster snapshot.",
+            RetrievalUnavailableReason = !hasSnapshot
+                ? "Retainer retrieval unavailable: no owner-matched Quartermaster snapshot."
+                : item.StockUnverified
+                    ? $"Retainer stock unverified; last observed {item.LastKnownRetainerStock:N0} units. Only covered stock can be retrieved; remaining stock is unknown."
+                    : null,
         }).ToArray();
     }
 
@@ -94,11 +99,11 @@ public static class WorkshopMaterialAvailabilityService
                 .Select(retainer => new QuartermasterRetainerCandidate(
                     retainer.RetainerId,
                     retainer.RetainerName,
-                    DateTime.TryParse(retainer.LastUpdated, out var observedAt) ? observedAt.ToUniversalTime() : DateTime.MinValue,
+                    InventoryObservedAt(retainer),
                     retainer.Bags.SelectMany(bag => bag.Items)
                         .Where(item => item.ItemId == itemId)
-                        .Sum(item => checked((int)item.Quantity))))
-                .Where(candidate => candidate.Quantity > 0)
+                        .Sum(item => checked((int)item.Quantity)))
+                    { StockVerified = QuartermasterStockCoverage.CoversItem(retainer.Storage.ObservedSources, itemId) })
                 .OrderByDescending(candidate => candidate.Quantity)
                 .ToList());
     }
@@ -116,7 +121,9 @@ public static class WorkshopMaterialAvailabilityService
                 var required = group.Sum(requirement => requirement.Quantity);
                 var playerCount = playerInventory.GetValueOrDefault(first.ItemId);
                 var retainerStock = getRetainerStock(first.ItemId);
-                var retainerCount = retainerStock.Sum(candidate => candidate.Quantity);
+                var retainerCount = retainerStock.Where(candidate => candidate.StockVerified).Sum(candidate => candidate.Quantity);
+                var unverified = retainerStock.Any(candidate => !candidate.StockVerified);
+                var lastKnown = retainerStock.Sum(candidate => candidate.Quantity);
                 var shortage = Math.Max(0, required - playerCount);
                 return new WorkshopMaterialAvailability(
                     first.ItemId,
@@ -127,7 +134,14 @@ public static class WorkshopMaterialAvailabilityService
                     retainerCount,
                     shortage,
                     Math.Max(0, required - playerCount - retainerCount),
-                    shortage == 0 ? [] : retainerStock);
+                    retainerStock)
+                {
+                    LastKnownRetainerStock = lastKnown,
+                    StockUnverified = unverified,
+                    RetrievalUnavailableReason = unverified
+                        ? $"Retainer stock unverified; last observed {lastKnown:N0} units. Remaining stock is unknown."
+                        : null,
+                };
             })
             .OrderBy(availability => availability.ItemName)
             .ToList();

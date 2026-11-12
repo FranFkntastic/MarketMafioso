@@ -514,6 +514,8 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
         var capacity = wanted.ToDictionary(itemId => itemId, _ => 0);
         foreach (var retainer in snapshot.Retainers)
         {
+            if (!QuartermasterStockCoverage.CoversItem(retainer, ElementalCurrencyCatalog.ShardItemIds[0]))
+                continue;
             var crystals = retainer.Bags.FirstOrDefault(bag => bag.BagName.Equals("RetainerCrystals", StringComparison.Ordinal));
             if (crystals is null)
                 continue;
