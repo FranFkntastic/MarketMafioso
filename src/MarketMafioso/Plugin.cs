@@ -102,6 +102,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeHost agentBridge;
     private readonly AgentBridgeViewportCaptureService agentBridgeViewportCapture;
     private readonly ProfileLoginCoordinator profileLoginCoordinator;
+    private readonly ProfileDataCenterCoordinator profileDataCenterCoordinator;
 
     private CancellationTokenSource? timerCancellation;
 
@@ -112,6 +113,8 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        profileDataCenterCoordinator = new ProfileDataCenterCoordinator(
+            PluginInterface.GetPluginConfigDirectory(), new DalamudDataCenterConnection(DataManager, ClientState, ObjectTable));
         profileLoginCoordinator = new ProfileLoginCoordinator(
             PluginInterface.GetPluginConfigDirectory(),
             new DalamudCharacterLoginDriver(new DalamudLifestreamLogin(PluginInterface),
@@ -748,7 +751,8 @@ public sealed class Plugin : IDalamudPlugin
     {
         try
         {
-            profileLoginCoordinator.Tick();
+            profileDataCenterCoordinator.Tick();
+            if (!profileDataCenterCoordinator.OwnsLobby) profileLoginCoordinator.Tick();
             retainerSaleChatObserver.Tick();
             retainerHistoryObserver.Tick();
             var nowUtc = DateTimeOffset.UtcNow;
