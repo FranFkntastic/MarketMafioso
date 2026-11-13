@@ -2734,7 +2734,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CancelActiveOperation(string message)
     {
-        marketBoard.AbandonBrowse(message);
+        // Cancelling route intent does not cancel an accepted native request.
+        // Keep observing it while stopped so recovery cannot overlap its pages.
+        var browse = marketBoard.BrowseSnapshot;
+        if (!(browse.IsActive && browse.Owner == MarketBoardBrowseOwner.MarketAcquisition && browse.RequestAccepted))
+            marketBoard.AbandonBrowse(message);
         var cancellation = operationExecutor.Cancel(clock.UtcNow, clock.MonotonicMilliseconds, message);
         if (cancellation.Accepted && cancellation.Snapshot != null)
             runner.RecordRouteOperationSnapshot(cancellation.Snapshot);
@@ -2786,7 +2790,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         recoveringRetainedStop = false;
         retainedRecoveryBrowseOperationId = null;
-        StopOwnedLocalApproach();
+        StopOwnedLocalApproach(releasing: true);
         ReleaseTravelFrameThrottle(terminalReason);
         var lease = activeTravelLease;
         if (lease == null)
@@ -2866,10 +2870,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         return true;
     }
 
-    private bool StopOwnedLocalApproach()
+    private bool StopOwnedLocalApproach(bool releasing = false)
     {
         if (!ownsLocalApproachNavigation)
             return true;
+        if (releasing)
+            ownsLocalApproachNavigation = false;
         var result = marketBoard.StopMarketBoardApproach();
         runner.RecordRouteCleanup(result.Message, new Dictionary<string, string?>
         {
@@ -2878,9 +2884,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         });
         if (result.Success)
             ownsLocalApproachNavigation = false;
-        else
-            state.AcquisitionStatus = result.Message;
-        return result.Success;
+        else if (!releasing)
+            throw new InvalidOperationException(result.Message);
+        return result.Success || releasing;
     }
 
     private void ReleaseTravelFrameThrottle(string terminalReason)

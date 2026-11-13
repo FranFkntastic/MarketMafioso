@@ -99,7 +99,9 @@ public sealed class MarketBoardApproachService
 
     public VNavmeshStopResult StopNavigation()
     {
-        var result = vnavmesh.Stop();
+        var result = vnavmesh.IsAvailable
+            ? vnavmesh.Stop()
+            : new VNavmeshStopResult(true, "vnavmesh is unloaded; its local approach ownership is released.");
         lastDirectInteractionUtc = null;
         return result;
     }

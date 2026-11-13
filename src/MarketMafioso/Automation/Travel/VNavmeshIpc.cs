@@ -30,6 +30,7 @@ public sealed class VNavmeshIpc
         this.adapter = adapter;
     }
 
+    public bool IsAvailable => adapter.IsAvailable;
     public bool IsReady => adapter.IsAvailable && adapter.IsReady();
     public bool IsRunning => adapter.IsAvailable && adapter.IsRunning();
 
