@@ -14,7 +14,6 @@ using Dalamud.Plugin.Services;
 using ECommons;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Franthropy.Dalamud.Observations;
-using Franthropy.Dalamud.Runtime;
 using Franthropy.Dalamud.Travel;
 using Franthropy.Observations.V1;
 using Dalamud.Interface.Windowing;
@@ -96,7 +95,6 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
     private readonly WorkshopRestockService workshopRestock;
-    private readonly FramePacingGovernor framePacingGovernor = new();
     private readonly AgentBridgeProofStore agentBridgeProofStore;
     private readonly AgentBridgeProofWindow agentBridgeProofWindow;
     private readonly AgentBridgeHost agentBridge;
@@ -304,7 +302,6 @@ public sealed class Plugin : IDalamudPlugin
             marketBoardBrowseObserver,
             itemId => retainerListingRefresh.ForceRetry(itemId),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
-            framePacingGovernor,
             Log,
             workshopRestock);
         exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
@@ -749,39 +746,32 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnFrameworkUpdate(IFramework framework)
     {
-        try
-        {
-            profileDataCenterCoordinator.Tick();
-            if (!profileDataCenterCoordinator.OwnsLobby) profileLoginCoordinator.Tick();
-            retainerSaleChatObserver.Tick();
-            retainerHistoryObserver.Tick();
-            var nowUtc = DateTimeOffset.UtcNow;
-            var retainerSessionActive = IsRetainerSessionActive();
-            var (immediatelyReady, immediateDeferredReason) = GetImmediateRetainerListingRefreshReadiness(retainerSessionActive);
-            var (refreshReady, refreshDeferredReason) = retainerListingRefreshReadiness.Observe(
-                nowUtc,
-                immediatelyReady,
-                immediateDeferredReason);
-            retainerListingRefresh.Tick(
-                nowUtc,
-                refreshReady,
-                refreshDeferredReason);
-            mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
-            if (Configuration.AutoAcceptIncomingTrades || tradeQueueRunner.IsActive)
-                tradeAutomationCoordinator.SuppressDropboxAutoAccept();
-            else
-                tradeAutomationCoordinator.RestoreDropboxAutoAccept();
-            tradeAutoAcceptController.Tick(
-                Configuration.AutoAcceptIncomingTrades && !tradeQueueRunner.IsActive);
-            tradeQueueRunner.Tick();
-            workshopRestock.Tick();
-            mainWindow.OnFrameworkUpdate(framework);
-            agentBridge.Tick();
-        }
-        finally
-        {
-            framePacingGovernor.PaceFrame();
-        }
+        profileDataCenterCoordinator.Tick();
+        if (!profileDataCenterCoordinator.OwnsLobby) profileLoginCoordinator.Tick();
+        retainerSaleChatObserver.Tick();
+        retainerHistoryObserver.Tick();
+        var nowUtc = DateTimeOffset.UtcNow;
+        var retainerSessionActive = IsRetainerSessionActive();
+        var (immediatelyReady, immediateDeferredReason) = GetImmediateRetainerListingRefreshReadiness(retainerSessionActive);
+        var (refreshReady, refreshDeferredReason) = retainerListingRefreshReadiness.Observe(
+            nowUtc,
+            immediatelyReady,
+            immediateDeferredReason);
+        retainerListingRefresh.Tick(
+            nowUtc,
+            refreshReady,
+            refreshDeferredReason);
+        mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
+        if (Configuration.AutoAcceptIncomingTrades || tradeQueueRunner.IsActive)
+            tradeAutomationCoordinator.SuppressDropboxAutoAccept();
+        else
+            tradeAutomationCoordinator.RestoreDropboxAutoAccept();
+        tradeAutoAcceptController.Tick(
+            Configuration.AutoAcceptIncomingTrades && !tradeQueueRunner.IsActive);
+        tradeQueueRunner.Tick();
+        workshopRestock.Tick();
+        mainWindow.OnFrameworkUpdate(framework);
+        agentBridge.Tick();
     }
 
     private static (bool Ready, string? Reason) GetImmediateRetainerListingRefreshReadiness(bool retainerSessionActive)
@@ -877,7 +867,6 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.Dispose();
         workshopRestock.Dispose();
-        framePacingGovernor.Dispose();
         reporter.Dispose();
         remoteMarketAccessProbe.Dispose();
         marketBoardBrowseObserver.Dispose();
