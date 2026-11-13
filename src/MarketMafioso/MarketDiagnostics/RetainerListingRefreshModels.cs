@@ -23,6 +23,9 @@ public sealed class PersistedRetainerListingRefreshState
     public string StatusMessage { get; set; } = "No retainer listing refresh is pending.";
     public bool NeedsAttention { get; set; }
     public bool AttentionNotified { get; set; }
+    // Queue-level pause while the market board has locked MMF out; cleared when the relog is observed.
+    public bool WaitingForRelog { get; set; }
+    public DateTime? WaitingForRelogSinceUtc { get; set; }
 }
 
 [Serializable]
@@ -47,6 +50,7 @@ public sealed class PersistedRetainerListingRefreshItem
     public string? ItemName { get; set; }
     public RetainerListingRefreshItemState State { get; set; } = RetainerListingRefreshItemState.Deferred;
     public int Attempts { get; set; }
+    // Retained only so configurations from the retired rate-limit retry ladder deserialize; always normalized to zero.
     public int RateLimitFailures { get; set; }
     public DateTime? NextAttemptAtUtc { get; set; }
     public DateTime? LastAttemptAtUtc { get; set; }

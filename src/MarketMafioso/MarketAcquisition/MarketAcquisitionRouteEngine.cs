@@ -112,6 +112,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         this.shardCheckpoints = shardCheckpoints;
     }
 
+    public bool IsRouteRunning => runner.IsRunning || state.ProbeRunning;
+
+    public bool IsPurchaseAutomationBusy => purchaseAutomation.IsBusy;
+
+    public bool IsShardCheckpointActive => shardCheckpoints?.IsActive == true;
+
     public bool IsRouteActive =>
         runner.IsRunning ||
         runner.IsPaused ||
@@ -1489,7 +1495,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         var disposition = ClassifyItemSearchResult(searchResult);
         var message = disposition == MarketAcquisitionRouteOperationDisposition.Failed &&
-                      !string.Equals(searchResult.Status, "SearchSubmitFailed", StringComparison.OrdinalIgnoreCase)
+                      !string.Equals(searchResult.Status, "SearchSubmitFailed", StringComparison.OrdinalIgnoreCase) &&
+                      !ShouldPauseForExpiredMarketSession(searchResult)
             ? $"Market board item search returned unsupported terminal status {searchResult.Status}. {searchResult.Message}"
             : searchResult.Message;
         var result = operationExecutor.Observe(
@@ -1520,8 +1527,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 : MarketAcquisitionRouteOperationDisposition.Failed;
     }
 
+    // A market-board lockout is cleared only by a relog, so the route keeps its stop and waits for the user.
     internal static bool ShouldPauseForExpiredMarketSession(MarketBoardItemSearchResult searchResult) =>
-        string.Equals(searchResult.Status, "MarketBoardSessionExpired", StringComparison.Ordinal);
+        searchResult.Status is "MarketBoardSessionExpired" or "MarketBoardRateLimited";
 
     private void ProbeLiveMarketBoardCore(
         MarketAcquisitionPlan plan,

@@ -4,24 +4,26 @@ using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Settings;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.MarketAcquisition;
+using MarketMafioso.MarketDiagnostics;
 
 namespace MarketMafioso.Windows.Main.Settings;
 
 internal sealed class MarketAcquisitionSettingsPages
 {
     private readonly Configuration config;
-    private readonly Func<uint, bool> forceRetryRetainerListingRefresh;
+    private readonly IRetainerListingRefreshControls refreshControls;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
+    private string? lastRelogAccepted;
 
     public MarketAcquisitionSettingsPages(
         Configuration config,
-        Func<uint, bool> forceRetryRetainerListingRefresh,
+        IRetainerListingRefreshControls refreshControls,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
-        this.forceRetryRetainerListingRefresh = forceRetryRetainerListingRefresh
-            ?? throw new ArgumentNullException(nameof(forceRetryRetainerListingRefresh));
+        this.refreshControls = refreshControls ?? throw new ArgumentNullException(nameof(refreshControls));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         Descriptors =
         [
@@ -30,7 +32,7 @@ internal sealed class MarketAcquisitionSettingsPages
             new("market.diagnostics", "Market Acquisition / Diagnostics", DrawDiagnostics, 31, IsUnlocked,
                 ["route diagnostic packages", "route log", "observed listings", "purchase records", "archive", "retention", "hot shelf", "keep raw", "exhaustive research", "early leaving"]),
             new("retainer-listings.refresh", "Retainer Listings / Price Refresh", DrawRetainerListingRefresh, 32, IsUnlocked,
-                ["retainer listing refresh", "Universalis", "remote market board", "background", "retainer menu", "force retry"]),
+                ["retainer listing refresh", "Universalis", "remote market board", "background", "retainer menu", "force retry", "lockout", "relog"]),
         ];
     }
 
@@ -45,12 +47,21 @@ internal sealed class MarketAcquisitionSettingsPages
             () => config.EnableRetainerListingRefresh,
             value => config.EnableRetainerListingRefresh = value);
         if (config.EnableRetainerListingRefresh &&
-            context.Matches("retainer listing refresh", "Universalis", "background", "deferred", "blocked", "Status"))
+            context.Matches("retainer listing refresh", "Universalis", "background", "deferred", "blocked", "Status", "lockout", "relog"))
         {
             var refresh = config.RetainerListingRefresh;
-            ImGui.TextColored(
-                refresh.NeedsAttention ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted,
-                refresh.StatusMessage);
+            var lockout = refreshControls.Lockout;
+            if (lockout.Active)
+            {
+                DrawMarketLockout(lockout);
+            }
+            else
+            {
+                lastRelogAccepted = null;
+                ImGui.TextColored(
+                    refresh.NeedsAttention ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted,
+                    refresh.StatusMessage);
+            }
             if (refresh.Items.Count > 0)
             {
                 var blockedItems = refresh.Items
@@ -65,6 +76,27 @@ internal sealed class MarketAcquisitionSettingsPages
                     DrawBlockedRefreshItem(item);
             }
             ImGui.Spacing();
+        }
+    }
+
+    private void DrawMarketLockout(MarketBoardLockoutStatus lockout)
+    {
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Warning,
+            $"Market board locked out. {refreshControls.WaitingCount} refresh item(s) waiting for relog.");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, refreshControls.DescribeLockout(lockout));
+        if (ImGui.SmallButton("Relog##market-lockout"))
+        {
+            var result = refreshControls.RequestRelog("settings");
+            lastRelogAccepted = result.Accepted ? result.Message : null;
+        }
+        // Deliberately not registered with the agent review registry: agents must never trigger a relog.
+        // The refusal is re-evaluated every frame by the controls, so it disappears once its cause ends.
+        var status = refreshControls.RelogRefusal is { } refusal ? $"Refused: {refusal}" : lastRelogAccepted;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
         }
     }
 
@@ -169,7 +201,7 @@ internal sealed class MarketAcquisitionSettingsPages
         ImGui.TextUnformatted(string.IsNullOrWhiteSpace(item.ItemName) ? $"Item {item.ItemId}" : item.ItemName);
         ImGui.SameLine();
         if (ImGui.SmallButton("Force retry"))
-            forceRetryRetainerListingRefresh(item.ItemId);
+            refreshControls.ForceRetry(item.ItemId);
         reviewRegistry.Register(
             $"settings.retainer-listings.refresh.{item.ItemId}.force-retry",
             $"Force retry {FormatItem(item)}",
@@ -183,7 +215,7 @@ internal sealed class MarketAcquisitionSettingsPages
             surfaceId: "settings.retainer-listings.refresh",
             mutating: true,
             completionOperationKind: null,
-            _ => forceRetryRetainerListingRefresh(item.ItemId)
+            _ => refreshControls.ForceRetry(item.ItemId)
                 ? AgentBridgeUiActionResult.Ok($"Queued a force retry for {FormatItem(item)}.")
                 : AgentBridgeUiActionResult.Fail($"{FormatItem(item)} is no longer blocked."));
         if (!string.IsNullOrWhiteSpace(item.LastMessage))

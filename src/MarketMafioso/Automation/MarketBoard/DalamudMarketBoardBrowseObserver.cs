@@ -44,6 +44,7 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
         IClientState clientState,
         PersistedMarketBoardSessionCircuitBreakerState sessionState,
         Action persistSessionState,
+        Func<string?> getCurrentWorld,
         IPluginLog log)
     {
         ArgumentNullException.ThrowIfNull(interopProvider);
@@ -53,7 +54,15 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         gate = new MarketBoardBrowseOperationGate(
             sessionState: sessionState ?? throw new ArgumentNullException(nameof(sessionState)),
-            persistSessionState: persistSessionState ?? throw new ArgumentNullException(nameof(persistSessionState)));
+            persistSessionState: persistSessionState ?? throw new ArgumentNullException(nameof(persistSessionState)),
+            getCurrentWorld: getCurrentWorld ?? throw new ArgumentNullException(nameof(getCurrentWorld)),
+            log: message => log.Information("[MarketMafioso] {Message}", message));
+        // Relog evidence comes from Dalamud's logout callback hook and its post-logout login edge, not from
+        // polling AgentLobby.IsLoggedIn: the events are ordered, carry the logout type and code for diagnosis,
+        // and the login edge additionally requires a materialized local player.
+        gate.ObserveInitialSession(clientState.IsLoggedIn);
+        clientState.Logout += OnLogout;
+        clientState.Login += OnLogin;
         framework.Update += OnFrameworkUpdate;
 
         try
@@ -110,6 +119,7 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
     public bool IsAvailable { get; private set; }
     public string AvailabilityMessage { get; private set; } = "Market-board browse observer has not initialized.";
     public MarketBoardBrowseSnapshot Snapshot => gate.Snapshot;
+    public MarketBoardLockoutStatus Lockout => gate.Lockout;
 
     public bool TryBegin(
         MarketBoardBrowseOwner owner,
@@ -234,15 +244,11 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
         }
     }
 
-    private void OnFrameworkUpdate(IFramework _)
-    {
-        if (gate.ObserveClientSession(clientState.IsLoggedIn))
-        {
-            log.Information(
-                "[MarketMafioso] A completed relog cleared the expired market-board session; autonomous searches may resume.");
-        }
-        gate.Advance(DateTimeOffset.UtcNow);
-    }
+    private void OnFrameworkUpdate(IFramework _) => gate.Advance(DateTimeOffset.UtcNow);
+
+    private void OnLogout(int type, int code) => gate.ObserveLogout(type, code);
+
+    private void OnLogin() => gate.ObserveLogin();
 
     private bool IsAddonVisible(string name)
     {
@@ -418,6 +424,8 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
     public void Dispose()
     {
         framework.Update -= OnFrameworkUpdate;
+        clientState.Logout -= OnLogout;
+        clientState.Login -= OnLogin;
         DisposeHooks();
         IsAvailable = false;
     }

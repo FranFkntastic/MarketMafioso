@@ -137,7 +137,7 @@ public class MainWindow : Window, IDisposable
         IPlayerState playerState,
         MarketBoardApproachService marketBoardApproachService,
         IMarketBoardBrowseRuntime marketBoardBrowseRuntime,
-        Func<uint, bool> forceRetryRetainerListingRefresh,
+        IRetainerListingRefreshControls retainerListingRefreshControls,
         string marketAcquisitionRouteDiagnosticsDirectory,
         IPluginLog log,
         WorkshopRestockService restock)
@@ -515,7 +515,7 @@ public class MainWindow : Window, IDisposable
             reporter,
             log,
             () => _ = routeEngine.Stop(),
-            forceRetryRetainerListingRefresh,
+            retainerListingRefreshControls,
             Plugin.Instance.RestartTimer,
             AgentReviewRegistry,
             marketIntelligencePassiveReporter.CreateStatus);
@@ -834,6 +834,28 @@ public class MainWindow : Window, IDisposable
             itemName,
             playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : string.Empty,
             IsControlledListingBlockedByAutomation()));
+
+    /// <summary>
+    /// Why market automation is doing work right now, or null when idle; a paused route is not running.
+    /// </summary>
+    public string? GetMarketAutomationBusyReason()
+    {
+        if (acquisitionWorkspace.IsBusy || routeEngine.IsRouteRunning)
+            return "A market acquisition route is running.";
+        if (routeEngine.IsPurchaseAutomationBusy)
+            return "A market-board purchase is in progress.";
+        if (marketBoardAcquisition.IsListingPurchaseActive)
+            return "A market listing purchase is in progress.";
+        if (routeEngine.IsShardCheckpointActive)
+            return "A shard acquisition checkpoint is in progress.";
+        return null;
+    }
+
+    public void OpenRetainerListingRefreshSettings()
+    {
+        settingsTab.ShowPage("retainer-listings.refresh");
+        TrySelectAgentBridgeTab("Settings");
+    }
 
     private bool IsControlledListingBlockedByAutomation() =>
         acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive || tradeQueueRunner.Snapshot.IsActive || workshopAssemblyRunner.IsRunning;

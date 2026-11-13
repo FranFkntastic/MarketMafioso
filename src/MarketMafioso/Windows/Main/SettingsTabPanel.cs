@@ -6,6 +6,7 @@ using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Settings;
 using MarketMafioso.Windows.Main.Settings;
 using MarketMafioso.MarketAcquisition;
+using MarketMafioso.MarketDiagnostics;
 
 namespace MarketMafioso.Windows.Main;
 
@@ -23,7 +24,7 @@ internal sealed class SettingsTabPanel
         HttpReporter reporter,
         IPluginLog log,
         Action stopMarketAcquisitionRoute,
-        Func<uint, bool> forceRetryRetainerListingRefresh,
+        IRetainerListingRefreshControls retainerListingRefreshControls,
         Action restartTimer,
         AgentBridgeUiReviewRegistry reviewRegistry,
         Func<MarketIntelligenceReportingStatus>? intelligenceStatus = null)
@@ -42,7 +43,7 @@ internal sealed class SettingsTabPanel
         pages.AddRange(new InventoryReporterSettingsPages(config, restartTimer, reporter, reviewRegistry).Descriptors);
         pages.AddRange(new MarketAcquisitionSettingsPages(
             config,
-            forceRetryRetainerListingRefresh,
+            retainerListingRefreshControls,
             reviewRegistry).Descriptors);
         pages.AddRange(new AdvancedSettingsPages(config, stopMarketAcquisitionRoute, reviewRegistry).Descriptors);
         navigationCatalog = new SettingsNavigationCatalog(pages);
@@ -89,6 +90,8 @@ internal sealed class SettingsTabPanel
                 () => SelectPage(page.Id));
         }
     }
+
+    public void ShowPage(string pageId) => SelectPage(pageId);
 
     private void SelectPage(string pageId)
     {

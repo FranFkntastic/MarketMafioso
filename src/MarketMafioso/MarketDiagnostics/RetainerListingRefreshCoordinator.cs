@@ -28,9 +28,7 @@ internal sealed class RetainerListingRefreshCoordinator
     private static readonly TimeSpan RejectedRequestDeferral = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan AmbiguousRequestDeferral = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan MissingOperationReconciliationDelay = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan RateLimitInitialRetryDelay = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan RateLimitMaximumRetryDelay = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan RateLimitFailureCooldown = TimeSpan.FromSeconds(30);
+    internal const string WaitingForRelogCode = "WaitingForRelog";
 
     private readonly Configuration config;
     private readonly IRetainerListingRefreshSource source;
@@ -82,6 +80,10 @@ internal sealed class RetainerListingRefreshCoordinator
         if (ObserveActiveRequest(nowUtc))
             return;
 
+        // While locked out nothing may dispatch, so cooled-down items stay put until the relog.
+        if (ObserveMarketLockout(nowUtc))
+            return;
+
         RecoverCooledDownItems(nowUtc);
 
         if (browseRuntime.Snapshot.IsActive)
@@ -115,6 +117,13 @@ internal sealed class RetainerListingRefreshCoordinator
     public void NotifyListingCaptureChanged() =>
         System.Threading.Interlocked.Exchange(ref captureReadRequested, 1);
 
+    /// <summary>Items that keep refresh intent and are not terminally blocked.</summary>
+    public int PendingCount => config.RetainerListingRefresh.Items.Count(item =>
+        item.State != RetainerListingRefreshItemState.Blocked);
+
+    public int BlockedCount => config.RetainerListingRefresh.Items.Count(item =>
+        item.State == RetainerListingRefreshItemState.Blocked);
+
     public bool ForceRetry(uint itemId, DateTimeOffset? nowUtc = null)
     {
         var state = config.RetainerListingRefresh;
@@ -122,7 +131,15 @@ internal sealed class RetainerListingRefreshCoordinator
             candidate.ItemId == itemId &&
             candidate.State == RetainerListingRefreshItemState.Blocked);
         if (item is null)
+        {
+            log($"User force retry for item {itemId} refused: the item is not blocked.");
             return false;
+        }
+
+        var waitingForRelog = browseRuntime.Lockout.Active;
+        log(waitingForRelog
+            ? $"User force retry accepted for {FormatItem(item)} (blocked by {item.LastCode}); the queue is waiting for a relog before it searches again."
+            : $"User force retry accepted for {FormatItem(item)} (blocked by {item.LastCode}).");
 
         item.State = RetainerListingRefreshItemState.Deferred;
         item.NextAttemptAtUtc = (nowUtc ?? DateTimeOffset.UtcNow).UtcDateTime;
@@ -133,12 +150,21 @@ internal sealed class RetainerListingRefreshCoordinator
             candidate.State == RetainerListingRefreshItemState.Blocked);
         state.NeedsAttention = remainingBlocked > 0;
         state.AttentionNotified = false;
-        UpdateStatus(
-            remainingBlocked > 0 ? "Blocked" : "Queued",
-            remainingBlocked > 0
-                ? $"Queued a force retry for {FormatItem(item)}; {remainingBlocked} other item(s) remain blocked."
-                : $"Queued a force retry for {FormatItem(item)}.",
-            persistState: true);
+        var queued = remainingBlocked > 0
+            ? $"Queued a force retry for {FormatItem(item)}; {remainingBlocked} other item(s) remain blocked."
+            : $"Queued a force retry for {FormatItem(item)}.";
+        if (waitingForRelog)
+        {
+            item.LastCode = WaitingForRelogCode;
+            UpdateStatus(
+                WaitingForRelogCode,
+                $"{queued} The queue is waiting for you to relog before it searches the market board again.",
+                persistState: true);
+        }
+        else
+        {
+            UpdateStatus(remainingBlocked > 0 ? "Blocked" : "Queued", queued, persistState: true);
+        }
         return true;
     }
 
@@ -197,6 +223,19 @@ internal sealed class RetainerListingRefreshCoordinator
             {
                 if (string.IsNullOrWhiteSpace(existing.ItemName))
                     existing.ItemName = candidate.ItemName;
+                if (existing.State == RetainerListingRefreshItemState.Blocked)
+                {
+                    // A new listing observation is fresh intent; it supersedes the evidence that blocked the item.
+                    var blockedBy = existing.LastCode;
+                    existing.State = RetainerListingRefreshItemState.Deferred;
+                    existing.NextAttemptAtUtc = nowUtc.UtcDateTime;
+                    existing.Attempts = 0;
+                    existing.OperationId = null;
+                    existing.AttentionNotified = false;
+                    existing.LastCode = "RequeuedFromListingDelta";
+                    existing.LastMessage = "Re-queued because a new retainer-listing observation included this item.";
+                    log($"Retainer listing refresh re-queued {FormatItem(existing)} from a new listing observation (was blocked by {blockedBy}).");
+                }
                 continue;
             }
 
@@ -393,8 +432,9 @@ internal sealed class RetainerListingRefreshCoordinator
                 Block(item, code, "RequestData rejected three spaced background attempts.");
                 return;
 
+            case MarketBoardBrowseOperationGate.LockoutFailureCode:
             case "MarketBoardRateLimited":
-                DeferRateLimited(item, nowUtc, message);
+                WaitForRelog(item, nowUtc, message);
                 return;
 
             case "BrowseTimeout":
@@ -430,38 +470,66 @@ internal sealed class RetainerListingRefreshCoordinator
             persistState: true);
     }
 
-    private void DeferRateLimited(
+    private void WaitForRelog(
         PersistedRetainerListingRefreshItem item,
         DateTimeOffset nowUtc,
         string message)
     {
-        item.RateLimitFailures++;
-        var delay = GetRateLimitRetryDelay(item.RateLimitFailures);
-        var retryAt = nowUtc.UtcDateTime + delay;
+        // The lockout is market-wide and says nothing about this item. Keep the intent and never retry before
+        // the relog; the queue-level pause owns the wait.
         item.State = RetainerListingRefreshItemState.Deferred;
-        item.NextAttemptAtUtc = retryAt;
+        item.NextAttemptAtUtc = nowUtc.UtcDateTime;
+        item.Attempts = 0;
         item.OperationId = null;
-        item.LastCode = "MarketBoardRateLimited";
+        item.LastCode = WaitingForRelogCode;
         item.LastMessage = message;
         item.AttentionNotified = false;
+        log($"Retainer listing refresh for {FormatItem(item)} is waiting for a relog after a market-board lockout.");
+        persist();
+    }
 
-        // CMB's recovery governor pauses every request behind one shared cooldown.
-        // Keep this item first so the retry proves the same request before the batch advances.
-        var followingRetryAt = retryAt.AddTicks(1);
-        foreach (var pending in config.RetainerListingRefresh.Items.Where(pending =>
-                     !ReferenceEquals(pending, item) &&
-                     pending.State == RetainerListingRefreshItemState.Deferred &&
-                     (pending.NextAttemptAtUtc is null || pending.NextAttemptAtUtc < followingRetryAt)))
+    private bool ObserveMarketLockout(DateTimeOffset nowUtc)
+    {
+        var state = config.RetainerListingRefresh;
+        var lockout = browseRuntime.Lockout;
+        if (lockout.Active)
         {
-            pending.NextAttemptAtUtc = followingRetryAt;
+            var waiting = PendingCount;
+            var message = $"Waiting for relog: the market board locked MMF out. {waiting} item(s) keep their refresh.";
+            if (!state.WaitingForRelog)
+            {
+                state.WaitingForRelog = true;
+                state.WaitingForRelogSinceUtc = nowUtc.UtcDateTime;
+                log($"Retainer listing refresh queue paused for relog; {waiting} item(s) waiting.");
+            }
+            if (!string.Equals(state.StatusCode, WaitingForRelogCode, StringComparison.Ordinal) ||
+                !string.Equals(state.StatusMessage, message, StringComparison.Ordinal))
+            {
+                UpdateStatus(WaitingForRelogCode, message, persistState: true);
+            }
+            return true;
         }
 
-        config.RetainerListingRefresh.NeedsAttention = config.RetainerListingRefresh.Items.Any(pending =>
-            pending.State == RetainerListingRefreshItemState.Blocked);
+        if (!state.WaitingForRelog)
+            return false;
+
+        state.WaitingForRelog = false;
+        state.WaitingForRelogSinceUtc = null;
+        foreach (var pending in state.Items.Where(pending =>
+                     pending.State == RetainerListingRefreshItemState.Deferred &&
+                     string.Equals(pending.LastCode, WaitingForRelogCode, StringComparison.Ordinal)))
+        {
+            pending.NextAttemptAtUtc = nowUtc.UtcDateTime;
+        }
+        var resumed = PendingCount;
+        log($"Retainer listing refresh queue resumed after relog; {resumed} item(s) queued.");
         UpdateStatus(
-            "RateLimited",
-            $"The market board asked MMF to wait; retrying {FormatItem(item)} in {delay.TotalSeconds:F0}s.",
+            resumed == 0 ? "Idle" : "Queued",
+            resumed == 0
+                ? "Market access restored; no retainer listing refresh is pending."
+                : $"Market access restored; {resumed} queued item(s) will refresh.",
             persistState: true);
+        return false;
     }
 
     private void Block(PersistedRetainerListingRefreshItem item, string code, string message)
@@ -489,7 +557,7 @@ internal sealed class RetainerListingRefreshCoordinator
     private void NormalizePersistedState()
     {
         var state = config.RetainerListingRefresh;
-        var recoveredRateLimits = 0;
+        var recoveredLockoutBlocks = 0;
         state.Items ??= [];
         state.SessionListings ??= [];
         state.CapturePending = false;
@@ -529,40 +597,39 @@ internal sealed class RetainerListingRefreshCoordinator
                 item.LastMessage = "The native browse capability is available again.";
                 item.AttentionNotified = false;
             }
-            else if (item.State == RetainerListingRefreshItemState.Blocked && IsLegacyRateLimit(item))
+            else if (item.State is RetainerListingRefreshItemState.Blocked or RetainerListingRefreshItemState.Deferred &&
+                     IsLockoutRecord(item))
             {
+                // Earlier builds blocked items terminally (or ran a retry ladder) on a market-wide lockout.
+                // The lockout says nothing about the item, so it rejoins the queue behind the relog pause.
+                var wasBlocked = item.State == RetainerListingRefreshItemState.Blocked;
                 item.State = RetainerListingRefreshItemState.Deferred;
                 item.NextAttemptAtUtc = DateTime.UtcNow;
-                item.RateLimitFailures = Math.Max(item.RateLimitFailures, Math.Max(1, item.Attempts));
-                item.LastCode = "RecoveredRateLimit";
-                item.LastMessage = "A previously terminal rate-limit response will be retried with adaptive backoff.";
+                item.Attempts = 0;
+                item.LastCode = WaitingForRelogCode;
+                item.LastMessage = "Recovered from a market-board lockout; waits for a relog before refreshing.";
                 item.AttentionNotified = false;
-                recoveredRateLimits++;
+                if (wasBlocked)
+                    recoveredLockoutBlocks++;
             }
+            item.RateLimitFailures = 0;
         }
 
         state.NeedsAttention = state.Items.Any(item => item.State == RetainerListingRefreshItemState.Blocked);
-        if (recoveredRateLimits > 0)
+        if (recoveredLockoutBlocks > 0)
         {
             state.StatusCode = "Deferred";
-            state.StatusMessage = $"Recovered {recoveredRateLimits} rate-limited item(s) for automatic retry.";
+            state.StatusMessage = $"Recovered {recoveredLockoutBlocks} item(s) blocked by a market-board lockout.";
             state.AttentionNotified = false;
+            log($"Retainer listing refresh recovered {recoveredLockoutBlocks} item(s) that an earlier build blocked on a market-board lockout.");
+            persist();
         }
     }
 
-    private static TimeSpan GetRateLimitRetryDelay(int failureCount)
-    {
-        if (failureCount >= 3)
-            return RateLimitFailureCooldown;
-
-        return TimeSpan.FromMilliseconds(Math.Min(
-            RateLimitMaximumRetryDelay.TotalMilliseconds,
-            RateLimitInitialRetryDelay.TotalMilliseconds * Math.Pow(3, Math.Max(0, failureCount - 1))));
-    }
-
-    private static bool IsLegacyRateLimit(PersistedRetainerListingRefreshItem item) =>
-        string.Equals(item.LastCode, "ServerStatusRejected", StringComparison.Ordinal) &&
-        item.LastMessage?.Contains("0x70000002", StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsLockoutRecord(PersistedRetainerListingRefreshItem item) =>
+        item.LastCode is MarketBoardBrowseOperationGate.LockoutFailureCode or "MarketBoardRateLimited" or "RecoveredRateLimit" ||
+        (string.Equals(item.LastCode, "ServerStatusRejected", StringComparison.Ordinal) &&
+         item.LastMessage?.Contains("0x70000002", StringComparison.OrdinalIgnoreCase) == true);
 
     private void UpdateStatus(string code, string message, bool persistState)
     {
