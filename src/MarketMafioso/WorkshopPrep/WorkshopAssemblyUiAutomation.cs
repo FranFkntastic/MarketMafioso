@@ -393,13 +393,16 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     ["materialIndex"] = index.ToString(),
                     ["stepsComplete"] = item.StepsComplete.ToString(),
                     ["stepsTotal"] = item.StepsTotal.ToString(),
+                    ["projectPhase"] = craftState.StepsComplete.ToString(),
+                    ["projectPhaseTotal"] = craftState.StepsTotal.ToString(),
                 });
             return new(
                 false,
                 $"Submitted workshop material request for {item.ItemCountPerStep}x {item.ItemName}.",
                 ActionTaken: true,
                 ActiveMaterialItemId: item.ItemId,
-                ActiveMaterialStepsComplete: item.StepsComplete);
+                ActiveMaterialStepsComplete: item.StepsComplete,
+                ContributionPhase: new(craftState.ResultItem, craftState.StepsComplete, craftState.StepsTotal));
         }
 
         return new(false, $"No unfinished queued material was found for {entry.ProjectName}. {DescribeUiState()}");
@@ -559,7 +562,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     public WorkshopAssemblyActionResult TryWaitForContributionProgress(
         WorkshopAssemblyQueueEntry entry,
         uint materialItemId,
-        uint previousStepsComplete)
+        uint previousStepsComplete) =>
+        TryWaitForContributionProgress(entry, materialItemId, previousStepsComplete, null);
+
+    public WorkshopAssemblyActionResult TryWaitForContributionProgress(
+        WorkshopAssemblyQueueEntry entry,
+        uint materialItemId,
+        uint previousStepsComplete,
+        WorkshopAssemblyPhaseContext? contributionPhase)
     {
         var materialDelivery = uiDriver.ReadMaterialDelivery();
         if (materialDelivery == null)
@@ -605,20 +615,31 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
 
         var material = craftState.Items.FirstOrDefault(x => x.ItemId == materialItemId);
-        if (material == null || material.Finished || material.StepsComplete > previousStepsComplete)
+        var observedPhase = new WorkshopAssemblyPhaseContext(craftState.ResultItem, craftState.StepsComplete, craftState.StepsTotal);
+        var sameProject = contributionPhase != null &&
+            contributionPhase.ResultItemId == observedPhase.ResultItemId &&
+            contributionPhase.PhaseTotal == observedPhase.PhaseTotal;
+        var laterPhase = sameProject && observedPhase.Phase > contributionPhase!.Phase;
+        var samePhase = contributionPhase == null || (sameProject && observedPhase.Phase == contributionPhase.Phase);
+        var rowProgress = samePhase && material != null &&
+            (material.Finished || material.StepsComplete > previousStepsComplete);
+        var reconciliation = laterPhase ? "later-phase" : rowProgress ? "material-advanced" : "not-proven";
+        if (laterPhase || rowProgress)
         {
             return new(
                 true,
-                $"Observed workshop material progress for {entry.ProjectName}.",
+                $"Observed workshop contribution progress for {entry.ProjectName}: {reconciliation}.",
                 ActiveMaterialItemId: materialItemId,
-                ActiveMaterialStepsComplete: material?.StepsComplete);
+                ActiveMaterialStepsComplete: material?.StepsComplete,
+                ContributionPhase: observedPhase);
         }
 
         return new(
             false,
-            $"Waiting for workshop material {material.ItemName} to advance beyond {previousStepsComplete}/{material.StepsTotal}.",
-            ActiveMaterialItemId: material.ItemId,
-            ActiveMaterialStepsComplete: material.StepsComplete);
+            $"Waiting for workshop material {materialItemId} to advance beyond {previousStepsComplete} in its submitted phase; native reconciliation: {reconciliation}.",
+            ActiveMaterialItemId: materialItemId,
+            ActiveMaterialStepsComplete: material?.StepsComplete,
+            ContributionPhase: observedPhase);
     }
 
     public string? BeginRun(bool requireCutsceneSkip)
