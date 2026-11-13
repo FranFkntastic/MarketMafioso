@@ -4,9 +4,9 @@
     "net10.0": {
       "Franthropy.Filtering": {
         "type": "Direct",
-        "requested": "[0.1.0-commit.653a853a92204dd34ec3af9c5803bb8d8f689658, 0.1.0-commit.653a853a92204dd34ec3af9c5803bb8d8f689658]",
-        "resolved": "0.1.0-commit.653a853a92204dd34ec3af9c5803bb8d8f689658",
-        "contentHash": "k9DX6howqQ74l4zc3J7qPm3/mui9DSbUrLDCBDQUaKs3mLjSfcwUyICgSeSjV61M/i5ny4oSj6g8TwisXCUpkg=="
+        "requested": "[0.1.0-commit.254c0cd633ffb025d8d669ce3bb17d7e8cca8661, 0.1.0-commit.254c0cd633ffb025d8d669ce3bb17d7e8cca8661]",
+        "resolved": "0.1.0-commit.254c0cd633ffb025d8d669ce3bb17d7e8cca8661",
+        "contentHash": "QEgmBJEbblIsyzODcnmMbaY3t5FiU5p2pHze0mGXqO7mktO4TJu4rwlCtzogA2z6ur7X3bsP0FKiAecOEqE49Q=="
       }
     }
   }
