@@ -38,8 +38,10 @@ public static class MarketAcquisitionRecentWorldPolicy
 
         foreach (var listing in sourceListings)
         {
-            if (evidenceWorlds.Contains(listing.WorldName) ||
-                !catalog.WasRecentlyChecked(listing.WorldName, line.ItemId, hqPolicy, line.MaxUnitPrice, nowUtc, ttl))
+            var cleared = catalog.FindRecent(listing.WorldName, line.ItemId, hqPolicy, line.MaxUnitPrice, nowUtc, ttl);
+            if (cleared is null ||
+                (evidenceWorlds.Contains(listing.WorldName) &&
+                 listing.LastReviewTimeUtc > new DateTimeOffset(DateTime.SpecifyKind(cleared.CheckedAtUtc, DateTimeKind.Utc))))
             {
                 filtered.Add(listing);
                 continue;

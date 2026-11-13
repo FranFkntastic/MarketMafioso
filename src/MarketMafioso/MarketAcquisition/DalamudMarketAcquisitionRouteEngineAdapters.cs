@@ -421,7 +421,20 @@ public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisi
 
     public void RecordProbeVisit(string currentWorld, MarketAcquisitionRequestView activeLine, MarketAcquisitionWorldItemSubtask? activeSubtask, MarketAcquisitionLiveCandidatePlan candidatePlan, string? requestId, string routeRunId)
     {
-        var legalRows = candidatePlan.Rows.Where(row => row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var hqPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(activeSubtask?.HqPolicy ?? activeLine.HqPolicy);
+        var maxUnitPrice = activeSubtask?.MaxUnitPrice ?? activeLine.MaxUnitPrice;
+        // Quantity/gil limits can reject stock without clearing the world/item price envelope.
+        var legalRows = candidatePlan.Rows.Where(row =>
+            row.LiveListing.Quantity > 0 && row.LiveListing.UnitPrice > 0 &&
+            row.LiveListing.UnitPrice <= maxUnitPrice &&
+            MarketAcquisitionPolicy.HqMatches(hqPolicy, row.LiveListing.IsHq)).ToArray();
+        // Filtered-out observations cannot prove absence in this price/HQ envelope.
+        var isCleared = legalRows.Length == 0 && candidatePlan.Rows.Count == candidatePlan.ReadableListingCount &&
+                        candidatePlan.IsListingReadFresh &&
+                        (candidatePlan.PriceRangeExhausted ||
+                         (candidatePlan.ListingReadState == MarketBoardListingReadState.FreshComplete &&
+                          !candidatePlan.IsVisibleListingCacheTruncated &&
+                          candidatePlan.ReadableListingCount >= candidatePlan.ReportedListingCount));
         catalog.RecordProbe(new MarketAcquisitionWorldVisitRecord
         {
             WorldName = currentWorld,
@@ -431,7 +444,11 @@ public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisi
             HqPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(activeSubtask?.HqPolicy ?? activeLine.HqPolicy),
             MaxUnitPrice = activeSubtask?.MaxUnitPrice ?? activeLine.MaxUnitPrice,
             CheckedAtUtc = DateTimeOffset.UtcNow,
-            Result = candidatePlan.WouldBuyQuantity > 0 ? MarketAcquisitionLiveCandidateStatuses.LegalStockObserved : candidatePlan.Status,
+            Result = legalRows.Length > 0
+                ? MarketAcquisitionLiveCandidateStatuses.LegalStockObserved
+                : isCleared
+                    ? MarketAcquisitionLiveCandidateStatuses.PriceEnvelopeCleared
+                    : MarketAcquisitionLiveCandidateStatuses.IncompleteListingCoverage,
             ObservedLegalListingCount = legalRows.Length,
             ObservedLegalQuantity = (uint)legalRows.Sum(row => row.LiveListing.Quantity),
             ObservedLegalGil = legalRows.Aggregate(0ul, (total, row) => checked(total + ((ulong)row.LiveListing.UnitPrice * row.LiveListing.Quantity))),

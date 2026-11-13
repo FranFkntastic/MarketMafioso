@@ -249,12 +249,13 @@ public static class MarketAcquisitionLiveCandidatePlanner
         var maxMeaningfulObservationUnitPrice = CalculateMeaningfulObservationUnitPriceThreshold(
             realListings,
             request.MaxUnitPrice);
-        var candidates = realListings
-            .Where(listing => MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice))
-            .ToList();
-
-        foreach (var listing in candidates)
+        foreach (var listing in realListings)
         {
+            if (!MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice))
+            {
+                rows.Add(Skipped(listing, "OutlierPrice", "Live unit price is outside the meaningful observation range.", selectedQuantity, selectedGil));
+                continue;
+            }
             if (listing.UnitPrice > request.MaxUnitPrice)
             {
                 rows.Add(Skipped(listing, "AboveThreshold", "Live unit price is above the configured max unit price.", selectedQuantity, selectedGil));

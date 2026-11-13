@@ -11,6 +11,7 @@ public static class MarketAcquisitionLiveCandidateStatuses
     public const string IncompleteListingCoverage = "IncompleteListingCoverage";
     public const string LegalStockObserved = "LegalStockObserved";
     public const string Purchased = "Purchased";
+    public const string PriceEnvelopeCleared = "PriceEnvelopeCleared";
 
     private const string LegacyVisibleCacheExhausted = "VisibleCacheExhausted";
 
@@ -18,10 +19,9 @@ public static class MarketAcquisitionLiveCandidateStatuses
         Equals(status, IncompleteListingCoverage) ||
         Equals(status, LegacyVisibleCacheExhausted);
 
+    // Observing or purchasing stock is not proof that the price/HQ envelope is cleared.
     public static bool IsConclusiveWorldVisitResult(string? result) =>
-        Equals(result, NoSafeListings) ||
-        Equals(result, LegalStockObserved) ||
-        Equals(result, Purchased);
+        Equals(result, PriceEnvelopeCleared);
 
     private static bool Equals(string? left, string right) =>
         left?.Equals(right, StringComparison.OrdinalIgnoreCase) == true;
