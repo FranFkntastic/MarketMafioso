@@ -54,6 +54,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly Dictionary<string, uint> initialOnHandByLine = new(StringComparer.Ordinal);
     private string? activeLinePurchaseWorld;
     private bool activeSearchAllowsPriceCutoff = true;
+    private bool recoveringRetainedStop;
+    private bool ownsLocalApproachNavigation;
+    private string? retainedRecoveryBrowseOperationId;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -516,7 +519,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
 
         CleanupOwnedTravel("Recovery");
+        var retainedBrowse = marketBoard.BrowseSnapshot;
         CancelActiveOperation("Recovering retained route progress.");
+        retainedRecoveryBrowseOperationId = string.IsNullOrWhiteSpace(retainedBrowse.OperationId)
+            ? null
+            : retainedBrowse.OperationId;
         claimedRequest = claimed;
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
@@ -537,6 +544,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             state.ManualRecoveryBlockedReason = null;
             travelInterruptedByCleanup = false;
+            recoveringRetainedStop = true;
         }
         return UpdateStatus(result);
     }
@@ -877,10 +885,37 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void HandlePendingStop(MarketAcquisitionGuidedRouteStop activeStop)
     {
+        if (WaitForNativeBrowseCompletion())
+            return;
         var currentWorld = context.IsCurrentWorldAvailable ? context.GetCurrentWorldName() : null;
-        // Every acquisition stop delegates the complete trip to `/li <world> mb`, including
-        // a stop on the current world. MMF owns market automation only after Lifestream is
-        // idle and has delivered the market-board UI.
+        if (recoveringRetainedStop &&
+            activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) &&
+            marketBoard.CanApproachMarketBoardLocally())
+        {
+            if (!context.TryIsWorldTravelBusy(out var travelBusy) || travelBusy)
+            {
+                state.AcquisitionStatus = "Waiting for confirmed idle Lifestream before local route recovery.";
+                return;
+            }
+            var approach = marketBoard.OpenOrApproachMarketBoard();
+            if (approach.ActionKind == MarketBoardApproachActionKind.NavigationStarted)
+                ownsLocalApproachNavigation = true;
+            UpdateStatus(runner.RecordMarketBoardApproach(approach));
+            if (!approach.ReadyToSearch)
+                return;
+
+            if (!StopOwnedLocalApproach())
+                return;
+            recoveringRetainedStop = false;
+            UpdateStatus(runner.RecordCurrentWorld(currentWorld!));
+            HandleArrivedStop(currentWorld!);
+            return;
+        }
+        if (!StopOwnedLocalApproach())
+            return;
+        recoveringRetainedStop = false;
+        // Ordinary stops and recovery outside local reach still delegate the
+        // complete trip to `/li <world> mb`, even on the current world.
         const bool requiresTravelPreparation = true;
         MarketAcquisitionRouteOperationSnapshot? preparation = null;
         if (requiresTravelPreparation ||
@@ -1273,12 +1308,20 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return;
             }
 
-            var searchResult = marketBoard.SearchItem(activeLine.ItemId, activeLine.ItemName);
+            var searchResult = marketBoard.SearchItem(activeLine.ItemId, activeLine.ItemName,
+                retainedRecoveryBrowseOperationId == null
+                    ? MarketBoardItemSearchIntent.PresentOrBrowse
+                    : MarketBoardItemSearchIntent.RequireFreshBrowse,
+                retainedRecoveryBrowseOperationId);
+            if (searchResult.BrowseEvidence is { Owner: MarketBoardBrowseOwner.MarketAcquisition } recoveredBrowse &&
+                recoveredBrowse.ItemId == activeLine.ItemId &&
+                recoveredBrowse.OperationId != retainedRecoveryBrowseOperationId)
+                retainedRecoveryBrowseOperationId = null;
             UpdateStatus(runner.RecordSearchResult(searchResult, clock.UtcNow));
             var operationResult = ObserveItemSearchOperation(operation, searchResult);
             if (operationResult.Disposition == MarketAcquisitionRouteOperationDisposition.Pending)
             {
-                if (TryRecordConclusiveListingPrefix(operation, claimed, activeLine, currentWorld, searchResult.BrowseEvidence))
+                if (TryObserveConclusiveListingPrefix(operation, activeLine, currentWorld, searchResult.BrowseEvidence))
                     return;
 
                 state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
@@ -1306,9 +1349,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ProbeLiveMarketBoard();
     }
 
-    private bool TryRecordConclusiveListingPrefix(
+    private bool TryObserveConclusiveListingPrefix(
         MarketAcquisitionRouteOperationSnapshot operation,
-        MarketAcquisitionClaimView claimed,
         MarketAcquisitionRequestView activeLine,
         string currentWorld,
         MarketBoardBrowseSnapshot? browse)
@@ -1340,52 +1382,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return false;
         }
 
-        var operationResult = operationExecutor.Observe(
-            new MarketAcquisitionRouteOperationObservation
-            {
-                OperationId = operation.OperationId,
-                Disposition = MarketAcquisitionRouteOperationDisposition.Succeeded,
-                Message = prefixPlan.Message,
-                Details = new Dictionary<string, string?>
-                {
-                    ["decisionSource"] = "VerifiedCheapestFirstPrefix",
-                    ["browseOperationId"] = prefixRead.BrowseOperationId,
-                    ["observedPages"] = prefixRead.BrowseObservedPageCount.ToString(),
-                    ["expectedPages"] = prefixRead.BrowseExpectedPageCount.ToString(),
-                    ["readableListings"] = prefixRead.ReadableListingCount.ToString(),
-                    ["reportedListings"] = prefixRead.ReportedListingCount.ToString(),
-                    ["remainingBrowseDisposition"] = prefixPlan.WouldBuyQuantity > 0 ? "PurchaseEligiblePrefix" : "CloseNativeItemResults",
-                },
-            },
-            clock.UtcNow,
-            clock.MonotonicMilliseconds);
-        if (!operationResult.Accepted || operationResult.Snapshot == null)
-            throw new InvalidOperationException(operationResult.Message);
-
-        runner.RecordRouteOperationSnapshot(operationResult.Snapshot);
-        UpdateStatus(runner.BeginProbe($"Arrived on {currentWorld}. The eligible price range is fully observed for {FormatItem(activeLine)}."));
+        // Preserve the early decision for diagnostics, not as permission to end
+        // transport. Search remains pending until native pages and history finish.
         state.MarketBoardReadResult = prefixRead;
-        state.MarketBoardReconciliation = null;
         state.LiveCandidatePlan = prefixPlan;
-
-        if (!state.EvidenceRefreshOnly && activeSubtask != null &&
-            EnforceExactAcquisitionCandidateAuthority(activeSubtask, prefixPlan) is not null)
-            return true;
-        if (prefixPlan.WouldBuyQuantity == 0 || state.EvidenceRefreshOnly)
-            ClosePriceCompleteBrowse(prefixRead);
-        var probeResult = runner.RecordProbe(currentWorld, prefixPlan, allowPurchases: !state.EvidenceRefreshOnly);
-        if (!probeResult.Success)
-        {
-            UpdateStatus(FailRoute(probeResult.Message));
-            return true;
-        }
-
-        evidence.RecordProbeVisit(currentWorld, activeLine, activeSubtask, prefixPlan, claimed.Id, state.ProgressNonce);
-        ClearMarketBoardAutomationState();
-        ReportRouteProgress();
-        EvaluateExactAcquisitionRouteCompletion();
-        state.AcquisitionStatus = probeResult.Message;
-        state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
+        state.AcquisitionStatus = $"Eligible price range observed. Waiting for native listings and history. {prefixPlan.Message}";
+        state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
         return true;
     }
 
@@ -1792,16 +1794,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionRouteLinePurchaseTotals totals, out MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
         candidatePlan = new();
-        return activeSearchAllowsPriceCutoff &&
+        return activeSearchAllowsPriceCutoff && marketBoard.BrowseSnapshot.IsComplete &&
             MarketAcquisitionLiveCandidatePlanner.TryBuildConclusiveSortedPrefixPlan(
                 line, plan, subtask, world, read, totals.PurchasedQuantity, totals.SpentGil,
                 marketBoard.BrowseSnapshot, out candidatePlan);
-    }
-
-    private void ClosePriceCompleteBrowse(MarketBoardReadResult read)
-    {
-        if (!marketBoard.CloseBrowse(read.BrowseOperationId))
-            throw new InvalidOperationException("The price-complete browse could not close its owned native item results.");
     }
 
     private static MarketBoardReadResult CreatePurchaseRecoveryPendingRead(
@@ -2135,8 +2131,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CompleteActiveWorldPurchaseBatch(string currentWorld)
     {
-        if (state.LiveCandidatePlan?.PriceRangeExhausted == true && state.MarketBoardReadResult is { } priceCompleteRead)
-            ClosePriceCompleteBrowse(priceCompleteRead);
+        if (WaitForNativeBrowseCompletion())
+            return;
         evidence.Flush();
         var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
         if (activeSubtask != null)
@@ -2788,6 +2784,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CleanupOwnedTravel(string terminalReason)
     {
+        recoveringRetainedStop = false;
+        retainedRecoveryBrowseOperationId = null;
+        StopOwnedLocalApproach();
         ReleaseTravelFrameThrottle(terminalReason);
         var lease = activeTravelLease;
         if (lease == null)
@@ -2855,6 +2854,33 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ? "Route cleanup completed with unresolved external Lifestream automation."
                 : "Route cleanup completed.",
             CreateTravelCleanupDetails(lease, terminalReason, "Aggregate", unresolved, result, cleanupId));
+    }
+
+    private bool WaitForNativeBrowseCompletion()
+    {
+        var browse = marketBoard.BrowseSnapshot;
+        if (!browse.IsActive)
+            return false;
+        state.AcquisitionStatus = $"Waiting for native listings and history before route handoff. {browse.Message}";
+        state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+        return true;
+    }
+
+    private bool StopOwnedLocalApproach()
+    {
+        if (!ownsLocalApproachNavigation)
+            return true;
+        var result = marketBoard.StopMarketBoardApproach();
+        runner.RecordRouteCleanup(result.Message, new Dictionary<string, string?>
+        {
+            ["dependency"] = "vnavmesh",
+            ["success"] = result.Success.ToString(),
+        });
+        if (result.Success)
+            ownsLocalApproachNavigation = false;
+        else
+            state.AcquisitionStatus = result.Message;
+        return result.Success;
     }
 
     private void ReleaseTravelFrameThrottle(string terminalReason)

@@ -33,7 +33,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
         stop.Status = "Pending";
         stop.MarketBoardTravelCommandSent = false;
         return MarketAcquisitionGuidedRouteResult.Ok(
-            $"Recovered the retained route at {stop.WorldName}; travel will resume through Lifestream's complete market-board trip.");
+            $"Recovered the retained route at {stop.WorldName}; checking local market-board reachability before travel.");
     }
 
     public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId)

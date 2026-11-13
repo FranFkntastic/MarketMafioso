@@ -79,6 +79,24 @@ public sealed class MarketBoardApproachService
 
     public unsafe bool IsMarketBoardReady() => IsMarketBoardUiOpen();
 
+    // Observation only: share discovery, distance and navigation policy with
+    // OpenOrApproach without targeting, moving or opening anything in preflight.
+    public bool CanApproachLocally()
+    {
+        if (IsMarketBoardUiOpen())
+            return true;
+        var playerPosition = objectTable.LocalPlayer?.Position;
+        var board = FindMarketBoard(playerPosition);
+        return Decide(false,
+            board == null || playerPosition == null
+                ? null
+                : CalculateHorizontalDistance(playerPosition.Value, board.Position),
+            vnavmesh.IsReady, vnavmesh.IsRunning).Kind is
+            MarketBoardApproachDecisionKind.InteractDirectly or
+            MarketBoardApproachDecisionKind.StartNavigation or
+            MarketBoardApproachDecisionKind.WaitForMovement;
+    }
+
     public VNavmeshStopResult StopNavigation()
     {
         var result = vnavmesh.Stop();
