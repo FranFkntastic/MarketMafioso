@@ -114,6 +114,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public bool IsRouteRunning => runner.IsRunning || state.ProbeRunning;
 
+    public bool IsPurchaseAutomationBusy => purchaseAutomation.IsBusy;
+
+    public bool IsShardCheckpointActive => shardCheckpoints?.IsActive == true;
+
     public bool IsRouteActive =>
         runner.IsRunning ||
         runner.IsPaused ||

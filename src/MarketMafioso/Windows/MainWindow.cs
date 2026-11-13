@@ -835,8 +835,21 @@ public class MainWindow : Window, IDisposable
             playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : string.Empty,
             IsControlledListingBlockedByAutomation()));
 
-    /// <summary>An acquisition request or route is doing work right now; a paused route is not running.</summary>
-    public bool IsMarketAcquisitionRunning => acquisitionWorkspace.IsBusy || routeEngine.IsRouteRunning;
+    /// <summary>
+    /// Why market automation is doing work right now, or null when idle; a paused route is not running.
+    /// </summary>
+    public string? GetMarketAutomationBusyReason()
+    {
+        if (acquisitionWorkspace.IsBusy || routeEngine.IsRouteRunning)
+            return "A market acquisition route is running.";
+        if (routeEngine.IsPurchaseAutomationBusy)
+            return "A market-board purchase is in progress.";
+        if (marketBoardAcquisition.IsListingPurchaseActive)
+            return "A market listing purchase is in progress.";
+        if (routeEngine.IsShardCheckpointActive)
+            return "A shard acquisition checkpoint is in progress.";
+        return null;
+    }
 
     public void OpenRetainerListingRefreshSettings()
     {

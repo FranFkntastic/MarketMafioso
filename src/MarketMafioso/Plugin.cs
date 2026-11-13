@@ -208,8 +208,7 @@ public sealed class Plugin : IDalamudPlugin
             marketBoardBrowseObserver,
             retainerListingRefresh,
             characterLoginDriver,
-            ObserveLoggedInCharacter,
-            GetRelogBlockingReason,
+            SampleRelogGameState,
             ResolveItemName,
             () => mainWindow?.OpenRetainerListingRefreshSettings(),
             message => Log.Information("[MarketMafioso] {Message}", message));
@@ -814,9 +813,23 @@ public sealed class Plugin : IDalamudPlugin
             return "A workshop vendor restock is in progress.";
         if (tradeQueueRunner.IsActive)
             return "Trade Queue execution is in progress.";
-        if (mainWindow.IsMarketAcquisitionRunning)
-            return "A market acquisition route is running.";
-        return null;
+        return mainWindow?.GetMarketAutomationBusyReason();
+    }
+
+    private MarketRelogGameState SampleRelogGameState()
+    {
+        var who = ObserveLoggedInCharacter();
+        return new MarketRelogGameState
+        {
+            LoggedIn = who.LoggedIn,
+            Name = who.Name,
+            HomeWorld = who.HomeWorld,
+            CurrentDataCenterId = PlayerState.CurrentWorld.IsValid ? PlayerState.CurrentWorld.Value.DataCenter.RowId : null,
+            HomeDataCenterId = PlayerState.HomeWorld.IsValid ? PlayerState.HomeWorld.Value.DataCenter.RowId : null,
+            IsConditionSet = flag => Condition[flag],
+            RetainerSessionOpen = IsRetainerSessionActive(),
+            AutomationBusyReason = GetRelogBlockingReason(),
+        };
     }
 
     private static (bool Ready, string? Reason) GetImmediateRetainerListingRefreshReadiness(bool retainerSessionActive)

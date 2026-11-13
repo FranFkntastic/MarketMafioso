@@ -80,10 +80,11 @@ internal sealed class RetainerListingRefreshCoordinator
         if (ObserveActiveRequest(nowUtc))
             return;
 
-        RecoverCooledDownItems(nowUtc);
-
+        // While locked out nothing may dispatch, so cooled-down items stay put until the relog.
         if (ObserveMarketLockout(nowUtc))
             return;
+
+        RecoverCooledDownItems(nowUtc);
 
         if (browseRuntime.Snapshot.IsActive)
             return;
@@ -135,7 +136,10 @@ internal sealed class RetainerListingRefreshCoordinator
             return false;
         }
 
-        log($"User force retry accepted for {FormatItem(item)} (blocked by {item.LastCode}).");
+        var waitingForRelog = browseRuntime.Lockout.Active;
+        log(waitingForRelog
+            ? $"User force retry accepted for {FormatItem(item)} (blocked by {item.LastCode}); the queue is waiting for a relog before it searches again."
+            : $"User force retry accepted for {FormatItem(item)} (blocked by {item.LastCode}).");
 
         item.State = RetainerListingRefreshItemState.Deferred;
         item.NextAttemptAtUtc = (nowUtc ?? DateTimeOffset.UtcNow).UtcDateTime;
@@ -146,12 +150,21 @@ internal sealed class RetainerListingRefreshCoordinator
             candidate.State == RetainerListingRefreshItemState.Blocked);
         state.NeedsAttention = remainingBlocked > 0;
         state.AttentionNotified = false;
-        UpdateStatus(
-            remainingBlocked > 0 ? "Blocked" : "Queued",
-            remainingBlocked > 0
-                ? $"Queued a force retry for {FormatItem(item)}; {remainingBlocked} other item(s) remain blocked."
-                : $"Queued a force retry for {FormatItem(item)}.",
-            persistState: true);
+        var queued = remainingBlocked > 0
+            ? $"Queued a force retry for {FormatItem(item)}; {remainingBlocked} other item(s) remain blocked."
+            : $"Queued a force retry for {FormatItem(item)}.";
+        if (waitingForRelog)
+        {
+            item.LastCode = WaitingForRelogCode;
+            UpdateStatus(
+                WaitingForRelogCode,
+                $"{queued} The queue is waiting for you to relog before it searches the market board again.",
+                persistState: true);
+        }
+        else
+        {
+            UpdateStatus(remainingBlocked > 0 ? "Blocked" : "Queued", queued, persistState: true);
+        }
         return true;
     }
 

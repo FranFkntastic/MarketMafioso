@@ -15,7 +15,7 @@ internal sealed class MarketAcquisitionSettingsPages
     private readonly Configuration config;
     private readonly IRetainerListingRefreshControls refreshControls;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
-    private string? lastRelogResult;
+    private string? lastRelogAccepted;
 
     public MarketAcquisitionSettingsPages(
         Configuration config,
@@ -52,11 +52,16 @@ internal sealed class MarketAcquisitionSettingsPages
             var refresh = config.RetainerListingRefresh;
             var lockout = refreshControls.Lockout;
             if (lockout.Active)
+            {
                 DrawMarketLockout(lockout);
+            }
             else
+            {
+                lastRelogAccepted = null;
                 ImGui.TextColored(
                     refresh.NeedsAttention ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted,
                     refresh.StatusMessage);
+            }
             if (refresh.Items.Count > 0)
             {
                 var blockedItems = refresh.Items
@@ -81,39 +86,18 @@ internal sealed class MarketAcquisitionSettingsPages
             $"Market board locked out. {refreshControls.WaitingCount} refresh item(s) waiting for relog.");
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, refreshControls.DescribeLockout(lockout));
         if (ImGui.SmallButton("Relog##market-lockout"))
-            lastRelogResult = RequestRelog();
-        reviewRegistry.Register(
-            "settings.retainer-listings.refresh.relog",
-            "Relog to clear the market-board lockout",
-            AgentBridgeUiControlKind.Button,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
-            enabled: true,
-            selected: false,
-            value: lockout.LockedAtUtc?.ToString("O"),
-            arguments: null,
-            surfaceId: "settings.retainer-listings.refresh",
-            mutating: true,
-            completionOperationKind: null,
-            _ =>
-            {
-                var result = refreshControls.RequestRelog("agent bridge");
-                lastRelogResult = result.Message;
-                return result.Accepted
-                    ? AgentBridgeUiActionResult.Ok(result.Message)
-                    : AgentBridgeUiActionResult.Fail(result.Message);
-            });
-        if (!string.IsNullOrWhiteSpace(lastRelogResult))
+        {
+            var result = refreshControls.RequestRelog("settings");
+            lastRelogAccepted = result.Accepted ? result.Message : null;
+        }
+        // Deliberately not registered with the agent review registry: agents must never trigger a relog.
+        // The refusal is re-evaluated every frame by the controls, so it disappears once its cause ends.
+        var status = refreshControls.RelogRefusal is { } refusal ? $"Refused: {refusal}" : lastRelogAccepted;
+        if (!string.IsNullOrWhiteSpace(status))
         {
             ImGui.SameLine();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, lastRelogResult);
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
         }
-    }
-
-    private string RequestRelog()
-    {
-        var result = refreshControls.RequestRelog("settings");
-        return result.Accepted ? result.Message : $"Refused: {result.Message}";
     }
 
     private void DrawOperation(SettingsPageContext context)

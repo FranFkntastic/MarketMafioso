@@ -1,3 +1,4 @@
+using Dalamud.Game.ClientState.Conditions;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.MarketDiagnostics;
 
@@ -27,16 +28,72 @@ public sealed class MarketLockoutRelogTests
         foreach (var owner in Enum.GetValues<MarketBoardBrowseOwner>())
             Assert.False(gate.TryBegin(owner, 1, out _));
 
-        // A plugin reload and a login without a logout (e.g. a world visit) must not clear it.
+        // A plugin reload while logged in, then a login without a logout (e.g. a world visit), must not clear it.
         gate = new MarketBoardBrowseOperationGate(() => Now, persisted);
+        gate.ObserveInitialSession(isLoggedIn: true);
         Assert.False(gate.ObserveLogin());
         Assert.True(gate.Lockout.Active);
 
-        gate.ObserveLogout(0, 10000);
+        // A plugin loaded at the title screen has already seen the logout; the next login clears it.
+        gate = new MarketBoardBrowseOperationGate(() => Now, persisted);
+        gate.ObserveInitialSession(isLoggedIn: false);
         Assert.True(gate.Lockout.Active);
         Assert.True(gate.ObserveLogin());
         Assert.False(gate.Lockout.Active);
         Assert.True(gate.TryBegin(MarketBoardBrowseOwner.MarketAcquisition, 1, out _));
+    }
+
+    [Fact]
+    public void UserSearchThatTripsTheLockoutLocksMmfOutToo()
+    {
+        var persisted = new PersistedMarketBoardSessionCircuitBreakerState();
+        var gate = new MarketBoardBrowseOperationGate(() => Now, persisted, getCurrentWorld: () => "Siren");
+
+        // No MMF operation is active: this header answers the user's own market-board search.
+        gate.ObserveHeader(MarketBoardBrowseOperationGate.RateLimitStatus, 0);
+
+        Assert.True(gate.Lockout.Active);
+        Assert.Equal(MarketBoardBrowseOperationGate.UnownedTriggerOwner, gate.Lockout.TriggerOwner);
+        Assert.Null(gate.Snapshot.FailureCode);
+        Assert.False(gate.TryBegin(MarketBoardBrowseOwner.RetainerListingRefresh, 1, out var refused));
+        Assert.Equal(MarketBoardBrowseOperationGate.LockoutFailureCode, refused.FailureCode);
+    }
+
+    [Fact]
+    public void RelogIsRefusedWhileTheCharacterOrMmfIsBusyOrAwayFromHome()
+    {
+        var idle = new MarketRelogGameState
+        {
+            LoggedIn = true,
+            Name = "Test Character",
+            HomeWorld = "Siren",
+            CurrentDataCenterId = 4,
+            HomeDataCenterId = 4,
+        };
+        string? Refusal(MarketRelogGameState state, bool browseActive = false) =>
+            MarketRelogPolicy.GetRefusal(lockoutActive: true, relogInFlight: false, browseActive, state);
+
+        Assert.Null(Refusal(idle));
+        Assert.NotNull(MarketRelogPolicy.GetRefusal(lockoutActive: false, relogInFlight: false, browseActive: false, idle));
+        Assert.NotNull(MarketRelogPolicy.GetRefusal(lockoutActive: true, relogInFlight: true, browseActive: false, idle));
+        Assert.NotNull(Refusal(idle, browseActive: true));
+        Assert.NotNull(Refusal(idle with { LoggedIn = false }));
+        Assert.Equal("A market listing purchase is in progress.", Refusal(idle with { AutomationBusyReason = "A market listing purchase is in progress." }));
+        Assert.NotNull(Refusal(idle with { RetainerSessionOpen = true }));
+        Assert.Equal(MarketRelogPolicy.WrongDataCenterReason, Refusal(idle with { CurrentDataCenterId = 5 }));
+        Assert.NotNull(Refusal(idle with { CurrentDataCenterId = null }));
+
+        foreach (var flag in new[]
+                 {
+                     ConditionFlag.InCombat, ConditionFlag.BoundByDuty, ConditionFlag.BoundByDuty56, ConditionFlag.BoundByDuty95,
+                     ConditionFlag.Crafting, ConditionFlag.PreparingToCraft, ConditionFlag.OccupiedInCutSceneEvent,
+                     ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78, ConditionFlag.BetweenAreas,
+                     ConditionFlag.BetweenAreas51, ConditionFlag.OccupiedSummoningBell, ConditionFlag.OccupiedInQuestEvent,
+                     ConditionFlag.OccupiedInEvent, ConditionFlag.LoggingOut,
+                 })
+        {
+            Assert.NotNull(Refusal(idle with { IsConditionSet = candidate => candidate == flag }));
+        }
     }
 
     [Fact]

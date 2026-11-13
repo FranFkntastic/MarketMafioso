@@ -168,6 +168,8 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
         listingAvailabilityProvider.RegisterFunc(() => IsAvailable && clientState.IsLoggedIn);
     }
 
+    public bool IsListingPurchaseActive => purchaseCoordinator.IsActive;
+
     public bool IsAvailable =>
         MarketAcquisitionUnlock.IsUnlocked(configuration) &&
         configuration.EnableMarketListingPurchases;

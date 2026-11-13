@@ -19,6 +19,9 @@ public interface IRetainerListingRefreshControls
     int WaitingCount { get; }
     bool ForceRetry(uint itemId);
     MarketRelogRequestResult RequestRelog(string source);
+
+    /// <summary>Why the last relog request was refused, while that cause still holds.</summary>
+    string? RelogRefusal { get; }
     string DescribeLockout(MarketBoardLockoutStatus lockout);
 }
 
@@ -36,8 +39,7 @@ internal sealed class MarketLockoutAttention : IRetainerListingRefreshControls, 
     private readonly IMarketBoardBrowseRuntime browseRuntime;
     private readonly RetainerListingRefreshCoordinator refresh;
     private readonly ICharacterLoginDriver loginDriver;
-    private readonly Func<(bool LoggedIn, string Name, string HomeWorld)> identity;
-    private readonly Func<string?> automationBlockingReason;
+    private readonly Func<MarketRelogGameState> gameState;
     private readonly Func<uint, string?> resolveItemName;
     private readonly Action openRefreshSettings;
     private readonly Action<string> log;
@@ -57,8 +59,7 @@ internal sealed class MarketLockoutAttention : IRetainerListingRefreshControls, 
         IMarketBoardBrowseRuntime browseRuntime,
         RetainerListingRefreshCoordinator refresh,
         ICharacterLoginDriver loginDriver,
-        Func<(bool LoggedIn, string Name, string HomeWorld)> identity,
-        Func<string?> automationBlockingReason,
+        Func<MarketRelogGameState> gameState,
         Func<uint, string?> resolveItemName,
         Action openRefreshSettings,
         Action<string> log)
@@ -68,8 +69,7 @@ internal sealed class MarketLockoutAttention : IRetainerListingRefreshControls, 
         this.browseRuntime = browseRuntime ?? throw new ArgumentNullException(nameof(browseRuntime));
         this.refresh = refresh ?? throw new ArgumentNullException(nameof(refresh));
         this.loginDriver = loginDriver ?? throw new ArgumentNullException(nameof(loginDriver));
-        this.identity = identity ?? throw new ArgumentNullException(nameof(identity));
-        this.automationBlockingReason = automationBlockingReason ?? throw new ArgumentNullException(nameof(automationBlockingReason));
+        this.gameState = gameState ?? throw new ArgumentNullException(nameof(gameState));
         this.resolveItemName = resolveItemName ?? throw new ArgumentNullException(nameof(resolveItemName));
         this.openRefreshSettings = openRefreshSettings ?? throw new ArgumentNullException(nameof(openRefreshSettings));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
@@ -80,6 +80,8 @@ internal sealed class MarketLockoutAttention : IRetainerListingRefreshControls, 
     public int WaitingCount => refresh.PendingCount;
 
     public bool ForceRetry(uint itemId) => refresh.ForceRetry(itemId);
+
+    public string? RelogRefusal => lastRelogRefusal;
 
     /// <summary>Runs on the framework thread.</summary>
     public void Tick(DateTimeOffset nowUtc)
@@ -92,6 +94,8 @@ internal sealed class MarketLockoutAttention : IRetainerListingRefreshControls, 
             relogInFlightUntilUtc = null;
         if (!lockout.Active)
             lastRelogRefusal = null;
+        else if (lastRelogRefusal is not null)
+            lastRelogRefusal = GetRelogRefusal(SampleGameState(logFailure: false)); // drop or update a stale refusal
 
         UpdateServerInfoBar(lockout, waiting, blocked);
         UpdateNotification(lockout, waiting);
@@ -138,22 +142,34 @@ internal sealed class MarketLockoutAttention : IRetainerListingRefreshControls, 
             : $"Locked out at {at} by {owner} ({subject}).";
     }
 
+    private MarketRelogGameState SampleGameState(bool logFailure = true)
+    {
+        try
+        {
+            return gameState();
+        }
+        catch (Exception exception)
+        {
+            if (logFailure)
+                log($"Relog readiness could not be sampled: {exception.Message}");
+            return new MarketRelogGameState();
+        }
+    }
+
+    private string? GetRelogRefusal(MarketRelogGameState state) =>
+        MarketRelogPolicy.GetRefusal(
+            browseRuntime.Lockout.Active,
+            relogInFlightUntilUtc is not null,
+            browseRuntime.Snapshot.IsActive,
+            state);
+
     private MarketRelogRequestResult EvaluateAndSubmitRelog()
     {
-        if (!browseRuntime.Lockout.Active)
-            return new(false, "No market-board lockout is active.");
-        if (relogInFlightUntilUtc is not null)
-            return new(false, "A relog is already in progress.");
-        if (browseRuntime.Snapshot.IsActive)
-            return new(false, "A market-board search is in progress.");
-
-        var blockingReason = automationBlockingReason();
-        if (!string.IsNullOrWhiteSpace(blockingReason))
-            return new(false, blockingReason);
-
-        var who = identity();
-        if (!who.LoggedIn || string.IsNullOrWhiteSpace(who.Name) || string.IsNullOrWhiteSpace(who.HomeWorld))
-            return new(false, "No logged-in character is available to relog.");
+        // Sampled at click time: the character's state may have changed since the button was drawn.
+        var who = SampleGameState();
+        var refusal = GetRelogRefusal(who);
+        if (refusal is not null)
+            return new(false, refusal);
 
         // Lifestream's character change logs out and selects the named character again, which for the current
         // character is exactly a relog.
@@ -179,7 +195,8 @@ internal sealed class MarketLockoutAttention : IRetainerListingRefreshControls, 
                 ? "\nRelogging..."
                 : lastRelogRefusal is { } refusal
                     ? $"\nRelog refused: {refusal}"
-                    : "\nClick to relog.";
+                    : string.Empty;
+            tooltip += "\nClick to open MMF settings, where you can relog.";
         }
         else if (blocked > 0)
         {
@@ -202,9 +219,8 @@ internal sealed class MarketLockoutAttention : IRetainerListingRefreshControls, 
         dtrEntry ??= dtrBar.Get(DtrTitle);
         dtrEntry.Text = text;
         dtrEntry.Tooltip = tooltip ?? string.Empty;
-        dtrEntry.OnClick = lockout.Active
-            ? _ => RequestRelog("server info bar")
-            : _ => openRefreshSettings();
+        // Any mouse button fires OnClick, so the entry only navigates; relogging needs a deliberate button press.
+        dtrEntry.OnClick = _ => openRefreshSettings();
         dtrEntry.Shown = true;
     }
 

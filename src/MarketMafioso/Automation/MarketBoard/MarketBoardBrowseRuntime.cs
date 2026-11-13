@@ -142,6 +142,7 @@ internal sealed class MarketBoardBrowseOperationGate
 {
     internal const uint RateLimitStatus = 0x70000002;
     internal const string LockoutFailureCode = "MarketBoardSessionExpired";
+    internal const string UnownedTriggerOwner = "User/unowned";
     private const int ListingsPerPage = 10;
     private const int MaximumListings = 100;
 
@@ -489,6 +490,27 @@ internal sealed class MarketBoardBrowseOperationGate
     {
         lock (sync)
         {
+            if (status == RateLimitStatus)
+            {
+                // The lockout is session-wide, so it is recorded whoever searched: a manual search that
+                // trips it locks MMF out exactly like an owned browse does.
+                var owned = snapshot.IsActive;
+                RecordRateLimit(owned);
+                if (owned)
+                {
+                    snapshot = snapshot with
+                    {
+                        HeaderObserved = true,
+                        HeaderStatus = status,
+                    };
+                    Fail(
+                        LockoutFailureCode,
+                        "The market-board server locked MMF out (status 0x70000002). MMF will not search the market board again until you log out and back in.");
+                }
+
+                return;
+            }
+
             if (!snapshot.IsActive)
                 return;
 
@@ -511,19 +533,9 @@ internal sealed class MarketBoardBrowseOperationGate
                     HeaderObserved = true,
                     HeaderStatus = status,
                 };
-                if (status == RateLimitStatus)
-                {
-                    RecordRateLimit();
-                    Fail(
-                        LockoutFailureCode,
-                        "The market-board server locked MMF out (status 0x70000002). MMF will not search the market board again until you log out and back in.");
-                }
-                else
-                {
-                    Fail(
-                        "ServerStatusRejected",
-                        $"The market-board server rejected the browse with status 0x{status:X8}.");
-                }
+                Fail(
+                    "ServerStatusRejected",
+                    $"The market-board server rejected the browse with status 0x{status:X8}.");
                 return;
             }
 
@@ -785,7 +797,7 @@ internal sealed class MarketBoardBrowseOperationGate
         };
     }
 
-    private void RecordRateLimit()
+    private void RecordRateLimit(bool owned)
     {
         var nowUtc = getUtcNow();
         string? world;
@@ -798,11 +810,14 @@ internal sealed class MarketBoardBrowseOperationGate
             world = null;
         }
 
+        var triggerOwner = owned ? snapshot.Owner?.ToString() : UnownedTriggerOwner;
+        var triggerItemId = owned ? snapshot.ItemId : 0u;
+        string? triggerOperationId = owned ? snapshot.OperationId : null;
         sessionState.RateLimitCount++;
         sessionState.LastRateLimitAtUtc = nowUtc;
         log(
-            $"Market-board rate limit observed (status 0x{RateLimitStatus:X8}): owner {snapshot.Owner}, " +
-            $"item {snapshot.ItemId}, world {world ?? "unknown"}, operation {snapshot.OperationId}.");
+            $"Market-board rate limit observed (status 0x{RateLimitStatus:X8}): owner {triggerOwner}, " +
+            $"item {triggerItemId}, world {world ?? "unknown"}, operation {triggerOperationId ?? "none"}.");
         if (!sessionState.RelogRequired)
         {
             // One server rate limit locks MMF out of the whole market board until a relog; no retry has
@@ -810,10 +825,10 @@ internal sealed class MarketBoardBrowseOperationGate
             sessionState.RelogRequired = true;
             sessionState.LogoutObserved = false;
             sessionState.ExpiredAtUtc = nowUtc;
-            sessionState.TriggerOwner = snapshot.Owner?.ToString();
-            sessionState.TriggerItemId = snapshot.ItemId;
+            sessionState.TriggerOwner = triggerOwner;
+            sessionState.TriggerItemId = triggerItemId;
             sessionState.TriggerWorld = world;
-            sessionState.TriggerOperationId = snapshot.OperationId;
+            sessionState.TriggerOperationId = triggerOperationId;
             log("Market-board lockout set: every MMF market search is refused until a logout followed by a login.");
         }
         persistSessionState();
