@@ -304,14 +304,6 @@ public sealed record AgentBridgeRouteTruth
     public uint? TargetPurchasedQuantity { get; init; }
     public uint? TargetRemainingQuantity { get; init; }
     public string? ExecutionMode { get; init; }
-    public bool TravelFrameThrottleActive { get; init; }
-    public int TravelFrameThrottleMaximumFramesPerSecond { get; init; }
-    public string? TravelFrameThrottleLeaseId { get; init; }
-    public string? TravelFrameThrottleRouteRunId { get; init; }
-    public string? TravelFrameThrottleTargetWorld { get; init; }
-    public long TravelFrameThrottleTotalDelayedFrames { get; init; }
-    public double TravelFrameThrottleTotalRequestedDelayMilliseconds { get; init; }
-    public string? TravelFrameThrottleLastReleaseReason { get; init; }
     public string? ArmedExactAcquisitionDryRunScenario { get; init; }
     public bool ExactAcquisitionDryRunFaultEligible { get; init; }
     public bool ExactAcquisitionDryRunFaultInjected { get; init; }
