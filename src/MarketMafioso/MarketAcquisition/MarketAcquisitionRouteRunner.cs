@@ -13,6 +13,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private static readonly TimeSpan MarketBoardListingFreshnessWatchdog = TimeSpan.FromSeconds(15);
 
     private readonly string diagnosticsDirectory;
+    private readonly Action<Exception, string>? errorLogger;
     private readonly UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier;
     private readonly Func<MarketAcquisitionRouteDiagnosticRetentionPolicy> retentionPolicyProvider;
     private readonly Dictionary<FreshnessObservationKey, FreshnessObservation> freshnessObservations = [];
@@ -43,12 +44,14 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public MarketAcquisitionRouteRunner(
         string diagnosticsDirectory,
         UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier,
-        Func<MarketAcquisitionRouteDiagnosticRetentionPolicy>? retentionPolicyProvider = null)
+        Func<MarketAcquisitionRouteDiagnosticRetentionPolicy>? retentionPolicyProvider = null,
+        Action<Exception, string>? errorLogger = null)
     {
         if (string.IsNullOrWhiteSpace(diagnosticsDirectory))
             throw new ArgumentException("Diagnostics directory is required.", nameof(diagnosticsDirectory));
 
         this.diagnosticsDirectory = diagnosticsDirectory;
+        this.errorLogger = errorLogger;
         this.universalisFreshnessVerifier = universalisFreshnessVerifier;
         this.retentionPolicyProvider = retentionPolicyProvider ?? (() => new MarketAcquisitionRouteDiagnosticRetentionPolicy());
     }
@@ -1204,6 +1207,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
     {
+        if (exception != null)
+            RecordFailure(message, exception);
         State = "Failed";
         StatusMessage = message;
         SearchSubmitted = false;
@@ -1211,10 +1216,38 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         ClearListingReadPendingWatchdog();
-        diagnostics.Fail(message, exception);
+        try { diagnostics.Fail(message, exception); }
+        catch { /* Failure logging cannot replace the route failure. */ }
         RefreshLastRunSummary();
-        CloseDiagnostics();
+        try { CloseDiagnostics(); }
+        catch { /* Best effort after the original exception was recorded independently. */ }
         return MarketAcquisitionRouteActionResult.Fail(message);
+    }
+
+    internal void RecordFailure(string message, Exception exception)
+    {
+        try
+        {
+            if (!MarketAcquisitionRouteFailure.TryBeginReport(exception))
+                return;
+            Dictionary<string, string?>? details = null;
+            var runtimeMessage = message;
+            try
+            {
+                details = MarketAcquisitionRouteFailure.Describe(exception);
+                runtimeMessage += " " + string.Join("; ", details.Select(pair => $"{pair.Key}={pair.Value}"));
+            }
+            catch { /* Still send the original exception object to the independent logger. */ }
+            try
+            {
+                // Independent of route diagnostics being enabled or writable; retain the object too.
+                errorLogger?.Invoke(exception, runtimeMessage);
+            }
+            catch { /* Runtime logging is best effort too. */ }
+            try { diagnostics.Record("failure-exception", message, details); }
+            catch { /* Never obscure the original with a diagnostic I/O failure. */ }
+        }
+        catch { /* Diagnostic formatting must not alter route or purchase truth. */ }
     }
 
     public void Dispose()

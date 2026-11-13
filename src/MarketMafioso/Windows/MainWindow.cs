@@ -297,7 +297,8 @@ public class MainWindow : Window, IDisposable
                 EnableColdArchive = config.ArchiveCompletedMarketAcquisitionRouteDiagnostics,
                 HotRetentionDays = config.MarketAcquisitionRouteDiagnosticsHotDays,
                 HotRetentionRunCount = config.MarketAcquisitionRouteDiagnosticsHotRuns,
-            });
+            },
+            (exception, message) => Plugin.Log.Error(exception, "[MarketMafioso] {Message}", message));
         exactAcquisitionRouteStateStore = new ConfigurationExactAcquisitionRouteExecutionStateStore(config);
         routeEngine = new MarketAcquisitionRouteEngine(
             marketAcquisitionRouteRunner,
