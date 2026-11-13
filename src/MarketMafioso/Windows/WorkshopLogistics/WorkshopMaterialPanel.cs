@@ -70,6 +70,20 @@ internal sealed class WorkshopMaterialPanel
         if (!string.IsNullOrWhiteSpace(visibleStatus))
             ImGui.TextColored(RunStatusColor(run), visibleStatus);
 
+        if (runner.CanAcknowledgeUnresolvedPurchase && runner.UnresolvedPurchaseMessage is { } unresolved)
+        {
+            var unresolvedRunId = config.ActiveWorkshopVendorBuyRun!.RunId;
+            ImGui.TextWrapped(unresolved);
+            ImGui.TextWrapped("Let the purchase finish verifying, or check your items and gil in game before clearing it. Clearing allows a new restock to buy again.");
+            if (ImGuiUi.Button("I checked in game - clear this", runner.CanAcknowledgeUnresolvedPurchase))
+                runner.AcknowledgeUnresolvedPurchase(unresolvedRunId, out actionStatus);
+            RegisterSimpleAction(
+                "workshop-logistics.vendor-restock.acknowledge-purchase",
+                "I checked in game - clear this",
+                runner.CanAcknowledgeUnresolvedPurchase,
+                () => runner.AcknowledgeUnresolvedPurchase(unresolvedRunId, out actionStatus));
+        }
+
         var automatic = run is not null && (runner.IsRunning || run.Phase == WorkshopVendorRestockPhase.Paused)
             ? run.AutomaticallyBuyVendorMaterials
             : config.AutomaticallyBuyWorkshopVendorMaterials;
