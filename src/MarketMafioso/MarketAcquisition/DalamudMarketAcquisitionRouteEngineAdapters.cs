@@ -494,9 +494,19 @@ public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisi
         if (!dirty)
             return;
 
-        catalog.Prune(MaxRecords);
-        config.Save();
-        dirty = false;
+        var failureStage = "world-visit.prune";
+        try
+        {
+            catalog.Prune(MaxRecords);
+            failureStage = "world-visit.config-save";
+            config.Save();
+            dirty = false;
+        }
+        catch (Exception exception)
+        {
+            MarketAcquisitionRouteFailure.Annotate(exception, failureStage);
+            throw;
+        }
     }
 
     private static string ResolveDataCenter(string worldName, string? plannedDataCenter) =>

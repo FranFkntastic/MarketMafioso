@@ -91,7 +91,12 @@ public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceSta
     private void WriteMirroredBase(MarketPurchaseEvidenceSnapshot snapshot)
     {
         var document = ToDocument(snapshot);
-        AtomicJsonFile.Write(path, document, JsonOptions);
+        try { AtomicJsonFile.Write(path, document, JsonOptions); }
+        catch (Exception exception)
+        {
+            MarketAcquisitionRouteFailure.Annotate(exception, "purchase-evidence.atomic-checkpoint", path);
+            throw;
+        }
         try
         {
             AtomicJsonFile.Write(backupPath, document, JsonOptions);
@@ -108,24 +113,32 @@ public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceSta
 
     private void AppendJournal(JournalEntry entry)
     {
-        var fullPath = Path.GetFullPath(journalPath);
-        var directory = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
+        try
+        {
+            var fullPath = Path.GetFullPath(journalPath);
+            var directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
 
-        var payload = JsonSerializer.SerializeToUtf8Bytes(entry, JsonOptions);
-        using var stream = new FileStream(
-            fullPath,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.Read,
-            bufferSize: 4096,
-            FileOptions.WriteThrough);
-        TrimUncommittedTrailingFragment(stream);
-        stream.Seek(0, SeekOrigin.End);
-        stream.Write(payload);
-        stream.WriteByte((byte)'\n');
-        stream.Flush(flushToDisk: true);
+            var payload = JsonSerializer.SerializeToUtf8Bytes(entry, JsonOptions);
+            using var stream = new FileStream(
+                fullPath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.WriteThrough);
+            TrimUncommittedTrailingFragment(stream);
+            stream.Seek(0, SeekOrigin.End);
+            stream.Write(payload);
+            stream.WriteByte((byte)'\n');
+            stream.Flush(flushToDisk: true);
+        }
+        catch (Exception exception)
+        {
+            MarketAcquisitionRouteFailure.Annotate(exception, "purchase-evidence.append-journal", journalPath);
+            throw;
+        }
     }
 
     private static void TrimUncommittedTrailingFragment(FileStream stream)

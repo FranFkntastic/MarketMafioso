@@ -140,8 +140,17 @@ public class Configuration : IPluginConfiguration
 
     public void Save()
     {
-        lock (saveSync)
-            Plugin.PluginInterface.SavePluginConfig(this);
+        try
+        {
+            lock (saveSync)
+                Plugin.PluginInterface.SavePluginConfig(this);
+        }
+        catch (Exception exception)
+        {
+            MarketAcquisition.MarketAcquisitionRouteFailure.Annotate(exception,
+                "configuration.SavePluginConfig", "Dalamud plugin configuration: MarketMafioso");
+            throw;
+        }
     }
 }
 

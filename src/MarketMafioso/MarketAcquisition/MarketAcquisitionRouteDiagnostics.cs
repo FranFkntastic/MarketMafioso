@@ -463,11 +463,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             message,
             exception == null
                 ? null
-                : new Dictionary<string, string?>
-                {
-                    ["exceptionType"] = exception.GetType().FullName,
-                    ["exceptionMessage"] = exception.Message,
-                });
+                : MarketAcquisitionRouteFailure.Describe(exception));
         Dispose();
     }
 
@@ -779,7 +775,10 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             }
         }
 
-        var summaryDetails = BuildSummaryDetails(filteredDetails);
+        // Exception evidence must survive Summary mode, not just the optional full trace.
+        var summaryDetails = eventName is "failed" or "failure-exception"
+            ? filteredDetails
+            : BuildSummaryDetails(filteredDetails);
         var summaryMessage = CompactSummaryValue(message);
 
         var elapsedMilliseconds = (long)stopwatch.Elapsed.TotalMilliseconds;
