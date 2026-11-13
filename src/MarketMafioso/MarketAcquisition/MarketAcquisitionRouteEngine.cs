@@ -263,7 +263,23 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!TryApplyInventoryBaselines(routePlan, exactAcquisitionContract is not null, out routePlan, out var inventoryFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(inventoryFailure));
         if (routePlan.WorldBatches.Count == 0)
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Ok("No useful world tasks remain after inventory reconciliation; no travel or purchases started."));
+        {
+            if (exactAcquisitionContract is not null || routePlan.Lines.Count == 0 ||
+                !routePlan.Lines.All(line => line.QuantityMode == "TargetQuantity" &&
+                    MarketAcquisitionTargetBases.Normalize(line.TargetBasis) == MarketAcquisitionTargetBases.OnHandTotal &&
+                    line.InitialOnHandQuantity >= line.RequestedQuantity))
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("No useful world tasks remain after inventory reconciliation, but targets are not all met."));
+
+            var alreadyMet = runner.CompleteAlreadyMet(routePlan);
+            if (executionMode == MarketAcquisitionExecutionMode.Live)
+            {
+                BeginHostedReportingSession(claimed);
+                foreach (var line in routePlan.Lines)
+                    ReportLineProgress(claimed, line.LineId, line.ItemName, "Complete", 0, 0, alreadyMet.Message, null);
+                ReportRouteProgress();
+            }
+            return UpdateStatus(alreadyMet);
+        }
         if (executionMode == MarketAcquisitionExecutionMode.Live && shardCheckpoints is not null)
         {
             var checkpointPreflight = shardCheckpoints.Prepare(routePlan, state.ProgressNonce);
@@ -436,6 +452,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Pause()
     {
+        inventoryReflectionWaitStartedUtc = null;
         travelInterruptedByCleanup = activeTravelLease != null;
         CleanupOwnedTravel("Pause");
         CancelActiveOperation("Route paused; active operation cancelled.");
@@ -1643,8 +1660,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return new MarketAcquisitionRouteLinePurchaseTotals(state.ActiveWorldPurchasedQuantity, state.ActiveWorldSpentGil);
 
         var completed = runner.GetLinePurchaseTotals(activeSubtask.LineId);
+        var purchased = checked(completed.PurchasedQuantity + state.ActiveLinePurchasedQuantity);
+        var covered = inventoryCoveredPurchases.GetValueOrDefault(activeSubtask.LineId);
         return new MarketAcquisitionRouteLinePurchaseTotals(
-            checked(initialOnHandByLine.GetValueOrDefault(activeSubtask.LineId) + completed.PurchasedQuantity + state.ActiveLinePurchasedQuantity - inventoryCoveredPurchases.GetValueOrDefault(activeSubtask.LineId)),
+            checked(initialOnHandByLine.GetValueOrDefault(activeSubtask.LineId) + (purchased > covered ? purchased - covered : 0u)),
             checked(completed.SpentGil + state.ActiveLineSpentGil));
     }
 
@@ -1663,6 +1682,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         activeLinePurchaseWorld = currentWorld;
         state.ActiveLinePurchasedQuantity = 0;
         state.ActiveLineSpentGil = 0;
+        // Recovery can discard active counters after their stock was folded into bags.
+        // Do not let that obsolete coverage swallow receipts from subsequent purchases.
+        var covered = Math.Min(inventoryCoveredPurchases.GetValueOrDefault(activeSubtask.LineId),
+            runner.GetLinePurchaseTotals(activeSubtask.LineId).PurchasedQuantity);
+        inventoryCoveredPurchases[activeSubtask.LineId] = covered;
+        runner.RecordReconciledInventory(activeSubtask.LineId,
+            initialOnHandByLine.GetValueOrDefault(activeSubtask.LineId), covered);
     }
 
     internal static bool ShouldResetLinePurchaseAccumulator(
@@ -2873,7 +2899,18 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var observed = inventoryObserver?.Observe(task.ItemId, task.HqPolicy);
             if (observed?.IsAvailable != true || purchase.PurchaseEvidenceState is PendingMarketPurchase)
             {
-                UpdateStatus(FailRoute($"Inventory reconciliation blocked for {task.ItemName}: {observed?.Message ?? "Inventory unavailable or purchase receipt pending."}"));
+                var now = clock.UtcNow;
+                inventoryReflectionWaitStartedUtc ??= now;
+                var reason = purchase.PurchaseEvidenceState is PendingMarketPurchase
+                    ? "purchase receipt pending"
+                    : observed?.Message ?? "Inventory unavailable";
+                if (now - inventoryReflectionWaitStartedUtc.Value < InventoryReflectionWait)
+                {
+                    state.AcquisitionStatus = $"Waiting to reconcile inventory for {task.ItemName}: {reason}.";
+                    state.NextRouteMonitorUtc = now.AddMilliseconds(250);
+                    return false;
+                }
+                UpdateStatus(FailRoute($"Inventory reconciliation timed out for {task.ItemName}: {reason}."));
                 return false;
             }
             var receipts = runner.GetLinePurchaseTotals(task.LineId).PurchasedQuantity;
@@ -2899,15 +2936,18 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
                 state.AcquisitionStatus = $"{task.ItemName}: bags hold {observed.Value.Quantity} after confirmed purchases; using the observed count (stock may have been used or moved).";
             }
-            inventoryReflectionWaitStartedUtc = null;
             initialOnHandByLine[task.LineId] = observed.Value.Quantity;
             inventoryCoveredPurchases[task.LineId] = state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? 0u : receipts;
+            runner.RecordReconciledInventory(task.LineId, observed.Value.Quantity, inventoryCoveredPurchases[task.LineId]);
         }
+        inventoryReflectionWaitStartedUtc = null;
         return true;
     }
 
     private void SkipInventorySatisfiedLine(MarketAcquisitionGuidedRouteStop stop)
     {
+        if (stop.ActiveItemSubtask is { } task)
+            ReportAcquisitionLineProgress(task, "Complete", 0, 0, "Target already met by current inventory; no purchase needed.");
         UpdateStatus(runner.SkipInventorySatisfiedLine());
     }
 

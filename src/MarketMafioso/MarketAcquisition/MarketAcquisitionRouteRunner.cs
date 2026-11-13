@@ -35,6 +35,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private string? currentRequestId;
     private MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live;
     private bool evaluateTargetFulfillmentRequested = true;
+    private readonly Dictionary<string, (uint OnHand, uint CoveredPurchases)> reconciledInventory = [];
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
         : this(diagnosticsDirectory, null, null)
@@ -151,6 +152,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         LastRunSummary = null;
         CompletionOutcome = null;
         ActivePlan = plan;
+        reconciledInventory.Clear();
         session = MarketAcquisitionGuidedRouteSession.Start(plan, includeOpportunisticChecks);
         currentRequestId = plan.RequestId;
         State = "Running";
@@ -209,9 +211,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         var reprepare = MarketAcquisitionPlanRepreparer.FilterCompletedOrProbedStops(
             plan,
-            // Modern advisory plans already apply authoritative recent-clearance policy.
-            // A past skip (price, budget, quantity, inventory) cannot prune a world.
-            plan.AdvisoryListings is not null ? [] : CompletedOrProbedStops,
+            CompletedOrProbedStops,
             preparedAtUtc);
         if (!reprepare.CanStart)
         {
@@ -244,6 +244,21 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId) =>
         session?.GetLinePurchaseTotals(lineId) ?? default;
+
+    public void RecordReconciledInventory(string lineId, uint onHand, uint coveredPurchases) =>
+        reconciledInventory[lineId] = (onHand, coveredPurchases);
+
+    public MarketAcquisitionRouteActionResult CompleteAlreadyMet(MarketAcquisitionPlan plan)
+    {
+        const string message = "Targets are already met by current inventory; no travel or purchases started.";
+        Reset(message);
+        ActivePlan = plan with { Status = "TargetsAlreadyMet" };
+        State = "Completed";
+        var requested = plan.Lines.Aggregate(0u, (total, line) => checked(total + line.RequestedQuantity));
+        CompletionOutcome = new MarketAcquisitionRouteCompletionOutcome(
+            MarketAcquisitionRouteCompletionKinds.TargetSatisfied, requested, requested, 0);
+        return MarketAcquisitionRouteActionResult.Ok(message) with { TargetsAlreadyMet = true };
+    }
 
     public MarketAcquisitionRouteActionResult Pause(string? message = null)
     {
@@ -365,6 +380,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     {
         CloseDiagnostics();
         session = null;
+        reconciledInventory.Clear();
         ActivePlan = null;
         currentRequestId = null;
         State = "Idle";
@@ -1335,7 +1351,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             .Select(line => new
             {
                 line.RequestedQuantity,
-                FulfilledQuantity = checked(line.InitialOnHandQuantity + session.GetLinePurchaseTotals(line.LineId).PurchasedQuantity),
+                FulfilledQuantity = ResolveFulfilledQuantity(line),
             })
             .ToArray();
         if (targetLines.Length == 0)
@@ -1368,6 +1384,13 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     {
         diagnostics.Complete(StatusMessage);
         CloseDiagnostics();
+    }
+
+    private uint ResolveFulfilledQuantity(MarketAcquisitionPlanLine line)
+    {
+        var purchased = session!.GetLinePurchaseTotals(line.LineId).PurchasedQuantity;
+        var inventory = reconciledInventory.GetValueOrDefault(line.LineId, (line.InitialOnHandQuantity, 0u));
+        return checked(inventory.Item1 + (purchased > inventory.Item2 ? purchased - inventory.Item2 : 0u));
     }
 
     private static bool IsCompletedOrProbed(MarketAcquisitionGuidedRouteStop stop)
@@ -1581,6 +1604,7 @@ public delegate Task<UniversalisFreshnessResult> UniversalisFreshnessVerifierDel
 public sealed record MarketAcquisitionRouteActionResult
 {
     public bool Success { get; init; }
+    public bool TargetsAlreadyMet { get; init; }
     public string Message { get; init; } = string.Empty;
 
     public static MarketAcquisitionRouteActionResult Ok(string message) => new()
