@@ -31,7 +31,6 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
     public async Task<IReadOnlyDictionary<uint, IReadOnlyList<MarketAcquisitionListing>>> FetchListingsAsync(
         string worldDataCenterOrRegion,
         IReadOnlyCollection<uint> itemIds,
-        int listingLimit,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(worldDataCenterOrRegion))
@@ -46,7 +45,8 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
             {
                 WorldOrDataCenter = worldDataCenterOrRegion,
                 ItemIds = itemIds,
-                ListingsPerItem = Math.Clamp(listingLimit, 1, 100),
+                // Omit the listings parameter: Universalis returns all listings by default.
+                ListingsPerItem = null,
                 HistoryEntriesPerItem = 0,
             },
             cancellationToken: cancellationToken).ConfigureAwait(false);

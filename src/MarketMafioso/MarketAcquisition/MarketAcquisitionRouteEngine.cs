@@ -138,8 +138,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public MarketAcquisitionRouteEngineSnapshot CreateSnapshot() => new()
     {
         ExecutionMode = state.ExecutionMode,
-        StatusMessage = runner.StatusMessage,
-        VisibleAcquisitionStatus = state.AcquisitionStatus,
+        StatusMessage = state.EvidenceRefreshOnly
+            ? $"Evidence-only scan (no purchasing): {runner.StatusMessage}"
+            : runner.StatusMessage,
+        VisibleAcquisitionStatus = state.EvidenceRefreshOnly
+            ? $"Evidence-only scan (no purchasing): {state.AcquisitionStatus}"
+            : state.AcquisitionStatus,
         IsRouteActive = IsRouteActive,
         IsRunning = runner.IsRunning,
         IsPaused = runner.IsPaused,
@@ -413,7 +417,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             diagnosticsLevel: enableDiagnostics ? diagnosticsLevel : MarketAcquisitionRouteDiagnosticsLevel.Off,
             evaluateTargetFulfillment: false);
         state.AcquisitionStatus = result.Success
-            ? $"Evidence refresh started. {result.Message}"
+            ? $"Evidence-only scan started (travel, no purchasing). {result.Message}"
             : result.Message;
         return result;
     }
@@ -2088,8 +2092,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         if (WaitForNativeBrowseCompletion())
             return;
-        evidence.Flush();
         var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
+        // A receipt proves one purchase, not that the remaining price/HQ envelope
+        // is empty. Persist the final reconciled observation before advancing.
+        if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live && state.LiveCandidatePlan is { } finalPlan && claimedRequest is { } claimed)
+            evidence.RecordProbeVisit(currentWorld, GetActiveRouteLine(claimed), activeSubtask, finalPlan, claimed.Id, state.ProgressNonce);
+        evidence.Flush();
         if (activeSubtask != null)
         {
             var lineStatus = ResolveZeroPurchaseLineStatus(state.LiveCandidatePlan, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);

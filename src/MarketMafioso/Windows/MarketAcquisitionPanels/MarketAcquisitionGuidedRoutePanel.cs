@@ -13,7 +13,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 {
     private readonly Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot;
     private readonly Action startRoute;
-    private readonly Action startEvidenceRefresh;
+    private readonly Func<MarketAcquisitionPlan?, Action?> createEvidenceRefreshConfirmation;
     private readonly Func<bool> canObserveCurrentBoard;
     private readonly Action observeCurrentBoard;
     private readonly Action pauseRoute;
@@ -31,11 +31,15 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action openLogsFolder;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly HashSet<string> expandedStops = new(StringComparer.OrdinalIgnoreCase);
+    private Action? confirmedEvidenceRefresh;
+    private string evidenceRefreshWorlds = string.Empty;
+    private bool openEvidenceRefreshConfirmation;
+    private bool closeEvidenceRefreshConfirmation;
 
     public MarketAcquisitionGuidedRoutePanel(
         Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot,
         Action startRoute,
-        Action startEvidenceRefresh,
+        Func<MarketAcquisitionPlan?, Action?> createEvidenceRefreshConfirmation,
         Func<bool> canObserveCurrentBoard,
         Action observeCurrentBoard,
         Action pauseRoute,
@@ -55,7 +59,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     {
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.startRoute = startRoute ?? throw new ArgumentNullException(nameof(startRoute));
-        this.startEvidenceRefresh = startEvidenceRefresh ?? throw new ArgumentNullException(nameof(startEvidenceRefresh));
+        this.createEvidenceRefreshConfirmation = createEvidenceRefreshConfirmation ?? throw new ArgumentNullException(nameof(createEvidenceRefreshConfirmation));
         this.canObserveCurrentBoard = canObserveCurrentBoard ?? throw new ArgumentNullException(nameof(canObserveCurrentBoard));
         this.observeCurrentBoard = observeCurrentBoard ?? throw new ArgumentNullException(nameof(observeCurrentBoard));
         this.pauseRoute = pauseRoute ?? throw new ArgumentNullException(nameof(pauseRoute));
@@ -98,7 +102,9 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         DrawExactAcquisitionExecution(snapshot);
         DrawShardStorageCheckpoint(snapshot);
         if (!DrawTerminalPurchaseRecovery(snapshot))
-            DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence);
+            DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence, plan);
+
+        DrawEvidenceRefreshConfirmation(canRefreshEvidence);
 
         ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
         if (snapshot.RecoveryBlockedReason is { } recoveryBlockedReason)
@@ -177,7 +183,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         MarketAcquisitionRouteEngineSnapshot snapshot,
         bool canStart,
         bool canReprepare,
-        bool canRefreshEvidence)
+        bool canRefreshEvidence,
+        MarketAcquisitionPlan? plan)
     {
         var primaryAction = MarketAcquisitionGuidedRouteActionPresenter.Resolve(snapshot);
         if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.RetryExactAcquisitionRecovery)
@@ -249,13 +256,15 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                 ImGui.SameLine();
             }
 
-            if (ImGuiUi.Button("Refresh Evidence##MarketAcquisitionRefreshEvidence", canRefreshEvidence))
-                startEvidenceRefresh();
+            if (ImGuiUi.Button("Refresh Evidence (scan only, no buying)...##MarketAcquisitionRefreshEvidence", canRefreshEvidence))
+                OpenEvidenceRefreshConfirmation(plan);
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Travel to the selected/prepared worlds and scan market listings. Buys nothing and does not change your purchase request or limits. Confirmation required.");
             RegisterLastControl(
                 "acquisition.route.refresh-evidence",
                 "Visit the selected worlds and publish fresh market evidence without purchasing",
                 canRefreshEvidence,
-                startEvidenceRefresh);
+                () => OpenEvidenceRefreshConfirmation(plan));
 
             var canObserve = canObserveCurrentBoard();
             ImGui.SameLine();
@@ -282,6 +291,67 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             reprepareRoute();
         RegisterLastControl("acquisition.route.refresh-plan", "Refresh the Market Acquisition plan", canReprepare, reprepareRoute);
         ImGui.TreePop();
+    }
+
+    private void OpenEvidenceRefreshConfirmation(MarketAcquisitionPlan? plan)
+    {
+        confirmedEvidenceRefresh = createEvidenceRefreshConfirmation(plan);
+        if (confirmedEvidenceRefresh is null || plan is null)
+            return;
+        evidenceRefreshWorlds = string.Join(", ", plan.WorldBatches.Select(batch => batch.WorldName));
+        closeEvidenceRefreshConfirmation = false;
+        openEvidenceRefreshConfirmation = true;
+    }
+
+    private void DrawEvidenceRefreshConfirmation(bool canRefreshEvidence)
+    {
+        const string popup = "Travel and scan only?##AcquisitionEvidenceRefreshConfirmation";
+        if (openEvidenceRefreshConfirmation)
+        {
+            ImGui.OpenPopup(popup);
+            openEvidenceRefreshConfirmation = false;
+        }
+        var viewport = ImGui.GetMainViewport();
+        ImGui.SetNextWindowPos(viewport.WorkPos + viewport.WorkSize * 0.5f,
+            ImGuiCond.Always, new System.Numerics.Vector2(0.5f, 0.5f));
+        if (!ImGui.BeginPopupModal(popup, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+        if (closeEvidenceRefreshConfirmation)
+        {
+            closeEvidenceRefreshConfirmation = false;
+            ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+            return;
+        }
+        ImGui.TextUnformatted("Evidence-only scan: travel, no purchasing.");
+        ImGui.PushTextWrapPos(ImGui.GetFontSize() * 45f);
+        ImGui.TextWrapped($"Travel to these selected/prepared worlds: {evidenceRefreshWorlds}");
+        ImGui.PopTextWrapPos();
+        ImGui.TextUnformatted("Buys nothing. Your purchase request and limits stay unchanged.");
+        if (ImGuiUi.Button("Cancel##AcquisitionEvidenceRefreshCancel", true))
+            CloseEvidenceRefreshConfirmation();
+        RegisterLastControl("acquisition.route.refresh-evidence.cancel", "Cancel evidence-only travel without starting a route", true,
+            CloseEvidenceRefreshConfirmation);
+        ImGui.SameLine();
+        var canConfirm = canRefreshEvidence && confirmedEvidenceRefresh is not null;
+        if (ImGuiUi.Button("Travel and scan - buy nothing##AcquisitionEvidenceRefreshConfirm", canConfirm))
+            ConfirmEvidenceRefresh();
+        RegisterLastControl("acquisition.route.refresh-evidence.confirm", "Confirm travel and scanning only; buy nothing", canConfirm,
+            ConfirmEvidenceRefresh);
+        ImGui.EndPopup();
+    }
+
+    private void CloseEvidenceRefreshConfirmation()
+    {
+        confirmedEvidenceRefresh = null;
+        closeEvidenceRefreshConfirmation = true;
+    }
+
+    private void ConfirmEvidenceRefresh()
+    {
+        var confirmedAction = confirmedEvidenceRefresh;
+        CloseEvidenceRefreshConfirmation();
+        confirmedAction?.Invoke();
     }
 
     private static void DrawExactAcquisitionExecution(MarketAcquisitionRouteEngineSnapshot snapshot)

@@ -488,7 +488,7 @@ public class MainWindow : Window, IDisposable
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
             routeEngine.CreateSnapshot,
             () => _ = StartGuidedRouteAsync(),
-            () => _ = StartEvidenceRefreshAsync(),
+            CreateEvidenceRefreshConfirmation,
             CanProbeLiveMarketBoard,
             () => _ = ProbeLiveMarketBoardAsync(),
             () => _ = PauseGuidedRouteAsync(),
@@ -2061,10 +2061,39 @@ public class MainWindow : Window, IDisposable
         });
     }
 
-    private Task StartEvidenceRefreshAsync()
+    private Action? CreateEvidenceRefreshConfirmation(MarketAcquisitionPlan? expectedPlan)
     {
+        if (!CanStartEvidenceRefresh() || !ReferenceEquals(expectedPlan, acquisitionWorkspace.PreparedPlan))
+            return null;
+
+        var preparedPlan = acquisitionWorkspace.PreparedPlan!;
+        var document = acquisitionRequestBuilder.CurrentDocument;
+        var intentHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document);
+        var request = acquisitionWorkspace.ResolveExecutionRequest(document);
+        var requestIdentity = System.Text.Json.JsonSerializer.Serialize(request with { CreatedAtUtc = default, ClaimedAtUtc = default });
+        return () => _ = StartEvidenceRefreshAsync(preparedPlan, intentHash, requestIdentity);
+    }
+
+    private Task StartEvidenceRefreshAsync(MarketAcquisitionPlan confirmedPlan, string confirmedIntentHash, string confirmedRequestIdentity)
+    {
+        if (!CanStartEvidenceRefresh())
+        {
+            acquisitionWorkspace.SetStatus("Evidence-only scan was not started: the route is no longer available. No purchases were attempted.");
+            return Task.CompletedTask;
+        }
+
         return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, (request, _) =>
         {
+            // Recheck after any hosted-claim recovery as well as at the confirmation click.
+            if (routeEngine.IsRouteActive || acquisitionWorkspace.IsPreparedPlanStale() ||
+                !ReferenceEquals(confirmedPlan, acquisitionWorkspace.PreparedPlan) ||
+                confirmedIntentHash != MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(acquisitionRequestBuilder.CurrentDocument) ||
+                confirmedRequestIdentity != System.Text.Json.JsonSerializer.Serialize(request with { CreatedAtUtc = default, ClaimedAtUtc = default }))
+            {
+                acquisitionWorkspace.SetStatus("Evidence-only scan was not started: the plan or request changed after confirmation opened. Review the current worlds and confirm again.");
+                return Task.CompletedTask;
+            }
+
             var preparedPlan = acquisitionWorkspace.RequirePreparedPlan(
                 "Prepare a plan before refreshing its market evidence.");
             var plan = MarketAcquisitionEvidenceRefreshPlanBuilder.Build(

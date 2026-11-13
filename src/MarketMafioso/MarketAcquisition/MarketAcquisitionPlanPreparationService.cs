@@ -11,7 +11,6 @@ public interface IMarketAcquisitionListingSource
     Task<IReadOnlyDictionary<uint, IReadOnlyList<MarketAcquisitionListing>>> FetchListingsAsync(
         string worldDataCenterOrRegion,
         IReadOnlyCollection<uint> itemIds,
-        int listingLimit,
         CancellationToken cancellationToken);
 }
 
@@ -58,7 +57,6 @@ public sealed class MarketAcquisitionPlanPreparationService
             listingsByItem = await listingSource.FetchListingsAsync(
                 claimed.Region,
                 planLines.Select(line => line.ItemId).Distinct().ToArray(),
-                100,
                 token).ConfigureAwait(false);
         }
         catch (UniversalisMarketListingsUnavailableException ex)
@@ -84,13 +82,14 @@ public sealed class MarketAcquisitionPlanPreparationService
                     $"Market listings were not returned for {line.ItemName}. Select Finalize Plan to retry.");
             }
 
-            if (isAllWorldSweep)
+            if (isAllWorldSweep || claimed.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase))
             {
                 var evidenceWorlds = await FindWorldsWithNewerUsefulUniversalisEvidenceAsync(
                     line,
+                    lineListings,
                     preparedAtUtc,
                     request.RecentWorldTtl,
-                    request.IgnoreRecentWorldVisitsForSweep,
+                    isAllWorldSweep && request.IgnoreRecentWorldVisitsForSweep,
                     token).ConfigureAwait(false);
                 freshEvidenceWorldCount += evidenceWorlds.Count;
 
@@ -100,7 +99,7 @@ public sealed class MarketAcquisitionPlanPreparationService
                     worldVisitCatalog,
                     preparedAtUtc,
                     request.RecentWorldTtl,
-                    request.IgnoreRecentWorldVisitsForSweep,
+                    isAllWorldSweep && request.IgnoreRecentWorldVisitsForSweep,
                     evidenceWorlds);
                 lineListings = filterResult.Listings;
 
@@ -109,7 +108,7 @@ public sealed class MarketAcquisitionPlanPreparationService
                     worldVisitCatalog,
                     preparedAtUtc,
                     request.RecentWorldTtl,
-                    request.IgnoreRecentWorldVisitsForSweep,
+                    isAllWorldSweep && request.IgnoreRecentWorldVisitsForSweep,
                     evidenceWorlds);
                 sweepWorldExclusions.AddRange(lineExclusions);
                 recentSkippedWorldCount += lineExclusions.Count;
@@ -127,7 +126,6 @@ public sealed class MarketAcquisitionPlanPreparationService
             preparedAtUtc,
             request.CurrentWorld,
             sweepWorldExclusions);
-        var recommendedTargetExpanded = ShouldExpandRecommendedTarget(claimed, plan);
         var recommendedTargetLines = plan.Lines
             .Where(line => line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -137,27 +135,14 @@ public sealed class MarketAcquisitionPlanPreparationService
         var recommendedRequestedQuantity = recommendedTargetLines.Aggregate(
             0u,
             (total, line) => checked(total + line.RequestedQuantity));
-        if (recommendedTargetExpanded)
-        {
-            plan = MarketAcquisitionPlanner.BuildPlan(
-                claimed with
-                {
-                    WorldMode = "AllWorldSweep",
-                    SweepScope = "Region",
-                    SweepDataCenters = [],
-                },
-                listings,
-                preparedAtUtc,
-                request.CurrentWorld,
-                sweepWorldExclusions);
-        }
         var statusMessage = plan.Status == "Ready"
             ? BuildPreparedPlanStatus(plan, recentSkippedWorldCount, freshEvidenceWorldCount)
             : BuildNoSupportedListingsStatus(plan);
-        if (recommendedTargetExpanded)
+        if (claimed.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase) &&
+            recommendedPlannedQuantity < recommendedRequestedQuantity)
         {
             statusMessage +=
-                $" Recommended evidence covered only {recommendedPlannedQuantity:N0}/{recommendedRequestedQuantity:N0} target item(s), so the route expanded to every world in {claimed.Region}.";
+                $" Recommended listings support {recommendedPlannedQuantity:N0}/{recommendedRequestedQuantity:N0} target item(s); {recommendedRequestedQuantity - recommendedPlannedQuantity:N0} remain unplanned. No unsupported worlds were added.";
         }
 
         return new MarketAcquisitionPlanPreparationResult
@@ -200,6 +185,7 @@ public sealed class MarketAcquisitionPlanPreparationService
 
     private async Task<IReadOnlyList<string>> FindWorldsWithNewerUsefulUniversalisEvidenceAsync(
         MarketAcquisitionBatchLineView line,
+        IReadOnlyList<MarketAcquisitionListing> regionalListings,
         DateTimeOffset preparedAtUtc,
         TimeSpan ttl,
         bool ignoreRecentVisits,
@@ -221,16 +207,23 @@ public sealed class MarketAcquisitionPlanPreparationService
         var evidenceWorlds = new List<string>();
         foreach (var visit in recentVisits)
         {
+            var checkedAtUtc = DateTime.SpecifyKind(visit.CheckedAtUtc, DateTimeKind.Utc);
+            if (regionalListings.Any(listing =>
+                    listing.WorldName.Equals(visit.WorldName, StringComparison.OrdinalIgnoreCase) &&
+                    IsNewerUsefulUniversalisListing(line, hqPolicy, checkedAtUtc, listing)))
+            {
+                evidenceWorlds.Add(visit.WorldName);
+                continue;
+            }
+
             try
             {
                 var worldListingsByItem = await listingSource.FetchListingsAsync(
                     visit.WorldName,
                     [line.ItemId],
-                    100,
                     token).ConfigureAwait(false);
                 if (!worldListingsByItem.TryGetValue(line.ItemId, out var worldListings))
                     continue;
-                var checkedAtUtc = DateTime.SpecifyKind(visit.CheckedAtUtc, DateTimeKind.Utc);
                 if (worldListings.Any(listing => IsNewerUsefulUniversalisListing(line, hqPolicy, checkedAtUtc, listing)))
                     evidenceWorlds.Add(visit.WorldName);
             }
@@ -274,20 +267,12 @@ public sealed class MarketAcquisitionPlanPreparationService
     {
         var status = $"Prepared {plan.WorldBatches.Count:N0} world batch(es).";
         if (recentSkippedWorldCount > 0)
-            status += $" Skipped {recentSkippedWorldCount:N0} recent sweep world/item check(s).";
+            status += $" Skipped {recentSkippedWorldCount:N0} recently cleared world/item check(s).";
         if (freshEvidenceWorldCount > 0)
             status += $" Reopened {freshEvidenceWorldCount:N0} recent world/item check(s) with fresh Universalis evidence.";
 
         return status;
     }
-
-    private static bool ShouldExpandRecommendedTarget(
-        MarketAcquisitionClaimView claimed,
-        MarketAcquisitionPlan plan) =>
-        claimed.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase) &&
-        plan.Lines.Any(line =>
-            line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase) &&
-            line.PlannedQuantity < line.RequestedQuantity);
 }
 
 public sealed record MarketAcquisitionPlanPreparationRequest
