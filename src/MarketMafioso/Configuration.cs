@@ -40,6 +40,7 @@ public class Configuration : IPluginConfiguration
     public MarketAcquisitionRouteDiagnosticsLevel MarketAcquisitionRouteDiagnostics { get; set; } =
         MarketAcquisitionRouteDiagnosticsLevel.Summary;
     public bool MarketAcquisitionExhaustiveResearchMode { get; set; } = false;
+    public bool MarketAcquisitionAethernetDeparture { get; set; } = true;
     public bool ArchiveCompletedMarketAcquisitionRouteDiagnostics { get; set; } = true;
     public int MarketAcquisitionRouteDiagnosticsHotDays { get; set; } = 14;
     public int MarketAcquisitionRouteDiagnosticsHotRuns { get; set; } = 50;

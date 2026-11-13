@@ -29,6 +29,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly MarketAcquisitionRouteReportDispatcher reportDispatcher;
     private readonly IMarketAcquisitionIntelligenceReporter? intelligenceReporter;
     private readonly IMarketAcquisitionInventoryObserver? inventoryObserver;
+    private readonly MarketAcquisitionAethernetDeparture? aethernetDeparture;
+    private string? lastDepartureStage;
     private readonly IMarketAcquisitionRouteClock clock;
     private readonly string reportPluginInstanceId;
     private readonly string? reportPluginVersion;
@@ -83,7 +85,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         string? reportPluginVersion = null,
         Func<bool>? exhaustiveResearchModeProvider = null,
         IMarketAcquisitionIntelligenceReporter? intelligenceReporter = null,
-        IMarketAcquisitionInventoryObserver? inventoryObserver = null)
+        IMarketAcquisitionInventoryObserver? inventoryObserver = null,
+        MarketAcquisitionAethernetDeparture? aethernetDeparture = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -104,6 +107,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         this.exhaustiveResearchModeProvider = exhaustiveResearchModeProvider ?? (() => false);
         this.intelligenceReporter = intelligenceReporter;
         this.inventoryObserver = inventoryObserver;
+        this.aethernetDeparture = aethernetDeparture;
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
         this.shardCheckpoints = shardCheckpoints;
     }
@@ -761,6 +765,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteEngineTickResult TickRoute(bool isRequestBusy)
     {
+        // Stop/Pause may race an async pathfind. Keep draining only the owned
+        // leg at monitor cadence, even while ordinary route execution is stopped.
+        if (aethernetDeparture?.HasPendingCleanup == true && clock.UtcNow >= state.NextRouteMonitorUtc)
+        {
+            aethernetDeparture.ReconcileCleanup();
+            state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+        }
         if (!TryAdvanceAndPreflightPurchaseEvidence(allowActivePurchaseSession: true))
             return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
 
@@ -911,6 +922,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         var currentWorld = context.IsCurrentWorldAvailable ? context.GetCurrentWorldName() : null;
+        if (aethernetDeparture?.ReconcileCleanup() == false)
+        {
+            state.AcquisitionStatus = "Waiting for interrupted aethernet departure navigation and Lifestream transfer to become idle.";
+            state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+            return;
+        }
         if (recoveringRetainedStop &&
             activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) &&
             marketBoard.CanApproachMarketBoardLocally())
@@ -981,6 +998,31 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return;
             }
 
+            if (aethernetDeparture != null)
+            {
+                var ready = aethernetDeparture.Tick(activeStop.WorldName, currentWorld!);
+                if (lastDepartureStage != aethernetDeparture.Stage)
+                {
+                    lastDepartureStage = aethernetDeparture.Stage;
+                    runner.RecordRouteCleanup(aethernetDeparture.Message, new Dictionary<string, string?>
+                    {
+                        ["preparationState"] = aethernetDeparture.Stage,
+                        ["world"] = activeStop.WorldName,
+                        ["networkIdentity"] = aethernetDeparture.NetworkIdentity,
+                    });
+                }
+                if (!ready)
+                {
+                    ObserveTravelPreparationOperation(preparation,
+                        MarketAcquisitionRouteOperationDisposition.Pending,
+                        aethernetDeparture.Message,
+                        new Dictionary<string, string?> { ["preparationState"] = aethernetDeparture.Stage });
+                    state.AcquisitionStatus = aethernetDeparture.Message;
+                    state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+                    return;
+                }
+            }
+
             var preflight = CheckLifestreamCommandPreflight($"travel to {activeStop.WorldName} market board");
             if (!preflight.CanSendCommand)
             {
@@ -1046,6 +1088,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             activeTravelLease = null;
         }
         UpdateStatus(travelResult);
+        // The next stop (or recovery) must derive its local leg from observations.
+        aethernetDeparture?.Cleanup();
+        lastDepartureStage = null;
         if (!travelResult.Success && string.Equals(runner.State, "Failed", StringComparison.OrdinalIgnoreCase))
             UpdateStatus(FailRoute(travelResult.Message));
         state.NextRouteMonitorUtc = clock.UtcNow.AddSeconds(2);
@@ -2905,6 +2950,18 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (deadline.Snapshot is not { IsTerminal: true } timedOut)
             return false;
 
+        if (timedOut.Kind == MarketAcquisitionRouteOperationKind.TravelPreparation &&
+            aethernetDeparture?.IsInProgress == true)
+        {
+            // A local optimization may time out, but must not fail the route or
+            // dispatch /li over an active path/transfer. A fresh preparation
+            // window continues the drain and then the existing direct path.
+            runner.RecordRouteOperationSnapshot(timedOut);
+            aethernetDeparture.FallBack("Local aethernet departure preparation timed out.");
+            state.AcquisitionStatus = aethernetDeparture.Message;
+            return false;
+        }
+
         marketBoard.AbandonBrowse(timedOut.Message);
         runner.RecordRouteOperationSnapshot(timedOut);
         UpdateStatus(FailRoute(timedOut.Message));
@@ -2978,6 +3035,18 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CleanupOwnedTravel(string terminalReason)
     {
+        if (aethernetDeparture != null)
+        {
+            var stopped = aethernetDeparture.Cleanup();
+            runner.RecordRouteCleanup("Local aethernet departure cleanup requested.", new Dictionary<string, string?>
+            {
+                ["dependency"] = "vnavmesh / Lifestream aethernet",
+                ["terminalReason"] = terminalReason,
+                ["navigationReleased"] = stopped.ToString(),
+                ["preparationState"] = aethernetDeparture.Stage,
+            });
+        }
+        lastDepartureStage = null;
         recoveringRetainedStop = false;
         retainedRecoveryBrowseOperationId = null;
         StopOwnedLocalApproach(releasing: true);

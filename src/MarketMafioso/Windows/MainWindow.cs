@@ -335,7 +335,11 @@ public class MainWindow : Window, IDisposable
             PluginBuildInfo.DisplayVersion,
             () => config.MarketAcquisitionExhaustiveResearchMode,
             marketIntelligencePassiveReporter,
-            new DalamudMarketAcquisitionInventoryObserver());
+            new DalamudMarketAcquisitionInventoryObserver(),
+            new MarketAcquisitionAethernetDeparture(
+                new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
+                lifestream,
+                () => config.MarketAcquisitionAethernetDeparture));
 
         SizeConstraints = new WindowSizeConstraints
         {
