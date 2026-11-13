@@ -18,7 +18,8 @@ public sealed record MarketAcquisitionWorkbenchFinalizationState(
     bool IsCurrentPlanStale,
     string WorkspaceStatus,
     ulong TotalSpendCeiling,
-    uint TargetQuantityTotal);
+    uint TargetQuantityTotal,
+    int StockUpLineCount = 0);
 
 public sealed record MarketAcquisitionWorkbenchFinalizationPresentation(
     bool CanFinalize,
@@ -71,9 +72,7 @@ public static class MarketAcquisitionWorkbenchFinalizationPresenter
         var spendText = state.TotalSpendCeiling == 0
             ? "spend ceiling unset"
             : $"up to {state.TotalSpendCeiling:N0} gil";
-        var targetText = state.TargetQuantityTotal == 0
-            ? "no target-quantity lines"
-            : $"{state.TargetQuantityTotal:N0} target units";
+        var targetText = $"{state.StockUpLineCount:N0} stock-up / {state.LineCount - state.StockUpLineCount:N0} buy-below-ceiling lines";
         var hosting = state.HasClaimedRequest
             ? "hosted work order attached"
             : "local execution; hosting optional";

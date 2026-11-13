@@ -26,7 +26,7 @@ internal sealed class MarketAcquisitionSettingsPages
         Descriptors =
         [
             new("market.operation", "Market Acquisition / Operation", DrawOperation, 30, IsUnlocked,
-                ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases"]),
+                ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases", "Ul'dah", "aethernet", "world travel"]),
             new("market.diagnostics", "Market Acquisition / Diagnostics", DrawDiagnostics, 31, IsUnlocked,
                 ["route diagnostic packages", "route log", "observed listings", "purchase records", "archive", "retention", "hot shelf", "keep raw", "exhaustive research", "early leaving"]),
             new("retainer-listings.refresh", "Retainer Listings / Price Refresh", DrawRetainerListingRefresh, 32, IsUnlocked,
@@ -70,6 +70,9 @@ internal sealed class MarketAcquisitionSettingsPages
 
     private void DrawOperation(SettingsPageContext context)
     {
+        DrawCheckbox(context, "Leave Ul'dah market via aethernet before world travel",
+            "Walk to Sapphire Avenue Exchange and transfer to Aetheryte Plaza before asking Lifestream to visit the next world. If unavailable, use normal Lifestream travel. Lifestream still handles world travel and the destination market board.",
+            () => config.MarketAcquisitionAethernetDeparture, value => config.MarketAcquisitionAethernetDeparture = value);
         DrawCheckbox(context, "Enable listing purchases",
             "Allows acquisition commands and integrations to open the market board and purchase confirmed listings.",
             () => config.EnableMarketListingPurchases, value => config.EnableMarketListingPurchases = value);

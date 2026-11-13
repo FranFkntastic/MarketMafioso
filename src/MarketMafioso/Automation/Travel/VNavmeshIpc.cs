@@ -12,6 +12,7 @@ public interface IVNavmeshIpcAdapter
     bool IsAvailable { get; }
     bool IsReady();
     bool IsRunning();
+    bool TryIsIdle(out bool idle) { idle = false; return false; }
     bool MoveCloseTo(Vector3 destination, float range);
     bool MoveDirect(IReadOnlyList<Vector3> waypoints);
     bool SetMovementAllowed(bool allowed);
@@ -33,6 +34,8 @@ public sealed class VNavmeshIpc
     public bool IsAvailable => adapter.IsAvailable;
     public bool IsReady => adapter.IsAvailable && adapter.IsReady();
     public bool IsRunning => adapter.IsAvailable && adapter.IsRunning();
+
+    public bool TryIsIdle(out bool idle) => adapter.TryIsIdle(out idle);
 
     public VNavmeshMoveResult MoveCloseTo(Vector3 destination, float range)
     {
@@ -119,6 +122,25 @@ public sealed class DalamudVNavmeshIpcAdapter : IVNavmeshIpcAdapter
         catch (Exception ex)
         {
             log.Warning(ex, "[MarketMafioso] vnavmesh running-state IPC failed.");
+            return false;
+        }
+    }
+
+    public bool TryIsIdle(out bool idle)
+    {
+        idle = false;
+        try
+        {
+            // Path.Stop stops the follower, not SimpleMove's pending pathfind.
+            // AsyncMoveRequest.Update can start a new path when that completes.
+            var pathfinding = pluginInterface.GetIpcSubscriber<bool>("vnavmesh.SimpleMove.PathfindInProgress").InvokeFunc();
+            var running = pluginInterface.GetIpcSubscriber<bool>(PathIsRunningChannel).InvokeFunc();
+            idle = !pathfinding && !running;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] vnavmesh idle-state IPC failed.");
             return false;
         }
     }

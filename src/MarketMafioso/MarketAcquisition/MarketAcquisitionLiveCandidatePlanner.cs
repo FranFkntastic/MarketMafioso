@@ -320,6 +320,10 @@ public static class MarketAcquisitionLiveCandidatePlanner
             readResult);
         return new MarketAcquisitionLiveCandidatePlan
         {
+            RemainingNeed = request.Quantity > alreadyPurchasedQuantity ? request.Quantity - alreadyPurchasedQuantity : 0,
+            CheapestSeenPrice = rows.Count == 0 ? null : rows.Min(row => row.LiveListing.UnitPrice),
+            SmallestStack = rows.Where(row => row.Reason == "TargetOverageExceeded").Select(row => (uint?)row.LiveListing.Quantity).Min(),
+            UnitPriceLimit = request.MaxUnitPrice,
             Status = status,
             Message = ResolveMessage(status, mode, request.Quantity, alreadyPurchasedQuantity, selectedQuantity, readResult),
             ListingReadState = readResult?.ReadState ?? MarketBoardListingReadState.FreshComplete,
@@ -488,6 +492,12 @@ public static class MarketAcquisitionLiveCandidatePlanner
                 return MarketAcquisitionLiveCandidateStatuses.IncompleteListingCoverage;
             if (rows.Any(row => row.Reason.Equals("TargetOverageExceeded", StringComparison.Ordinal)))
                 return MarketAcquisitionLiveCandidateStatuses.OverageLimit;
+
+            if (mode == "TargetQuantity" && totalQuantityAfter >= requestedQuantity) return "TargetAlreadyMet";
+            if (rows.Count == 0) return "NoListings";
+            if (rows.Any(row => row.Reason == "GilCapExceeded")) return "SpendLimitReached";
+            if (rows.Any(row => row.Reason == "HqPolicyMismatch")) return "QualityMismatch";
+            if (rows.All(row => row.Reason is "AboveThreshold" or "OutlierPrice")) return "AbovePriceLimit";
 
             return MarketAcquisitionLiveCandidateStatuses.NoSafeListings;
         }

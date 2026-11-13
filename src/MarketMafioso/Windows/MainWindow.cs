@@ -188,7 +188,8 @@ public class MainWindow : Window, IDisposable
         var marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
-            marketAcquisitionWorldVisitCatalog);
+            marketAcquisitionWorldVisitCatalog,
+            new DalamudMarketAcquisitionInventoryObserver());
         acquisitionWorkspace = new MarketAcquisitionRequestWorkspace(
             config,
             acquisitionClient,
@@ -334,7 +335,11 @@ public class MainWindow : Window, IDisposable
             PluginBuildInfo.DisplayVersion,
             () => config.MarketAcquisitionExhaustiveResearchMode,
             marketIntelligencePassiveReporter,
-            new DalamudMarketAcquisitionInventoryObserver());
+            new DalamudMarketAcquisitionInventoryObserver(),
+            new MarketAcquisitionAethernetDeparture(
+                new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
+                lifestream,
+                () => config.MarketAcquisitionAethernetDeparture));
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -1807,7 +1812,8 @@ public class MainWindow : Window, IDisposable
             acquisitionWorkspace.IsPreparedPlanStale(),
             acquisitionWorkspace.Status,
             acquisitionRequestBuilder.TotalSpendCeiling,
-            acquisitionRequestBuilder.TargetQuantityTotal));
+            acquisitionRequestBuilder.TargetQuantityTotal,
+            acquisitionRequestBuilder.CurrentDocument.Lines.Count(line => line.QuantityMode == "TargetQuantity")));
 
         ImGui.BeginGroup();
         ImGui.TextColored(presentation.CanFinalize ? ColSuccess : ColMuted, presentation.Title);
@@ -2044,7 +2050,7 @@ public class MainWindow : Window, IDisposable
             var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before starting a guided route.");
             var diagnosticsLevel = MarketAcquisitionRouteDiagnosticsPolicy.Resolve(
                 config.MarketAcquisitionRouteDiagnostics);
-            routeEngine.Start(
+            var result = routeEngine.Start(
                 plan,
                 request,
                 diagnosticsLevel != MarketAcquisitionRouteDiagnosticsLevel.Off,
@@ -2052,6 +2058,11 @@ public class MainWindow : Window, IDisposable
                 acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract,
                 acquisitionRequestBuilder.CurrentDocument,
                 diagnosticsLevel: diagnosticsLevel);
+            if (result.TargetsAlreadyMet)
+            {
+                acquisitionWorkspace.ReplacePreparedPlan(plan with { Status = "TargetsAlreadyMet", WorldBatches = [], PlannedQuantity = 0, PlannedGil = 0 });
+                acquisitionWorkspace.SetStatus(result.Message);
+            }
             routeEngine.ReportRouteProgress();
             return Task.CompletedTask;
         });

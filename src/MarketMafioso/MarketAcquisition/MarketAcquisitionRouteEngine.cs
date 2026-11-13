@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MarketMafioso.Automation.MarketBoard;
@@ -28,6 +29,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly MarketAcquisitionRouteReportDispatcher reportDispatcher;
     private readonly IMarketAcquisitionIntelligenceReporter? intelligenceReporter;
     private readonly IMarketAcquisitionInventoryObserver? inventoryObserver;
+    private readonly MarketAcquisitionAethernetDeparture? aethernetDeparture;
+    private string? lastDepartureStage;
     private readonly IMarketAcquisitionRouteClock clock;
     private readonly string reportPluginInstanceId;
     private readonly string? reportPluginVersion;
@@ -51,6 +54,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool exactAcquisitionDryRunNoViableConsumed;
     private bool purchaseEvidenceRouteBlocked;
     private readonly Dictionary<string, uint> initialOnHandByLine = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, uint> inventoryCoveredPurchases = new(StringComparer.Ordinal);
+    private string? reconciledDepartureWorld;
+    private string? reconciledSearch;
+    private DateTimeOffset? inventoryReflectionWaitStartedUtc;
+    private static readonly TimeSpan InventoryReflectionWait = TimeSpan.FromSeconds(10);
     private string? activeLinePurchaseWorld;
     private bool activeSearchAllowsPriceCutoff = true;
     private bool recoveringRetainedStop;
@@ -77,7 +85,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         string? reportPluginVersion = null,
         Func<bool>? exhaustiveResearchModeProvider = null,
         IMarketAcquisitionIntelligenceReporter? intelligenceReporter = null,
-        IMarketAcquisitionInventoryObserver? inventoryObserver = null)
+        IMarketAcquisitionInventoryObserver? inventoryObserver = null,
+        MarketAcquisitionAethernetDeparture? aethernetDeparture = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -98,6 +107,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         this.exhaustiveResearchModeProvider = exhaustiveResearchModeProvider ?? (() => false);
         this.intelligenceReporter = intelligenceReporter;
         this.inventoryObserver = inventoryObserver;
+        this.aethernetDeparture = aethernetDeparture;
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
         this.shardCheckpoints = shardCheckpoints;
     }
@@ -252,6 +262,24 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
         if (!TryApplyInventoryBaselines(routePlan, exactAcquisitionContract is not null, out routePlan, out var inventoryFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(inventoryFailure));
+        if (routePlan.WorldBatches.Count == 0)
+        {
+            if (exactAcquisitionContract is not null || routePlan.Lines.Count == 0 ||
+                !routePlan.Lines.All(line => line.QuantityMode == "TargetQuantity" &&
+                    MarketAcquisitionTargetBases.Normalize(line.TargetBasis) == MarketAcquisitionTargetBases.OnHandTotal &&
+                    line.InitialOnHandQuantity >= line.RequestedQuantity))
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("No useful world tasks remain after inventory reconciliation, but targets are not all met."));
+
+            var alreadyMet = runner.CompleteAlreadyMet(routePlan);
+            if (executionMode == MarketAcquisitionExecutionMode.Live)
+            {
+                BeginHostedReportingSession(claimed);
+                foreach (var line in routePlan.Lines)
+                    ReportLineProgress(claimed, line.LineId, line.ItemName, "Complete", 0, 0, alreadyMet.Message, null);
+                ReportRouteProgress();
+            }
+            return UpdateStatus(alreadyMet);
+        }
         if (executionMode == MarketAcquisitionExecutionMode.Live && shardCheckpoints is not null)
         {
             var checkpointPreflight = shardCheckpoints.Prepare(routePlan, state.ProgressNonce);
@@ -424,6 +452,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Pause()
     {
+        inventoryReflectionWaitStartedUtc = null;
         travelInterruptedByCleanup = activeTravelLease != null;
         CleanupOwnedTravel("Pause");
         CancelActiveOperation("Route paused; active operation cancelled.");
@@ -519,6 +548,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
 
         CleanupOwnedTravel("Recovery");
+        reconciledDepartureWorld = null;
+        reconciledSearch = null;
+        inventoryReflectionWaitStartedUtc = null;
         var retainedBrowse = marketBoard.BrowseSnapshot;
         CancelActiveOperation("Recovering retained route progress.");
         retainedRecoveryBrowseOperationId = string.IsNullOrWhiteSpace(retainedBrowse.OperationId)
@@ -750,6 +782,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteEngineTickResult TickRoute(bool isRequestBusy)
     {
+        // Stop/Pause may race an async pathfind. Keep draining only the owned
+        // leg at monitor cadence, even while ordinary route execution is stopped.
+        if (aethernetDeparture?.HasPendingCleanup == true && clock.UtcNow >= state.NextRouteMonitorUtc)
+        {
+            aethernetDeparture.ReconcileCleanup();
+            state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+        }
         if (!TryAdvanceAndPreflightPurchaseEvidence(allowActivePurchaseSession: true))
             return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
 
@@ -887,7 +926,25 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         if (WaitForNativeBrowseCompletion())
             return;
+        if (reconciledDepartureWorld != activeStop.WorldName)
+        {
+            if (!ReconcileInventory(activeStop)) return;
+            reconciledDepartureWorld = activeStop.WorldName;
+            if (activeStop.ItemSubtasks.Count > 0 && activeStop.ItemSubtasks.All(IsInventorySatisfied))
+            {
+                while (runner.IsRunning && ReferenceEquals(runner.ActiveStop, activeStop) && activeStop.ActiveItemSubtask is not null)
+                    SkipInventorySatisfiedLine(activeStop);
+                reconciledDepartureWorld = null;
+                return;
+            }
+        }
         var currentWorld = context.IsCurrentWorldAvailable ? context.GetCurrentWorldName() : null;
+        if (aethernetDeparture?.ReconcileCleanup() == false)
+        {
+            state.AcquisitionStatus = "Waiting for interrupted aethernet departure navigation and Lifestream transfer to become idle.";
+            state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+            return;
+        }
         if (recoveringRetainedStop &&
             activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) &&
             marketBoard.CanApproachMarketBoardLocally())
@@ -958,6 +1015,31 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return;
             }
 
+            if (aethernetDeparture != null)
+            {
+                var ready = aethernetDeparture.Tick(activeStop.WorldName, currentWorld!);
+                if (lastDepartureStage != aethernetDeparture.Stage)
+                {
+                    lastDepartureStage = aethernetDeparture.Stage;
+                    runner.RecordRouteCleanup(aethernetDeparture.Message, new Dictionary<string, string?>
+                    {
+                        ["preparationState"] = aethernetDeparture.Stage,
+                        ["world"] = activeStop.WorldName,
+                        ["networkIdentity"] = aethernetDeparture.NetworkIdentity,
+                    });
+                }
+                if (!ready)
+                {
+                    ObserveTravelPreparationOperation(preparation,
+                        MarketAcquisitionRouteOperationDisposition.Pending,
+                        aethernetDeparture.Message,
+                        new Dictionary<string, string?> { ["preparationState"] = aethernetDeparture.Stage });
+                    state.AcquisitionStatus = aethernetDeparture.Message;
+                    state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+                    return;
+                }
+            }
+
             var preflight = CheckLifestreamCommandPreflight($"travel to {activeStop.WorldName} market board");
             if (!preflight.CanSendCommand)
             {
@@ -1023,6 +1105,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             activeTravelLease = null;
         }
         UpdateStatus(travelResult);
+        // The next stop (or recovery) must derive its local leg from observations.
+        aethernetDeparture?.Cleanup();
+        lastDepartureStage = null;
         if (!travelResult.Success && string.Equals(runner.State, "Failed", StringComparison.OrdinalIgnoreCase))
             UpdateStatus(FailRoute(travelResult.Message));
         state.NextRouteMonitorUtc = clock.UtcNow.AddSeconds(2);
@@ -1243,6 +1328,18 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var claimed = claimedRequest ?? throw new InvalidOperationException("No dashboard request is accepted.");
         if (!runner.SearchSubmitted)
         {
+            var stop = runner.ActiveStop!;
+            var searchKey = $"{stop.WorldName}:{stop.CompletedItemSubtaskCount}";
+            if (reconciledSearch != searchKey)
+            {
+                if (!ReconcileInventory(stop)) return;
+                reconciledSearch = searchKey;
+                if (stop.ActiveItemSubtask is { } task && IsInventorySatisfied(task))
+                {
+                    SkipInventorySatisfiedLine(stop);
+                    return;
+                }
+            }
             if (!marketBoard.IsMarketBoardReady())
             {
                 UpdateStatus(runner.RecordTravelCompletion(
@@ -1563,8 +1660,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return new MarketAcquisitionRouteLinePurchaseTotals(state.ActiveWorldPurchasedQuantity, state.ActiveWorldSpentGil);
 
         var completed = runner.GetLinePurchaseTotals(activeSubtask.LineId);
+        var purchased = checked(completed.PurchasedQuantity + state.ActiveLinePurchasedQuantity);
+        var covered = inventoryCoveredPurchases.GetValueOrDefault(activeSubtask.LineId);
         return new MarketAcquisitionRouteLinePurchaseTotals(
-            checked(initialOnHandByLine.GetValueOrDefault(activeSubtask.LineId) + completed.PurchasedQuantity + state.ActiveLinePurchasedQuantity),
+            checked(initialOnHandByLine.GetValueOrDefault(activeSubtask.LineId) + (purchased > covered ? purchased - covered : 0u)),
             checked(completed.SpentGil + state.ActiveLineSpentGil));
     }
 
@@ -1583,6 +1682,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         activeLinePurchaseWorld = currentWorld;
         state.ActiveLinePurchasedQuantity = 0;
         state.ActiveLineSpentGil = 0;
+        // Recovery can discard active counters after their stock was folded into bags.
+        // Do not let that obsolete coverage swallow receipts from subsequent purchases.
+        var covered = Math.Min(inventoryCoveredPurchases.GetValueOrDefault(activeSubtask.LineId),
+            runner.GetLinePurchaseTotals(activeSubtask.LineId).PurchasedQuantity);
+        inventoryCoveredPurchases[activeSubtask.LineId] = covered;
+        runner.RecordReconciledInventory(activeSubtask.LineId,
+            initialOnHandByLine.GetValueOrDefault(activeSubtask.LineId), covered);
     }
 
     internal static bool ShouldResetLinePurchaseAccumulator(
@@ -2162,6 +2268,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
 
             failureStage = "batch.advance";
+            if (state.LiveCandidatePlan is { } finalCandidates && claimedRequest is { } finalClaim)
+            {
+                var line = GetActiveRouteLine(finalClaim);
+                var totals = ResolveActiveRouteLinePurchaseTotals(activeSubtask);
+                state.LiveCandidatePlan = finalCandidates with
+                {
+                    RemainingNeed = line.Quantity > totals.PurchasedQuantity ? line.Quantity - totals.PurchasedQuantity : 0u,
+                };
+            }
             var result = runner.RecordWorldPurchaseBatchComplete(
                 currentWorld,
                 activeSubtask == null ? state.ActiveWorldPurchasedQuantity : state.ActiveLinePurchasedQuantity,
@@ -2169,7 +2284,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0
                     ? ResolveZeroPurchaseLineStatus(state.LiveCandidatePlan, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil)
                     : null,
-                state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0 ? state.LiveCandidatePlan?.Message : null);
+                state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0 ? state.LiveCandidatePlan?.Message : null,
+                state.LiveCandidatePlan);
             state.AcquisitionStatus = result.Message;
             ClearMarketBoardAutomationState();
             state.ActiveLinePurchasedQuantity = 0;
@@ -2727,6 +2843,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         initialOnHandByLine.Clear();
         var adjustedLines = new List<MarketAcquisitionPlanLine>(plan.Lines.Count);
+        inventoryCoveredPurchases.Clear();
+        reconciledDepartureWorld = null;
+        reconciledSearch = null;
+        inventoryReflectionWaitStartedUtc = null;
         foreach (var line in plan.Lines)
         {
             var basis = MarketAcquisitionTargetBases.Normalize(line.TargetBasis, exactAcquisition);
@@ -2756,8 +2876,79 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
 
         adjustedPlan = plan with { Lines = adjustedLines };
+        if (!exactAcquisition && plan.AdvisoryListings is { } advisory && claimedRequest is { } request &&
+            plan.Lines.Any(line => line.InitialOnHandQuantity != initialOnHandByLine.GetValueOrDefault(line.LineId)))
+            adjustedPlan = MarketAcquisitionPlanner.BuildPlan(request, advisory, plan.PreparedAtUtc,
+                context.GetCurrentWorldName(), plan.SweepWorldExclusions, initialOnHandByLine);
         failure = string.Empty;
         return true;
+    }
+
+    private bool IsInventorySatisfied(MarketAcquisitionWorldItemSubtask task) =>
+        exactAcquisitionAuthority is null && task.QuantityMode == "TargetQuantity" &&
+        MarketAcquisitionTargetBases.Normalize(task.TargetBasis) == MarketAcquisitionTargetBases.OnHandTotal &&
+        (ulong)initialOnHandByLine.GetValueOrDefault(task.LineId) +
+        (state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? runner.GetLinePurchaseTotals(task.LineId).PurchasedQuantity : 0u) >= task.RequestedQuantity;
+
+    private bool ReconcileInventory(MarketAcquisitionGuidedRouteStop stop)
+    {
+        if (exactAcquisitionAuthority is not null) return true;
+        foreach (var task in stop.ItemSubtasks.Where(task => task.QuantityMode == "TargetQuantity" &&
+                     MarketAcquisitionTargetBases.Normalize(task.TargetBasis) == MarketAcquisitionTargetBases.OnHandTotal))
+        {
+            var observed = inventoryObserver?.Observe(task.ItemId, task.HqPolicy);
+            if (observed?.IsAvailable != true || purchase.PurchaseEvidenceState is PendingMarketPurchase)
+            {
+                var now = clock.UtcNow;
+                inventoryReflectionWaitStartedUtc ??= now;
+                var reason = purchase.PurchaseEvidenceState is PendingMarketPurchase
+                    ? "purchase receipt pending"
+                    : observed?.Message ?? "Inventory unavailable";
+                if (now - inventoryReflectionWaitStartedUtc.Value < InventoryReflectionWait)
+                {
+                    state.AcquisitionStatus = $"Waiting to reconcile inventory for {task.ItemName}: {reason}.";
+                    state.NextRouteMonitorUtc = now.AddMilliseconds(250);
+                    return false;
+                }
+                UpdateStatus(FailRoute($"Inventory reconciliation timed out for {task.ItemName}: {reason}."));
+                return false;
+            }
+            var receipts = runner.GetLinePurchaseTotals(task.LineId).PurchasedQuantity;
+            if (stop.Status == "Purchasing" && stop.ActiveItemSubtask?.LineId == task.LineId &&
+                state.ActivePurchaseLineId == task.LineId && activeLinePurchaseWorld == stop.WorldName)
+                receipts = checked(receipts + state.ActiveLinePurchasedQuantity);
+            var covered = inventoryCoveredPurchases.GetValueOrDefault(task.LineId);
+            // A receipt is not a second copy of stock already visible in bags. Until its
+            // delta is reflected, keep the previous baseline and refuse another purchase.
+            if (state.ExecutionMode != MarketAcquisitionExecutionMode.DryRun && receipts > covered &&
+                observed.Value.Quantity < (ulong)initialOnHandByLine.GetValueOrDefault(task.LineId) + receipts - covered)
+            {
+                // Give the inventory update a bounded chance to land, then trust the bags:
+                // a persistent shortfall means stock was used or moved, not a missing receipt.
+                var now = clock.UtcNow;
+                inventoryReflectionWaitStartedUtc ??= now;
+                if (now - inventoryReflectionWaitStartedUtc.Value < InventoryReflectionWait)
+                {
+                    state.AcquisitionStatus = $"Waiting for purchased {task.ItemName} to appear in main bags/crystal pouch before re-checking need.";
+                    state.NextRouteMonitorUtc = now.AddMilliseconds(250);
+                    return false;
+                }
+
+                state.AcquisitionStatus = $"{task.ItemName}: bags hold {observed.Value.Quantity} after confirmed purchases; using the observed count (stock may have been used or moved).";
+            }
+            initialOnHandByLine[task.LineId] = observed.Value.Quantity;
+            inventoryCoveredPurchases[task.LineId] = state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? 0u : receipts;
+            runner.RecordReconciledInventory(task.LineId, observed.Value.Quantity, inventoryCoveredPurchases[task.LineId]);
+        }
+        inventoryReflectionWaitStartedUtc = null;
+        return true;
+    }
+
+    private void SkipInventorySatisfiedLine(MarketAcquisitionGuidedRouteStop stop)
+    {
+        if (stop.ActiveItemSubtask is { } task)
+            ReportAcquisitionLineProgress(task, "Complete", 0, 0, "Target already met by current inventory; no purchase needed.");
+        UpdateStatus(runner.SkipInventorySatisfiedLine());
     }
 
     private MarketAcquisitionRouteActionResult UpdateStatus(MarketAcquisitionRouteActionResult result)
@@ -2798,6 +2989,18 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var deadline = operationExecutor.CheckDeadline(clock.UtcNow, clock.MonotonicMilliseconds);
         if (deadline.Snapshot is not { IsTerminal: true } timedOut)
             return false;
+
+        if (timedOut.Kind == MarketAcquisitionRouteOperationKind.TravelPreparation &&
+            aethernetDeparture?.IsInProgress == true)
+        {
+            // A local optimization may time out, but must not fail the route or
+            // dispatch /li over an active path/transfer. A fresh preparation
+            // window continues the drain and then the existing direct path.
+            runner.RecordRouteOperationSnapshot(timedOut);
+            aethernetDeparture.FallBack("Local aethernet departure preparation timed out.");
+            state.AcquisitionStatus = aethernetDeparture.Message;
+            return false;
+        }
 
         marketBoard.AbandonBrowse(timedOut.Message);
         runner.RecordRouteOperationSnapshot(timedOut);
@@ -2872,6 +3075,18 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CleanupOwnedTravel(string terminalReason)
     {
+        if (aethernetDeparture != null)
+        {
+            var stopped = aethernetDeparture.Cleanup();
+            runner.RecordRouteCleanup("Local aethernet departure cleanup requested.", new Dictionary<string, string?>
+            {
+                ["dependency"] = "vnavmesh / Lifestream aethernet",
+                ["terminalReason"] = terminalReason,
+                ["navigationReleased"] = stopped.ToString(),
+                ["preparationState"] = aethernetDeparture.Stage,
+            });
+        }
+        lastDepartureStage = null;
         recoveringRetainedStop = false;
         retainedRecoveryBrowseOperationId = null;
         StopOwnedLocalApproach(releasing: true);

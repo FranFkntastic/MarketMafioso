@@ -4,6 +4,10 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed record MarketAcquisitionLiveCandidatePlan
 {
+    public uint RemainingNeed { get; init; }
+    public uint? CheapestSeenPrice { get; init; }
+    public uint? SmallestStack { get; init; }
+    public uint UnitPriceLimit { get; init; }
     public bool PriceRangeExhausted { get; init; }
     public string Status { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
