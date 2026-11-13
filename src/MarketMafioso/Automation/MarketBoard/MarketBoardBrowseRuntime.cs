@@ -66,11 +66,27 @@ public sealed record MarketBoardBrowseSnapshot
     public bool IsTerminal => IsComplete || IsFailed;
 }
 
+public sealed record MarketBoardLockoutStatus
+{
+    public static MarketBoardLockoutStatus Clear { get; } = new();
+
+    public bool Active { get; init; }
+    public bool LogoutObserved { get; init; }
+    public DateTimeOffset? LockedAtUtc { get; init; }
+    public string? TriggerOwner { get; init; }
+    public uint TriggerItemId { get; init; }
+    public string? TriggerWorld { get; init; }
+    public string? TriggerOperationId { get; init; }
+}
+
 public interface IMarketBoardBrowseRuntime
 {
     bool IsAvailable { get; }
     string AvailabilityMessage { get; }
     MarketBoardBrowseSnapshot Snapshot { get; }
+
+    /// <summary>The server-imposed market-board lockout that only a logout followed by a login clears.</summary>
+    MarketBoardLockoutStatus Lockout { get; }
 
     bool TryBegin(
         MarketBoardBrowseOwner owner,
@@ -110,17 +126,22 @@ internal static class MarketBoardBrowseTimeoutPolicy
 [Serializable]
 public sealed class PersistedMarketBoardSessionCircuitBreakerState
 {
+    // Rate limits observed since the last relog, kept for diagnostics. Any nonzero count means relog-required.
     public int RateLimitCount { get; set; }
     public bool RelogRequired { get; set; }
     public bool LogoutObserved { get; set; }
     public DateTimeOffset? LastRateLimitAtUtc { get; set; }
     public DateTimeOffset? ExpiredAtUtc { get; set; }
+    public string? TriggerOwner { get; set; }
+    public uint TriggerItemId { get; set; }
+    public string? TriggerWorld { get; set; }
+    public string? TriggerOperationId { get; set; }
 }
 
 internal sealed class MarketBoardBrowseOperationGate
 {
-    private const uint RateLimitStatus = 0x70000002;
-    internal const int RateLimitExpirationThreshold = 3;
+    internal const uint RateLimitStatus = 0x70000002;
+    internal const string LockoutFailureCode = "MarketBoardSessionExpired";
     private const int ListingsPerPage = 10;
     private const int MaximumListings = 100;
 
@@ -128,6 +149,8 @@ internal sealed class MarketBoardBrowseOperationGate
     private readonly Func<DateTimeOffset> getUtcNow;
     private readonly PersistedMarketBoardSessionCircuitBreakerState sessionState;
     private readonly Action persistSessionState;
+    private readonly Func<string?> getCurrentWorld;
+    private readonly Action<string> log;
     private readonly string operationNamespace = Guid.NewGuid().ToString("N");
     private long operationSequence;
     private MarketBoardBrowseSnapshot snapshot = MarketBoardBrowseSnapshot.Idle;
@@ -136,27 +159,37 @@ internal sealed class MarketBoardBrowseOperationGate
     public MarketBoardBrowseOperationGate(
         Func<DateTimeOffset>? getUtcNow = null,
         PersistedMarketBoardSessionCircuitBreakerState? sessionState = null,
-        Action? persistSessionState = null)
+        Action? persistSessionState = null,
+        Func<string?>? getCurrentWorld = null,
+        Action<string>? log = null)
     {
         this.getUtcNow = getUtcNow ?? (() => DateTimeOffset.UtcNow);
         this.sessionState = sessionState ?? new PersistedMarketBoardSessionCircuitBreakerState();
         this.persistSessionState = persistSessionState ?? (() => { });
+        this.getCurrentWorld = getCurrentWorld ?? (() => null);
+        this.log = log ?? (_ => { });
         var repaired = false;
         if (this.sessionState.RateLimitCount < 0)
         {
             this.sessionState.RateLimitCount = 0;
             repaired = true;
         }
-        if (this.sessionState.RelogRequired && this.sessionState.RateLimitCount < RateLimitExpirationThreshold)
+        // Earlier builds absorbed two strikes before expiring access, and a relog reset the count to zero.
+        // A persisted nonzero count without RelogRequired therefore records a rate limit in a session that has
+        // not relogged since, and that session is still locked out of the market board.
+        if (!this.sessionState.RelogRequired && this.sessionState.RateLimitCount > 0)
         {
-            this.sessionState.RateLimitCount = RateLimitExpirationThreshold;
+            this.sessionState.RelogRequired = true;
             repaired = true;
+            this.log(
+                $"Repaired a persisted market-board rate-limit count of {this.sessionState.RateLimitCount} " +
+                "to a relog-required lockout; no relog has been observed since it was recorded.");
         }
-        if (this.sessionState.RateLimitCount >= RateLimitExpirationThreshold)
+        if (this.sessionState.RelogRequired)
         {
-            if (!this.sessionState.RelogRequired)
+            if (this.sessionState.RateLimitCount < 1)
             {
-                this.sessionState.RelogRequired = true;
+                this.sessionState.RateLimitCount = 1;
                 repaired = true;
             }
             if (this.sessionState.ExpiredAtUtc is null)
@@ -167,6 +200,28 @@ internal sealed class MarketBoardBrowseOperationGate
         }
         if (repaired)
             this.persistSessionState();
+    }
+
+    public MarketBoardLockoutStatus Lockout
+    {
+        get
+        {
+            lock (sync)
+            {
+                return sessionState.RelogRequired
+                    ? new MarketBoardLockoutStatus
+                    {
+                        Active = true,
+                        LogoutObserved = sessionState.LogoutObserved,
+                        LockedAtUtc = sessionState.ExpiredAtUtc,
+                        TriggerOwner = sessionState.TriggerOwner,
+                        TriggerItemId = sessionState.TriggerItemId,
+                        TriggerWorld = sessionState.TriggerWorld,
+                        TriggerOperationId = sessionState.TriggerOperationId,
+                    }
+                    : MarketBoardLockoutStatus.Clear;
+            }
+        }
     }
 
     public MarketBoardBrowseSnapshot Snapshot
@@ -218,38 +273,79 @@ internal sealed class MarketBoardBrowseOperationGate
         }
     }
 
-    public bool ObserveClientSession(bool isLoggedIn)
+    /// <summary>
+    /// Records the client session state when the runtime starts. Being logged out is conclusive evidence that
+    /// the session which produced a persisted lockout has ended: the lobby clears its logged-in flag only in
+    /// its logout callback, and a fresh game process starts logged out.
+    /// </summary>
+    public void ObserveInitialSession(bool isLoggedIn)
     {
         lock (sync)
         {
-            if (!isLoggedIn)
-            {
-                if (sessionState.RateLimitCount == 0 || sessionState.LogoutObserved)
-                    return false;
+            if (isLoggedIn || !sessionState.RelogRequired || sessionState.LogoutObserved)
+                return;
 
+            sessionState.LogoutObserved = true;
+            persistSessionState();
+            log("MMF started while logged out; the market-board lockout clears at the next login.");
+        }
+    }
+
+    public void ObserveLogout(int type, int code)
+    {
+        lock (sync)
+        {
+            if (!sessionState.RelogRequired)
+            {
+                log($"Logout observed (type {type}, code {code}); no market-board lockout is active.");
+                return;
+            }
+
+            if (!sessionState.LogoutObserved)
+            {
                 sessionState.LogoutObserved = true;
                 persistSessionState();
+            }
+            log($"Logout observed (type {type}, code {code}); the market-board lockout clears at the next login.");
+        }
+    }
+
+    public bool ObserveLogin()
+    {
+        lock (sync)
+        {
+            if (!sessionState.RelogRequired)
+            {
+                log("Login observed; no market-board lockout is active.");
                 return false;
             }
 
             if (!sessionState.LogoutObserved)
+            {
+                log("Login observed without a preceding logout; the market-board lockout remains.");
                 return false;
+            }
 
-            var clearedExpiredSession = sessionState.RelogRequired;
+            var lockedAt = sessionState.ExpiredAtUtc;
             sessionState.RateLimitCount = 0;
             sessionState.RelogRequired = false;
             sessionState.LogoutObserved = false;
             sessionState.LastRateLimitAtUtc = null;
             sessionState.ExpiredAtUtc = null;
+            sessionState.TriggerOwner = null;
+            sessionState.TriggerItemId = 0;
+            sessionState.TriggerWorld = null;
+            sessionState.TriggerOperationId = null;
             persistSessionState();
 
             if (snapshot.IsFailed &&
-                string.Equals(snapshot.FailureCode, "MarketBoardSessionExpired", StringComparison.Ordinal))
+                string.Equals(snapshot.FailureCode, LockoutFailureCode, StringComparison.Ordinal))
             {
                 snapshot = MarketBoardBrowseSnapshot.Idle;
             }
 
-            return clearedExpiredSession;
+            log($"Market-board lockout from {lockedAt:O} cleared by an observed logout followed by a login.");
+            return true;
         }
     }
 
@@ -418,12 +514,9 @@ internal sealed class MarketBoardBrowseOperationGate
                 if (status == RateLimitStatus)
                 {
                     RecordRateLimit();
-                    var expired = sessionState.RelogRequired;
                     Fail(
-                        expired ? "MarketBoardSessionExpired" : "MarketBoardRateLimited",
-                        expired
-                            ? $"The market-board server rate-limited MMF {sessionState.RateLimitCount} times in this login session. MMF has expired market access and will not search again until you relog."
-                            : $"The market-board server asked MMF to wait before searching again (status 0x70000002; strike {sessionState.RateLimitCount}/{RateLimitExpirationThreshold}).");
+                        LockoutFailureCode,
+                        "The market-board server locked MMF out (status 0x70000002). MMF will not search the market board again until you log out and back in.");
                 }
                 else
                 {
@@ -695,13 +788,33 @@ internal sealed class MarketBoardBrowseOperationGate
     private void RecordRateLimit()
     {
         var nowUtc = getUtcNow();
+        string? world;
+        try
+        {
+            world = getCurrentWorld();
+        }
+        catch (Exception)
+        {
+            world = null;
+        }
+
         sessionState.RateLimitCount++;
         sessionState.LastRateLimitAtUtc = nowUtc;
-        if (sessionState.RateLimitCount >= RateLimitExpirationThreshold)
+        log(
+            $"Market-board rate limit observed (status 0x{RateLimitStatus:X8}): owner {snapshot.Owner}, " +
+            $"item {snapshot.ItemId}, world {world ?? "unknown"}, operation {snapshot.OperationId}.");
+        if (!sessionState.RelogRequired)
         {
+            // One server rate limit locks MMF out of the whole market board until a relog; no retry has
+            // ever succeeded without one, so the first observation expires access immediately.
             sessionState.RelogRequired = true;
             sessionState.LogoutObserved = false;
-            sessionState.ExpiredAtUtc ??= nowUtc;
+            sessionState.ExpiredAtUtc = nowUtc;
+            sessionState.TriggerOwner = snapshot.Owner?.ToString();
+            sessionState.TriggerItemId = snapshot.ItemId;
+            sessionState.TriggerWorld = world;
+            sessionState.TriggerOperationId = snapshot.OperationId;
+            log("Market-board lockout set: every MMF market search is refused until a logout followed by a login.");
         }
         persistSessionState();
     }
@@ -713,8 +826,8 @@ internal sealed class MarketBoardBrowseOperationGate
         Owner = owner,
         ItemId = itemId,
         Phase = MarketBoardBrowsePhase.Failed,
-        FailureCode = "MarketBoardSessionExpired",
-        Message = $"MMF market access expired after {sessionState.RateLimitCount} server rate limits. Relog before starting or resuming market searches.",
+        FailureCode = LockoutFailureCode,
+        Message = "The market-board server locked MMF out. Log out and back in before starting or resuming market searches.",
         SessionRateLimitCount = sessionState.RateLimitCount,
         SessionRelogRequired = true,
         SessionExpiredAtUtc = sessionState.ExpiredAtUtc,

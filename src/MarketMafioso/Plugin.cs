@@ -56,6 +56,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IGameInteropProvider GameInteropProvider { get; private set; } = null!;
     [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
     [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
+    [PluginService] internal static IDtrBar DtrBar { get; private set; } = null!;
     [PluginService] internal static IAetheryteList AetheryteList { get; private set; } = null!;
     [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
 
@@ -73,6 +74,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly RetainerHistoryObserver retainerHistoryObserver;
     private readonly DalamudMarketBoardBrowseObserver marketBoardBrowseObserver;
     private readonly RetainerListingRefreshCoordinator retainerListingRefresh;
+    private readonly MarketLockoutAttention marketLockoutAttention;
     private readonly RetainerListingRefreshReadinessGate retainerListingRefreshReadiness = new();
     private readonly FranthropyRetainerListingRefreshSource sharedObservationListings;
     private readonly DalamudSharedObservationClient sharedObservationClient;
@@ -113,17 +115,12 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         profileDataCenterCoordinator = new ProfileDataCenterCoordinator(
             PluginInterface.GetPluginConfigDirectory(), new DalamudDataCenterConnection(DataManager, ClientState, ObjectTable, GameGui));
+        var characterLoginDriver = new DalamudCharacterLoginDriver(new DalamudLifestreamLogin(PluginInterface),
+            () => DalamudCharacterLoginDriver.IsLifestreamLoaded(PluginInterface));
         profileLoginCoordinator = new ProfileLoginCoordinator(
             PluginInterface.GetPluginConfigDirectory(),
-            new DalamudCharacterLoginDriver(new DalamudLifestreamLogin(PluginInterface),
-                () => DalamudCharacterLoginDriver.IsLifestreamLoaded(PluginInterface)),
-            () =>
-            {
-                var player = ObjectTable.LocalPlayer;
-                return (ClientState.IsLoggedIn && player is not null,
-                    player?.Name.TextValue ?? string.Empty,
-                    PlayerState.HomeWorld.IsValid ? PlayerState.HomeWorld.Value.Name.ToString() : string.Empty);
-            },
+            characterLoginDriver,
+            ObserveLoggedInCharacter,
             (message, exception) =>
             {
                 if (exception is null) Log.Warning("[MarketMafioso] {Message}", message);
@@ -192,6 +189,7 @@ public sealed class Plugin : IDalamudPlugin
             ClientState,
             Configuration.MarketBoardSessionCircuitBreaker,
             Configuration.Save,
+            () => PlayerState.CurrentWorld.IsValid ? PlayerState.CurrentWorld.Value.Name.ToString() : null,
             Log);
         sharedObservationListings = new FranthropyRetainerListingRefreshSource(
             sharedObservationClient,
@@ -204,6 +202,17 @@ public sealed class Plugin : IDalamudPlugin
             message => ChatGui.PrintError($"[MMF] {message}"),
             message => Log.Information("[MarketMafioso] {Message}", message));
         sharedObservationListings.Changed += retainerListingRefresh.NotifyListingCaptureChanged;
+        marketLockoutAttention = new MarketLockoutAttention(
+            DtrBar,
+            NotificationManager,
+            marketBoardBrowseObserver,
+            retainerListingRefresh,
+            characterLoginDriver,
+            ObserveLoggedInCharacter,
+            GetRelogBlockingReason,
+            ResolveItemName,
+            () => mainWindow?.OpenRetainerListingRefreshSettings(),
+            message => Log.Information("[MarketMafioso] {Message}", message));
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         remoteMarketAccessProbe = new RemoteMarketAccessProbe(
             Configuration,
@@ -300,7 +309,7 @@ public sealed class Plugin : IDalamudPlugin
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
                 Log),
             marketBoardBrowseObserver,
-            itemId => retainerListingRefresh.ForceRetry(itemId),
+            marketLockoutAttention,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log,
             workshopRestock);
@@ -761,6 +770,7 @@ public sealed class Plugin : IDalamudPlugin
             nowUtc,
             refreshReady,
             refreshDeferredReason);
+        marketLockoutAttention.Tick(nowUtc);
         mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
         if (Configuration.AutoAcceptIncomingTrades || tradeQueueRunner.IsActive)
             tradeAutomationCoordinator.SuppressDropboxAutoAccept();
@@ -772,6 +782,41 @@ public sealed class Plugin : IDalamudPlugin
         workshopRestock.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
+    }
+
+    private static (bool LoggedIn, string Name, string HomeWorld) ObserveLoggedInCharacter()
+    {
+        var player = ObjectTable.LocalPlayer;
+        return (ClientState.IsLoggedIn && player is not null,
+            player?.Name.TextValue ?? string.Empty,
+            PlayerState.HomeWorld.IsValid ? PlayerState.HomeWorld.Value.Name.ToString() : string.Empty);
+    }
+
+    private static string? ResolveItemName(uint itemId)
+    {
+        try
+        {
+            var name = DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>()?.GetRowOrDefault(itemId)?.Name.ToString();
+            return string.IsNullOrWhiteSpace(name) ? null : name;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    // A relog interrupts whatever MMF automation is driving the character, so it is refused while any runs.
+    private string? GetRelogBlockingReason()
+    {
+        if (workshopAssemblyRunner.IsRunning)
+            return "A workshop run is in progress.";
+        if (workshopRestock.Runner.IsRunning)
+            return "A workshop vendor restock is in progress.";
+        if (tradeQueueRunner.IsActive)
+            return "Trade Queue execution is in progress.";
+        if (mainWindow.IsMarketAcquisitionRunning)
+            return "A market acquisition route is running.";
+        return null;
     }
 
     private static (bool Ready, string? Reason) GetImmediateRetainerListingRefreshReadiness(bool retainerSessionActive)
@@ -869,6 +914,7 @@ public sealed class Plugin : IDalamudPlugin
         workshopRestock.Dispose();
         reporter.Dispose();
         remoteMarketAccessProbe.Dispose();
+        marketLockoutAttention.Dispose();
         marketBoardBrowseObserver.Dispose();
         retainerHistoryObserver.Dispose();
         retainerSaleChatObserver.Dispose();
