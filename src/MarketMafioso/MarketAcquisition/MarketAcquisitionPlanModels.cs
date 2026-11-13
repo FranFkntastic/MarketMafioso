@@ -88,6 +88,9 @@ public sealed record MarketAcquisitionWorldBatch
 
 public sealed record MarketAcquisitionPlan
 {
+    // Optional so persisted plans predating inventory-aware planning remain readable.
+    public IReadOnlyList<MarketAcquisitionListing>? AdvisoryListings { get; init; }
+    public IReadOnlyList<MarketAcquisitionSweepWorldExclusion> SweepWorldExclusions { get; init; } = [];
     public string RequestId { get; init; } = string.Empty;
     public string Status { get; init; } = string.Empty;
     public string WorldMode { get; init; } = string.Empty;

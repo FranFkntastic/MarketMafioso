@@ -209,7 +209,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         var reprepare = MarketAcquisitionPlanRepreparer.FilterCompletedOrProbedStops(
             plan,
-            CompletedOrProbedStops,
+            // Modern advisory plans already apply authoritative recent-clearance policy.
+            // A past skip (price, budget, quantity, inventory) cannot prune a world.
+            plan.AdvisoryListings is not null ? [] : CompletedOrProbedStops,
             preparedAtUtc);
         if (!reprepare.CanStart)
         {
@@ -900,6 +902,18 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             : MarketAcquisitionRouteActionResult.Fail(result.Message);
     }
 
+    public MarketAcquisitionRouteActionResult SkipInventorySatisfiedLine()
+    {
+        if (!IsRunning || session is null) return Fail("No running route is available for inventory reconciliation.");
+        var result = session.SkipInventorySatisfiedLine();
+        StatusMessage = result.Message;
+        SearchSubmitted = false;
+        diagnostics.Record("inventory-target-satisfied", result.Message);
+        RecordLatestWorldSummary();
+        if (!result.Success) return FailRoute(result.Message);
+        return session.ActiveStop is null ? Complete(result.Message) : MarketAcquisitionRouteActionResult.Ok(result.Message);
+    }
+
     private static string SummarizeSkipReasons(MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
         var reasons = candidatePlan.Rows
@@ -1062,7 +1076,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         uint purchasedQuantity,
         uint spentGil,
         string? zeroPurchaseStatus = null,
-        string? zeroPurchaseMessage = null)
+        string? zeroPurchaseMessage = null,
+        MarketAcquisitionLiveCandidatePlan? finalPlan = null)
     {
         if (!IsRunning)
             return Fail($"Route is {State}; world purchase result was not recorded.");
@@ -1074,7 +1089,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             spentGil,
             zeroPurchaseStatus,
             zeroPurchaseMessage,
-            executionMode == MarketAcquisitionExecutionMode.DryRun) ??
+            executionMode == MarketAcquisitionExecutionMode.DryRun, finalPlan) ??
                       MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
         StatusMessage = result.Message;
         SearchSubmitted = false;

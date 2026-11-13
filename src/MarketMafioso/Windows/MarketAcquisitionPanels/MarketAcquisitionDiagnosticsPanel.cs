@@ -275,7 +275,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
                 : "spent";
             ImGui.TextColored(
                 runSummary.FailedWorldCount > 0 || runSummary.Warnings.Count > 0 ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Success,
-                $"Run rollup: {purchaseVerb} {runSummary.PurchasedQuantity:N0}, {spendVerb} {FormatGil(runSummary.SpentGil)}; {runSummary.CompletedWorldCount:N0} complete / {runSummary.PartialWorldCount:N0} partial / {runSummary.FailedWorldCount:N0} failed world(s).");
+                $"Run rollup: {purchaseVerb} {runSummary.PurchasedQuantity:N0}, {spendVerb} {FormatGil(runSummary.SpentGil)}; {runSummary.BoughtWorldCount:N0} bought / {runSummary.NothingBoughtWorldCount:N0} nothing bought / {runSummary.BlockedWorldCount:N0} blocked world(s).");
 
             if (runSummary.OpportunisticPurchasedQuantity > 0 || runSummary.PlannedPurchasedQuantity > 0)
             {
@@ -382,7 +382,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
 
         var purchaseVerb = snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? "would purchase" : "purchased";
         var spendVerb = snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? "would spend" : "spent";
-        return $"Last run {purchaseVerb} {summary.PurchasedQuantity:N0}, {spendVerb} {FormatGil(summary.SpentGil)}; {summary.CompletedWorldCount:N0} complete / {summary.PartialWorldCount:N0} partial / {summary.FailedWorldCount:N0} failed world(s).";
+        return $"Last run {purchaseVerb} {summary.PurchasedQuantity:N0}, {spendVerb} {FormatGil(summary.SpentGil)}; {summary.BoughtWorldCount:N0} bought / {summary.NothingBoughtWorldCount:N0} nothing bought / {summary.BlockedWorldCount:N0} blocked world(s).";
     }
 
     private static IReadOnlyList<string> GetCurrentWarnings(MarketAcquisitionRouteEngineSnapshot snapshot) =>

@@ -28,6 +28,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private string quantityMode = "AllBelowThreshold";
     private string targetQuantityBuffer = string.Empty;
+    private string maximumOverageBuffer = string.Empty;
+    private readonly IMarketAcquisitionInventoryObserver inventoryObserver = new DalamudMarketAcquisitionInventoryObserver();
+    private readonly Dictionary<(uint, string), MarketAcquisitionInventoryObservation> inventory = new();
+    private DateTimeOffset nextInventoryRefresh;
     private string maxUnitPriceBuffer = string.Empty;
     private string gilCapBuffer = string.Empty;
     private string hqPolicy = "Either";
@@ -320,19 +324,36 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var flags = AcquisitionRequestTableStyle.LineTableFlags |
                     ImGuiTableFlags.SizingStretchProp |
                     ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV4", 9, flags, new Vector2(0, tableHeight)))
+        if (DateTimeOffset.UtcNow >= nextInventoryRefresh)
+        {
+            inventory.Clear();
+            foreach (var line in document.Lines.Where(line => line.QuantityMode == "TargetQuantity"))
+                inventory[(line.ItemId, line.HqPolicy)] = inventoryObserver.Observe(line.ItemId, line.HqPolicy);
+            nextInventoryRefresh = DateTimeOffset.UtcNow.AddSeconds(1);
+        }
+        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV5", 11, flags, new Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.4f);
         ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthStretch, 1.5f);
-        ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthStretch, 0.9f);
-        ImGui.TableSetupColumn("Max over", ImGuiTableColumnFlags.WidthStretch, 0.8f);
+        ImGui.TableSetupColumn("Target on hand", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+        ImGui.TableSetupColumn("Extra units allowed", ImGuiTableColumnFlags.WidthStretch, 0.8f);
+        ImGui.TableSetupColumn("On hand", ImGuiTableColumnFlags.WidthStretch, 0.8f);
+        ImGui.TableSetupColumn("Still need", ImGuiTableColumnFlags.WidthStretch, 0.8f);
         ImGui.TableSetupColumn("Unit ceiling", ImGuiTableColumnFlags.WidthStretch, 1.1f);
         ImGui.TableSetupColumn("Spend ceiling", ImGuiTableColumnFlags.WidthStretch, 1.2f);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthStretch, 0.8f);
-        ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch, 1.4f);
+        ImGui.TableSetupColumn("Price source", ImGuiTableColumnFlags.WidthStretch, 1.4f);
         ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed, 72f);
-        ImGui.TableHeadersRow();
+        ImGui.TableNextRow(ImGuiTableRowFlags.Headers);
+        var headers = new[] { "Item", "Buying rule", "Target on hand", "Extra units allowed", "On hand", "Still need", "Unit ceiling", "Spend ceiling", "Quality", "Price source", "" };
+        var tooltips = new[] { "Item to acquire.", "Stock up to a target, or buy below a unit ceiling.", "Desired stock, not units to buy. Exact acquisition retains its required purchase quantity.", "Units accepted above the target when whole market stacks don't fit exactly; 0 = never exceed.", "Counts main bags + crystal pouch only; retainers, saddlebags, armoury and FC chest are not counted.", "Target minus current on-hand stock; unknown when inventory is not loaded.", "Maximum gil per unit.", "Maximum gil spent on this line.", "Accepted item quality.", "Typed ceiling or Craft Architect quote; a quote is not necessarily the active ceiling.", "" };
+        for (var column = 0; column < headers.Length; column++)
+        {
+            ImGui.TableNextColumn();
+            ImGui.TableHeader(headers[column]);
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(tooltips[column]);
+        }
 
         for (var index = 0; index < document.Lines.Count; index++)
         {
@@ -391,6 +412,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         DrawCompactOverageCell(line, index);
+
+        var stockUp = line.QuantityMode == "TargetQuantity" && !isExactAcquisitionLine;
+        inventory.TryGetValue((line.ItemId, line.HqPolicy), out var observed);
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(!stockUp ? "-" : observed.IsAvailable ? $"{observed.Quantity:N0}" : "Unknown");
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(!stockUp ? "-" : observed.IsAvailable ? $"{(line.TargetQuantity > observed.Quantity ? line.TargetQuantity - observed.Quantity : 0):N0}" : "Unknown");
 
         ImGui.TableNextColumn();
         DrawCompactUnitCell(line, index);
@@ -606,8 +634,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         MarketAcquisitionRequestBuilderContext context,
         MarketAcquisitionSelectedLinePresentation? selection)
     {
-        var height = ImGui.GetFrameHeightWithSpacing() + 10f;
-        if (!ImGui.BeginChild("AcquisitionWorkbenchSelectedLineCommandBar", new Vector2(0, height), true))
+        var height = ImGui.GetFrameHeight() + 2f * ImGui.GetStyle().WindowPadding.Y;
+        if (!ImGui.BeginChild("AcquisitionWorkbenchSelectedLineCommandBar", new Vector2(0, height), true,
+                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
             ImGui.EndChild();
             return;
@@ -894,6 +923,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         ImGui.SetNextItemWidth(-1);
+        if (quantityMode == "TargetQuantity")
+            ImGui.InputTextWithHint("##NewOverage", "0", ref maximumOverageBuffer, 32);
+        else
+            ImGui.TextColored(MainWindow.ColMuted, "-");
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MainWindow.ColMuted, "-");
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MainWindow.ColMuted, "-");
+        ImGui.TableNextColumn();
+        ImGui.SetNextItemWidth(-1);
         ImGui.InputTextWithHint("##NewUnit", "Unset", ref maxUnitPriceBuffer, 32);
 
         ImGui.TableNextColumn();
@@ -907,7 +947,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TextColored(MainWindow.ColMuted, "After add");
 
         ImGui.TableNextColumn();
-        var canAdd = canEdit && RequestLineInputValidator.CanAddIntentLine(
+        var canAdd = canEdit && (quantityMode != "TargetQuantity" || string.IsNullOrWhiteSpace(maximumOverageBuffer) || uint.TryParse(maximumOverageBuffer.Trim(), out _)) && RequestLineInputValidator.CanAddIntentLine(
             itemAutocomplete.SelectedItem,
             quantityMode,
             targetQuantityBuffer,
@@ -979,7 +1019,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         value switch
         {
             "AllBelowThreshold" => "Buy below ceiling",
-            "TargetQuantity" => "Target quantity",
+            "TargetQuantity" => "Stock up to",
             "Either" => "Any",
             "HQOnly" => "HQ only",
             "NQOnly" => "NQ only",
@@ -1070,6 +1110,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ItemName = item.Name,
             QuantityMode = quantityMode,
             TargetQuantity = quantityMode == "TargetQuantity" ? ParseUInt(targetQuantityBuffer) : 0,
+            MaximumOverage = quantityMode == "TargetQuantity" ? ParseUInt(maximumOverageBuffer) : 0,
             MaxQuantity = 0,
             HqPolicy = hqPolicy,
             MaxUnitPrice = ParseUInt(maxUnitPriceBuffer),
@@ -1130,6 +1171,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         itemAutocomplete.SearchBuffer = string.Empty;
         quantityMode = "AllBelowThreshold";
         targetQuantityBuffer = string.Empty;
+        maximumOverageBuffer = string.Empty;
         maxUnitPriceBuffer = string.Empty;
         gilCapBuffer = string.Empty;
         hqPolicy = "Either";

@@ -132,13 +132,15 @@ public static class MarketAcquisitionSelectedLinePresenter
             var state = warningCount > 0
                 ? $"{warningCount:N0} warning{(warningCount == 1 ? string.Empty : "s")}"
                 : "ready";
-            return $"CA · {threshold.Value:N0} gil · {state}";
+            return line.MaxUnitPrice == threshold.Value
+                ? $"CA quote · {threshold.Value:N0} gil · {state}"
+                : line.MaxUnitPrice > 0 ? "Typed" : "No ceiling";
         }
 
         if (line.MaxUnitPrice > 0)
-            return "Manual";
+            return "Typed";
 
-        return quote is null ? "Missing" : "Quote incomplete";
+        return quote is null ? "No ceiling" : "Quote incomplete";
     }
 
     private static string FormatItemName(MarketAcquisitionRequestLineDocument line) =>

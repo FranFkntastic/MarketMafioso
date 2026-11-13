@@ -6,6 +6,9 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed record MarketAcquisitionRouteRunSummary
 {
+    public int BoughtWorldCount { get; init; }
+    public int NothingBoughtWorldCount { get; init; }
+    public int BlockedWorldCount { get; init; }
     public uint PurchasedQuantity { get; init; }
     public uint SpentGil { get; init; }
     public uint PlannedPurchasedQuantity { get; init; }
@@ -42,9 +45,13 @@ public sealed record MarketAcquisitionRouteRunSummary
             !line.Source.Equals("Opportunistic", StringComparison.OrdinalIgnoreCase));
         var opportunisticLines = lines.Where(line =>
             line.Source.Equals("Opportunistic", StringComparison.OrdinalIgnoreCase));
+        var worldRows = MarketAcquisitionRouteTablePresenter.BuildRows(stops);
 
         return new MarketAcquisitionRouteRunSummary
         {
+            BoughtWorldCount = worldRows.Count(row => row.State == "Bought"),
+            NothingBoughtWorldCount = worldRows.Count(row => row.State == "Nothing bought"),
+            BlockedWorldCount = worldRows.Count(row => row.State == "Blocked"),
             PurchasedQuantity = SumQuantity(lines),
             SpentGil = SumGil(lines),
             PlannedPurchasedQuantity = SumQuantity(plannedLines),

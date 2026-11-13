@@ -263,13 +263,32 @@ public sealed class MarketAcquisitionGuidedRouteSession
             $"{FormatZeroPurchaseProbeMessage(candidatePlan.Status)} for {FormatPreviousItem(stop)} on {currentWorld}. Next stop: {ActiveStop?.WorldName}.");
     }
 
+    public MarketAcquisitionGuidedRouteResult SkipInventorySatisfiedLine()
+    {
+        var stop = ActiveStop;
+        if (stop?.ActiveItemSubtask is null)
+            return MarketAcquisitionGuidedRouteResult.Fail("No active inventory target to skip.");
+        const string message = "Target already met (not searched)";
+        var line = stop.LineStates.First(line => line.LineId == stop.ActiveItemSubtask.LineId);
+        line.Outcome = message;
+        line.RemainingNeed = 0;
+        var pending = stop.Status == "Pending";
+        if (TryAdvanceActiveItemSubtask(stop, zeroPurchaseStatus: "SkippedTargetAlreadyMet", zeroPurchaseMessage: message))
+        {
+            if (pending) stop.Status = "Pending";
+        }
+        else CompleteActiveStop(stop.PurchasedQuantity, stop.SpentGil);
+        return MarketAcquisitionGuidedRouteResult.Ok($"{stop.WorldName}: {message}. No market query was sent.");
+    }
+
     public MarketAcquisitionGuidedRouteResult RecordWorldPurchaseBatchComplete(
         string currentWorld,
         uint purchasedQuantity,
         uint spentGil,
         string? zeroPurchaseStatus = null,
         string? zeroPurchaseMessage = null,
-        bool dryRun = false)
+        bool dryRun = false,
+        MarketAcquisitionLiveCandidatePlan? finalPlan = null)
     {
         var stop = ActiveStop;
         if (stop == null)
@@ -280,6 +299,8 @@ public sealed class MarketAcquisitionGuidedRouteSession
 
         if (!stop.Status.Equals("Purchasing", StringComparison.OrdinalIgnoreCase))
             return MarketAcquisitionGuidedRouteResult.Fail($"Cannot complete purchases while stop is {stop.Status}.");
+
+        if (finalPlan is not null) UpdateActiveLineProbe(stop, finalPlan);
 
         if (stop.ItemSubtasks.Count == 0)
         {
@@ -351,7 +372,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
                 ? zeroPurchaseMessage ?? "No safe live candidates remained."
                 : dryRun
                     ? $"Would purchase {purchasedQuantity:N0} item(s), would spend {spentGil:N0} gil."
-                    : $"Purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil.");
+                    : FormatPurchaseOutcome(stop, purchasedQuantity));
         stop.CompletedItemSubtaskCount++;
         if (stop.CompletedItemSubtaskCount >= stop.ItemSubtasks.Count)
             return false;
@@ -405,6 +426,8 @@ public sealed class MarketAcquisitionGuidedRouteSession
         line.LiveObservedGil = SumObservedGil(candidatePlan);
         line.WouldBuyQuantity = candidatePlan.WouldBuyQuantity;
         line.WouldSpendGil = candidatePlan.WouldSpendGil;
+        line.RemainingNeed = candidatePlan.RemainingNeed;
+        line.Outcome = FormatCandidateOutcome(candidatePlan);
     }
 
     private static uint SumObservedQuantity(MarketAcquisitionLiveCandidatePlan candidatePlan)
@@ -431,10 +454,10 @@ public sealed class MarketAcquisitionGuidedRouteSession
         DataCenter = stop.DataCenter,
         PurchasedQuantity = stop.PurchasedQuantity,
         SpentGil = stop.SpentGil,
-        CompletedLineCount = stop.LineStates.Count(line => line.Status.Equals("Complete", StringComparison.OrdinalIgnoreCase)),
+        CompletedLineCount = stop.LineStates.Count(line => line.PurchasedQuantity > 0),
         SkippedLineCount = stop.LineStates.Count(line => line.Status.StartsWith("Skipped", StringComparison.OrdinalIgnoreCase)),
         FailedLineCount = stop.LineStates.Count(line => line.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase)),
-        Message = $"{stop.WorldName} complete: bought {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil across {stop.LineStates.Count:N0} line(s).",
+        Message = $"{stop.WorldName}: {(stop.PurchasedQuantity > 0 ? "Bought" : "Nothing bought")}; {stop.LineStates.Count(line => line.PurchasedQuantity > 0):N0} bought / {stop.LineStates.Count(line => line.PurchasedQuantity == 0 && line.Status != "Failed"):N0} nothing bought / {stop.LineStates.Count(line => line.Status == "Failed"):N0} blocked lines; {stop.SpentGil:N0} gil.",
     };
 
     private RouteTotals BuildRouteTotals()
@@ -456,6 +479,28 @@ public sealed class MarketAcquisitionGuidedRouteSession
             : candidateStatus.Equals(MarketAcquisitionLiveCandidateStatuses.OverageLimit, StringComparison.OrdinalIgnoreCase)
                 ? "SkippedOverageLimit"
             : "SkippedNoLiveStock";
+
+    private static string FormatPurchaseOutcome(MarketAcquisitionGuidedRouteStop stop, uint purchased)
+    {
+        var task = stop.ActiveItemSubtask;
+        var line = stop.LineStates.FirstOrDefault(line => line.LineId == task?.LineId);
+        if (task?.QuantityMode != "TargetQuantity") return $"Bought {purchased:N0}";
+        return line?.RemainingNeed > 0
+            ? $"Bought {purchased:N0}, still short {line.RemainingNeed:N0}"
+            : $"Bought {purchased:N0} (target met)";
+    }
+
+    public static string FormatCandidateOutcome(MarketAcquisitionLiveCandidatePlan plan) => plan.Status switch
+    {
+        "TargetAlreadyMet" => "Target already met (not searched)",
+        "AbovePriceLimit" => $"Above price limit (cheapest {plan.CheapestSeenPrice:N0}, limit {plan.UnitPriceLimit:N0})",
+        "OverageLimit" => $"Stacks exceed allowance (need {plan.RemainingNeed:N0}, smallest {plan.SmallestStack:N0})",
+        "QualityMismatch" => "Quality mismatch",
+        "SpendLimitReached" => "Spend limit reached",
+        "NoListings" => "No listings",
+        "IncompleteListingCoverage" => "Incomplete listing read",
+        _ => plan.Message,
+    };
 
     private static string FormatZeroPurchaseProbeMessage(string candidateStatus) =>
         MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidateStatus)
@@ -514,6 +559,8 @@ public sealed record MarketAcquisitionGuidedRouteStop
 
 public sealed record MarketAcquisitionRouteLineState
 {
+    public uint RemainingNeed { get; set; }
+    public string? Outcome { get; set; }
     public string LineId { get; init; } = string.Empty;
     public uint ItemId { get; init; }
     public string? ItemName { get; init; }

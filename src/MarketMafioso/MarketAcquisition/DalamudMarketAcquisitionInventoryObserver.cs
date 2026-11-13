@@ -21,7 +21,11 @@ public sealed class DalamudMarketAcquisitionInventoryObserver : IMarketAcquisiti
 
         var normalizedPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(hqPolicy);
         var quantity = 0u;
-        foreach (var inventoryType in PlayerBags)
+        // Crystals live outside the four main bags; require the pouch to be loaded too.
+        var containers = itemId is >= 2 and <= 19
+            ? new[] { InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4, InventoryType.Crystals }
+            : PlayerBags;
+        foreach (var inventoryType in containers)
         {
             var container = manager->GetInventoryContainer(inventoryType);
             if (container == null || !container->IsLoaded)

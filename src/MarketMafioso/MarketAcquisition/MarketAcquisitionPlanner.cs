@@ -11,7 +11,8 @@ public static class MarketAcquisitionPlanner
         IEnumerable<MarketAcquisitionListing> listings,
         DateTimeOffset preparedAtUtc,
         string? currentWorld = null,
-        IEnumerable<MarketAcquisitionSweepWorldExclusion>? sweepWorldExclusions = null)
+        IEnumerable<MarketAcquisitionSweepWorldExclusion>? sweepWorldExclusions = null,
+        IReadOnlyDictionary<string, uint>? inventoryBaselines = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(listings);
@@ -27,8 +28,12 @@ public static class MarketAcquisitionPlanner
             ? ResolveSweepWorlds(request, currentWorld)
             : [];
 
-        foreach (var line in requestLines)
+        foreach (var originalLine in requestLines)
         {
+            var onHand = originalLine.QuantityMode == "TargetQuantity" &&
+                         originalLine.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal
+                ? inventoryBaselines?.GetValueOrDefault(originalLine.LineId) ?? 0u : 0u;
+            var line = originalLine with { Quantity = originalLine.Quantity > onHand ? originalLine.Quantity - onHand : 0u };
             var matchingListings = sourceListings
                 .Where(listing => ListingMatchesLine(request, line, listing))
                 .OrderBy(listing => listing.UnitPrice)
@@ -71,7 +76,10 @@ public static class MarketAcquisitionPlanner
                 .ThenBy(subtask => subtask.WorldName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var lineSubtasks = BuildExecutableLinePlan(line, candidates, isAllWorldSweep);
+            var lineSubtasks = line.QuantityMode == "TargetQuantity" && line.Quantity == 0
+                ? new List<MarketAcquisitionWorldItemSubtask>()
+                : BuildExecutableLinePlan(line, candidates, isAllWorldSweep)
+                    .Select(task => task with { RequestedQuantity = originalLine.Quantity }).ToList();
             selectedSubtasks.AddRange(lineSubtasks);
             planLines.Add(new MarketAcquisitionPlanLine
             {
@@ -80,13 +88,15 @@ public static class MarketAcquisitionPlanner
                 ItemId = line.ItemId,
                 ItemName = line.ItemName,
                 QuantityMode = line.QuantityMode,
-                RequestedQuantity = line.Quantity,
+                RequestedQuantity = originalLine.Quantity,
+                InitialOnHandQuantity = onHand,
                 TargetBasis = line.TargetBasis,
                 MaximumOverage = line.MaximumOverage,
                 HqPolicy = line.HqPolicy,
                 MaxUnitPrice = line.MaxUnitPrice,
                 GilCap = line.MaxTotalGil,
-                Status = lineSubtasks.Count == 0 ? "NoSupportedListings" : "Ready",
+                Status = line.QuantityMode == "TargetQuantity" && line.Quantity == 0
+                    ? "TargetAlreadyMet" : lineSubtasks.Count == 0 ? "NoSupportedListings" : "Ready",
                 PlannedQuantity = (uint)lineSubtasks.Sum(subtask => subtask.PlannedQuantity),
                 PlannedGil = (uint)lineSubtasks.Sum(subtask => subtask.PlannedGil),
             });
@@ -106,6 +116,8 @@ public static class MarketAcquisitionPlanner
 
         return new MarketAcquisitionPlan
         {
+            AdvisoryListings = sourceListings,
+            SweepWorldExclusions = sweepExclusions,
             RequestId = request.Id,
             Status = batches.Count == 0 ? "NoSupportedListings" : "Ready",
             WorldMode = request.WorldMode,

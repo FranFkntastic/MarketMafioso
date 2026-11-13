@@ -26,12 +26,15 @@ public sealed class MarketAcquisitionPlanPreparationService
 
     private readonly IMarketAcquisitionListingSource listingSource;
     private readonly MarketAcquisitionWorldVisitCatalog worldVisitCatalog;
+    private readonly IMarketAcquisitionInventoryObserver? inventoryObserver;
 
     public MarketAcquisitionPlanPreparationService(
         IMarketAcquisitionListingSource listingSource,
-        MarketAcquisitionWorldVisitCatalog worldVisitCatalog)
+        MarketAcquisitionWorldVisitCatalog worldVisitCatalog,
+        IMarketAcquisitionInventoryObserver? inventoryObserver = null)
     {
         this.listingSource = listingSource ?? throw new ArgumentNullException(nameof(listingSource));
+        this.inventoryObserver = inventoryObserver;
         this.worldVisitCatalog = worldVisitCatalog ?? throw new ArgumentNullException(nameof(worldVisitCatalog));
     }
 
@@ -42,6 +45,15 @@ public sealed class MarketAcquisitionPlanPreparationService
         ArgumentNullException.ThrowIfNull(request);
         var claimed = request.Claim ?? throw new InvalidOperationException("No acquisition request is available.");
         var planLines = GetPlanLines(claimed);
+        var baselines = new Dictionary<string, uint>(StringComparer.Ordinal);
+        foreach (var line in planLines.Where(line => line.QuantityMode == "TargetQuantity" &&
+                     MarketAcquisitionTargetBases.Normalize(line.TargetBasis) == MarketAcquisitionTargetBases.OnHandTotal))
+        {
+            var observation = inventoryObserver?.Observe(line.ItemId, line.HqPolicy);
+            if (observation?.IsAvailable != true)
+                throw new InvalidOperationException($"Cannot finalize safely for {line.ItemName}: {observation?.Message ?? "Inventory observer unavailable."}");
+            baselines[line.LineId] = observation.Value.Quantity;
+        }
         var listings = new List<MarketAcquisitionListing>();
         var sweepWorldExclusions = new List<MarketAcquisitionSweepWorldExclusion>();
         var freshEvidenceWorldCount = 0;
@@ -122,19 +134,22 @@ public sealed class MarketAcquisitionPlanPreparationService
             listings,
             preparedAtUtc,
             request.CurrentWorld,
-            sweepWorldExclusions);
+            sweepWorldExclusions,
+            baselines);
         var recommendedTargetLines = plan.Lines
             .Where(line => line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
             .ToArray();
         var recommendedPlannedQuantity = recommendedTargetLines.Aggregate(
             0u,
-            (total, line) => checked(total + Math.Min(line.PlannedQuantity, line.RequestedQuantity)));
+            (total, line) => checked(total + Math.Min(line.PlannedQuantity, RemainingNeed(line))));
         var recommendedRequestedQuantity = recommendedTargetLines.Aggregate(
             0u,
-            (total, line) => checked(total + line.RequestedQuantity));
+            (total, line) => checked(total + RemainingNeed(line)));
         var statusMessage = plan.Status == "Ready"
             ? BuildPreparedPlanStatus(plan, recentSkippedWorldCount, freshEvidenceWorldCount)
-            : BuildNoSupportedListingsStatus(plan);
+            : plan.Lines.All(line => line.QuantityMode == "TargetQuantity" && RemainingNeed(line) == 0)
+                ? "All stock-up targets are already met. No travel or purchases are needed."
+                : BuildNoSupportedListingsStatus(plan);
         if (claimed.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase) &&
             recommendedPlannedQuantity < recommendedRequestedQuantity)
         {
@@ -179,6 +194,11 @@ public sealed class MarketAcquisitionPlanPreparationService
             },
         ];
     }
+
+    private static uint RemainingNeed(MarketAcquisitionPlanLine line) =>
+        line.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal
+            ? line.RequestedQuantity > line.InitialOnHandQuantity ? line.RequestedQuantity - line.InitialOnHandQuantity : 0u
+            : line.RequestedQuantity;
 
     private IReadOnlyList<string> FindWorldsWithNewerUsefulUniversalisEvidence(
         MarketAcquisitionBatchLineView line,

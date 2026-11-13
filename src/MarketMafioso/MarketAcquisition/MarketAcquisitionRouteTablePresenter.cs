@@ -41,14 +41,15 @@ public static class MarketAcquisitionRouteTablePresenter
         new()
         {
             Item = FormatItem(line.ItemName, line.ItemId),
-            Source = string.IsNullOrWhiteSpace(line.Source) ? "Planned" : line.Source,
-            State = FormatState(line.Status),
+            Source = line.Source == "Opportunistic" ? "Extra check" : string.IsNullOrWhiteSpace(line.Source) ? "Planned" : line.Source,
+            State = line.Status == "Failed" ? "Failed" : line.Status == "Complete" ? line.LatestMessage ?? "Bought" : line.Outcome ?? FormatState(line.Status),
             Planned = line.PlannedQuantity == 0 && line.PlannedGil == 0
                 ? "-"
                 : FormatQuantityGil(line.PlannedQuantity, line.PlannedGil),
             Discovered = string.IsNullOrWhiteSpace(line.LiveCandidateStatus)
                 ? "-"
-                : FormatQuantityGil(line.LiveObservedQuantity, line.LiveObservedGil),
+                : FormatQuantityGil(line.LiveObservedQuantity, line.LiveObservedGil) +
+                  (line.LiveObservedQuantity != line.WouldBuyQuantity ? $" · eligible {line.WouldBuyQuantity:N0}" : ""),
             Bought = line.PurchasedQuantity == 0 && line.SpentGil == 0
                 ? "-"
                 : FormatQuantityGil(line.PurchasedQuantity, line.SpentGil),
@@ -93,11 +94,9 @@ public static class MarketAcquisitionRouteTablePresenter
         if (stop.Status.Equals("TravelCommandSent", StringComparison.OrdinalIgnoreCase))
             return "Traveling";
 
-        if (purchasedLines > 0 && skipped > 0)
-            return "Partial";
-
         if (stop.LineStates.Count > 0 && completed + skipped == stop.LineStates.Count)
-            return "Complete";
+            return purchasedLines > 0 ? "Bought" : "Nothing bought";
+        if (stop.Status == "Complete") return purchasedLines > 0 ? "Bought" : "Nothing bought";
 
         return string.IsNullOrWhiteSpace(stop.Status)
             ? "Pending"
@@ -128,9 +127,9 @@ public static class MarketAcquisitionRouteTablePresenter
         if (opportunistic == 0)
             return FormatCount(planned, "planned line");
         if (planned == 0)
-            return FormatCount(opportunistic, "opportunistic line");
+            return FormatCount(opportunistic, "extra check");
 
-        return $"{planned:N0} planned / {opportunistic:N0} opportunistic";
+        return $"{planned:N0} planned / {opportunistic:N0} extra checks";
     }
 
     private static string FormatNotes(
@@ -143,7 +142,7 @@ public static class MarketAcquisitionRouteTablePresenter
         if (aggregate.FailedLineCount > 0)
             notes.Add(FormatCount(aggregate.FailedLineCount, "failed line"));
         if (aggregate.OpportunisticLineCount > 0)
-            notes.Add(FormatCount(aggregate.OpportunisticLineCount, "opportunistic check"));
+            notes.Add(FormatCount(aggregate.OpportunisticLineCount, "extra check"));
 
         var noSafeStock = lines.Count(line =>
             line.Status.Contains("NoLiveStock", StringComparison.OrdinalIgnoreCase) ||
@@ -156,36 +155,31 @@ public static class MarketAcquisitionRouteTablePresenter
 
     private static string FormatPlannedIntent(IReadOnlyList<MarketAcquisitionRouteLineState> lines)
     {
-        var plannedQuantity = 0u;
         var plannedGil = 0ul;
         foreach (var line in lines)
         {
-            plannedQuantity = checked(plannedQuantity + line.PlannedQuantity);
             plannedGil = checked(plannedGil + line.PlannedGil);
         }
 
-        return plannedQuantity == 0 && plannedGil == 0
-            ? "-"
-            : FormatQuantityGil(plannedQuantity, plannedGil);
+        return $"{lines.Where(line => line.Source != "Opportunistic").Select(line => line.ItemId).Distinct().Count():N0} items / {plannedGil:N0} gil";
     }
 
     private static string FormatBoughtResult(IReadOnlyList<MarketAcquisitionRouteLineState> lines)
     {
-        var boughtQuantity = 0u;
         var spentGil = 0ul;
         foreach (var line in lines)
         {
-            boughtQuantity = checked(boughtQuantity + line.PurchasedQuantity);
             spentGil = checked(spentGil + line.SpentGil);
         }
 
-        return boughtQuantity == 0 && spentGil == 0
-            ? "-"
-            : FormatQuantityGil(boughtQuantity, spentGil);
+        return $"{lines.Where(line => line.PurchasedQuantity > 0).Select(line => line.ItemId).Distinct().Count():N0} items / {spentGil:N0} gil";
     }
 
     private static string FormatLineNotes(MarketAcquisitionRouteLineState line)
     {
+        if (line.Status != "Complete" && !string.IsNullOrWhiteSpace(line.Outcome)) return line.Outcome;
+        if (line.Status == "Complete" && line.RemainingNeed > 0 && !string.IsNullOrWhiteSpace(line.Outcome))
+            return $"{line.LatestMessage} · {line.Outcome}";
         if (!string.IsNullOrWhiteSpace(line.LatestMessage))
             return line.LatestMessage;
         if (!string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
@@ -199,7 +193,7 @@ public static class MarketAcquisitionRouteTablePresenter
         var name = string.IsNullOrWhiteSpace(itemName)
             ? $"Item {itemId.ToString(CultureInfo.InvariantCulture)}"
             : itemName;
-        return $"{name} ({itemId.ToString(CultureInfo.InvariantCulture)})";
+        return name;
     }
 
     private static string FormatQuantityGil(uint quantity, ulong gil) =>

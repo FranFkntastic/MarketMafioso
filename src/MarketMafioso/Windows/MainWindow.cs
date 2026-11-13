@@ -188,7 +188,8 @@ public class MainWindow : Window, IDisposable
         var marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
-            marketAcquisitionWorldVisitCatalog);
+            marketAcquisitionWorldVisitCatalog,
+            new DalamudMarketAcquisitionInventoryObserver());
         acquisitionWorkspace = new MarketAcquisitionRequestWorkspace(
             config,
             acquisitionClient,
@@ -1807,7 +1808,8 @@ public class MainWindow : Window, IDisposable
             acquisitionWorkspace.IsPreparedPlanStale(),
             acquisitionWorkspace.Status,
             acquisitionRequestBuilder.TotalSpendCeiling,
-            acquisitionRequestBuilder.TargetQuantityTotal));
+            acquisitionRequestBuilder.TargetQuantityTotal,
+            acquisitionRequestBuilder.CurrentDocument.Lines.Count(line => line.QuantityMode == "TargetQuantity")));
 
         ImGui.BeginGroup();
         ImGui.TextColored(presentation.CanFinalize ? ColSuccess : ColMuted, presentation.Title);
