@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.Json;
 using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using MarketMafioso.Quartermaster;
 
@@ -14,7 +15,8 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
     private readonly IWorkshopQuartermasterRestockService quartermaster;
     private readonly Action save;
     private readonly Func<DateTimeOffset> utcNow;
-    private readonly GilVendorBuyCoordinator coordinator;
+    private GilVendorBuyCoordinator coordinator;
+    private readonly Action<string>? diagnosticLog;
     private bool disposed;
     private readonly Func<string?> persistenceError;
 
@@ -33,6 +35,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         this.save = save ?? throw new ArgumentNullException(nameof(save));
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         this.persistenceError = persistenceError ?? (() => null);
+        this.diagnosticLog = diagnosticLog;
         ConvertLegacyRunIfPresent(diagnosticLog);
         coordinator = new GilVendorBuyCoordinator(
             new ConfigurationGilVendorBuyRunStore(config, save),
@@ -48,6 +51,76 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                              (config.ActiveWorkshopVendorBuyRun is null &&
                               IsPolicyRunning(config.ActiveWorkshopVendorRestockState));
 
+    private static bool HasUnresolvedPurchase(GilVendorBuyRunSnapshot? run) =>
+        run is not null && (run.ArmedPurchase is not null ||
+            run.Phase is GilVendorBuyPhase.Indeterminate or GilVendorBuyPhase.ReconcileReceipt);
+
+    public string? UnresolvedPurchaseMessage
+    {
+        get
+        {
+            var run = config.ActiveWorkshopVendorBuyRun;
+            if (!HasUnresolvedPurchase(run)) return null;
+            var intent = run!.ArmedPurchase;
+            var line = intent is not null
+                ? run.Lines.FirstOrDefault(candidate => candidate.ItemId == intent.ItemId)
+                : run.Lines.ElementAtOrDefault(run.LineIndex);
+            var itemName = line?.ItemName;
+            if (string.IsNullOrWhiteSpace(itemName))
+                itemName = config.ActiveWorkshopVendorRestockState?.Lines
+                    .FirstOrDefault(candidate => candidate.ItemId == (intent?.ItemId ?? line?.ItemId))?.ItemName;
+            var purchase = intent is not null
+                ? $"{intent.Quantity:N0} {(!string.IsNullOrWhiteSpace(itemName) ? itemName : $"item #{intent.ItemId}")}"
+                : !string.IsNullOrWhiteSpace(itemName)
+                    ? $"{itemName} (purchase quantity unavailable)"
+                    : "an earlier purchase (item and quantity unavailable)";
+            return $"Cannot start another restock: the outcome of buying {purchase} is still unknown. " +
+                   "The saved purchase has been kept to prevent buying it twice." +
+                   (string.IsNullOrWhiteSpace(run.Message) ? string.Empty : $" Details: {run.Message}");
+        }
+    }
+
+    public bool CanAcknowledgeUnresolvedPurchase =>
+        HasUnresolvedPurchase(config.ActiveWorkshopVendorBuyRun) &&
+        (!coordinator.IsRunning || config.ActiveWorkshopVendorBuyRun!.Phase == GilVendorBuyPhase.ReconcileReceipt);
+
+    public bool AcknowledgeUnresolvedPurchase(string expectedRunId, out string message)
+    {
+        if (config.ActiveWorkshopVendorBuyRun?.RunId != expectedRunId)
+        {
+            message = "The saved purchase changed. Check the current purchase before clearing it.";
+            return false;
+        }
+        if (!CanAcknowledgeUnresolvedPurchase)
+        {
+            message = "Pause the restock before clearing an unverified purchase.";
+            return false;
+        }
+        if (diagnosticLog is null)
+        {
+            message = "The purchase cannot be cleared because its evidence cannot be logged.";
+            return false;
+        }
+
+        // Production routes this callback to Warning. Log before disposing or clearing anything.
+        diagnosticLog("[MarketMafioso] User acknowledged checking the unresolved vendor purchase in game; " +
+                      "clearing its duplicate-purchase protection. Preserved evidence: " +
+                      JsonSerializer.Serialize(new
+                      {
+                          Run = config.ActiveWorkshopVendorBuyRun,
+                          Policy = config.ActiveWorkshopVendorRestockState,
+                      }));
+        coordinator.Dispose();
+        config.ActiveWorkshopVendorBuyRun = null;
+        config.ActiveWorkshopVendorRestockState = null;
+        // The coordinator owns a separate snapshot: replace it too, or it could save the old run again.
+        coordinator = new GilVendorBuyCoordinator(
+            new ConfigurationGilVendorBuyRunStore(config, save), runtime, utcNow);
+        save();
+        message = "Saved purchase cleared after your in-game check. No purchase was submitted.";
+        return true;
+    }
+
     public bool TryStart(
         WorkshopVendorRestockReview review,
         QuartermasterOwnerScope owner,
@@ -56,6 +129,11 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
     {
         ArgumentNullException.ThrowIfNull(review);
         ArgumentNullException.ThrowIfNull(owner);
+        if (UnresolvedPurchaseMessage is { } unresolved)
+        {
+            error = unresolved;
+            return false;
+        }
         if (IsRunning || ActiveRun?.Phase == WorkshopVendorRestockPhase.Paused)
         {
             error = "A workshop restock run is already active.";
@@ -457,6 +535,11 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
     {
         if (config.LegacyActiveWorkshopVendorRestock is not { } legacy)
             return;
+        if (HasUnresolvedPurchase(config.ActiveWorkshopVendorBuyRun))
+        {
+            diagnosticLog?.Invoke("[MarketMafioso] Kept the unresolved vendor purchase instead of replacing it with a legacy run.");
+            return;
+        }
         var state = new WorkshopVendorRestockState
         {
             LocalContentId = legacy.LocalContentId,
@@ -489,7 +572,9 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         var resumeNeedsQuartermaster = legacy.Phase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster ||
                                       (legacy.Phase == WorkshopVendorRestockPhase.Paused &&
                                        legacy.ResumePhase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster);
-        if (!resumeNeedsQuartermaster && legacy.AutomaticallyBuyVendorMaterials && legacy.Stops.Count > 0)
+        if ((!resumeNeedsQuartermaster && legacy.AutomaticallyBuyVendorMaterials && legacy.Stops.Count > 0) ||
+            legacy.ArmedPurchase is not null ||
+            legacy.Phase is WorkshopVendorRestockPhase.Indeterminate or WorkshopVendorRestockPhase.ReconcileReceipt)
         {
             engineRun = new GilVendorBuyRunSnapshot
             {
