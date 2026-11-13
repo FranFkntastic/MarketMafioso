@@ -52,7 +52,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
             previousPrice = listing.UnitPrice;
         }
 
-        if (request.MaxUnitPrice == 0 || previousPrice <= request.MaxUnitPrice)
+        if (previousPrice <= request.MaxUnitPrice)
             return false;
 
         var partialPlan = activeSubtask == null
@@ -262,17 +262,10 @@ public static class MarketAcquisitionLiveCandidatePlanner
             .ThenBy(listing => listing.RetainerName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
             .ToList();
-        var maxMeaningfulObservationUnitPrice = CalculateMeaningfulObservationUnitPriceThreshold(
-            realListings,
-            request.MaxUnitPrice);
         foreach (var listing in realListings)
         {
-            if (request.MaxUnitPrice == 0 && !MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice))
-            {
-                rows.Add(Skipped(listing, "OutlierPrice", "Live unit price is outside the meaningful observation range.", selectedQuantity, selectedGil));
-                continue;
-            }
-            if (request.MaxUnitPrice > 0 && listing.UnitPrice > request.MaxUnitPrice)
+            // The line's unit ceiling is the only price rule; ceilings are required, so no market-relative guard applies here.
+            if (listing.UnitPrice > request.MaxUnitPrice)
             {
                 rows.Add(Skipped(listing, "AboveThreshold", "Live unit price is above the configured max unit price.", selectedQuantity, selectedGil));
                 continue;
@@ -527,57 +520,6 @@ public static class MarketAcquisitionLiveCandidatePlanner
             return MarketAcquisitionLiveCandidateStatuses.UnderProcured;
 
         return MarketAcquisitionLiveCandidateStatuses.Ready;
-    }
-
-    private static ulong CalculateMeaningfulObservationUnitPriceThreshold(
-        IReadOnlyList<MarketBoardLiveListing> listings,
-        uint configuredMaxUnitPrice)
-    {
-        if (listings.Count == 0)
-            return ulong.MaxValue;
-
-        var modeSource = configuredMaxUnitPrice == 0
-            ? listings
-            : listings
-                .Where(listing => listing.UnitPrice <= (decimal)configuredMaxUnitPrice * 10m)
-                .ToArray();
-        var modePrice = modeSource.Count == 0 ? 0 : CalculateModePrice(modeSource);
-        var baselinePrice = modePrice > 0
-            ? modePrice
-            : configuredMaxUnitPrice;
-
-        if (baselinePrice <= 0)
-            return ulong.MaxValue;
-
-        return (ulong)Math.Ceiling(baselinePrice * 2.5m);
-    }
-
-    private static decimal CalculateModePrice(IReadOnlyList<MarketBoardLiveListing> listings)
-    {
-        var sortedByPrice = listings.OrderBy(listing => listing.UnitPrice).ToArray();
-        var halfCount = Math.Max(1, sortedByPrice.Length / 2);
-        var cheapestHalf = sortedByPrice.Take(halfCount).ToArray();
-        var baselinePrice = cheapestHalf.Length > 0
-            ? cheapestHalf.Average(listing => (decimal)listing.UnitPrice)
-            : sortedByPrice[0].UnitPrice;
-        var reasonableListings = listings
-            .Where(listing => listing.UnitPrice <= baselinePrice * 10m)
-            .ToArray();
-
-        if (reasonableListings.Length == 0)
-            reasonableListings = sortedByPrice.Take(3).ToArray();
-
-        return reasonableListings
-            .GroupBy(listing => listing.UnitPrice)
-            .Select(group => new
-            {
-                Price = (decimal)group.Key,
-                Quantity = group.Aggregate(0ul, (total, listing) => checked(total + listing.Quantity)),
-            })
-            .OrderByDescending(group => group.Quantity)
-            .ThenBy(group => group.Price)
-            .FirstOrDefault()
-            ?.Price ?? 0m;
     }
 
     private static string ResolveMessage(

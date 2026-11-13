@@ -17,6 +17,7 @@ public sealed class DalamudMarketAcquisitionInventoryObserver : IMarketAcquisiti
         var crystal = itemId is >= 2 and <= 19;
         ulong room = 0;
         var free = 0;
+        var crystalSlotSeen = false;
         foreach (var type in crystal ? new[] { InventoryType.Crystals } : PlayerBags)
         {
             var bag = manager->GetInventoryContainer(type);
@@ -26,10 +27,15 @@ public sealed class DalamudMarketAcquisitionInventoryObserver : IMarketAcquisiti
                 var slot = bag->GetInventorySlot(i);
                 if (slot == null) return new(false, 0, 0);
                 if (slot->ItemId == 0 && !crystal) { free++; room += stack.Value; }
-                else if (slot->ItemId == itemId && slot->Flags.HasFlag(InventoryItem.ItemFlags.HighQuality) == isHq)
+                else if (slot->ItemId == itemId && (crystal || slot->Flags.HasFlag(InventoryItem.ItemFlags.HighQuality) == isHq))
+                {
+                    crystalSlotSeen |= crystal;
                     room += (ulong)Math.Max(0L, (long)stack.Value - slot->Quantity);
+                }
             }
         }
+        // Each crystal type owns a fixed pouch slot that reads as empty at zero quantity, so a missing slot means a full stack of room.
+        if (crystal && !crystalSlotSeen) room = stack.Value;
         return new(true, room, free);
     }
 
