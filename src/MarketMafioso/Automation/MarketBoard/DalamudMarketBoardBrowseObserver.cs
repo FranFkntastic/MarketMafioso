@@ -32,7 +32,6 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
     private readonly IClientState clientState;
     private readonly MarketBoardBrowseOperationGate gate;
     private string? loggedTerminalOperationId;
-    private (MarketBoardBrowseOwner Owner, string OperationId, DateTimeOffset Deadline)? pendingClose;
     private Hook<InfoProxyItemSearch.Delegates.RequestData>? requestDataHook;
     private Hook<PacketDispatcher.Delegates.HandleMarketBoardItemRequestStartPacket>? headerHook;
     private Hook<InfoProxyItemSearch.Delegates.AddPage>? addPageHook;
@@ -157,46 +156,6 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
         out MarketBoardBrowseSnapshot snapshot) =>
         gate.TryAbandon(owner, operationId, reason, out snapshot);
 
-    public bool RequestClose(MarketBoardBrowseOwner owner, string operationId)
-    {
-        var browse = Snapshot;
-        if (owner != MarketBoardBrowseOwner.MarketAcquisition || browse.Owner != owner || browse.OperationId != operationId ||
-            !browse.HeaderObserved || browse.HeaderStatus != 0 || browse.IsFailed)
-            return false;
-        if (browse.Phase == MarketBoardBrowsePhase.Retired)
-            return true;
-        if (pendingClose is not null)
-            return pendingClose.Value.OperationId == operationId;
-
-        var result = gameGui.GetAddonByName<AtkUnitBase>("ItemSearchResult", 1);
-        var proxy = InfoProxyItemSearch.Instance();
-        if (result != null && result->IsVisible && (proxy == null || proxy->SearchItemId != browse.ItemId))
-            return false;
-        pendingClose = (owner, operationId, DateTimeOffset.UtcNow.AddSeconds(5));
-        if (result != null && result->IsVisible)
-            result->Close(true);
-        ObservePendingClose();
-        return true;
-    }
-
-    private void ObservePendingClose()
-    {
-        if (pendingClose is not { } close)
-            return;
-        var result = gameGui.GetAddonByName<AtkUnitBase>("ItemSearchResult", 1);
-        var closed = result == null || !result->IsVisible;
-        if (gate.TryRetireAfterResultClosed(close.Owner, close.OperationId, closed, out _))
-        {
-            pendingClose = null;
-            return;
-        }
-        if (DateTimeOffset.UtcNow >= close.Deadline && gate.Snapshot.FailureCode != "BrowseCloseFailed")
-        {
-            gate.ObserveResultCloseTimeout(close.OperationId);
-            LogTerminalFailure();
-        }
-    }
-
     public bool TryRequestExactItem(
         MarketBoardBrowseOwner owner,
         uint itemId,
@@ -277,7 +236,6 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
 
     private void OnFrameworkUpdate(IFramework _)
     {
-        ObservePendingClose();
         if (gate.ObserveClientSession(clientState.IsLoggedIn))
         {
             log.Information(
@@ -361,12 +319,7 @@ internal sealed unsafe class DalamudMarketBoardBrowseObserver : IHeadlessMarketB
             log.Error(exception, "[MarketMafioso] Failed to observe a market-board listings page.");
         }
 
-        ObservePendingClose();
-        // The native mismatch path clears the shared cache before cancelling.
-        // A page from an explicitly closed browse must neither clear the new
-        // cache nor schedule another continuation for the retired request.
-        if (proxy != null && packet != 0 && gate.IsRetiredPage(requestId))
-            return;
+        // Always let vanilla ingest pages and schedule its continuation.
         addPageHook!.Original(proxy, packet);
         gate.ObservePage(
             continuationToken,

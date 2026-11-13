@@ -60,22 +60,15 @@ public sealed class MarketBoardItemSearchDriver
         var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
 
         var observedBrowse = browseRuntime.Snapshot;
-        if (owner == MarketBoardBrowseOwner.MarketAcquisition && IsOwnedBrowse(observedBrowse, owner, itemId) &&
-            observedBrowse.IsActive && intent == MarketBoardItemSearchIntent.RequireFreshBrowse &&
-            observedBrowse.OperationId == previousOperationId)
-        {
-            browseRuntime.RequestClose(owner, observedBrowse.OperationId);
-            observedBrowse = browseRuntime.Snapshot;
-        }
         if (IsOwnedBrowse(observedBrowse, owner, itemId))
         {
             var isPreviousTerminal =
                 intent == MarketBoardItemSearchIntent.RequireFreshBrowse &&
                 observedBrowse.IsTerminal &&
                 string.Equals(observedBrowse.OperationId, previousOperationId, StringComparison.Ordinal);
-            if (observedBrowse.Phase != MarketBoardBrowsePhase.Retired && (!observedBrowse.IsTerminal ||
+            if (!observedBrowse.IsTerminal ||
                 (!isPreviousTerminal &&
-                 !string.Equals(lastReturnedTerminalOperationId, observedBrowse.OperationId, StringComparison.Ordinal))))
+                 !string.Equals(lastReturnedTerminalOperationId, observedBrowse.OperationId, StringComparison.Ordinal)))
             {
                 if (observedBrowse.IsTerminal)
                     lastReturnedTerminalOperationId = observedBrowse.OperationId;
@@ -341,7 +334,7 @@ public sealed class MarketBoardItemSearchDriver
         uint openResultItemId,
         MarketBoardItemSearchIntent intent = MarketBoardItemSearchIntent.PresentOrBrowse,
         string? previousOperationId = null) =>
-        browse.IsTerminal && browse.Phase != MarketBoardBrowsePhase.Retired &&
+        browse.IsTerminal &&
         IsOwnedBrowse(browse, owner, requestedItemId) &&
         resultVisible &&
         IsOpenListingResultForRequestedItem(requestedItemId, openResultItemId) &&

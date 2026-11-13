@@ -86,6 +86,9 @@ public sealed class UnsupportedMarketAcquisitionRouteTravelCleanup : IMarketAcqu
 public interface IMarketAcquisitionMarketBoardIo
 {
     bool IsMarketBoardReady();
+    bool CanApproachMarketBoardLocally();
+    MarketBoardApproachResult OpenOrApproachMarketBoard();
+    VNavmeshStopResult StopMarketBoardApproach();
     MarketBoardItemSearchResult SearchItem(
         uint itemId,
         string? itemName,
@@ -95,7 +98,6 @@ public interface IMarketAcquisitionMarketBoardIo
     MarketBoardInputCapture CaptureInputState();
     void AbandonBrowse(string reason);
     MarketBoardBrowseSnapshot BrowseSnapshot { get; }
-    bool CloseBrowse(string operationId);
 }
 
 public sealed record MarketAcquisitionApproachLease
