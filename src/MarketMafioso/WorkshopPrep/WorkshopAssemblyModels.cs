@@ -65,6 +65,9 @@ public sealed record WorkshopAssemblyProgress(
     int TotalProjects,
     DateTimeOffset UpdatedAt);
 
+// Project-level AtkValues 0/6/7, not a material row's contribution counter.
+public sealed record WorkshopAssemblyPhaseContext(uint ResultItemId, uint Phase, uint PhaseTotal);
+
 public sealed record WorkshopAssemblyActionResult(
     bool Success,
     string Message,
@@ -77,7 +80,8 @@ public sealed record WorkshopAssemblyActionResult(
     uint? ActiveMaterialStepsComplete = null,
     bool IsProjectUnavailable = false,
     bool IsWaiting = false,
-    WorkshopMaterialBlocker MaterialBlocker = WorkshopMaterialBlocker.None);
+    WorkshopMaterialBlocker MaterialBlocker = WorkshopMaterialBlocker.None,
+    WorkshopAssemblyPhaseContext? ContributionPhase = null);
 
 public sealed record WorkshopAssemblyPreflightResult(
     bool CanStart,

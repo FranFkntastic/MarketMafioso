@@ -33,6 +33,13 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
         uint materialItemId,
         uint previousStepsComplete);
 
+    WorkshopAssemblyActionResult TryWaitForContributionProgress(
+        WorkshopAssemblyQueueEntry entry,
+        uint materialItemId,
+        uint previousStepsComplete,
+        WorkshopAssemblyPhaseContext? contributionPhase) =>
+        TryWaitForContributionProgress(entry, materialItemId, previousStepsComplete);
+
     string DescribeUiState();
 
     // Arms the native-crash fuse for the duration of a run and, when asked, takes

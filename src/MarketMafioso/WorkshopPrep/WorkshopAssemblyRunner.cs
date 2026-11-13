@@ -31,6 +31,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private uint? activeMaterialItemId;
     private uint? pendingProgressMaterialItemId;
     private uint? pendingProgressStepsComplete;
+    private WorkshopAssemblyPhaseContext? pendingProgressPhase;
     private int stalledMaterialRequestRecoveryCount;
     private WorkshopAssemblyRunnerState stateBeforePause = WorkshopAssemblyRunnerState.Idle;
     private DateTimeOffset stateStartedBeforePause;
@@ -127,6 +128,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         activeMaterialItemId = null;
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        pendingProgressPhase = null;
         progressReopenAttempts = 0;
         stalledMaterialRequestRecoveryCount = 0;
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
@@ -208,6 +210,9 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         framework.Update -= OnFrameworkUpdate;
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
+        pendingProgressMaterialItemId = null;
+        pendingProgressStepsComplete = null;
+        pendingProgressPhase = null;
         uiAutomation.ResetState();
         SetState(WorkshopAssemblyRunnerState.Stopped, "Workshop assembly stopped by user.");
         diagnostics.Record("stopped", "Workshop assembly stopped by user.");
@@ -373,6 +378,16 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     private void TickOpeningProject(WorkshopAssemblyQueueEntry entry)
     {
+        // Observe completion before opening consumes an Advance/Complete menu.
+        // The offered native menu proves completion; sending its callback does not.
+        if (pendingProgressMaterialItemId != null && pendingProgressStepsComplete != null)
+        {
+            var progress = uiAutomation.TryWaitForContributionProgress(entry,
+                pendingProgressMaterialItemId.Value, pendingProgressStepsComplete.Value, pendingProgressPhase);
+            RecordActionResult("opening-progress-reconcile", entry, progress);
+            if (progress.Success)
+                AcknowledgeContributionProgress(entry, progress.Message);
+        }
         var result = uiAutomation.TryOpenProject(entry);
         activeMaterialItemId = result.ActiveMaterialItemId;
         RecordActionResult("open-project", entry, result);
@@ -454,6 +469,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         {
             pendingProgressMaterialItemId = result.ActiveMaterialItemId;
             pendingProgressStepsComplete = result.ActiveMaterialStepsComplete;
+            pendingProgressPhase = result.ContributionPhase;
         }
 
         RecordActionResult("submit-material", entry, result);
@@ -518,8 +534,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 ["stalledMessage"] = stalledResult.Message,
             });
         activeMaterialItemId = null;
+        // This recovery cancels a request before contribution confirmation.
+        // Do not wait for an unsubmitted row to advance after reopening. Confirmed
+        // contributions instead retain their checkpoint through lockout recovery.
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        pendingProgressPhase = null;
         SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, recovery.Message);
     }
 
@@ -575,7 +595,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var result = uiAutomation.TryWaitForContributionProgress(
             entry,
             pendingProgressMaterialItemId.Value,
-            pendingProgressStepsComplete.Value);
+            pendingProgressStepsComplete.Value,
+            pendingProgressPhase);
         activeMaterialItemId = result.ActiveMaterialItemId;
         RecordActionResult("lockout-wait", entry, result);
         if (result.RequiresWorkshopReopen)
@@ -608,15 +629,23 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return;
         }
 
+        AcknowledgeContributionProgress(entry, result.Message);
+        SetState(WorkshopAssemblyRunnerState.SubmittingMaterial, $"Continuing material contribution for {entry.ProjectName}.");
+    }
+
+    private void AcknowledgeContributionProgress(WorkshopAssemblyQueueEntry entry, string message)
+    {
+        var details = BuildActiveDetails(entry);
+        details["submittedPhase"] = pendingProgressPhase?.ToString();
+        details["materialBaseline"] = pendingProgressStepsComplete?.ToString();
+        diagnostics.Record("contribution-progress", message, details);
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        pendingProgressPhase = null;
+        progressReopenAttempts = 0;
+        stalledMaterialRequestRecoveryCount = 0;
         uiAutomation.NotePreparationProgress();
         actionGuard.NoteProgress();
-        diagnostics.Record(
-            "lockout-end",
-            "Post-contribution lockout elapsed and material progress was observed.",
-            BuildActiveDetails(entry));
-        SetState(WorkshopAssemblyRunnerState.SubmittingMaterial, $"Continuing material contribution for {entry.ProjectName}.");
     }
 
     private void HandlePendingActionOrTimeout(
@@ -648,6 +677,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         activeMaterialItemId = null;
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        pendingProgressPhase = null;
         progressReopenAttempts = 0;
         if (activeEntryCompletedQuantity >= entry.Quantity)
         {
@@ -677,6 +707,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         skippedQuantity += remaining;
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        pendingProgressPhase = null;
         progressReopenAttempts = 0;
         diagnostics.Record("project-skipped", message, BuildActiveDetails(entry));
         log.Warning("[MarketMafioso] {Message}", message);
@@ -911,6 +942,9 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         details["hasPendingMaterialRequest"] = result.HasPendingMaterialRequest.ToString();
         details["activeMaterialItemId"] = result.ActiveMaterialItemId?.ToString();
         details["activeMaterialStepsComplete"] = result.ActiveMaterialStepsComplete?.ToString();
+        details["contributionPhase"] = result.ContributionPhase?.ToString();
+        details["pendingProgressPhase"] = pendingProgressPhase?.ToString();
+        details["pendingMaterialBaseline"] = pendingProgressStepsComplete?.ToString();
 
         diagnostics.Record(phase, result.Message, details);
     }
