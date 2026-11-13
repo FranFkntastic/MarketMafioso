@@ -5,6 +5,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Vendors;
+using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Quartermaster;
@@ -72,16 +73,15 @@ internal sealed class WorkshopMaterialPanel
 
         if (runner.CanAcknowledgeUnresolvedPurchase && runner.UnresolvedPurchaseMessage is { } unresolved)
         {
-            var unresolvedRunId = config.ActiveWorkshopVendorBuyRun!.RunId;
+            var unresolvedRun = config.ActiveWorkshopVendorBuyRun!;
+            var unresolvedRunId = unresolvedRun.RunId;
             ImGui.TextWrapped(unresolved);
-            ImGui.TextWrapped("Let the purchase finish verifying, or check your items and gil in game before clearing it. Clearing allows a new restock to buy again.");
+            ImGui.TextWrapped(unresolvedRun.Phase == GilVendorBuyPhase.Indeterminate
+                ? "The purchase couldn't be confirmed automatically. Check your items and gil in game before clearing it. Clearing allows a new restock to buy again."
+                : "Let the purchase finish verifying, or check your items and gil in game before clearing it. Clearing allows a new restock to buy again.");
+            // Human-only: deliberately not registered with the agent bridge, so an agent can never clear purchase protection.
             if (ImGuiUi.Button("I checked in game - clear this", runner.CanAcknowledgeUnresolvedPurchase))
                 runner.AcknowledgeUnresolvedPurchase(unresolvedRunId, out actionStatus);
-            RegisterSimpleAction(
-                "workshop-logistics.vendor-restock.acknowledge-purchase",
-                "I checked in game - clear this",
-                runner.CanAcknowledgeUnresolvedPurchase,
-                () => runner.AcknowledgeUnresolvedPurchase(unresolvedRunId, out actionStatus));
         }
 
         var automatic = run is not null && (runner.IsRunning || run.Phase == WorkshopVendorRestockPhase.Paused)
