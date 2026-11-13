@@ -41,7 +41,7 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 
 namespace MarketMafioso.Windows;
 
-public class MainWindow : Window, IDisposable
+public partial class MainWindow : Window, IDisposable
 {
     private readonly Configuration config;
     private readonly MarketAcquisitionWorldVisitCatalog marketAcquisitionWorldVisitCatalog;
@@ -194,7 +194,7 @@ public class MainWindow : Window, IDisposable
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
             marketAcquisitionWorldVisitCatalog,
-            new DalamudMarketAcquisitionInventoryObserver());
+            new DalamudMarketAcquisitionInventoryObserver(dataManager));
         acquisitionWorkspace = new MarketAcquisitionRequestWorkspace(
             config,
             acquisitionClient,
@@ -331,7 +331,7 @@ public class MainWindow : Window, IDisposable
             PluginBuildInfo.DisplayVersion,
             () => config.MarketAcquisitionExhaustiveResearchMode,
             marketIntelligencePassiveReporter,
-            new DalamudMarketAcquisitionInventoryObserver(),
+            new DalamudMarketAcquisitionInventoryObserver(dataManager),
             new MarketAcquisitionAethernetDeparture(
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
                 lifestream,
@@ -1848,7 +1848,7 @@ public class MainWindow : Window, IDisposable
         ImGui.SameLine();
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - buttonWidth));
         if (ImGuiUi.PrimaryButton("Finalize Plan", presentation.CanFinalize))
-            _ = FinalizeMarketAcquisitionPlanAsync();
+            _ = OpenAcquisitionFinalizationAsync();
         AgentReviewRegistry.Register(
             "acquisition.finalize",
             "Finalize the Market Acquisition Workbench for execution",
@@ -1858,12 +1858,19 @@ public class MainWindow : Window, IDisposable
             presentation.CanFinalize,
             false,
             acquisitionWorkspace.ClaimedRequest?.Id,
-            () => _ = FinalizeMarketAcquisitionPlanAsync());
+            () => _ = OpenAcquisitionFinalizationAsync());
+        DrawAcquisitionFinalizationModal();
     }
 
     private async Task FinalizeMarketAcquisitionPlanAsync()
     {
+        var reviewed = acquisitionFinalizationPlan;
         await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
+        if (reviewed is null || acquisitionFinalizationHash != MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(acquisitionRequestBuilder.CurrentDocument))
+        {
+            await OpenAcquisitionFinalizationAsync().ConfigureAwait(false);
+            return;
+        }
         if (!acquisitionRequestBuilder.FinalizeExactAcquisitionAuthority())
             return;
         var claimed = acquisitionWorkspace.ClaimedRequest;
@@ -1879,7 +1886,15 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
-        await PrepareMarketAcquisitionPlanAsync().ConfigureAwait(false);
+        if (acquisitionFinalizationHash != MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(acquisitionRequestBuilder.CurrentDocument))
+        {
+            await OpenAcquisitionFinalizationAsync().ConfigureAwait(false);
+            return;
+        }
+        await acquisitionWorkspace.PreparePlanAsync(
+            GetCurrentWorldName(), GetMarketAcquisitionRecentWorldTtl(),
+            config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
+            acquisitionRequestBuilder.CurrentDocument, reviewed).ConfigureAwait(false);
     }
 
     private async Task ReturnActiveWorkOrderAsync()

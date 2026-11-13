@@ -152,6 +152,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         DrawExactAcquisitionAuthority(context);
         DrawRouteScope(context);
+        ImGui.BeginDisabled(context.IsBusy || context.IsRouteActive || IsSynchronizing);
+        DrawRunBudgetInput();
+        ImGui.EndDisabled();
         ImGui.Spacing();
         DrawExceptionalStatus(context);
         ImGuiUi.SectionHeader("Buy list", MainWindow.ColHeader);
@@ -566,6 +569,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ApplyLineEdit(index, line, gilCap: ClampToUInt(gilCap), message: "Spend ceiling updated.");
     }
 
+    public void DrawRunBudgetInput()
+    {
+        var text = document.RunSpendCap == 0 ? string.Empty : document.RunSpendCap.ToString();
+        ImGui.SetNextItemWidth(180);
+        if (ImGui.InputTextWithHint("Run budget##RunSpendCap", "Unset", ref text, 10, ImGuiInputTextFlags.CharsDecimal) &&
+            (text.Length == 0 || uint.TryParse(text, out _)))
+            controller.SetRunSpendCap(ParseUInt(text));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Confirmed purchases across this finalized plan, including pause, recovery and restart. A newly finalized plan starts fresh.");
+    }
+
     private void DrawCompactHqCell(MarketAcquisitionRequestLineDocument line, int index)
     {
         var current = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy;
@@ -939,7 +953,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         ImGui.SetNextItemWidth(-1);
-        ImGui.InputTextWithHint("##NewSpend", "Optional", ref gilCapBuffer, 32);
+        ImGui.InputTextWithHint("##NewSpend", "Unset", ref gilCapBuffer, 10, ImGuiInputTextFlags.CharsDecimal);
 
         ImGui.TableNextColumn();
         DrawInlineCombo("##NewQuality", ["Either", "HQOnly", "NQOnly"], ref hqPolicy);

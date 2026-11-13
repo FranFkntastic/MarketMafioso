@@ -52,7 +52,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
             previousPrice = listing.UnitPrice;
         }
 
-        if (previousPrice <= request.MaxUnitPrice)
+        if (request.MaxUnitPrice == 0 || previousPrice <= request.MaxUnitPrice)
             return false;
 
         var partialPlan = activeSubtask == null
@@ -208,6 +208,21 @@ public static class MarketAcquisitionLiveCandidatePlanner
             alreadySpentGil);
     }
 
+    public static MarketAcquisitionLiveCandidatePlan BuildBudgetedCandidatePlan(
+        MarketAcquisitionRequestView request, MarketAcquisitionPlan plan, MarketAcquisitionWorldItemSubtask? subtask,
+        string world, MarketBoardReadResult read, uint purchased, uint spent, MarketAcquisitionLiveCandidatePlan original)
+    {
+        var remaining = plan.RunSpend.ConfirmedGil >= plan.RunSpendCap ? 0UL : plan.RunSpendCap - plan.RunSpend.ConfirmedGil;
+        var result = BuildCandidatePlanCore(request, world, read.ItemId,
+            EnrichRetainerNames(read.Listings, subtask?.Listings ?? FindPlannedListings(plan, world, read.ItemId)),
+            purchased, spent, read, remaining);
+        foreach (var row in result.Rows.Where(r => r.Reason == "RunBudgetExceeded"))
+            plan.RunSpend.CheapestUnaffordableGil = Math.Min(plan.RunSpend.CheapestUnaffordableGil ?? ulong.MaxValue,
+                (ulong)row.LiveListing.UnitPrice * row.LiveListing.Quantity);
+        return result with { PriceRangeExhausted = original.PriceRangeExhausted,
+            Status = original.PriceRangeExhausted ? "Ready" : result.Status };
+    }
+
     private static MarketAcquisitionLiveCandidatePlan BuildCandidatePlanCore(
         MarketAcquisitionRequestView request,
         string currentWorld,
@@ -215,7 +230,8 @@ public static class MarketAcquisitionLiveCandidatePlanner
         IEnumerable<MarketBoardLiveListing> liveListings,
         uint alreadyPurchasedQuantity,
         uint alreadySpentGil,
-        MarketBoardReadResult? readResult = null)
+        MarketBoardReadResult? readResult = null,
+        ulong? remainingRunGil = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(liveListings);
@@ -251,12 +267,12 @@ public static class MarketAcquisitionLiveCandidatePlanner
             request.MaxUnitPrice);
         foreach (var listing in realListings)
         {
-            if (!MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice))
+            if (request.MaxUnitPrice == 0 && !MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice))
             {
                 rows.Add(Skipped(listing, "OutlierPrice", "Live unit price is outside the meaningful observation range.", selectedQuantity, selectedGil));
                 continue;
             }
-            if (listing.UnitPrice > request.MaxUnitPrice)
+            if (request.MaxUnitPrice > 0 && listing.UnitPrice > request.MaxUnitPrice)
             {
                 rows.Add(Skipped(listing, "AboveThreshold", "Live unit price is above the configured max unit price.", selectedQuantity, selectedGil));
                 continue;
@@ -276,6 +292,11 @@ public static class MarketAcquisitionLiveCandidatePlanner
             }
 
             var nextSelectedQuantity = checked(selectedQuantity + listing.Quantity);
+            if (remainingRunGil is { } remaining && (ulong)listing.UnitPrice * listing.Quantity > remaining)
+            {
+                rows.Add(Skipped(listing, "RunBudgetExceeded", $"Whole listing exceeds remaining run budget of {remaining:N0} gil.", selectedQuantity, selectedGil));
+                continue;
+            }
             var nextTotalQuantity = checked(alreadyPurchasedQuantity + nextSelectedQuantity);
             if (targetBudget != null &&
                 !(targetBudget with { ConfirmedPurchasedQuantity = selectedQuantity }).CanAdmit(listing.Quantity))

@@ -8,6 +8,47 @@ public static class MarketAcquisitionRequestDocumentMapper
 {
     public const int DefaultExpiresInSeconds = 300;
 
+    // Run budget is intentionally local to the prepared execution, never sent as a hosted line cap.
+    public static MarketAcquisitionPlan ApplyLocalExecutionPolicy(
+        MarketAcquisitionRequestDocument document, MarketAcquisitionPlan plan) =>
+        plan with { RunSpendCap = document.RunSpendCap };
+
+    public static MarketAcquisitionPlan BindReviewedPlan(MarketAcquisitionPlan plan, MarketAcquisitionClaimView claim)
+    {
+        var lines = MarketAcquisitionPlanPreparationService.GetPlanLines(claim);
+        if (lines.Count != plan.Lines.Count) throw new InvalidOperationException("Reviewed plan lines changed before confirmation.");
+        var ids = plan.Lines.ToDictionary(line => line.LineId, line =>
+        {
+            var target = lines.Single(candidate => candidate.Ordinal == line.Ordinal);
+            if (target.ItemId != line.ItemId || target.MaxUnitPrice != line.MaxUnitPrice || target.GilCap != line.GilCap ||
+                target.QuantityMode != line.QuantityMode || target.HqPolicy != line.HqPolicy ||
+                target.MaximumOverage != line.MaximumOverage ||
+                (target.QuantityMode == "TargetQuantity" ? target.TargetQuantity : target.MaxQuantity) != line.RequestedQuantity)
+                throw new InvalidOperationException("Reviewed plan prices changed before confirmation.");
+            return target.LineId;
+        });
+        MarketAcquisitionPlannedListing BindListing(MarketAcquisitionPlannedListing listing) =>
+            listing with { LineId = ids.GetValueOrDefault(listing.LineId, listing.LineId) };
+        return plan with
+        {
+            RequestId = claim.Id,
+            Lines = plan.Lines.Select(line => line with { LineId = ids[line.LineId] }).ToArray(),
+            WorldBatches = plan.WorldBatches.Select(batch => batch with
+            {
+                Listings = batch.Listings.Select(BindListing).ToArray(),
+                ItemSubtasks = batch.ItemSubtasks.Select(task => task with
+                {
+                    LineId = ids[task.LineId], Listings = task.Listings.Select(BindListing).ToArray(),
+                }).ToArray(),
+            }).ToArray(),
+            Diagnostics = plan.Diagnostics with
+            {
+                ListingDecisions = plan.Diagnostics.ListingDecisions.Select(decision => decision with
+                    { LineId = ids.GetValueOrDefault(decision.LineId, decision.LineId) }).ToArray(),
+            },
+        };
+    }
+
     public static MarketAcquisitionBatchCreateRequest BuildCreateRequest(
         MarketAcquisitionRequestDocument document,
         string characterName,

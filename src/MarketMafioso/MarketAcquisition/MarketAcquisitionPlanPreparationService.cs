@@ -55,6 +55,7 @@ public sealed class MarketAcquisitionPlanPreparationService
             baselines[line.LineId] = observation.Value.Quantity;
         }
         var listings = new List<MarketAcquisitionListing>();
+        var advisoryListings = new List<MarketAcquisitionListing>();
         var sweepWorldExclusions = new List<MarketAcquisitionSweepWorldExclusion>();
         var freshEvidenceWorldCount = 0;
         var recentSkippedWorldCount = 0;
@@ -92,6 +93,7 @@ public sealed class MarketAcquisitionPlanPreparationService
                     $"Market listings were not returned for {line.ItemName}. Select Finalize Plan to retry.");
             }
 
+            advisoryListings.AddRange(lineListings);
             if (isAllWorldSweep || claimed.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase))
             {
                 var evidenceWorlds = FindWorldsWithNewerUsefulUniversalisEvidence(
@@ -138,7 +140,7 @@ public sealed class MarketAcquisitionPlanPreparationService
             baselines,
             request.MinimumStopValueGil,
             request.ExhaustiveResearchMode,
-            request.MinimumStopCoveragePercent);
+            request.MinimumStopCoveragePercent) with { AdvisoryListings = advisoryListings.Distinct().ToArray() };
         var recommendedTargetLines = plan.Lines
             .Where(line => line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
             .ToArray();

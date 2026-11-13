@@ -644,6 +644,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (runner.ActivePlan is { } retained)
+            plan = plan with { RunSpendCap = retained.RunSpendCap, RunSpend = retained.RunSpend };
         if (!TryPreflightRouteAction(out var evidenceBlockReason))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
@@ -754,6 +756,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = nextWorldGil;
             state.ActiveLinePurchasedQuantity = nextLineQuantity;
             state.ActiveLineSpentGil = nextLineGil;
+            runner.ActivePlan?.RunSpend.Record(candidate.TotalGil);
             CompleteTerminalPurchaseReconciliation(
                 $"Purchase outcome reconciled: listing {candidate.ListingId} was purchased. Recovering will refresh live listings before continuing.");
             try
@@ -1759,6 +1762,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             if (!runner.IsRunning)
                 return;
+            // The single purchase session reserves its entire listing until terminal evidence resolves.
+            if (purchaseAutomation.PurchaseSession?.IsActive == true)
+                return;
             var activeStop = runner.ActiveStop;
             if (activeStop is not { Status: "Purchasing" })
                 return;
@@ -1834,6 +1840,31 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
 
             failureStage = "purchase-continuation.select-candidate";
+            if (plan.RunSpendCap > 0)
+            {
+                state.LiveCandidatePlan = MarketAcquisitionLiveCandidatePlanner.BuildBudgetedCandidatePlan(
+                    activeLine, plan, activeStop.ActiveItemSubtask, currentWorld, candidateRead,
+                    totals.PurchasedQuantity, totals.SpentGil, state.LiveCandidatePlan);
+                if (plan.RunSpend.ConfirmedGil >= plan.RunSpendCap)
+                {
+                    CompletePurchaseRouteAtBoard(currentWorld, MarketAcquisitionRouteCompletionKinds.BudgetReached,
+                        $"BudgetReached: budget {plan.RunSpendCap:N0}, spent {plan.RunSpend.ConfirmedGil:N0}, remaining 0, cheapest unaffordable listing {plan.RunSpend.CheapestUnaffordableGil?.ToString("N0") ?? "No data"} gil.");
+                    return;
+                }
+            }
+            var nextCandidate = MarketBoardPurchasePlanner.SelectFirstFreshSafeCandidate(state.LiveCandidatePlan, freshRead);
+            if (nextCandidate is not null)
+            {
+                var capacity = inventoryObserver?.Capacity(nextCandidate.ItemId, nextCandidate.IsHq);
+                if (capacity?.IsAvailable != true)
+                    throw new InvalidOperationException("Cannot verify inventory capacity before purchase.");
+                if (capacity.Value.Units < nextCandidate.Quantity)
+                {
+                    CompletePurchaseRouteAtBoard(currentWorld, MarketAcquisitionRouteCompletionKinds.InventoryFull,
+                        $"InventoryFull: {activeLine.ItemName}, listing {nextCandidate.Quantity:N0} units, room {capacity.Value.Units:N0}, free slots {capacity.Value.FreeSlots:N0}.");
+                    return;
+                }
+            }
             var selection = purchase.ExecuteFirstCandidate(state.LiveCandidatePlan, freshRead);
             var now = clock.UtcNow;
             purchaseAutomation.RecordPurchaseSelection(selection, now, MarketBoardPurchaseConfirmationWatchdog);
@@ -1879,6 +1910,18 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             CaptureFailure(exception);
             throw;
         }
+    }
+
+    private void CompletePurchaseRouteAtBoard(string world, string kind, string message)
+    {
+        var hasSubtask = runner.ActiveStop?.ActiveItemSubtask is not null;
+        runner.RecordWorldPurchaseBatchComplete(world,
+            hasSubtask ? state.ActiveLinePurchasedQuantity : state.ActiveWorldPurchasedQuantity,
+            hasSubtask ? state.ActiveLineSpentGil : state.ActiveWorldSpentGil,
+            kind, message, state.LiveCandidatePlan);
+        UpdateStatus(runner.CompleteWithOutcome(kind, message));
+        purchaseAutomation.Clear();
+        ReportRouteProgress();
     }
 
     private MarketBoardReadResult ReadPurchaseListings(
@@ -2143,6 +2186,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = nextWorldGil;
             state.ActiveLinePurchasedQuantity = nextLineQuantity;
             state.ActiveLineSpentGil = nextLineGil;
+            runner.ActivePlan?.RunSpend.Record(candidate.TotalGil);
             state.AcquisitionStatus = "Purchase: confirmed by server packet; continuing from the remembered listing snapshot.";
             failureStage = "confirmed-purchase.receipt-reporting-checkpoint";
             var checkpointRequested = ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
@@ -2247,6 +2291,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
             state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
             state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
+            runner.ActivePlan?.RunSpend.Record(candidate.TotalGil);
             exactAcquisitionAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate, runner.ActivePlan);
             var checkpointRequested = ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
             state.UseProjectedMarketBoardSnapshot =
@@ -2744,6 +2789,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static string ResolveZeroPurchaseLineStatus(MarketAcquisitionLiveCandidatePlan? candidatePlan, uint purchasedQuantity, uint spentGil) =>
         purchasedQuantity > 0 || spentGil > 0
             ? "Complete"
+            : candidatePlan?.Rows.Any(row => row.Reason == "RunBudgetExceeded") == true
+                ? "SkippedRunBudget"
             : MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidatePlan?.Status)
                 ? "SkippedIncompleteListingCoverage"
                 : candidatePlan?.Status.Equals(MarketAcquisitionLiveCandidateStatuses.OverageLimit, StringComparison.OrdinalIgnoreCase) == true

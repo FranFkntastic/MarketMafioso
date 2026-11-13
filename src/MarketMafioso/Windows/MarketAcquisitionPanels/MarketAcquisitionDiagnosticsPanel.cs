@@ -320,6 +320,8 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
 
         var text = outcome.Kind switch
         {
+            MarketAcquisitionRouteCompletionKinds.BudgetReached or MarketAcquisitionRouteCompletionKinds.InventoryFull =>
+                outcome.Detail ?? outcome.Kind,
             MarketAcquisitionRouteCompletionKinds.TargetSatisfied =>
                 $"Completion: target satisfied - {outcome.TargetPurchasedQuantity:N0}/{outcome.TargetRequestedQuantity:N0} target item(s).",
             MarketAcquisitionRouteCompletionKinds.ScopeExhaustedBelowTarget =>

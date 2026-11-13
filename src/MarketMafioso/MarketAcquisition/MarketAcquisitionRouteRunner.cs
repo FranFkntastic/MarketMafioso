@@ -1356,7 +1356,12 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         RecordWorldSummary(summary);
     }
 
-    private MarketAcquisitionRouteActionResult Complete(string message)
+    public MarketAcquisitionRouteActionResult CompleteWithOutcome(string kind, string message)
+    {
+        return Complete(message, kind);
+    }
+
+    private MarketAcquisitionRouteActionResult Complete(string message, string? kind = null)
     {
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
@@ -1364,6 +1369,16 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         itemSearchAutomationStartedUtc = null;
         RefreshLastRunSummary();
         CompletionOutcome = BuildCompletionOutcome();
+        if (kind is null && executionMode == MarketAcquisitionExecutionMode.Live && evaluateTargetFulfillmentRequested && ActivePlan is { RunSpendCap: > 0 } plan &&
+            plan.RunSpend.CheapestUnaffordableGil is { } cheapest &&
+            (CompletionOutcome.Kind != MarketAcquisitionRouteCompletionKinds.TargetSatisfied ||
+             plan.Lines.Any(line => line.QuantityMode == "AllBelowThreshold")))
+        {
+            kind = MarketAcquisitionRouteCompletionKinds.BudgetReached;
+            var spent = plan.RunSpend.ConfirmedGil;
+            message = $"BudgetReached: budget {plan.RunSpendCap:N0}, spent {spent:N0}, remaining {(spent >= plan.RunSpendCap ? 0UL : plan.RunSpendCap - spent):N0}, cheapest unaffordable listing {cheapest:N0} gil.";
+        }
+        if (kind is not null) CompletionOutcome = CompletionOutcome with { Kind = kind, Detail = message };
         StatusMessage = message;
         State = "Completed";
         diagnostics.Record(
