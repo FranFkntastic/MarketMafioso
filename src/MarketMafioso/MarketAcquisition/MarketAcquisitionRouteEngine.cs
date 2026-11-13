@@ -2093,6 +2093,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (WaitForNativeBrowseCompletion())
             return;
         var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
+        if (state.MarketBoardReadResult is { IsFresh: true, Status: "NoListings" } emptyRead &&
+            claimedRequest is { } emptyClaim && runner.ActivePlan is { } activePlan)
+        {
+            var line = GetActiveRouteLine(emptyClaim);
+            var totals = ResolveActiveRouteLinePurchaseTotals(activeSubtask);
+            state.LiveCandidatePlan = activeSubtask is null
+                ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(line, activePlan, currentWorld, emptyRead, totals.PurchasedQuantity, totals.SpentGil)
+                : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(line, activePlan, activeSubtask, currentWorld, emptyRead, totals.PurchasedQuantity, totals.SpentGil);
+        }
         // A receipt proves one purchase, not that the remaining price/HQ envelope
         // is empty. Persist the final reconciled observation before advancing.
         if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live && state.LiveCandidatePlan is { } finalPlan && claimedRequest is { } claimed)

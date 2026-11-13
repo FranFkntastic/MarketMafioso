@@ -188,12 +188,7 @@ public class MainWindow : Window, IDisposable
         var marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
-            marketAcquisitionWorldVisitCatalog,
-            (ex, worldName, itemId) => log.Warning(
-                ex,
-                "[MarketMafioso] Unable to refresh Universalis evidence for {World} item {ItemId}.",
-                worldName,
-                itemId));
+            marketAcquisitionWorldVisitCatalog);
         acquisitionWorkspace = new MarketAcquisitionRequestWorkspace(
             config,
             acquisitionClient,
@@ -2070,11 +2065,10 @@ public class MainWindow : Window, IDisposable
         var document = acquisitionRequestBuilder.CurrentDocument;
         var intentHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document);
         var request = acquisitionWorkspace.ResolveExecutionRequest(document);
-        var requestIdentity = System.Text.Json.JsonSerializer.Serialize(request with { CreatedAtUtc = default, ClaimedAtUtc = default });
-        return () => _ = StartEvidenceRefreshAsync(preparedPlan, intentHash, requestIdentity);
+        return () => _ = StartEvidenceRefreshAsync(preparedPlan, intentHash, request.Id);
     }
 
-    private Task StartEvidenceRefreshAsync(MarketAcquisitionPlan confirmedPlan, string confirmedIntentHash, string confirmedRequestIdentity)
+    private Task StartEvidenceRefreshAsync(MarketAcquisitionPlan confirmedPlan, string confirmedIntentHash, string confirmedRequestId)
     {
         if (!CanStartEvidenceRefresh())
         {
@@ -2088,7 +2082,7 @@ public class MainWindow : Window, IDisposable
             if (routeEngine.IsRouteActive || acquisitionWorkspace.IsPreparedPlanStale() ||
                 !ReferenceEquals(confirmedPlan, acquisitionWorkspace.PreparedPlan) ||
                 confirmedIntentHash != MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(acquisitionRequestBuilder.CurrentDocument) ||
-                confirmedRequestIdentity != System.Text.Json.JsonSerializer.Serialize(request with { CreatedAtUtc = default, ClaimedAtUtc = default }))
+                confirmedRequestId != request.Id)
             {
                 acquisitionWorkspace.SetStatus("Evidence-only scan was not started: the plan or request changed after confirmation opened. Review the current worlds and confirm again.");
                 return Task.CompletedTask;

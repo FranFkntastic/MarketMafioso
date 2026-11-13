@@ -26,16 +26,13 @@ public sealed class MarketAcquisitionPlanPreparationService
 
     private readonly IMarketAcquisitionListingSource listingSource;
     private readonly MarketAcquisitionWorldVisitCatalog worldVisitCatalog;
-    private readonly Action<Exception, string, uint>? freshEvidenceWarningSink;
 
     public MarketAcquisitionPlanPreparationService(
         IMarketAcquisitionListingSource listingSource,
-        MarketAcquisitionWorldVisitCatalog worldVisitCatalog,
-        Action<Exception, string, uint>? freshEvidenceWarningSink = null)
+        MarketAcquisitionWorldVisitCatalog worldVisitCatalog)
     {
         this.listingSource = listingSource ?? throw new ArgumentNullException(nameof(listingSource));
         this.worldVisitCatalog = worldVisitCatalog ?? throw new ArgumentNullException(nameof(worldVisitCatalog));
-        this.freshEvidenceWarningSink = freshEvidenceWarningSink;
     }
 
     public async Task<MarketAcquisitionPlanPreparationResult> PrepareAsync(
@@ -76,6 +73,7 @@ public sealed class MarketAcquisitionPlanPreparationService
 
         foreach (var line in planLines)
         {
+            token.ThrowIfCancellationRequested();
             if (!listingsByItem.TryGetValue(line.ItemId, out var lineListings))
             {
                 throw new InvalidOperationException(
@@ -84,13 +82,12 @@ public sealed class MarketAcquisitionPlanPreparationService
 
             if (isAllWorldSweep || claimed.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase))
             {
-                var evidenceWorlds = await FindWorldsWithNewerUsefulUniversalisEvidenceAsync(
+                var evidenceWorlds = FindWorldsWithNewerUsefulUniversalisEvidence(
                     line,
                     lineListings,
                     preparedAtUtc,
                     request.RecentWorldTtl,
-                    isAllWorldSweep && request.IgnoreRecentWorldVisitsForSweep,
-                    token).ConfigureAwait(false);
+                    isAllWorldSweep && request.IgnoreRecentWorldVisitsForSweep);
                 freshEvidenceWorldCount += evidenceWorlds.Count;
 
                 var filterResult = MarketAcquisitionRecentWorldPolicy.FilterListings(
@@ -183,13 +180,12 @@ public sealed class MarketAcquisitionPlanPreparationService
         ];
     }
 
-    private async Task<IReadOnlyList<string>> FindWorldsWithNewerUsefulUniversalisEvidenceAsync(
+    private IReadOnlyList<string> FindWorldsWithNewerUsefulUniversalisEvidence(
         MarketAcquisitionBatchLineView line,
         IReadOnlyList<MarketAcquisitionListing> regionalListings,
         DateTimeOffset preparedAtUtc,
         TimeSpan ttl,
-        bool ignoreRecentVisits,
-        CancellationToken token)
+        bool ignoreRecentVisits)
     {
         if (ignoreRecentVisits || ttl <= TimeSpan.Zero)
             return [];
@@ -213,23 +209,6 @@ public sealed class MarketAcquisitionPlanPreparationService
                     IsNewerUsefulUniversalisListing(line, hqPolicy, checkedAtUtc, listing)))
             {
                 evidenceWorlds.Add(visit.WorldName);
-                continue;
-            }
-
-            try
-            {
-                var worldListingsByItem = await listingSource.FetchListingsAsync(
-                    visit.WorldName,
-                    [line.ItemId],
-                    token).ConfigureAwait(false);
-                if (!worldListingsByItem.TryGetValue(line.ItemId, out var worldListings))
-                    continue;
-                if (worldListings.Any(listing => IsNewerUsefulUniversalisListing(line, hqPolicy, checkedAtUtc, listing)))
-                    evidenceWorlds.Add(visit.WorldName);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                freshEvidenceWarningSink?.Invoke(ex, visit.WorldName, line.ItemId);
             }
         }
 
