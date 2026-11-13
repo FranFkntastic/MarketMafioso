@@ -120,7 +120,7 @@ public sealed class MarketAcquisitionRunSpendLedger
 {
     public ulong ConfirmedGil { get; private set; }
     public ulong? CheapestUnaffordableGil { get; set; }
-    public void Record(uint gil) => ConfirmedGil = checked(ConfirmedGil + gil);
+    public void Record(ulong gil) => ConfirmedGil = checked(ConfirmedGil + gil);
 }
 
 public sealed record MarketAcquisitionPlanDiagnostics

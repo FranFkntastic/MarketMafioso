@@ -174,6 +174,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         }
         CompletionOutcome = null;
         ActivePlan = plan;
+        plan.RunSpend.CheapestUnaffordableGil = null;
         reconciledInventory.Clear();
         session = MarketAcquisitionGuidedRouteSession.Start(plan, includeOpportunisticChecks);
         currentRequestId = plan.RequestId;
@@ -1155,7 +1156,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         uint spentGil,
         string? zeroPurchaseStatus = null,
         string? zeroPurchaseMessage = null,
-        MarketAcquisitionLiveCandidatePlan? finalPlan = null)
+        MarketAcquisitionLiveCandidatePlan? finalPlan = null,
+        string? completionKind = null,
+        string? completionDetail = null)
     {
         if (!IsRunning)
             return Fail($"Route is {State}; world purchase result was not recorded.");
@@ -1188,6 +1191,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         if (result.Success)
             RecordLatestWorldSummary();
+
+        if (result.Success && completionKind is not null)
+            return Complete(completionDetail ?? result.Message, completionKind);
 
         if (result.Success && session?.ActiveStop == null)
             return Complete(result.Message);
@@ -1369,15 +1375,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         itemSearchAutomationStartedUtc = null;
         RefreshLastRunSummary();
         CompletionOutcome = BuildCompletionOutcome();
-        if (kind is null && executionMode == MarketAcquisitionExecutionMode.Live && evaluateTargetFulfillmentRequested && ActivePlan is { RunSpendCap: > 0 } plan &&
-            plan.RunSpend.CheapestUnaffordableGil is { } cheapest &&
-            (CompletionOutcome.Kind != MarketAcquisitionRouteCompletionKinds.TargetSatisfied ||
-             plan.Lines.Any(line => line.QuantityMode == "AllBelowThreshold")))
-        {
-            kind = MarketAcquisitionRouteCompletionKinds.BudgetReached;
-            var spent = plan.RunSpend.ConfirmedGil;
-            message = $"BudgetReached: budget {plan.RunSpendCap:N0}, spent {spent:N0}, remaining {(spent >= plan.RunSpendCap ? 0UL : plan.RunSpendCap - spent):N0}, cheapest unaffordable listing {cheapest:N0} gil.";
-        }
+        // Budget completion is explicit at the board, where the final live candidates
+        // and remaining route are known. An earlier skipped listing is not authority.
         if (kind is not null) CompletionOutcome = CompletionOutcome with { Kind = kind, Detail = message };
         StatusMessage = message;
         State = "Completed";
@@ -1387,6 +1386,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             new Dictionary<string, string?>
             {
                 ["kind"] = CompletionOutcome.Kind,
+                ["detail"] = CompletionOutcome.Detail,
                 ["targetRequestedQuantity"] = CompletionOutcome.TargetRequestedQuantity.ToString(CultureInfo.InvariantCulture),
                 ["targetPurchasedQuantity"] = CompletionOutcome.TargetPurchasedQuantity.ToString(CultureInfo.InvariantCulture),
                 ["targetRemainingQuantity"] = CompletionOutcome.TargetRemainingQuantity.ToString(CultureInfo.InvariantCulture),

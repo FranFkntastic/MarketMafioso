@@ -14,6 +14,8 @@ public sealed record MarketBoardPurchaseCandidate
     public uint Quantity { get; init; }
     public bool IsHq { get; init; }
     public uint TotalGil => checked(UnitPrice * Quantity);
+    public uint? TotalTax { get; init; }
+    public ulong WalletCost => (ulong)TotalGil + (TotalTax ?? (((ulong)TotalGil + 19) / 20));
 
     public static MarketBoardPurchaseCandidate FromLiveListing(MarketBoardLiveListing listing) =>
         new()
@@ -26,6 +28,7 @@ public sealed record MarketBoardPurchaseCandidate
             RetainerNameSource = listing.RetainerNameSource,
             UnitPrice = listing.UnitPrice,
             Quantity = listing.Quantity,
+            TotalTax = listing.TotalTax,
             IsHq = listing.IsHq,
         };
 
@@ -36,6 +39,7 @@ public sealed record MarketBoardPurchaseCandidate
         RetainerId.Equals(listing.RetainerId, System.StringComparison.Ordinal) &&
         UnitPrice == listing.UnitPrice &&
         Quantity == listing.Quantity &&
+        TotalTax == listing.TotalTax &&
         IsHq == listing.IsHq;
 }
 

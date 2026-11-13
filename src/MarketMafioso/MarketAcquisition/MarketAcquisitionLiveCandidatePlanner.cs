@@ -216,9 +216,8 @@ public static class MarketAcquisitionLiveCandidatePlanner
         var result = BuildCandidatePlanCore(request, world, read.ItemId,
             EnrichRetainerNames(read.Listings, subtask?.Listings ?? FindPlannedListings(plan, world, read.ItemId)),
             purchased, spent, read, remaining);
-        foreach (var row in result.Rows.Where(r => r.Reason == "RunBudgetExceeded"))
-            plan.RunSpend.CheapestUnaffordableGil = Math.Min(plan.RunSpend.CheapestUnaffordableGil ?? ulong.MaxValue,
-                (ulong)row.LiveListing.UnitPrice * row.LiveListing.Quantity);
+        plan.RunSpend.CheapestUnaffordableGil = result.Rows.Where(r => r.Reason == "RunBudgetExceeded")
+            .Select(r => (ulong?)r.LiveListing.WalletCost).Min();
         return result with { PriceRangeExhausted = original.PriceRangeExhausted,
             Status = original.PriceRangeExhausted ? "Ready" : result.Status };
     }
@@ -285,11 +284,6 @@ public static class MarketAcquisitionLiveCandidatePlanner
             }
 
             var nextSelectedQuantity = checked(selectedQuantity + listing.Quantity);
-            if (remainingRunGil is { } remaining && (ulong)listing.UnitPrice * listing.Quantity > remaining)
-            {
-                rows.Add(Skipped(listing, "RunBudgetExceeded", $"Whole listing exceeds remaining run budget of {remaining:N0} gil.", selectedQuantity, selectedGil));
-                continue;
-            }
             var nextTotalQuantity = checked(alreadyPurchasedQuantity + nextSelectedQuantity);
             if (targetBudget != null &&
                 !(targetBudget with { ConfirmedPurchasedQuantity = selectedQuantity }).CanAdmit(listing.Quantity))
@@ -309,6 +303,14 @@ public static class MarketAcquisitionLiveCandidatePlanner
             if (hasGilCap && nextTotalGil > request.MaxTotalGil)
             {
                 rows.Add(Skipped(listing, "GilCapExceeded", "Buying this whole listing would exceed the configured gil cap.", selectedQuantity, selectedGil));
+                continue;
+            }
+
+            // Only record budget as binding after quality, target/overage and line caps pass.
+            // Execution selects one listing then replans against the confirmed wallet ledger.
+            if (remainingRunGil is { } remaining && listing.WalletCost > remaining)
+            {
+                rows.Add(Skipped(listing, "RunBudgetExceeded", $"Whole listing including tax exceeds remaining run budget of {remaining:N0} gil.", selectedQuantity, selectedGil));
                 continue;
             }
 

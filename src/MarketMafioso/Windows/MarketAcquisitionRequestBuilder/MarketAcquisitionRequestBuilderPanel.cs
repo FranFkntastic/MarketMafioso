@@ -577,7 +577,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             (text.Length == 0 || uint.TryParse(text, out _)))
             controller.SetRunSpendCap(ParseUInt(text));
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Confirmed purchases across this finalized plan, including pause, recovery and restart. A newly finalized plan starts fresh.");
+            ImGui.SetTooltip("Confirmed wallet spend including market tax across this finalized plan, including pause, recovery and restart. A newly finalized plan starts fresh. Plugin reload resets the tally: plans are not persisted and you must re-finalize.");
     }
 
     private void DrawCompactHqCell(MarketAcquisitionRequestLineDocument line, int index)
