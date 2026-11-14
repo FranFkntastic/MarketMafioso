@@ -135,7 +135,9 @@ public sealed class MarketAcquisitionPlanPreparationService
             preparedAtUtc,
             request.CurrentWorld,
             sweepWorldExclusions,
-            baselines);
+            baselines,
+            request.MinimumStopValueGil,
+            request.ExhaustiveResearchMode);
         var recommendedTargetLines = plan.Lines
             .Where(line => line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -150,6 +152,9 @@ public sealed class MarketAcquisitionPlanPreparationService
             : plan.Lines.All(line => line.QuantityMode == "TargetQuantity" && RemainingNeed(line) == 0)
                 ? "All stock-up targets are already met. No travel or purchases are needed."
                 : BuildNoSupportedListingsStatus(plan);
+        var lowValueStops = plan.Diagnostics.StopDecisions.Count(decision => decision.Skipped);
+        if (lowValueStops > 0)
+            statusMessage += $" Skipped {lowValueStops:N0} world(s) below the minimum stop value of {plan.MinimumStopValueGil:N0} gil; see the plan for estimates.";
         if (claimed.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase) &&
             recommendedPlannedQuantity < recommendedRequestedQuantity)
         {
@@ -276,6 +281,8 @@ public sealed class MarketAcquisitionPlanPreparationService
 
 public sealed record MarketAcquisitionPlanPreparationRequest
 {
+    public int MinimumStopValueGil { get; init; } = 5_000;
+    public bool ExhaustiveResearchMode { get; init; }
     public MarketAcquisitionClaimView? Claim { get; init; }
     public string CurrentWorld { get; init; } = string.Empty;
     public DateTimeOffset PreparedAtUtc { get; init; } = DateTimeOffset.UtcNow;

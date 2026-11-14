@@ -145,6 +145,17 @@ internal sealed class MarketAcquisitionSettingsPages
         }
         DrawCheckbox(context, "Full all-world resweep", "Ignore recent checked-world history while preparing an all-world route.",
             () => config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep, value => config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep = value);
+        if (context.Matches("Minimum stop value", "gil", "Recommended", "route"))
+        {
+            var value = config.MarketAcquisitionMinimumStopValueGil;
+            ImGui.SetNextItemWidth(120f);
+            if (ImGui.InputInt("Minimum stop value (gil)", ref value))
+            {
+                config.MarketAcquisitionMinimumStopValueGil = Math.Max(0, value);
+                config.Save();
+            }
+            ImGui.TextWrapped("Recommended routes skip stops below this estimated value. 0 disables the minimum. All-world sweeps and exhaustive research never drop stops by value. Applies when preparing a plan.");
+        }
     }
 
     private void DrawDiagnostics(SettingsPageContext context)

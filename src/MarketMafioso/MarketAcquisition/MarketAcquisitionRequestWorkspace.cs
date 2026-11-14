@@ -462,6 +462,8 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                         PreparedAtUtc = preparedAt,
                         RecentWorldTtl = recentWorldTtl,
                         IgnoreRecentWorldVisitsForSweep = ignoreRecentWorldVisitsForSweep,
+                        MinimumStopValueGil = config.MarketAcquisitionMinimumStopValueGil,
+                        ExhaustiveResearchMode = config.MarketAcquisitionExhaustiveResearchMode,
                     },
                     token).ConfigureAwait(false);
             }
@@ -490,6 +492,8 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                 PreparedAtUtc = DateTimeOffset.UtcNow,
                 RecentWorldTtl = recentWorldTtl,
                 IgnoreRecentWorldVisitsForSweep = false,
+                MinimumStopValueGil = config.MarketAcquisitionMinimumStopValueGil,
+                ExhaustiveResearchMode = config.MarketAcquisitionExhaustiveResearchMode,
             },
             token);
     }
