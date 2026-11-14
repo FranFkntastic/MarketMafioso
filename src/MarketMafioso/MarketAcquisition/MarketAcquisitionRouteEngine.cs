@@ -61,7 +61,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan InventoryReflectionWait = TimeSpan.FromSeconds(10);
     private string? activeLinePurchaseWorld;
     private bool activeSearchAllowsPriceCutoff = true;
-    private bool recoveringRetainedStop;
     private bool ownsLocalApproachNavigation;
     private string? retainedRecoveryBrowseOperationId;
 
@@ -582,7 +581,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             state.ManualRecoveryBlockedReason = null;
             travelInterruptedByCleanup = false;
-            recoveringRetainedStop = true;
         }
         return UpdateStatus(result);
     }
@@ -951,13 +949,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
             return;
         }
-        if (recoveringRetainedStop &&
+        // Start and recovery alike: already on the stop's world with a board open,
+        // in interaction range, or within vnavmesh approach range means walk to it
+        // locally instead of re-running Lifestream's whole market-board trip.
+        if (activeTravelLease is null &&
             activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) &&
             marketBoard.CanApproachMarketBoardLocally())
         {
             if (!context.TryIsWorldTravelBusy(out var travelBusy) || travelBusy)
             {
-                state.AcquisitionStatus = "Waiting for confirmed idle Lifestream before local route recovery.";
+                state.AcquisitionStatus = "Waiting for confirmed idle Lifestream before the local market-board approach.";
                 return;
             }
             var approach = marketBoard.OpenOrApproachMarketBoard();
@@ -969,16 +970,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
             if (!StopOwnedLocalApproach())
                 return;
-            recoveringRetainedStop = false;
             UpdateStatus(runner.RecordCurrentWorld(currentWorld!));
             HandleArrivedStop(currentWorld!);
             return;
         }
         if (!StopOwnedLocalApproach())
             return;
-        recoveringRetainedStop = false;
-        // Ordinary stops and recovery outside local reach still delegate the
-        // complete trip to `/li <world> mb`, even on the current world.
+        // Other worlds, or no board within approach range, delegate the complete
+        // trip to `/li <world> mb`.
         const bool requiresTravelPreparation = true;
         MarketAcquisitionRouteOperationSnapshot? preparation = null;
         if (requiresTravelPreparation ||
@@ -3095,7 +3094,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             });
         }
         lastDepartureStage = null;
-        recoveringRetainedStop = false;
         retainedRecoveryBrowseOperationId = null;
         StopOwnedLocalApproach(releasing: true);
         var lease = activeTravelLease;
