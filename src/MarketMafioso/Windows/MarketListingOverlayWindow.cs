@@ -7,7 +7,6 @@ using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Tables;
-using Lumina.Excel.Sheets;
 using MarketMafioso.MarketAcquisition.MarketBoard;
 using MarketMafioso.Windows.Main;
 
@@ -137,7 +136,7 @@ public sealed class MarketListingOverlayWindow : Window
         if (view.Listings.Count > 0 && cachedIconItemId != view.Listings[0].ItemId)
         {
             cachedIconItemId = view.Listings[0].ItemId;
-            cachedIcon = ResolveItemIcon(cachedIconItemId);
+            cachedIcon = MarketMafiosoItemIcons.Resolve(cachedIconItemId);
         }
 
         if (controller.ConsumePendingSelectionMaxPrice() is { } maxPrice)
@@ -460,21 +459,6 @@ public sealed class MarketListingOverlayWindow : Window
                 invoke();
                 return AgentBridgeUiActionResult.Ok("Market-listing control was invoked.");
             });
-
-    private static ISharedImmediateTexture? ResolveItemIcon(uint itemId)
-    {
-        try
-        {
-            var item = Plugin.DataManager.GetExcelSheet<Item>()?.GetRowOrDefault(itemId);
-            if (item is null)
-                return null;
-            return Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(item.Value.Icon));
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     private static void Cell(string text, bool muted)
     {
