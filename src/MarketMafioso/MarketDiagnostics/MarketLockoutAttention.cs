@@ -108,12 +108,12 @@ internal sealed class MarketLockoutAttention : IRetainerListingRefreshControls, 
         if (result.Accepted)
         {
             lastRelogRefusal = null;
-            log($"User relog request from {source} accepted: {result.Message}");
+            log($"Relog request from {source} accepted: {result.Message}");
         }
         else
         {
             lastRelogRefusal = result.Message;
-            log($"User relog request from {source} refused: {result.Message}");
+            log($"Relog request from {source} refused: {result.Message}");
         }
 
         notificationContent = null;
