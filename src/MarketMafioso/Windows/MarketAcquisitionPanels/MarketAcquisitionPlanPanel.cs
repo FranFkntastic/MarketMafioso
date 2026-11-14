@@ -22,6 +22,11 @@ internal sealed class MarketAcquisitionPlanPanel
     private static readonly DalamudTableProjection<MarketAcquisitionWorldBatch> detailLayout = new(
         [new DalamudTableColumn<MarketAcquisitionWorldBatch>("World", 120, batch => batch.WorldName)]);
 
+    // Inner vertical borders would cut through full-width detail rows.
+    private const ImGuiTableFlags NestedTableFlags =
+        ImGuiTableFlags.BordersOuter | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit;
+    private const float DetailIndent = 24;
+
     private readonly HashSet<string> expandedStops = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> expandedItems = new(StringComparer.OrdinalIgnoreCase);
 
@@ -58,7 +63,7 @@ internal sealed class MarketAcquisitionPlanPanel
             return;
 
         if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable", 5,
-                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingFixedFit))
+                NestedTableFlags | ImGuiTableFlags.Resizable))
             return;
 
         ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 56);
@@ -103,7 +108,7 @@ internal sealed class MarketAcquisitionPlanPanel
                     : $"Planned {batch.PlannedGil:N0} gil; buy-below listings under ceiling add {batch.EstimatedValueGil - Math.Min(batch.EstimatedValueGil, batch.PlannedGil):N0} gil.\n{plan.Diagnostics.RouteOrderingBasis}");
 
             if (expandedStops.Contains(stopKey) && batch.Listings.Count > 0)
-                detailLayout.DrawDetailRow($"plan-stop-detail-{stopKey}", () => DrawStopItems(batch));
+                detailLayout.DrawDetailRow($"plan-stop-detail-{stopKey}", () => DrawIndented(() => DrawStopItems(batch)));
         }
 
         foreach (var decision in skipped.OrderByDescending(decision => decision.EstimatedValueGil))
@@ -141,10 +146,10 @@ internal sealed class MarketAcquisitionPlanPanel
             .ToArray();
 
         if (!ImGui.BeginTable($"PlanStopItems##{batch.WorldName}", 5,
-                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit))
+                NestedTableFlags))
             return;
 
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed, 220);
         ImGui.TableSetupColumn("Listings", ImGuiTableColumnFlags.WidthFixed, 72);
         ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 72);
         ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, 140);
@@ -170,7 +175,7 @@ internal sealed class MarketAcquisitionPlanPanel
             ImGui.TextUnformatted(FormatGil(group.Gil));
 
             if (expandedItems.Contains(group.Key))
-                detailLayout.DrawDetailRow($"plan-item-detail-{group.Key}", () => DrawItemListings(group));
+                detailLayout.DrawDetailRow($"plan-item-detail-{group.Key}", () => DrawIndented(() => DrawItemListings(group)));
         }
 
         ImGui.EndTable();
@@ -178,16 +183,16 @@ internal sealed class MarketAcquisitionPlanPanel
 
     private static void DrawItemListings(PlanItemGroup group)
     {
-        if (!ImGui.BeginTable($"PlanItemListings##{group.Key}", 6,
-                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit))
+        if (!ImGui.BeginTable($"PlanItemListings##{group.Key}", 5,
+                NestedTableFlags))
             return;
 
         ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 56);
         ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, 96);
         ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, 110);
         ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 40);
-        ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Reviewed", ImGuiTableColumnFlags.WidthFixed, 96);
+        ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, 160);
+
         ImGui.TableHeadersRow();
 
         foreach (var listing in group.Listings)
@@ -205,11 +210,17 @@ internal sealed class MarketAcquisitionPlanPanel
             ImGui.TextUnformatted(string.IsNullOrWhiteSpace(listing.RetainerName) ? "-" : listing.RetainerName);
             if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(listing.ListingId))
                 ImGui.SetTooltip($"Listing {listing.ListingId}");
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatReviewAge(listing.LastReviewTimeUtc));
+
         }
 
         ImGui.EndTable();
+    }
+
+    private static void DrawIndented(Action draw)
+    {
+        ImGui.Indent(DetailIndent);
+        try { draw(); }
+        finally { ImGui.Unindent(DetailIndent); }
     }
 
     private static void DrawExpander(HashSet<string> expanded, string key, string id)
@@ -221,20 +232,6 @@ internal sealed class MarketAcquisitionPlanPanel
             expanded.Remove(key);
         else
             expanded.Add(key);
-    }
-
-    private static string FormatReviewAge(DateTimeOffset reviewed)
-    {
-        if (reviewed == default)
-            return "-";
-        var age = DateTimeOffset.UtcNow - reviewed;
-        if (age < TimeSpan.FromMinutes(1))
-            return "just now";
-        if (age < TimeSpan.FromHours(1))
-            return $"{(int)age.TotalMinutes}m ago";
-        if (age < TimeSpan.FromDays(1))
-            return $"{(int)age.TotalHours}h ago";
-        return $"{(int)age.TotalDays}d ago";
     }
 
     private static string FormatPlannedListingItem(MarketAcquisitionPlannedListing listing) =>
