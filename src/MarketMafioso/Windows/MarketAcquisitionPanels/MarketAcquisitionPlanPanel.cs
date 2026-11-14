@@ -38,23 +38,13 @@ internal sealed class MarketAcquisitionPlanPanel
         if (isStale)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Request changed after this plan was prepared. Update the request and prepare a fresh plan before starting.");
 
-        if (!string.IsNullOrWhiteSpace(plan.Diagnostics.RouteOrderingBasis))
-        {
-            ImGui.TextWrapped(plan.Diagnostics.RouteOrderingBasis);
-            foreach (var batch in plan.WorldBatches)
-                ImGui.TextUnformatted($"{batch.WorldName}: estimated {batch.EstimatedValueGil:N0} gil");
-        }
-        foreach (var decision in plan.Diagnostics.StopDecisions.Where(decision => decision.Skipped))
-            ImGui.TextWrapped($"{decision.WorldName}: skipped (estimated {decision.EstimatedValueGil:N0} gil). {decision.Reason}");
+        DrawRouteStops(plan);
 
         if (plan.WorldBatches.Count == 0)
             return;
 
         if (!ImGui.CollapsingHeader("World Listings##MarketAcquisitionPlanWorldListings"))
-        {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Expand to inspect advisory listings. Live market-board rows remain authoritative.");
             return;
-        }
 
         var tableFlags =
             ImGuiTableFlags.Borders |
@@ -104,6 +94,74 @@ internal sealed class MarketAcquisitionPlanPanel
 
             ImGui.EndTable();
         }
+    }
+
+    private static void DrawRouteStops(MarketAcquisitionPlan plan)
+    {
+        var skipped = plan.Diagnostics.StopDecisions.Where(decision => decision.Skipped).ToArray();
+        if (plan.WorldBatches.Count == 0 && skipped.Length == 0)
+            return;
+
+        var label = skipped.Length == 0
+            ? $"Route Stops ({plan.WorldBatches.Count:N0})"
+            : $"Route Stops ({plan.WorldBatches.Count:N0}, {skipped.Length:N0} skipped)";
+        if (!ImGui.CollapsingHeader($"{label}##MarketAcquisitionPlanRouteStops", ImGuiTreeNodeFlags.DefaultOpen))
+            return;
+
+        if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable", 6,
+                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingFixedFit))
+            return;
+
+        ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 56);
+        ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 120);
+        ImGui.TableSetupColumn("Data Center", ImGuiTableColumnFlags.WidthFixed, 96);
+        ImGui.TableSetupColumn("Est. Value", ImGuiTableColumnFlags.WidthFixed, 120);
+        ImGui.TableSetupColumn("Planned", ImGuiTableColumnFlags.WidthFixed, 80);
+        ImGui.TableSetupColumn("Planned Gil", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableHeadersRow();
+
+        var ordinal = 0;
+        foreach (var batch in plan.WorldBatches)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted((++ordinal).ToString());
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(batch.WorldName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatRouteDataCenter(batch.DataCenter));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(batch.EstimatedValueGil.ToString("N0"));
+            if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(plan.Diagnostics.RouteOrderingBasis))
+                ImGui.SetTooltip(plan.Diagnostics.RouteOrderingBasis);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(batch.PlannedQuantity.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(batch.PlannedGil.ToString("N0"));
+        }
+
+        foreach (var decision in skipped.OrderByDescending(decision => decision.EstimatedValueGil))
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Skipped");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(decision.Reason);
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, decision.WorldName);
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatRouteDataCenter(MarketAcquisitionWorldCatalog.ResolveDataCenter(decision.WorldName)));
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, decision.EstimatedValueGil.ToString("N0"));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(decision.Reason);
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "—");
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "—");
+        }
+
+        ImGui.EndTable();
     }
 
     private static string FormatPlannedListingItem(MarketAcquisitionPlannedListing listing) =>
