@@ -12,8 +12,6 @@ namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 
 internal sealed class MarketAcquisitionGuidedRoutePanel
 {
-    private static readonly DalamudTableProjection<MarketAcquisitionRouteStopRow> detailLayout = new(
-        [new DalamudTableColumn<MarketAcquisitionRouteStopRow>("World", 140, row => row.WorldName)]);
     private readonly Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot;
     private readonly Action startRoute;
     private readonly Func<MarketAcquisitionPlan?, Action?> createEvidenceRefreshConfirmation;
@@ -33,7 +31,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus;
     private readonly Action openLogsFolder;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
-    private readonly HashSet<string> expandedStops = new(StringComparer.OrdinalIgnoreCase);
+    private readonly DalamudExpandableRows expandedStops = new();
     private Action? confirmedEvidenceRefresh;
     private string evidenceRefreshWorlds = string.Empty;
     private bool openEvidenceRefreshConfirmation;
@@ -389,7 +387,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
     {
         var rows = MarketAcquisitionRouteTablePresenter.BuildRows(stops);
-        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 7, ImGuiUi.InteractiveTableFlags))
+        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 7,
+                DalamudNestedTableFlags.Parent(resizable: true) | ImGuiTableFlags.Reorderable | ImGuiTableFlags.Hideable))
         {
             ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 140);
             ImGui.TableSetupColumn("Data Center");
@@ -404,7 +403,9 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                DrawGuidedRouteStopExpander(row);
+                expandedStops.DrawToggle(GetGuidedRouteStopKey(row));
+                ImGui.SameLine();
+                ImGui.TextUnformatted(row.WorldName);
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(FormatRouteDataCenter(row.DataCenter));
                 ImGui.TableNextColumn();
@@ -425,34 +426,16 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                 ImGui.TextColored(row.Aggregate.FailedLineCount > 0 ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted, row.Notes);
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip(row.Notes);
 
-                if (expandedStops.Contains(GetGuidedRouteStopKey(row)))
-                    detailLayout.DrawDetailRow(GetGuidedRouteStopKey(row), () => DrawGuidedRouteStopLineRows(row));
+                expandedStops.DrawDetail(GetGuidedRouteStopKey(row), () => DrawGuidedRouteStopLineRows(row));
             }
 
             ImGui.EndTable();
         }
     }
 
-    private void DrawGuidedRouteStopExpander(MarketAcquisitionRouteStopRow row)
-    {
-        var key = GetGuidedRouteStopKey(row);
-        var expanded = expandedStops.Contains(key);
-        var buttonLabel = expanded ? $"v##route-stop-{key}" : $">##route-stop-{key}";
-        if (ImGui.SmallButton(buttonLabel))
-        {
-            if (expanded)
-                expandedStops.Remove(key);
-            else
-                expandedStops.Add(key);
-        }
-
-        ImGui.SameLine();
-        ImGui.TextUnformatted(row.WorldName);
-    }
-
     private static void DrawGuidedRouteStopLineRows(MarketAcquisitionRouteStopRow stop)
     {
-        if (!ImGui.BeginTable("ItemDetails", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable)) return;
+        if (!ImGui.BeginTable("ItemDetails", 7, DalamudNestedTableFlags.Child)) return;
         foreach (var header in new[] { "Item", "Source", "Outcome", "Planned", "Seen", "Bought", "Notes" })
             ImGui.TableSetupColumn(header);
         ImGui.TableHeadersRow();

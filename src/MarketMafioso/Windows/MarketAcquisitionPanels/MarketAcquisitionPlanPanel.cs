@@ -18,17 +18,8 @@ internal sealed class MarketAcquisitionPlanPanel
         public uint MaxUnit => Listings.Max(listing => listing.UnitPrice);
     }
 
-    // Any projection drives Franthropy's detail rows; the row type is irrelevant here.
-    private static readonly DalamudTableProjection<MarketAcquisitionWorldBatch> detailLayout = new(
-        [new DalamudTableColumn<MarketAcquisitionWorldBatch>("World", 120, batch => batch.WorldName)]);
-
-    // Inner vertical borders would cut through full-width detail rows.
-    private const ImGuiTableFlags NestedTableFlags =
-        ImGuiTableFlags.BordersOuter | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit;
-    private const float DetailIndent = 24;
-
-    private readonly HashSet<string> expandedStops = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> expandedItems = new(StringComparer.OrdinalIgnoreCase);
+    private readonly DalamudExpandableRows expandedStops = new();
+    private readonly DalamudExpandableRows expandedItems = new();
 
     public void Draw(MarketAcquisitionPlan? plan, bool isStale)
     {
@@ -63,7 +54,7 @@ internal sealed class MarketAcquisitionPlanPanel
             return;
 
         if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable", 5,
-                NestedTableFlags | ImGuiTableFlags.Resizable | ImGuiTableFlags.NoBordersInBodyUntilResize))
+                DalamudNestedTableFlags.Parent(resizable: true)))
             return;
 
         ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 56);
@@ -83,7 +74,7 @@ internal sealed class MarketAcquisitionPlanPanel
             ImGui.TableNextColumn();
             if (batch.Listings.Count > 0)
             {
-                DrawExpander(expandedStops, stopKey, $"plan-stop-{stopKey}");
+                expandedStops.DrawToggle(stopKey);
                 ImGui.SameLine();
             }
 
@@ -107,8 +98,8 @@ internal sealed class MarketAcquisitionPlanPanel
                     ? plan.Diagnostics.RouteOrderingBasis
                     : $"Planned {batch.PlannedGil:N0} gil; buy-below listings under ceiling add {batch.EstimatedValueGil - Math.Min(batch.EstimatedValueGil, batch.PlannedGil):N0} gil.\n{plan.Diagnostics.RouteOrderingBasis}");
 
-            if (expandedStops.Contains(stopKey) && batch.Listings.Count > 0)
-                detailLayout.DrawDetailRow($"plan-stop-detail-{stopKey}", () => DrawIndented(() => DrawStopItems(batch)));
+            if (batch.Listings.Count > 0)
+                expandedStops.DrawDetail(stopKey, () => DrawStopItems(batch));
         }
 
         foreach (var decision in skipped.OrderByDescending(decision => decision.EstimatedValueGil))
@@ -146,7 +137,7 @@ internal sealed class MarketAcquisitionPlanPanel
             .ToArray();
 
         if (!ImGui.BeginTable($"PlanStopItems##{batch.WorldName}", 5,
-                NestedTableFlags))
+                DalamudNestedTableFlags.Parent()))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed, 220);
@@ -160,7 +151,7 @@ internal sealed class MarketAcquisitionPlanPanel
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            DrawExpander(expandedItems, group.Key, $"plan-item-{group.Key}");
+            expandedItems.DrawToggle(group.Key);
             ImGui.SameLine();
             ImGui.TextUnformatted(group.Item);
             ImGui.TableNextColumn();
@@ -174,8 +165,7 @@ internal sealed class MarketAcquisitionPlanPanel
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(FormatGil(group.Gil));
 
-            if (expandedItems.Contains(group.Key))
-                detailLayout.DrawDetailRow($"plan-item-detail-{group.Key}", () => DrawIndented(() => DrawItemListings(group)));
+            expandedItems.DrawDetail(group.Key, () => DrawItemListings(group));
         }
 
         ImGui.EndTable();
@@ -184,7 +174,7 @@ internal sealed class MarketAcquisitionPlanPanel
     private static void DrawItemListings(PlanItemGroup group)
     {
         if (!ImGui.BeginTable($"PlanItemListings##{group.Key}", 5,
-                NestedTableFlags))
+                DalamudNestedTableFlags.Child))
             return;
 
         ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 56);
@@ -214,24 +204,6 @@ internal sealed class MarketAcquisitionPlanPanel
         }
 
         ImGui.EndTable();
-    }
-
-    private static void DrawIndented(Action draw)
-    {
-        ImGui.Indent(DetailIndent);
-        try { draw(); }
-        finally { ImGui.Unindent(DetailIndent); }
-    }
-
-    private static void DrawExpander(HashSet<string> expanded, string key, string id)
-    {
-        var isExpanded = expanded.Contains(key);
-        if (!ImGui.SmallButton(isExpanded ? $"v##{id}" : $">##{id}"))
-            return;
-        if (isExpanded)
-            expanded.Remove(key);
-        else
-            expanded.Add(key);
     }
 
     private static string FormatPlannedListingItem(MarketAcquisitionPlannedListing listing) =>
