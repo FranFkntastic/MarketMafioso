@@ -217,7 +217,7 @@ internal sealed class MarketAcquisitionPlanPanel
         ImGui.TableSetColumnIndex(1);
         ImGui.TextColored(MarketMafiosoUiTheme.Error, "Short after");
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Target items still under their need after every route stop, biggest gap first.");
+            ImGui.SetTooltip("Target items still under their need after every route stop, least covered first.");
 
         for (var rank = 0; rank < shortfalls.Count && coverageColumns.SlotColumn(rank); rank++)
             DrawShortfallBar($"slot{rank}", shortfalls[rank]);

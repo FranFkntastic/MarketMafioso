@@ -26,7 +26,7 @@ internal static class MarketMafiosoItemIcons
         }
         catch
         {
-            texture = null;
+            return null;
         }
 
         Cache[itemId] = texture;

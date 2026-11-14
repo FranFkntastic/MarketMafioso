@@ -62,7 +62,7 @@ internal sealed class MarketAcquisitionRouteCoverage
     /// <summary>Ranked bars per skipped stop, aligned with <see cref="Skipped"/>.</summary>
     public IReadOnlyList<IReadOnlyList<RouteCoverageBar>> SkippedBars { get; }
 
-    /// <summary>Lines still short after the route, biggest gap first.</summary>
+    /// <summary>Lines still short after the route, least covered first.</summary>
     public IReadOnlyList<RouteCoverageShortfall> Shortfalls { get; }
 
     public IReadOnlyDictionary<string, MarketAcquisitionPlanLine> Lines { get; }
