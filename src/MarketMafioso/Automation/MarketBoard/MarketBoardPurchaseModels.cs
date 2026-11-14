@@ -32,6 +32,8 @@ public sealed record MarketBoardPurchaseCandidate
             IsHq = listing.IsHq,
         };
 
+    // Tax is wallet-cost data, not listing identity: its availability or value
+    // across reads must not turn the same listing into a changed listing.
     public bool Matches(MarketBoardLiveListing listing) =>
         ItemId == listing.ItemId &&
         WorldName.Equals(listing.WorldName, System.StringComparison.OrdinalIgnoreCase) &&
@@ -39,7 +41,6 @@ public sealed record MarketBoardPurchaseCandidate
         RetainerId.Equals(listing.RetainerId, System.StringComparison.Ordinal) &&
         UnitPrice == listing.UnitPrice &&
         Quantity == listing.Quantity &&
-        TotalTax == listing.TotalTax &&
         IsHq == listing.IsHq;
 }
 
