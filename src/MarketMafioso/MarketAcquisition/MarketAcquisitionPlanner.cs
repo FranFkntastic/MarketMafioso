@@ -702,17 +702,20 @@ public static class MarketAcquisitionPlanner
         {
             EstimatedValueGil = EstimateWorldValue(plan, batch),
         }).ToArray();
+        // The current world needs no travel, so any value there is worth taking.
+        bool BelowFloor(MarketAcquisitionWorldBatch batch) => batch.EstimatedValueGil < (ulong)floor &&
+            !batch.WorldName.Equals(plan.RouteCurrentWorld, StringComparison.OrdinalIgnoreCase);
         var decisions = valued.Select(batch => new MarketAcquisitionStopDecision
         {
             WorldName = batch.WorldName,
             EstimatedValueGil = batch.EstimatedValueGil,
-            Skipped = batch.EstimatedValueGil < (ulong)floor,
-            Reason = batch.EstimatedValueGil < (ulong)floor
+            Skipped = BelowFloor(batch),
+            Reason = BelowFloor(batch)
                 ? $"Estimated value {batch.EstimatedValueGil:N0} gil is below the minimum stop value of {floor:N0} gil."
                 : basis,
         }).ToArray();
         var remaining = valued
-            .Where(batch => batch.EstimatedValueGil >= (ulong)floor)
+            .Where(batch => !BelowFloor(batch))
             .OrderByDescending(batch => batch.EstimatedValueGil > 0 && batch.WorldName.Equals(plan.RouteCurrentWorld, StringComparison.OrdinalIgnoreCase))
             .ThenByDescending(batch => batch.EstimatedValueGil)
             .ThenBy(batch => batch.WorldName, StringComparer.OrdinalIgnoreCase)
