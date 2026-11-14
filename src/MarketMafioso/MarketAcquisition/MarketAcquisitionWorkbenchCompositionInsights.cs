@@ -24,10 +24,10 @@ public sealed record MarketAcquisitionCompositionDiff(
 }
 
 public sealed record MarketAcquisitionCompositionSpend(
-    ulong StockUpCeiling,
+    ulong WorstCase,
     int StockUpLines,
     int BuyBelowLines,
-    int UnpricedStockUpLines);
+    int OpenLines);
 
 /// <summary>
 /// Read-only comparisons and summaries shown by the Compositions window.
@@ -76,32 +76,42 @@ public static class MarketAcquisitionWorkbenchCompositionInsights
     public static MarketAcquisitionCompositionSpend Spend(IEnumerable<MarketAcquisitionRequestLineDocument> lines)
     {
         ulong total = 0;
-        int stockUp = 0, buyBelow = 0, unpriced = 0;
+        int stockUp = 0, buyBelow = 0, open = 0;
         foreach (var line in lines)
         {
+            ulong? lineMax = null;
             if (line.QuantityMode == StockUp)
             {
                 stockUp++;
-                if (line.MaxUnitPrice == 0)
-                    unpriced++;
-                total += (ulong)line.TargetQuantity * line.MaxUnitPrice;
+                // Same bound the route budget uses: target plus extra units, at the unit ceiling.
+                if (line.MaxUnitPrice > 0)
+                    lineMax = ((ulong)line.TargetQuantity + line.MaximumOverage) * line.MaxUnitPrice;
             }
             else
             {
                 buyBelow++;
             }
+
+            if (line.GilCap > 0)
+                lineMax = lineMax is { } bound ? Math.Min(bound, line.GilCap) : line.GilCap;
+            if (lineMax is { } max)
+                total += max;
+            else
+                open++;
         }
 
-        return new(total, stockUp, buyBelow, unpriced);
+        return new(total, stockUp, buyBelow, open);
     }
 
-    /// <summary>"62.5M", "+3" or "open": the compact worst-case spend label for the list.</summary>
+    /// <summary>"62.5M", "62.5M +3" or "open": the compact worst-case spend label for the list.</summary>
     public static string FormatSpendCell(MarketAcquisitionCompositionSpend spend)
     {
-        if (spend.StockUpLines == 0)
-            return spend.BuyBelowLines > 0 ? "open" : "-";
-        var label = FormatCompactGil(spend.StockUpCeiling);
-        return spend.BuyBelowLines > 0 ? $"{label} +{spend.BuyBelowLines}" : label;
+        if (spend.StockUpLines + spend.BuyBelowLines == 0)
+            return "-";
+        if (spend.OpenLines == spend.StockUpLines + spend.BuyBelowLines)
+            return "open";
+        var label = FormatCompactGil(spend.WorstCase);
+        return spend.OpenLines > 0 ? $"{label} +{spend.OpenLines}" : label;
     }
 
     public static string FormatCompactGil(ulong gil) =>
@@ -118,7 +128,7 @@ public static class MarketAcquisitionWorkbenchCompositionInsights
         var local = utc.ToLocalTime();
         return local.Year == nowUtc.ToLocalTime().Year
             ? local.ToString("MMM d", CultureInfo.CurrentCulture)
-            : local.ToString("MMM d ''yy", CultureInfo.CurrentCulture);
+            : local.ToString("MMM d \\'yy", CultureInfo.CurrentCulture);
     }
 
     public static string SafeRegion(string region)
@@ -197,6 +207,12 @@ public static class MarketAcquisitionWorkbenchCompositionInsights
             fields.Add(new("Extra units allowed", FormatCount(beforeExtra), FormatCount(afterExtra)));
         if (before.MaxUnitPrice != after.MaxUnitPrice)
             fields.Add(new("Unit ceiling", FormatCount(before.MaxUnitPrice), FormatCount(after.MaxUnitPrice)));
+        if (!string.Equals(before.TargetBasis, after.TargetBasis, StringComparison.Ordinal))
+            fields.Add(new("Target basis", before.TargetBasis, after.TargetBasis));
+        if (before.MaxQuantity != after.MaxQuantity)
+            fields.Add(new("Max quantity", FormatCount(before.MaxQuantity), FormatCount(after.MaxQuantity)));
+        if (before.GilCap != after.GilCap)
+            fields.Add(new("Spend ceiling", FormatCount(before.GilCap), FormatCount(after.GilCap)));
         if (!string.Equals(before.HqPolicy, after.HqPolicy, StringComparison.OrdinalIgnoreCase))
             fields.Add(new("Quality", FormatQuality(before.HqPolicy), FormatQuality(after.HqPolicy)));
         return fields;

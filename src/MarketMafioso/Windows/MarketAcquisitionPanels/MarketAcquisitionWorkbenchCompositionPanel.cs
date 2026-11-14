@@ -31,6 +31,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
     private string? renameCompositionId;
     private bool focusNameInput;
     private string? updateTargetId;
+    private string? loadTargetId;
     private string? pendingPopup;
     private bool closePopup;
     private bool selectSourceOnNextDraw = true;
@@ -580,7 +581,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
         if (ConsumeClose())
             return;
 
-        var selected = catalog.SelectedComposition;
+        var selected = loadTargetId is null ? null : catalog.Find(loadTargetId);
         ImGui.TextUnformatted(selected is null
             ? "This composition is no longer available."
             : $"Loading {selected.Name} discards the finalized plan.");
@@ -736,18 +737,16 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
     private static void DrawSpendTooltip(MarketAcquisitionCompositionSpend spend)
     {
         ImGui.BeginTooltip();
-        if (spend.StockUpLines > 0)
+        if (spend.WorstCase > 0)
         {
-            ImGui.TextUnformatted($"{spend.StockUpCeiling:N0} gil worst case");
+            ImGui.TextUnformatted($"{spend.WorstCase:N0} gil worst case");
             ImGui.TextColored(
                 MainWindow.ColMuted,
-                $"{spend.StockUpLines:N0} stock-up line(s): target on hand × unit ceiling");
-            if (spend.UnpricedStockUpLines > 0)
-                ImGui.TextColored(MainWindow.ColWarning, $"{spend.UnpricedStockUpLines:N0} stock-up line(s) have no unit ceiling");
+                "Stock-up: (target on hand + extra units) × unit ceiling. A spend ceiling caps any line.");
         }
 
-        if (spend.BuyBelowLines > 0)
-            ImGui.TextColored(MainWindow.ColMuted, $"{spend.BuyBelowLines:N0} buy-below line(s): open-ended, bounded by unit ceiling only");
+        if (spend.OpenLines > 0)
+            ImGui.TextColored(MainWindow.ColMuted, $"{spend.OpenLines:N0} line(s) with no spend ceiling: open-ended");
         ImGui.EndTooltip();
     }
 
@@ -848,6 +847,9 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
 
     private bool CommitName(MarketAcquisitionRequestDocument document)
     {
+        // Rename targets the composition the popup was opened for, even if the list selection moved meanwhile.
+        if (renameCompositionId is not null && catalog.SelectedCompositionId != renameCompositionId)
+            catalog.Select(renameCompositionId);
         var result = renameCompositionId is null
             ? catalog.SaveNew(nameBuffer, document)
             : catalog.RenameSelected(nameBuffer);
@@ -899,7 +901,10 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
     private void RequestLoad(MarketAcquisitionWorkbenchCompositionContext context, MarketAcquisitionWorkbenchComposition selected)
     {
         if (context.HasReadyPreparedPlan)
+        {
+            loadTargetId = selected.Id;
             pendingPopup = LoadPopupId;
+        }
         else
             loadComposition(selected, context.CharacterName, context.World);
     }
