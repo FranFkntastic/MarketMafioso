@@ -137,7 +137,8 @@ public sealed class MarketAcquisitionPlanPreparationService
             sweepWorldExclusions,
             baselines,
             request.MinimumStopValueGil,
-            request.ExhaustiveResearchMode);
+            request.ExhaustiveResearchMode,
+            request.MinimumStopCoveragePercent);
         var recommendedTargetLines = plan.Lines
             .Where(line => line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -154,7 +155,7 @@ public sealed class MarketAcquisitionPlanPreparationService
                 : BuildNoSupportedListingsStatus(plan);
         var lowValueStops = plan.Diagnostics.StopDecisions.Count(decision => decision.Skipped);
         if (lowValueStops > 0)
-            statusMessage += $" Skipped {lowValueStops:N0} world(s) below the minimum stop value of {plan.MinimumStopValueGil:N0} gil; see the plan for estimates.";
+            statusMessage += $" Skipped {lowValueStops:N0} world(s) below the applicable target coverage ({plan.MinimumStopCoveragePercent:N0}%) and buy-below savings ({plan.MinimumStopValueGil:N0} gil) floors; see stop reasons for shares and savings.";
         if (claimed.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase) &&
             recommendedPlannedQuantity < recommendedRequestedQuantity)
         {
@@ -201,9 +202,7 @@ public sealed class MarketAcquisitionPlanPreparationService
     }
 
     private static uint RemainingNeed(MarketAcquisitionPlanLine line) =>
-        line.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal
-            ? line.RequestedQuantity > line.InitialOnHandQuantity ? line.RequestedQuantity - line.InitialOnHandQuantity : 0u
-            : line.RequestedQuantity;
+        MarketAcquisitionPlanner.RemainingNeed(line);
 
     private IReadOnlyList<string> FindWorldsWithNewerUsefulUniversalisEvidence(
         MarketAcquisitionBatchLineView line,
@@ -282,6 +281,7 @@ public sealed class MarketAcquisitionPlanPreparationService
 public sealed record MarketAcquisitionPlanPreparationRequest
 {
     public int MinimumStopValueGil { get; init; } = 5_000;
+    public int MinimumStopCoveragePercent { get; init; } = 2;
     public bool ExhaustiveResearchMode { get; init; }
     public MarketAcquisitionClaimView? Claim { get; init; }
     public string CurrentWorld { get; init; } = string.Empty;

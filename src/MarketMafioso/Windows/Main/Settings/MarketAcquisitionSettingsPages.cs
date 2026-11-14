@@ -145,16 +145,29 @@ internal sealed class MarketAcquisitionSettingsPages
         }
         DrawCheckbox(context, "Full all-world resweep", "Ignore recent checked-world history while preparing an all-world route.",
             () => config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep, value => config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep = value);
-        if (context.Matches("Minimum stop value", "gil", "Recommended", "route"))
+        if (context.Matches("Minimum stop coverage", "percent", "Recommended", "route"))
+        {
+            var value = config.MarketAcquisitionMinimumStopCoveragePercent;
+            ImGui.SetNextItemWidth(120f);
+            if (ImGui.InputInt("Minimum stop target coverage (%)", ref value))
+            {
+                config.MarketAcquisitionMinimumStopCoveragePercent = Math.Clamp(value, 0, 100);
+                config.Save();
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Recommended routes keep stops covering at least this share of any stock-up line's remaining need, or meeting the buy-below savings floor. Each line weighs equally. 0 disables this floor. Current world, all-world sweeps and exhaustive research are exempt. Applies when preparing a plan.");
+        }
+        if (context.Matches("Minimum stop buy-below savings", "gil", "Recommended", "route"))
         {
             var value = config.MarketAcquisitionMinimumStopValueGil;
             ImGui.SetNextItemWidth(120f);
-            if (ImGui.InputInt("Minimum stop value (gil)", ref value))
+            if (ImGui.InputInt("Minimum stop buy-below savings (gil)", ref value))
             {
                 config.MarketAcquisitionMinimumStopValueGil = Math.Max(0, value);
                 config.Save();
             }
-            ImGui.TextWrapped("Recommended routes skip stops below this estimated value. 0 disables the minimum. All-world sweeps and exhaustive research never drop stops by value. Applies when preparing a plan.");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Savings are (unit ceiling - unit price) times quantity for planned and eligible advisory buy-below listings, not planned spend or guaranteed purchases. Recommended routes skip only when all applicable floors are missed. 0 disables this floor. Current world, all-world sweeps and exhaustive research are exempt. Applies when preparing a plan.");
         }
     }
 

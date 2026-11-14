@@ -14,7 +14,8 @@ public static class MarketAcquisitionPlanner
         IEnumerable<MarketAcquisitionSweepWorldExclusion>? sweepWorldExclusions = null,
         IReadOnlyDictionary<string, uint>? inventoryBaselines = null,
         int minimumStopValueGil = 5_000,
-        bool exhaustiveResearchMode = false)
+        bool exhaustiveResearchMode = false,
+        int minimumStopCoveragePercent = 2)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(listings);
@@ -118,6 +119,7 @@ public static class MarketAcquisitionPlanner
         {
             RouteCurrentWorld = currentWorld ?? string.Empty,
             MinimumStopValueGil = Math.Max(0, minimumStopValueGil),
+            MinimumStopCoveragePercent = Math.Clamp(minimumStopCoveragePercent, 0, 100),
             ExhaustiveResearchMode = exhaustiveResearchMode,
             AdvisoryListings = sourceListings,
             SweepWorldExclusions = sweepExclusions,
@@ -695,29 +697,61 @@ public static class MarketAcquisitionPlanner
 
     public static MarketAcquisitionPlan ApplyRoutePolicy(MarketAcquisitionPlan plan)
     {
-        const string basis = "Current world first when valuable; then estimated gil descending; world name breaks ties. Value = planned target buys + eligible buy-below advisory listings (not guaranteed purchases).";
-        var floor = plan.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase) && !plan.ExhaustiveResearchMode
-            ? Math.Max(0, plan.MinimumStopValueGil) : 0;
-        var valued = plan.WorldBatches.Select(batch => batch with
+        const string basis = "Current world first with positive coverage or savings; then equal-weight target coverage score descending, buy-below savings descending, and world name. Advisory savings are not guaranteed purchases.";
+        var applyFloors = plan.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase) && !plan.ExhaustiveResearchMode;
+        var coverageFloor = Math.Clamp(plan.MinimumStopCoveragePercent, 0, 100) / 100d;
+        var savingsFloor = (ulong)Math.Max(0, plan.MinimumStopValueGil);
+        var valued = plan.WorldBatches.Select(batch =>
         {
-            EstimatedValueGil = EstimateWorldValue(plan, batch),
+            var shares = plan.Lines.Where(line => line.QuantityMode != "AllBelowThreshold")
+                .Select(line =>
+                {
+                    var need = RemainingNeed(line);
+                    var quantity = batch.ItemSubtasks.Where(task => task.LineId == line.LineId)
+                        .Aggregate(0UL, (total, task) => total + task.PlannedQuantity);
+                    return new MarketAcquisitionStopLineCoverage
+                    {
+                        LineId = line.LineId, ItemName = line.ItemName, RemainingNeed = need,
+                        PlannedQuantity = quantity, Share = need == 0 ? 0 : Math.Min(1d, (double)quantity / need),
+                    };
+                }).ToArray();
+            return batch with
+            {
+                EstimatedValueGil = batch.PlannedGil,
+                LineCoverage = shares,
+                CoverageScore = shares.Sum(line => line.Share),
+                BuyBelowSavingsGil = EstimateBuyBelowSavings(plan, batch),
+            };
         }).ToArray();
-        // The current world needs no travel, so any value there is worth taking.
-        bool BelowFloor(MarketAcquisitionWorldBatch batch) => batch.EstimatedValueGil < (ulong)floor &&
-            !batch.WorldName.Equals(plan.RouteCurrentWorld, StringComparison.OrdinalIgnoreCase);
+        bool HasTargets(MarketAcquisitionWorldBatch batch) => batch.LineCoverage.Any(line => line.PlannedQuantity > 0);
+        bool HasBuyBelow(MarketAcquisitionWorldBatch batch) =>
+            batch.ItemSubtasks.Any(task => task.QuantityMode == "AllBelowThreshold") ||
+            EligibleBuyBelowAdvisory(plan, batch).Any();
+        // An absent category cannot rescue a stop. A disabled floor in a present
+        // category does: zero means do not reject stops on that measure.
+        bool BelowFloor(MarketAcquisitionWorldBatch batch) => applyFloors &&
+            !batch.WorldName.Equals(plan.RouteCurrentWorld, StringComparison.OrdinalIgnoreCase) &&
+            (!HasTargets(batch) || (coverageFloor > 0 && batch.LineCoverage.All(line => line.Share < coverageFloor))) &&
+            (!HasBuyBelow(batch) || (savingsFloor > 0 && batch.BuyBelowSavingsGil < savingsFloor));
         var decisions = valued.Select(batch => new MarketAcquisitionStopDecision
         {
             WorldName = batch.WorldName,
             EstimatedValueGil = batch.EstimatedValueGil,
+            PlannedGil = batch.PlannedGil,
+            PlannedQuantity = batch.PlannedQuantity,
+            LineCoverage = batch.LineCoverage,
+            CoverageScore = batch.CoverageScore,
+            BuyBelowSavingsGil = batch.BuyBelowSavingsGil,
             Skipped = BelowFloor(batch),
             Reason = BelowFloor(batch)
-                ? $"Estimated value {batch.EstimatedValueGil:N0} gil is below the minimum stop value of {floor:N0} gil."
+                ? $"Skipped: {(HasTargets(batch) ? $"covers at most {batch.LineCoverage.Max(line => line.Share) * 100:0.##}% of any target (floor {coverageFloor * 100:0.##}%)" : "no stock-up lines")} and {(HasBuyBelow(batch) ? $"saves {batch.BuyBelowSavingsGil:N0} gil under ceilings (floor {savingsFloor:N0} gil)" : "no buy-below lines")}."
                 : basis,
         }).ToArray();
         var remaining = valued
             .Where(batch => !BelowFloor(batch))
-            .OrderByDescending(batch => batch.EstimatedValueGil > 0 && batch.WorldName.Equals(plan.RouteCurrentWorld, StringComparison.OrdinalIgnoreCase))
-            .ThenByDescending(batch => batch.EstimatedValueGil)
+            .OrderByDescending(batch => (batch.CoverageScore > 0 || batch.BuyBelowSavingsGil > 0) && batch.WorldName.Equals(plan.RouteCurrentWorld, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(batch => batch.CoverageScore)
+            .ThenByDescending(batch => batch.BuyBelowSavingsGil)
             .ThenBy(batch => batch.WorldName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var currentWorlds = valued.Select(batch => batch.WorldName).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -738,26 +772,50 @@ public static class MarketAcquisitionPlanner
         };
     }
 
-    private static ulong EstimateWorldValue(MarketAcquisitionPlan plan, MarketAcquisitionWorldBatch batch)
-    {
-        // Opportunistic lines may not have a planned subtask on this world.
-        var buyBelow = plan.Lines.Where(line => line.QuantityMode == "AllBelowThreshold").ToArray();
-        // Legacy plans without advisory evidence retain their last planned estimate.
-        if (buyBelow.Length == 0 || plan.AdvisoryListings is null)
-            return batch.PlannedGil;
+    internal static uint RemainingNeed(MarketAcquisitionPlanLine line) =>
+        line.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal
+            ? line.RequestedQuantity > line.InitialOnHandQuantity ? line.RequestedQuantity - line.InitialOnHandQuantity : 0u
+            : line.RequestedQuantity;
 
-        var plannedBuyBelow = batch.ItemSubtasks.Where(task => task.QuantityMode == "AllBelowThreshold")
-            .Aggregate(0UL, (total, task) => total + task.PlannedGil);
-        var advisoryValue = plan.AdvisoryListings.Distinct()
-            .Where(listing => listing.WorldName.Equals(batch.WorldName, StringComparison.OrdinalIgnoreCase) &&
-                listing.Quantity > 0 && listing.UnitPrice > 0 &&
-                buyBelow.Any(line => line.ItemId == listing.ItemId && listing.UnitPrice <= line.MaxUnitPrice &&
+    private static ulong EstimateBuyBelowSavings(MarketAcquisitionPlan plan, MarketAcquisitionWorldBatch batch)
+    {
+        var buyBelow = plan.Lines.Where(line => line.QuantityMode == "AllBelowThreshold").ToArray();
+        var candidates = batch.Listings
+            .Select(listing => (Listing: listing, Line: buyBelow.FirstOrDefault(line => line.LineId == listing.LineId)))
+            .Where(pair => pair.Line != null)
+            .Select(pair => (pair.Listing.ItemId, pair.Listing.ListingId, pair.Listing.RetainerId,
+                pair.Listing.RetainerName, pair.Listing.IsHq, pair.Listing.UnitPrice, pair.Listing.Quantity,
+                Savings: (ulong)(pair.Line!.MaxUnitPrice - Math.Min(pair.Line.MaxUnitPrice, pair.Listing.UnitPrice)) * pair.Listing.Quantity))
+            .ToList();
+        var advisory = EligibleBuyBelowAdvisory(plan, batch).Distinct();
+        foreach (var listing in advisory)
+        {
+            // Count each listing once, even when it is both planned and advisory
+            // or matches multiple request lines. Use the largest eligible ceiling.
+            var ceiling = buyBelow.Where(line => line.ItemId == listing.ItemId &&
+                    listing.UnitPrice <= line.MaxUnitPrice &&
                     MarketAcquisitionPolicy.HqMatches(line.HqPolicy, listing.IsHq) &&
                     !plan.SweepWorldExclusions.Any(exclusion => exclusion.LineId == line.LineId &&
-                        exclusion.WorldName.Equals(batch.WorldName, StringComparison.OrdinalIgnoreCase))))
-            .Aggregate(0UL, (total, listing) => total + (ulong)listing.UnitPrice * listing.Quantity);
-        return (ulong)batch.PlannedGil - plannedBuyBelow + advisoryValue;
+                        exclusion.WorldName.Equals(batch.WorldName, StringComparison.OrdinalIgnoreCase)))
+                .Max(line => line.MaxUnitPrice);
+            candidates.Add((listing.ItemId, listing.ListingId, listing.RetainerId, listing.RetainerName,
+                listing.IsHq, listing.UnitPrice, listing.Quantity, (ulong)(ceiling - listing.UnitPrice) * listing.Quantity));
+        }
+        return candidates.GroupBy(candidate => (candidate.ItemId, candidate.ListingId,
+                candidate.RetainerId, candidate.RetainerName, candidate.IsHq, candidate.UnitPrice, candidate.Quantity))
+            .Aggregate(0UL, (total, group) => checked(total + group.Max(candidate => candidate.Savings)));
     }
+
+    private static IEnumerable<MarketAcquisitionListing> EligibleBuyBelowAdvisory(
+        MarketAcquisitionPlan plan, MarketAcquisitionWorldBatch batch) =>
+        (plan.AdvisoryListings ?? []).Where(listing =>
+            listing.WorldName.Equals(batch.WorldName, StringComparison.OrdinalIgnoreCase) &&
+            listing.Quantity > 0 && listing.UnitPrice > 0 &&
+            plan.Lines.Any(line => line.QuantityMode == "AllBelowThreshold" &&
+                line.ItemId == listing.ItemId && listing.UnitPrice <= line.MaxUnitPrice &&
+                MarketAcquisitionPolicy.HqMatches(line.HqPolicy, listing.IsHq) &&
+                !plan.SweepWorldExclusions.Any(exclusion => exclusion.LineId == line.LineId &&
+                    exclusion.WorldName.Equals(batch.WorldName, StringComparison.OrdinalIgnoreCase))));
 
     private static string NormalizeQuantityMode(string quantityMode) =>
         quantityMode switch

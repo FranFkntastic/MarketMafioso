@@ -463,6 +463,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                         RecentWorldTtl = recentWorldTtl,
                         IgnoreRecentWorldVisitsForSweep = ignoreRecentWorldVisitsForSweep,
                         MinimumStopValueGil = config.MarketAcquisitionMinimumStopValueGil,
+                        MinimumStopCoveragePercent = config.MarketAcquisitionMinimumStopCoveragePercent,
                         ExhaustiveResearchMode = config.MarketAcquisitionExhaustiveResearchMode,
                     },
                     token).ConfigureAwait(false);
@@ -493,6 +494,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                 RecentWorldTtl = recentWorldTtl,
                 IgnoreRecentWorldVisitsForSweep = false,
                 MinimumStopValueGil = config.MarketAcquisitionMinimumStopValueGil,
+                MinimumStopCoveragePercent = config.MarketAcquisitionMinimumStopCoveragePercent,
                 ExhaustiveResearchMode = config.MarketAcquisitionExhaustiveResearchMode,
             },
             token);

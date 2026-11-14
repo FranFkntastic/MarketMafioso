@@ -191,6 +191,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["opportunisticChecks"] = includeOpportunisticChecks.ToString(),
                 ["executionMode"] = executionMode.ToString(),
                 ["routeOrderingBasis"] = plan.Diagnostics.RouteOrderingBasis,
+                ["minimumStopCoveragePercent"] = plan.MinimumStopCoveragePercent.ToString(),
                 ["minimumStopValueGil"] = plan.MinimumStopValueGil.ToString(),
             });
         foreach (var stop in plan.Diagnostics.StopDecisions)
@@ -199,6 +200,12 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             {
                 ["world"] = stop.WorldName,
                 ["estimatedValueGil"] = stop.EstimatedValueGil.ToString(CultureInfo.InvariantCulture),
+                ["plannedGil"] = stop.PlannedGil.ToString(CultureInfo.InvariantCulture),
+                ["coverageScore"] = stop.CoverageScore.ToString(CultureInfo.InvariantCulture),
+                ["lineCoverage"] = string.Join("; ", stop.LineCoverage.Select(line =>
+                    $"{line.LineId}:{line.PlannedQuantity}/{line.RemainingNeed}={line.Share.ToString("R", CultureInfo.InvariantCulture)}")),
+                ["buyBelowSavingsGil"] = stop.BuyBelowSavingsGil.ToString(CultureInfo.InvariantCulture),
+                ["minimumStopCoveragePercent"] = plan.MinimumStopCoveragePercent.ToString(),
                 ["skipped"] = stop.Skipped.ToString(),
                 ["routeOrdinal"] = (plan.WorldBatches.ToList().FindIndex(batch =>
                     batch.WorldName.Equals(stop.WorldName, StringComparison.OrdinalIgnoreCase)) + 1).ToString(),

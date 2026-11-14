@@ -53,7 +53,7 @@ internal sealed class MarketAcquisitionPlanPanel
         if (!ImGui.CollapsingHeader($"{label}##MarketAcquisitionPlanRouteStops", ImGuiTreeNodeFlags.DefaultOpen))
             return;
 
-        if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable", 5,
+        if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable", 7,
                 DalamudNestedTableFlags.Parent(resizable: true)))
             return;
 
@@ -61,7 +61,9 @@ internal sealed class MarketAcquisitionPlanPanel
         ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 160);
         ImGui.TableSetupColumn("Data Center", ImGuiTableColumnFlags.WidthFixed, 96);
         ImGui.TableSetupColumn("Items", ImGuiTableColumnFlags.WidthFixed, 80);
-        ImGui.TableSetupColumn("Value", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, 110);
+        ImGui.TableSetupColumn("Coverage", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Savings", ImGuiTableColumnFlags.WidthFixed, 110);
         ImGui.TableHeadersRow();
 
         var ordinal = 0;
@@ -92,17 +94,19 @@ internal sealed class MarketAcquisitionPlanPanel
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(batch.PlannedQuantity.ToString("N0"));
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(FormatGil((uint)Math.Min(batch.EstimatedValueGil, uint.MaxValue)));
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(batch.EstimatedValueGil == batch.PlannedGil
-                    ? plan.Diagnostics.RouteOrderingBasis
-                    : $"Planned {batch.PlannedGil:N0} gil; buy-below listings under ceiling add {batch.EstimatedValueGil - Math.Min(batch.EstimatedValueGil, batch.PlannedGil):N0} gil.\n{plan.Diagnostics.RouteOrderingBasis}");
+            ImGui.TextUnformatted(FormatGil(batch.PlannedGil));
+            ImGui.TableNextColumn();
+            DrawCoverage(batch.LineCoverage, false);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatSavings(batch.BuyBelowSavingsGil));
+            if (ImGui.IsItemHovered() && batch.BuyBelowSavingsGil > 0)
+                ImGui.SetTooltip("Savings under buy-below ceilings, including eligible advisory listings; not guaranteed purchases.");
 
             if (batch.Listings.Count > 0)
                 expandedStops.DrawDetail(stopKey, () => DrawStopItems(batch));
         }
 
-        foreach (var decision in skipped.OrderByDescending(decision => decision.EstimatedValueGil))
+        foreach (var decision in skipped.OrderByDescending(decision => decision.CoverageScore).ThenByDescending(decision => decision.BuyBelowSavingsGil))
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
@@ -114,15 +118,36 @@ internal sealed class MarketAcquisitionPlanPanel
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatRouteDataCenter(MarketAcquisitionWorldCatalog.ResolveDataCenter(decision.WorldName)));
             ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "—");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, decision.PlannedQuantity.ToString("N0"));
             ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatGil((uint)Math.Min(decision.EstimatedValueGil, uint.MaxValue)));
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatGil(decision.PlannedGil));
+            ImGui.TableNextColumn();
+            DrawCoverage(decision.LineCoverage, true);
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatSavings(decision.BuyBelowSavingsGil));
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(decision.Reason);
         }
 
         ImGui.EndTable();
     }
+
+    private static void DrawCoverage(IReadOnlyList<MarketAcquisitionStopLineCoverage> shares, bool muted)
+    {
+        var covered = shares.Where(line => line.Share > 0).OrderByDescending(line => line.Share).ToArray();
+        var text = covered.Length == 0 ? "-" :
+            $"{covered[0].ItemName ?? "Unnamed item"} {covered[0].Share * 100:0.##}%" +
+            (covered.Length > 1 ? $" +{covered.Length - 1}" : string.Empty);
+        if (muted)
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, text);
+        else
+            ImGui.TextUnformatted(text);
+        if (ImGui.IsItemHovered() && covered.Length > 0)
+            ImGui.SetTooltip(string.Join("\n", covered.Select(line =>
+                $"{line.ItemName ?? "Unnamed item"}: {line.Share * 100:0.##}% ({line.PlannedQuantity:N0}/{line.RemainingNeed:N0})")));
+    }
+
+    private static string FormatSavings(ulong gil) => gil > 0 ? $"{gil:N0} gil" : "-";
 
     private void DrawStopItems(MarketAcquisitionWorldBatch batch)
     {
