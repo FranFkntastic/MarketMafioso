@@ -53,7 +53,8 @@ internal sealed class MarketAcquisitionPlanPanel
         if (!ImGui.CollapsingHeader($"{label}##MarketAcquisitionPlanRouteStops", ImGuiTreeNodeFlags.DefaultOpen))
             return;
 
-        if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable", 7,
+        // The ID carries the column layout: ImGui would otherwise reapply the saved 5-column widths.
+        if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable##coverage-v1", 7,
                 DalamudNestedTableFlags.Parent(resizable: true)))
             return;
 
