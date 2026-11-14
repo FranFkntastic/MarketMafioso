@@ -130,6 +130,11 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
 
+        // Exact-authority routes do not opt into advisory routing. Reapply only to
+        // plans prepared by this policy, including restart/recovery inputs.
+        if (!string.IsNullOrWhiteSpace(plan.Diagnostics.RouteOrderingBasis))
+            plan = MarketAcquisitionPlanner.ApplyRoutePolicy(plan);
+
         CloseDiagnostics();
         diagnosticsRequested = enableDiagnostics;
         diagnosticsLevelRequested = enableDiagnostics
@@ -185,7 +190,22 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["plannedListingCount"] = plan.Diagnostics.PlannedListingCount.ToString(),
                 ["opportunisticChecks"] = includeOpportunisticChecks.ToString(),
                 ["executionMode"] = executionMode.ToString(),
+                ["routeOrderingBasis"] = plan.Diagnostics.RouteOrderingBasis,
+                ["minimumStopValueGil"] = plan.MinimumStopValueGil.ToString(),
             });
+        foreach (var stop in plan.Diagnostics.StopDecisions)
+        {
+            diagnostics.Record("route-stop-value", stop.Reason, new Dictionary<string, string?>
+            {
+                ["world"] = stop.WorldName,
+                ["estimatedValueGil"] = stop.EstimatedValueGil.ToString(CultureInfo.InvariantCulture),
+                ["skipped"] = stop.Skipped.ToString(),
+                ["routeOrdinal"] = (plan.WorldBatches.ToList().FindIndex(batch =>
+                    batch.WorldName.Equals(stop.WorldName, StringComparison.OrdinalIgnoreCase)) + 1).ToString(),
+                ["orderingBasis"] = plan.Diagnostics.RouteOrderingBasis,
+                ["minimumStopValueGil"] = plan.MinimumStopValueGil.ToString(),
+            });
+        }
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 

@@ -77,6 +77,7 @@ public sealed record MarketAcquisitionWorldItemSubtask
 
 public sealed record MarketAcquisitionWorldBatch
 {
+    public ulong EstimatedValueGil { get; init; }
     public string WorldName { get; init; } = string.Empty;
     public string DataCenter { get; init; } = string.Empty;
     public uint PlannedQuantity { get; init; }
@@ -88,6 +89,9 @@ public sealed record MarketAcquisitionWorldBatch
 
 public sealed record MarketAcquisitionPlan
 {
+    public string RouteCurrentWorld { get; init; } = string.Empty;
+    public int MinimumStopValueGil { get; init; } = 5_000;
+    public bool ExhaustiveResearchMode { get; init; }
     // Optional so persisted plans predating inventory-aware planning remain readable.
     public IReadOnlyList<MarketAcquisitionListing>? AdvisoryListings { get; init; }
     public IReadOnlyList<MarketAcquisitionSweepWorldExclusion> SweepWorldExclusions { get; init; } = [];
@@ -106,6 +110,8 @@ public sealed record MarketAcquisitionPlan
 
 public sealed record MarketAcquisitionPlanDiagnostics
 {
+    public string RouteOrderingBasis { get; init; } = string.Empty;
+    public IReadOnlyList<MarketAcquisitionStopDecision> StopDecisions { get; init; } = [];
     public int SourceListingCount { get; init; }
     public int NonZeroListingCount { get; init; }
     public int PriceSupportedListingCount { get; init; }
@@ -113,6 +119,14 @@ public sealed record MarketAcquisitionPlanDiagnostics
     public int WorldSupportedListingCount { get; init; }
     public int PlannedListingCount { get; init; }
     public IReadOnlyList<MarketAcquisitionListingDecision> ListingDecisions { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionStopDecision
+{
+    public string WorldName { get; init; } = string.Empty;
+    public ulong EstimatedValueGil { get; init; }
+    public bool Skipped { get; init; }
+    public string Reason { get; init; } = string.Empty;
 }
 
 public sealed record MarketAcquisitionListingDecision

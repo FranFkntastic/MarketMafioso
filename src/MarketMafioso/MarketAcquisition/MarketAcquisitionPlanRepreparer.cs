@@ -24,7 +24,7 @@ public static class MarketAcquisitionPlanRepreparer
             .Where(batch => !skippedSet.Contains(batch.WorldName))
             .ToArray();
 
-        var filtered = plan with
+        var filtered = MarketAcquisitionPlanner.ApplyRoutePolicy(plan with
         {
             Status = remainingBatches.Length == 0 ? "NoSupportedListings" : "Ready",
             PreparedAtUtc = preparedAtUtc,
@@ -32,11 +32,13 @@ public static class MarketAcquisitionPlanRepreparer
             PlannedGil = (uint)remainingBatches.Sum(batch => batch.PlannedGil),
             Diagnostics = plan.Diagnostics with
             {
+                StopDecisions = plan.Diagnostics.StopDecisions.Where(decision => !skippedSet.Contains(decision.WorldName)).ToArray(),
                 PlannedListingCount = remainingBatches.Sum(batch => batch.Listings.Count),
             },
             Lines = RecalculateLines(plan.Lines, remainingBatches),
             WorldBatches = remainingBatches,
-        };
+        });
+        remainingBatches = filtered.WorldBatches.ToArray();
 
         return new MarketAcquisitionPlanReprepareResult
         {
@@ -49,7 +51,7 @@ public static class MarketAcquisitionPlanRepreparer
         };
     }
 
-    private static IReadOnlyList<MarketAcquisitionPlanLine> RecalculateLines(
+    internal static IReadOnlyList<MarketAcquisitionPlanLine> RecalculateLines(
         IReadOnlyList<MarketAcquisitionPlanLine> lines,
         IReadOnlyList<MarketAcquisitionWorldBatch> remainingBatches)
     {
@@ -68,7 +70,7 @@ public static class MarketAcquisitionPlanRepreparer
                 subtasks ??= [];
                 return line with
                 {
-                    Status = subtasks.Length == 0 ? "NoSupportedListings" : "Ready",
+                    Status = line.Status == "TargetAlreadyMet" ? line.Status : subtasks.Length == 0 ? "NoSupportedListings" : "Ready",
                     PlannedQuantity = (uint)subtasks.Sum(subtask => subtask.PlannedQuantity),
                     PlannedGil = (uint)subtasks.Sum(subtask => subtask.PlannedGil),
                 };

@@ -12,7 +12,9 @@ public static class MarketAcquisitionPlanner
         DateTimeOffset preparedAtUtc,
         string? currentWorld = null,
         IEnumerable<MarketAcquisitionSweepWorldExclusion>? sweepWorldExclusions = null,
-        IReadOnlyDictionary<string, uint>? inventoryBaselines = null)
+        IReadOnlyDictionary<string, uint>? inventoryBaselines = null,
+        int minimumStopValueGil = 5_000,
+        bool exhaustiveResearchMode = false)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(listings);
@@ -102,20 +104,21 @@ public static class MarketAcquisitionPlanner
             });
         }
 
-        var batches = RouteSortBatches(
-            selectedSubtasks
-                .GroupBy(subtask => subtask.WorldName, StringComparer.OrdinalIgnoreCase)
-                .Select(group => BuildWorldBatch(group.Key, group))
-                .ToList(),
-            currentWorld);
+        var batches = selectedSubtasks
+            .GroupBy(subtask => subtask.WorldName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => BuildWorldBatch(group.Key, group))
+            .ToList();
 
         var primaryLine = requestLines[0];
         var totalQuantity = (uint)batches.Sum(batch => batch.PlannedQuantity);
         var totalGil = (uint)batches.Sum(batch => batch.PlannedGil);
         var diagnostics = BuildDiagnostics(request, requestLines, sourceListings, sweepWorlds, sweepExclusions, selectedSubtasks);
 
-        return new MarketAcquisitionPlan
+        return ApplyRoutePolicy(new MarketAcquisitionPlan
         {
+            RouteCurrentWorld = currentWorld ?? string.Empty,
+            MinimumStopValueGil = Math.Max(0, minimumStopValueGil),
+            ExhaustiveResearchMode = exhaustiveResearchMode,
             AdvisoryListings = sourceListings,
             SweepWorldExclusions = sweepExclusions,
             RequestId = request.Id,
@@ -132,7 +135,7 @@ public static class MarketAcquisitionPlanner
             },
             Lines = planLines,
             WorldBatches = batches,
-        };
+        });
     }
 
     private static IReadOnlyList<PlannerLine> BuildRequestLines(MarketAcquisitionRequestView request)
@@ -690,38 +693,67 @@ public static class MarketAcquisitionPlanner
     private static bool LineSatisfiesQuantity(PlannerLine line, uint plannedQuantity) =>
         IsUnboundedAllBelowThreshold(line) || plannedQuantity >= line.Quantity;
 
-    private static IReadOnlyList<MarketAcquisitionWorldBatch> RouteSortBatches(
-        IReadOnlyList<MarketAcquisitionWorldBatch> batches,
-        string? currentWorld)
+    public static MarketAcquisitionPlan ApplyRoutePolicy(MarketAcquisitionPlan plan)
     {
-        if (string.IsNullOrWhiteSpace(currentWorld))
-            return batches;
-
-        var currentDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(currentWorld);
-        var indexedBatches = batches
-            .Select((batch, index) => new
+        const string basis = "Current world first when valuable; then estimated gil descending; world name breaks ties. Value = planned target buys + eligible buy-below advisory listings (not guaranteed purchases).";
+        var floor = plan.WorldMode.Equals("Recommended", StringComparison.OrdinalIgnoreCase) && !plan.ExhaustiveResearchMode
+            ? Math.Max(0, plan.MinimumStopValueGil) : 0;
+        var valued = plan.WorldBatches.Select(batch => batch with
+        {
+            EstimatedValueGil = EstimateWorldValue(plan, batch),
+        }).ToArray();
+        var decisions = valued.Select(batch => new MarketAcquisitionStopDecision
+        {
+            WorldName = batch.WorldName,
+            EstimatedValueGil = batch.EstimatedValueGil,
+            Skipped = batch.EstimatedValueGil < (ulong)floor,
+            Reason = batch.EstimatedValueGil < (ulong)floor
+                ? $"Estimated value {batch.EstimatedValueGil:N0} gil is below the minimum stop value of {floor:N0} gil."
+                : basis,
+        }).ToArray();
+        var remaining = valued
+            .Where(batch => batch.EstimatedValueGil >= (ulong)floor)
+            .OrderByDescending(batch => batch.EstimatedValueGil > 0 && batch.WorldName.Equals(plan.RouteCurrentWorld, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(batch => batch.EstimatedValueGil)
+            .ThenBy(batch => batch.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var currentWorlds = valued.Select(batch => batch.WorldName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return plan with
+        {
+            Status = remaining.Length == 0 ? "NoSupportedListings" : "Ready",
+            WorldBatches = remaining,
+            PlannedQuantity = (uint)remaining.Sum(batch => batch.PlannedQuantity),
+            PlannedGil = (uint)remaining.Sum(batch => batch.PlannedGil),
+            Lines = MarketAcquisitionPlanRepreparer.RecalculateLines(plan.Lines, remaining),
+            Diagnostics = plan.Diagnostics with
             {
-                Batch = batch,
-                Index = index,
-                DataCenter = string.IsNullOrWhiteSpace(batch.DataCenter)
-                    ? MarketAcquisitionWorldCatalog.ResolveDataCenter(batch.WorldName)
-                    : batch.DataCenter,
-            })
-            .ToList();
+                RouteOrderingBasis = basis,
+                StopDecisions = decisions.Concat(plan.Diagnostics.StopDecisions
+                    .Where(decision => decision.Skipped && !currentWorlds.Contains(decision.WorldName))).ToArray(),
+                PlannedListingCount = remaining.Sum(batch => batch.Listings.Count),
+            },
+        };
+    }
 
-        if (indexedBatches.Count <= 1)
-            return batches;
+    private static ulong EstimateWorldValue(MarketAcquisitionPlan plan, MarketAcquisitionWorldBatch batch)
+    {
+        // Opportunistic lines may not have a planned subtask on this world.
+        var buyBelow = plan.Lines.Where(line => line.QuantityMode == "AllBelowThreshold").ToArray();
+        // Legacy plans without advisory evidence retain their last planned estimate.
+        if (buyBelow.Length == 0 || plan.AdvisoryListings is null)
+            return batch.PlannedGil;
 
-        return indexedBatches
-            .OrderBy(entry => !entry.Batch.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
-            .ThenBy(entry => !entry.DataCenter.Equals(currentDataCenter, StringComparison.OrdinalIgnoreCase))
-            .ThenBy(entry => entry.DataCenter.Equals(currentDataCenter, StringComparison.OrdinalIgnoreCase)
-                ? string.Empty
-                : entry.DataCenter,
-                StringComparer.OrdinalIgnoreCase)
-            .ThenBy(entry => entry.Index)
-            .Select(entry => entry.Batch)
-            .ToList();
+        var plannedBuyBelow = batch.ItemSubtasks.Where(task => task.QuantityMode == "AllBelowThreshold")
+            .Aggregate(0UL, (total, task) => total + task.PlannedGil);
+        var advisoryValue = plan.AdvisoryListings.Distinct()
+            .Where(listing => listing.WorldName.Equals(batch.WorldName, StringComparison.OrdinalIgnoreCase) &&
+                listing.Quantity > 0 && listing.UnitPrice > 0 &&
+                buyBelow.Any(line => line.ItemId == listing.ItemId && listing.UnitPrice <= line.MaxUnitPrice &&
+                    MarketAcquisitionPolicy.HqMatches(line.HqPolicy, listing.IsHq) &&
+                    !plan.SweepWorldExclusions.Any(exclusion => exclusion.LineId == line.LineId &&
+                        exclusion.WorldName.Equals(batch.WorldName, StringComparison.OrdinalIgnoreCase))))
+            .Aggregate(0UL, (total, listing) => total + (ulong)listing.UnitPrice * listing.Quantity);
+        return (ulong)batch.PlannedGil - plannedBuyBelow + advisoryValue;
     }
 
     private static string NormalizeQuantityMode(string quantityMode) =>

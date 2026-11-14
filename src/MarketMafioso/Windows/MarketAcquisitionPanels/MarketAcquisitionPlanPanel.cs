@@ -38,6 +38,15 @@ internal sealed class MarketAcquisitionPlanPanel
         if (isStale)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Request changed after this plan was prepared. Update the request and prepare a fresh plan before starting.");
 
+        if (!string.IsNullOrWhiteSpace(plan.Diagnostics.RouteOrderingBasis))
+        {
+            ImGui.TextWrapped(plan.Diagnostics.RouteOrderingBasis);
+            foreach (var batch in plan.WorldBatches)
+                ImGui.TextUnformatted($"{batch.WorldName}: estimated {batch.EstimatedValueGil:N0} gil");
+        }
+        foreach (var decision in plan.Diagnostics.StopDecisions.Where(decision => decision.Skipped))
+            ImGui.TextWrapped($"{decision.WorldName}: skipped (estimated {decision.EstimatedValueGil:N0} gil). {decision.Reason}");
+
         if (plan.WorldBatches.Count == 0)
             return;
 
