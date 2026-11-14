@@ -315,8 +315,8 @@ internal static class MarketAcquisitionRequestPolicy
             throw new ArgumentException("Target quantity is required.", nameof(line));
         if (line.QuantityMode == "TargetQuantity" &&
             !string.IsNullOrWhiteSpace(line.TargetBasis) &&
-            line.TargetBasis is not ("OnHandTotal" or "RequiredPurchaseQuantity"))
-            throw new ArgumentException("Target basis must be OnHandTotal or RequiredPurchaseQuantity.", nameof(line));
+            line.TargetBasis is not ("OnHandTotal" or "OnHandIncludingRetainers" or "RequiredPurchaseQuantity"))
+            throw new ArgumentException("Target basis must be OnHandTotal, OnHandIncludingRetainers or RequiredPurchaseQuantity.", nameof(line));
         if (line.QuantityMode == "AllBelowThreshold" && line.MaximumOverage != 0)
             throw new ArgumentException("Maximum overage applies only to target quantity lines.", nameof(line));
     }

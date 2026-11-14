@@ -281,7 +281,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             if (exactAcquisitionContract is not null || routePlan.Lines.Count == 0 ||
                 !routePlan.Lines.All(line => line.QuantityMode == "TargetQuantity" &&
-                    MarketAcquisitionTargetBases.Normalize(line.TargetBasis) == MarketAcquisitionTargetBases.OnHandTotal &&
+                    MarketAcquisitionTargetBases.CountsOnHand(line.TargetBasis) &&
                     line.InitialOnHandQuantity >= line.RequestedQuantity))
                 return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("No useful world tasks remain after inventory reconciliation, but targets are not all met."));
 
@@ -3009,7 +3009,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var basis = MarketAcquisitionTargetBases.Normalize(line.TargetBasis, exactAcquisition);
             var initialOnHand = 0u;
             if (line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase) &&
-                basis == MarketAcquisitionTargetBases.OnHandTotal)
+                MarketAcquisitionTargetBases.CountsOnHand(basis))
             {
                 if (inventoryObserver is null)
                 {
@@ -3018,7 +3018,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     return false;
                 }
 
-                var observation = inventoryObserver.Observe(line.ItemId, line.HqPolicy);
+                var observation = inventoryObserver.Observe(line.ItemId, line.HqPolicy, basis);
                 if (!observation.IsAvailable)
                 {
                     adjustedPlan = plan;
@@ -3044,7 +3044,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private bool IsInventorySatisfied(MarketAcquisitionWorldItemSubtask task) =>
         exactAcquisitionAuthority is null && task.QuantityMode == "TargetQuantity" &&
-        MarketAcquisitionTargetBases.Normalize(task.TargetBasis) == MarketAcquisitionTargetBases.OnHandTotal &&
+        MarketAcquisitionTargetBases.CountsOnHand(task.TargetBasis) &&
         (ulong)initialOnHandByLine.GetValueOrDefault(task.LineId) +
         (state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? runner.GetLinePurchaseTotals(task.LineId).PurchasedQuantity : 0u) >= task.RequestedQuantity;
 
@@ -3052,9 +3052,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         if (exactAcquisitionAuthority is not null) return true;
         foreach (var task in stop.ItemSubtasks.Where(task => task.QuantityMode == "TargetQuantity" &&
-                     MarketAcquisitionTargetBases.Normalize(task.TargetBasis) == MarketAcquisitionTargetBases.OnHandTotal))
+                     MarketAcquisitionTargetBases.CountsOnHand(task.TargetBasis)))
         {
-            var observed = inventoryObserver?.Observe(task.ItemId, task.HqPolicy);
+            var observed = inventoryObserver?.Observe(task.ItemId, task.HqPolicy, task.TargetBasis);
             if (observed?.IsAvailable != true || purchase.PurchaseEvidenceState is PendingMarketPurchase)
             {
                 var now = clock.UtcNow;

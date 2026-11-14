@@ -80,6 +80,14 @@ internal sealed class MarketAcquisitionPlanPanel
         if (isStale)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Request changed after this plan was prepared. Update the request and prepare a fresh plan before starting.");
 
+        foreach (var line in plan.Lines.Where(line => line.QuantityMode == "TargetQuantity" &&
+                     MarketAcquisitionTargetBases.CountsOnHand(line.TargetBasis)))
+        {
+            var scope = line.TargetBasis == MarketAcquisitionTargetBases.OnHandIncludingRetainers ? "player + retainers" : "player";
+            var need = line.RequestedQuantity > line.InitialOnHandQuantity ? line.RequestedQuantity - line.InitialOnHandQuantity : 0u;
+            ImGui.TextUnformatted($"{line.ItemName}: on hand {line.InitialOnHandQuantity:N0} ({scope}), target {line.RequestedQuantity:N0}, still need {need:N0}");
+        }
+
         DrawRouteStops(plan);
     }
 

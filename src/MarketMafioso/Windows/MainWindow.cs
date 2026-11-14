@@ -194,7 +194,7 @@ public partial class MainWindow : Window, IDisposable
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
             marketAcquisitionWorldVisitCatalog,
-            new DalamudMarketAcquisitionInventoryObserver(dataManager));
+            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope));
         acquisitionWorkspace = new MarketAcquisitionRequestWorkspace(
             config,
             acquisitionClient,
@@ -331,7 +331,7 @@ public partial class MainWindow : Window, IDisposable
             PluginBuildInfo.DisplayVersion,
             () => config.MarketAcquisitionExhaustiveResearchMode,
             marketIntelligencePassiveReporter,
-            new DalamudMarketAcquisitionInventoryObserver(dataManager),
+            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope),
             new MarketAcquisitionAethernetDeparture(
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
                 lifestream,
@@ -472,7 +472,8 @@ public partial class MainWindow : Window, IDisposable
             SyncAcquisitionRequestBuilderAsync,
             RefreshAcquisitionRequestBuilderRemoteAsync,
             acquisitionWorkspace.OnDocumentAdopted,
-            AgentReviewRegistry);
+            AgentReviewRegistry,
+            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope));
         acquisitionCompositionCatalog = new MarketAcquisitionWorkbenchCompositionCatalog(
             new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save));
         var acquisitionWorkbenchCompositions = new MarketAcquisitionWorkbenchCompositionPanel(

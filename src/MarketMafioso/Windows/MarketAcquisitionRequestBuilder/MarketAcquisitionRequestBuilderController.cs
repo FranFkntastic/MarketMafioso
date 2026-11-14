@@ -346,6 +346,17 @@ public sealed class MarketAcquisitionRequestBuilderController
         return true;
     }
 
+    public bool SetIncludeRetainerStock(int index, bool include)
+    {
+        if (!SelectLine(index) || IsExactAcquisitionLine(index) || Document.Lines[index].QuantityMode != "TargetQuantity")
+            return false;
+        CommitLocalEdit(RequestDocumentMutation.ReplaceLine(Document, index, Document.Lines[index] with
+        {
+            TargetBasis = include ? MarketAcquisitionTargetBases.OnHandIncludingRetainers : MarketAcquisitionTargetBases.OnHandTotal,
+        }), "Stock-up inventory scope updated.");
+        return true;
+    }
+
     public bool ApplyLineEdit(
         int index,
         string quantityMode,

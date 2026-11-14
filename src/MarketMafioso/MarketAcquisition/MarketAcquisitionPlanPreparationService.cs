@@ -47,9 +47,9 @@ public sealed class MarketAcquisitionPlanPreparationService
         var planLines = GetPlanLines(claimed);
         var baselines = new Dictionary<string, uint>(StringComparer.Ordinal);
         foreach (var line in planLines.Where(line => line.QuantityMode == "TargetQuantity" &&
-                     MarketAcquisitionTargetBases.Normalize(line.TargetBasis) == MarketAcquisitionTargetBases.OnHandTotal))
+                     MarketAcquisitionTargetBases.CountsOnHand(line.TargetBasis)))
         {
-            var observation = inventoryObserver?.Observe(line.ItemId, line.HqPolicy);
+            var observation = inventoryObserver?.Observe(line.ItemId, line.HqPolicy, line.TargetBasis);
             if (observation?.IsAvailable != true)
                 throw new InvalidOperationException($"Cannot finalize safely for {line.ItemName}: {observation?.Message ?? "Inventory observer unavailable."}");
             baselines[line.LineId] = observation.Value.Quantity;
