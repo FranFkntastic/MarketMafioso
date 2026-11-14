@@ -48,10 +48,14 @@ internal sealed class WorkshopAssemblyPanel
             actionWidth);
 
         var workshopStatus = getWorkshopStatus();
-        ImGui.TextColored(GetWorkshopStatusColor(workshopStatus), workshopStatus);
-
         var progress = workshopAssemblyRunner.Progress;
-        ImGui.TextColored(workshopAssemblyRunner.HasActiveRun ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted, progress.Message);
+        // Active progress is already the summary strip's Assembly status.
+        if (!workshopAssemblyRunner.HasActiveRun || !string.Equals(workshopStatus, progress.Message, StringComparison.Ordinal))
+            ImGui.TextColored(GetWorkshopStatusColor(workshopStatus), workshopStatus);
+        if (!workshopAssemblyRunner.HasActiveRun && !string.Equals(progress.Message, workshopStatus, StringComparison.Ordinal))
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, progress.Message);
+        if (!string.IsNullOrWhiteSpace(progress.ActiveProjectName))
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, $"Current project: {progress.ActiveProjectName}");
         if (progress.TotalProjects > 0)
         {
             var completed = Math.Clamp(progress.CompletedProjects, 0, progress.TotalProjects);
@@ -204,6 +208,7 @@ internal sealed class WorkshopAssemblyPanel
 
         if (workshopStatus.Contains("copied", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("sent", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("replaced", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("added", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("cleared", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("removed", StringComparison.OrdinalIgnoreCase))
