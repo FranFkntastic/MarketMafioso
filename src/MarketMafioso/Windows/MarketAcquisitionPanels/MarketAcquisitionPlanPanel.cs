@@ -108,16 +108,15 @@ internal sealed class MarketAcquisitionPlanPanel
         if (!ImGui.CollapsingHeader($"{label}##MarketAcquisitionPlanRouteStops", ImGuiTreeNodeFlags.DefaultOpen))
             return;
 
-        if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable", 6,
+        if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable", 5,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingFixedFit))
             return;
 
         ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 56);
         ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 120);
         ImGui.TableSetupColumn("Data Center", ImGuiTableColumnFlags.WidthFixed, 96);
-        ImGui.TableSetupColumn("Est. Value", ImGuiTableColumnFlags.WidthFixed, 120);
-        ImGui.TableSetupColumn("Planned", ImGuiTableColumnFlags.WidthFixed, 80);
-        ImGui.TableSetupColumn("Planned Gil", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Items", ImGuiTableColumnFlags.WidthFixed, 80);
+        ImGui.TableSetupColumn("Value", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableHeadersRow();
 
         var ordinal = 0;
@@ -131,13 +130,13 @@ internal sealed class MarketAcquisitionPlanPanel
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(FormatRouteDataCenter(batch.DataCenter));
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(batch.EstimatedValueGil.ToString("N0"));
-            if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(plan.Diagnostics.RouteOrderingBasis))
-                ImGui.SetTooltip(plan.Diagnostics.RouteOrderingBasis);
-            ImGui.TableNextColumn();
             ImGui.TextUnformatted(batch.PlannedQuantity.ToString("N0"));
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(batch.PlannedGil.ToString("N0"));
+            ImGui.TextUnformatted(FormatGil((uint)Math.Min(batch.EstimatedValueGil, uint.MaxValue)));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(batch.EstimatedValueGil == batch.PlannedGil
+                    ? plan.Diagnostics.RouteOrderingBasis
+                    : $"Planned {batch.PlannedGil:N0} gil; buy-below listings under ceiling add {batch.EstimatedValueGil - Math.Min(batch.EstimatedValueGil, batch.PlannedGil):N0} gil.\n{plan.Diagnostics.RouteOrderingBasis}");
         }
 
         foreach (var decision in skipped.OrderByDescending(decision => decision.EstimatedValueGil))
@@ -152,13 +151,11 @@ internal sealed class MarketAcquisitionPlanPanel
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatRouteDataCenter(MarketAcquisitionWorldCatalog.ResolveDataCenter(decision.WorldName)));
             ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, decision.EstimatedValueGil.ToString("N0"));
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "—");
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatGil((uint)Math.Min(decision.EstimatedValueGil, uint.MaxValue)));
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(decision.Reason);
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "—");
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "—");
         }
 
         ImGui.EndTable();
