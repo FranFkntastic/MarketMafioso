@@ -20,6 +20,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionCatalog
         var snapshot = store.Load();
         compositions = snapshot.Compositions.ToList();
         SelectedCompositionId = snapshot.SelectedCompositionId;
+        Source = snapshot.Source;
     }
 
     public IReadOnlyList<MarketAcquisitionWorkbenchComposition> Compositions => compositions;
@@ -29,7 +30,30 @@ public sealed class MarketAcquisitionWorkbenchCompositionCatalog
     public MarketAcquisitionWorkbenchComposition? SelectedComposition =>
         compositions.FirstOrDefault(composition => composition.Id == SelectedCompositionId);
 
-    public string Status { get; private set; } = "Saved compositions are ready.";
+    public string Status { get; private set; } = string.Empty;
+
+    /// <summary>Bumped whenever <see cref="Status"/> is set, so the panel can tell a fresh message from a stale one.</summary>
+    public int StatusVersion { get; private set; }
+
+    public MarketAcquisitionWorkbenchCompositionSource? Source { get; private set; }
+
+    public MarketAcquisitionWorkbenchComposition? Find(string? id) =>
+        id is null ? null : compositions.FirstOrDefault(composition => composition.Id == id);
+
+    /// <summary>The source composition, when it is still linked to the given Workbench identity.</summary>
+    public MarketAcquisitionWorkbenchComposition? SourceFor(string workbenchRequestId) =>
+        Source is { } source && source.WorkbenchRequestId == workbenchRequestId ? Find(source.CompositionId) : null;
+
+    public void LinkSource(string compositionId, string workbenchRequestId, bool loadedFromComposition)
+    {
+        if (Find(compositionId) is null || string.IsNullOrWhiteSpace(workbenchRequestId))
+            return;
+        Source = new(compositionId, workbenchRequestId, loadedFromComposition);
+        Persist();
+    }
+
+    /// <summary>Returns why <paramref name="name"/> cannot be used, or null when it can.</summary>
+    public string? NameProblem(string name, string? exceptId = null) => ValidateName(name, exceptId);
 
     public bool Select(string? id)
     {
@@ -55,24 +79,27 @@ public sealed class MarketAcquisitionWorkbenchCompositionCatalog
         var composition = MarketAcquisitionWorkbenchComposition.FromDocument(name, document, nowUtc ?? DateTimeOffset.UtcNow);
         compositions.Add(composition);
         SelectedCompositionId = composition.Id;
-        Status = $"Saved {composition.Name}.";
+        Source = new(composition.Id, document.LocalRequestId, false);
+        SetStatus($"Saved {composition.Name}.");
         Persist();
         return new MarketAcquisitionWorkbenchCompositionResult(true, Status, composition);
     }
 
-    public MarketAcquisitionWorkbenchCompositionResult UpdateSelected(
+    public MarketAcquisitionWorkbenchCompositionResult Update(
+        string compositionId,
         MarketAcquisitionRequestDocument document,
         DateTimeOffset? nowUtc = null)
     {
-        var selected = SelectedComposition;
-        if (selected is null)
-            return Fail("Select a saved composition to update.");
+        var target = Find(compositionId);
+        if (target is null)
+            return Fail("That composition is no longer available.");
         if (document.Lines.Count == 0)
             return Fail("An empty Workbench cannot overwrite a saved composition.");
 
-        var updated = selected.WithDocument(document, nowUtc ?? DateTimeOffset.UtcNow);
+        var updated = target.WithDocument(document, nowUtc ?? DateTimeOffset.UtcNow);
         Replace(updated);
-        Status = $"Updated {updated.Name} from the Workbench.";
+        Source = new(updated.Id, document.LocalRequestId, Source?.CompositionId == updated.Id && Source.LoadedFromComposition);
+        SetStatus($"Updated {updated.Name} from the Workbench.");
         Persist();
         return new MarketAcquisitionWorkbenchCompositionResult(true, Status, updated);
     }
@@ -88,7 +115,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionCatalog
 
         var updated = selected with { Name = name.Trim(), UpdatedAtUtc = nowUtc ?? DateTimeOffset.UtcNow };
         Replace(updated);
-        Status = $"Renamed composition to {updated.Name}.";
+        SetStatus($"Renamed composition to {updated.Name}.");
         Persist();
         return new MarketAcquisitionWorkbenchCompositionResult(true, Status, updated);
     }
@@ -111,7 +138,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionCatalog
         };
         compositions.Add(duplicate);
         SelectedCompositionId = duplicate.Id;
-        Status = $"Duplicated {selected.Name} as {duplicate.Name}.";
+        SetStatus($"Duplicated {selected.Name} as {duplicate.Name}.");
         Persist();
         return new MarketAcquisitionWorkbenchCompositionResult(true, Status, duplicate);
     }
@@ -124,7 +151,9 @@ public sealed class MarketAcquisitionWorkbenchCompositionCatalog
 
         compositions.Remove(selected);
         SelectedCompositionId = compositions.OrderBy(composition => composition.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault()?.Id;
-        Status = $"Deleted {selected.Name}.";
+        if (Source?.CompositionId == selected.Id)
+            Source = null;
+        SetStatus($"Deleted {selected.Name}.");
         Persist();
         return new MarketAcquisitionWorkbenchCompositionResult(true, Status, selected);
     }
@@ -157,13 +186,20 @@ public sealed class MarketAcquisitionWorkbenchCompositionCatalog
             compositions[index] = composition;
     }
 
-    private MarketAcquisitionWorkbenchCompositionResult Fail(string message)
+    private void SetStatus(string message)
     {
         Status = message;
+        StatusVersion++;
+    }
+
+    private MarketAcquisitionWorkbenchCompositionResult Fail(string message)
+    {
+        SetStatus(message);
         return new MarketAcquisitionWorkbenchCompositionResult(false, message);
     }
 
     private void Persist() => store.Save(new MarketAcquisitionWorkbenchCompositionStoreSnapshot(
         compositions.OrderBy(composition => composition.Name, StringComparer.OrdinalIgnoreCase).ToList(),
-        SelectedCompositionId));
+        SelectedCompositionId,
+        Source));
 }

@@ -8,4 +8,6 @@ public sealed record MarketAcquisitionWorkbenchCompositionContext(
     string World,
     bool HasCharacterScope,
     bool IsBusy,
-    bool IsRouteActive);
+    bool IsRouteActive,
+    string? CharacterRegion,
+    bool HasReadyPreparedPlan);

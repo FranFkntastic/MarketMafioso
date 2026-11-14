@@ -6,7 +6,17 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed record MarketAcquisitionWorkbenchCompositionStoreSnapshot(
     IReadOnlyList<MarketAcquisitionWorkbenchComposition> Compositions,
-    string? SelectedCompositionId);
+    string? SelectedCompositionId,
+    MarketAcquisitionWorkbenchCompositionSource? Source = null);
+
+/// <summary>
+/// The composition the current Workbench came from (or was last saved into), tied to that
+/// Workbench's local identity so a new blank, restore or hosted adoption naturally unlinks it.
+/// </summary>
+public sealed record MarketAcquisitionWorkbenchCompositionSource(
+    string CompositionId,
+    string WorkbenchRequestId,
+    bool LoadedFromComposition);
 
 public interface IMarketAcquisitionWorkbenchCompositionStore
 {
@@ -36,7 +46,12 @@ public sealed class ConfigurationMarketAcquisitionWorkbenchCompositionStore : IM
         var selectedId = compositions.Any(composition => composition.Id == config.SelectedMarketAcquisitionWorkbenchCompositionId)
             ? config.SelectedMarketAcquisitionWorkbenchCompositionId
             : compositions.FirstOrDefault()?.Id;
-        return new MarketAcquisitionWorkbenchCompositionStoreSnapshot(compositions, selectedId);
+        var source = config.MarketAcquisitionWorkbenchCompositionSource is { } stored &&
+                     compositions.Any(composition => composition.Id == stored.CompositionId) &&
+                     !string.IsNullOrWhiteSpace(stored.WorkbenchRequestId)
+            ? new MarketAcquisitionWorkbenchCompositionSource(stored.CompositionId, stored.WorkbenchRequestId, stored.LoadedFromComposition)
+            : null;
+        return new MarketAcquisitionWorkbenchCompositionStoreSnapshot(compositions, selectedId, source);
     }
 
     public void Save(MarketAcquisitionWorkbenchCompositionStoreSnapshot snapshot)
@@ -44,6 +59,14 @@ public sealed class ConfigurationMarketAcquisitionWorkbenchCompositionStore : IM
         ArgumentNullException.ThrowIfNull(snapshot);
         config.MarketAcquisitionWorkbenchCompositions = snapshot.Compositions.Select(ToPersisted).ToList();
         config.SelectedMarketAcquisitionWorkbenchCompositionId = snapshot.SelectedCompositionId;
+        config.MarketAcquisitionWorkbenchCompositionSource = snapshot.Source is { } source
+            ? new PersistedMarketAcquisitionWorkbenchCompositionSource
+            {
+                CompositionId = source.CompositionId,
+                WorkbenchRequestId = source.WorkbenchRequestId,
+                LoadedFromComposition = source.LoadedFromComposition,
+            }
+            : null;
         saveConfig();
     }
 
