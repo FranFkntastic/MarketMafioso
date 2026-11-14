@@ -61,6 +61,7 @@ public class Configuration : IPluginConfiguration
     public string AgentBridgeProtectedAccessToken { get; set; } = string.Empty;
     public int MarketAcquisitionRecentWorldTtlHours { get; set; } = 18;
     public int MarketAcquisitionMinimumStopValueGil { get; set; } = 5_000;
+    public int MarketAcquisitionMinimumStopCoveragePercent { get; set; } = 2;
     public bool MarketAcquisitionIgnoreRecentWorldVisitsForSweep { get; set; } = false;
     public List<PersistedMarketAcquisitionWorldVisit> MarketAcquisitionWorldVisits { get; set; } = [];
     public bool EnableWorkshopHostCraftQuotes { get; set; } = false;
