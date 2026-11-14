@@ -76,7 +76,7 @@ public class MainWindow : Window, IDisposable
     private readonly StandaloneSquirePanel squirePanel;
     private readonly StatusTabPanel statusTab;
     private readonly SettingsTabPanel settingsTab;
-    private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
+    private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel;
     private readonly MarketAcquisitionRequestPickupPanel marketAcquisitionRequestPickupPanel;
     private readonly MarketAcquisitionDiagnosticsPanel marketAcquisitionDiagnosticsPanel;
     private readonly UiStateCaptureService uiStateCapture;
@@ -146,6 +146,7 @@ public class MainWindow : Window, IDisposable
     {
         AllowClickthrough = false;
         this.config = config;
+        marketAcquisitionPlanPanel = new MarketAcquisitionPlanPanel(config);
         this.reporter = reporter;
         this.scanner = scanner;
         this.retainerReports = retainerReports;

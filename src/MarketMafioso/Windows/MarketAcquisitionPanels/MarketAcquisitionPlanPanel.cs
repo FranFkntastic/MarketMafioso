@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.MarketAcquisition;
@@ -10,6 +11,29 @@ namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 
 internal sealed class MarketAcquisitionPlanPanel
 {
+    private const int DefaultCoverageSlots = 3;
+    // Declared slot columns. Changing this changes the table layout: bump the table ID with it.
+    private const int MaximumCoverageSlots = 8;
+    private const int LeadingColumns = 6;
+    private const float ItemCoverageWidth = 210;
+
+    private static readonly DalamudProgressCellStyle CoverageStyle = new(
+        Fill: MarketMafiosoUiTheme.Header,
+        Complete: MarketMafiosoUiTheme.Success,
+        Muted: MarketMafiosoUiTheme.Muted,
+        Track: new Vector4(1f, 1f, 1f, 0.06f),
+        Overflow: MarketMafiosoUiTheme.Warning,
+        Shortfall: MarketMafiosoUiTheme.Error,
+        Highlight: new Vector4(1f, 1f, 1f, 1f),
+        Text: new Vector4(1f, 1f, 1f, 1f),
+        MutedText: MarketMafiosoUiTheme.Muted);
+
+    private enum CoverageRow
+    {
+        Route,
+        Skipped,
+    }
+
     private sealed record PlanItemGroup(string Key, string Item, IReadOnlyList<MarketAcquisitionPlannedListing> Listings)
     {
         public uint Quantity => (uint)Math.Min(Listings.Sum(listing => (long)listing.Quantity), uint.MaxValue);
@@ -20,6 +44,22 @@ internal sealed class MarketAcquisitionPlanPanel
 
     private readonly DalamudExpandableRows expandedStops = new();
     private readonly DalamudExpandableRows expandedItems = new();
+    private readonly DalamudCrossRowHighlight coverageHighlight = new();
+    private readonly DalamudRankedColumns coverageColumns;
+    private MarketAcquisitionPlan? coveragePlan;
+    private MarketAcquisitionRouteCoverage? coverage;
+
+    public MarketAcquisitionPlanPanel(Configuration config)
+    {
+        coverageColumns = new DalamudRankedColumns(DefaultCoverageSlots, MaximumCoverageSlots, slots =>
+        {
+            config.MarketAcquisitionCoverageColumns = slots;
+            config.Save();
+        })
+        {
+            PreferredSlots = config.MarketAcquisitionCoverageColumns,
+        };
+    }
 
     public void Draw(MarketAcquisitionPlan? plan, bool isStale)
     {
@@ -41,39 +81,56 @@ internal sealed class MarketAcquisitionPlanPanel
         DrawRouteStops(plan);
     }
 
+    private MarketAcquisitionRouteCoverage ResolveCoverage(MarketAcquisitionPlan plan)
+    {
+        if (!ReferenceEquals(plan, coveragePlan) || coverage == null)
+        {
+            coverage = MarketAcquisitionRouteCoverage.Build(plan);
+            coveragePlan = plan;
+        }
+
+        return coverage;
+    }
+
     private void DrawRouteStops(MarketAcquisitionPlan plan)
     {
-        var skipped = plan.Diagnostics.StopDecisions.Where(decision => decision.Skipped).ToArray();
-        if (plan.WorldBatches.Count == 0 && skipped.Length == 0)
+        var routeCoverage = ResolveCoverage(plan);
+        var skipped = routeCoverage.Skipped;
+        if (plan.WorldBatches.Count == 0 && skipped.Count == 0)
             return;
 
-        var label = skipped.Length == 0
+        var label = skipped.Count == 0
             ? $"Route Stops ({plan.WorldBatches.Count:N0})"
-            : $"Route Stops ({plan.WorldBatches.Count:N0}, {skipped.Length:N0} skipped)";
+            : $"Route Stops ({plan.WorldBatches.Count:N0}, {skipped.Count:N0} skipped)";
         if (!ImGui.CollapsingHeader($"{label}##MarketAcquisitionPlanRouteStops", ImGuiTreeNodeFlags.DefaultOpen))
             return;
 
-        // The ID carries the column layout: ImGui would otherwise reapply the saved 5-column widths.
-        if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable##coverage-v1", 7,
-                DalamudNestedTableFlags.Parent(resizable: true)))
+        // The ID carries the column layout: ImGui reapplies saved widths by table ID and column index.
+        // The column count is fixed (every ranked slot is declared); hidden slots are disabled, not removed.
+        if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable##ranked-coverage-v1",
+                LeadingColumns + coverageColumns.ColumnCount,
+                DalamudNestedTableFlags.Parent(resizable: true) | ImGuiTableFlags.Hideable))
             return;
 
-        ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 56);
-        ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 160);
-        ImGui.TableSetupColumn("Data Center", ImGuiTableColumnFlags.WidthFixed, 96);
-        ImGui.TableSetupColumn("Items", ImGuiTableColumnFlags.WidthFixed, 80);
-        ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, 110);
-        ImGui.TableSetupColumn("Coverage", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Savings", ImGuiTableColumnFlags.WidthFixed, 110);
-        ImGui.TableHeadersRow();
+        ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoHide, 56);
+        ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoHide, 160);
+        ImGui.TableSetupColumn("Data Center", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 96);
+        ImGui.TableSetupColumn("Items", ImGuiTableColumnFlags.WidthFixed, 64);
+        ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoHide, 110);
+        ImGui.TableSetupColumn("Savings", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoHide, 110);
+        coverageColumns.SetupColumns(LeadingColumns, routeCoverage.RequiredSlots,
+            rank => rank == 0 ? "Top coverage" : DalamudRankedColumns.Ordinal(rank + 1));
+        coverageColumns.HeadersRow();
 
-        var ordinal = 0;
-        foreach (var batch in plan.WorldBatches)
+        for (var index = 0; index < plan.WorldBatches.Count; index++)
         {
+            var batch = plan.WorldBatches[index];
+            var bars = routeCoverage.Stops[index];
             var stopKey = batch.WorldName;
             ImGui.TableNextRow();
+            ImGui.PushID($"stop:{index}");
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted((++ordinal).ToString());
+            ImGui.TextUnformatted((index + 1).ToString());
             ImGui.TableNextColumn();
             if (batch.Listings.Count > 0)
             {
@@ -82,6 +139,7 @@ internal sealed class MarketAcquisitionPlanPanel
             }
 
             ImGui.TextUnformatted(batch.WorldName);
+            DataCenterTooltip(batch.DataCenter);
             if (batch.ExceedsRequestedQuantity)
             {
                 ImGui.SameLine();
@@ -97,60 +155,211 @@ internal sealed class MarketAcquisitionPlanPanel
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(FormatGil(batch.PlannedGil));
             ImGui.TableNextColumn();
-            DrawCoverage(batch.LineCoverage, false);
-            ImGui.TableNextColumn();
             ImGui.TextUnformatted(FormatSavings(batch.BuyBelowSavingsGil));
             if (ImGui.IsItemHovered() && batch.BuyBelowSavingsGil > 0)
                 ImGui.SetTooltip("Savings under buy-below ceilings, including eligible advisory listings; not guaranteed purchases.");
+            DrawCoverageSlots(bars, CoverageRow.Route);
+            ImGui.PopID();
 
             if (batch.Listings.Count > 0)
-                expandedStops.DrawDetail(stopKey, () => DrawStopItems(batch));
+                expandedStops.DrawDetail(stopKey, () => DrawStopItems(batch, bars, routeCoverage));
         }
 
-        foreach (var decision in skipped.OrderByDescending(decision => decision.CoverageScore).ThenByDescending(decision => decision.BuyBelowSavingsGil))
+        if (routeCoverage.Shortfalls.Count > 0)
+            DrawShortfallRow(routeCoverage.Shortfalls);
+
+        for (var index = 0; index < skipped.Count; index++)
         {
+            var decision = skipped[index];
             ImGui.TableNextRow();
+            ImGui.PushID($"skipped:{index}");
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Skipped");
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(decision.Reason);
             ImGui.TableNextColumn();
+            var dataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(decision.WorldName);
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, decision.WorldName);
+            DataCenterTooltip(dataCenter);
             ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatRouteDataCenter(MarketAcquisitionWorldCatalog.ResolveDataCenter(decision.WorldName)));
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatRouteDataCenter(dataCenter));
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, decision.PlannedQuantity.ToString("N0"));
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatGil(decision.PlannedGil));
             ImGui.TableNextColumn();
-            DrawCoverage(decision.LineCoverage, true);
-            ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, FormatSavings(decision.BuyBelowSavingsGil));
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(decision.Reason);
+            DrawCoverageSlots(routeCoverage.SkippedBars[index], CoverageRow.Skipped);
+            ImGui.PopID();
         }
 
         ImGui.EndTable();
     }
 
-    private static void DrawCoverage(IReadOnlyList<MarketAcquisitionStopLineCoverage> shares, bool muted)
+    private void DrawCoverageSlots(IReadOnlyList<RouteCoverageBar> bars, CoverageRow row)
     {
-        var covered = shares.Where(line => line.Share > 0).OrderByDescending(line => line.Share).ToArray();
-        var text = covered.Length == 0 ? "-" :
-            $"{covered[0].ItemName ?? "Unnamed item"} {covered[0].Share * 100:0.##}%" +
-            (covered.Length > 1 ? $" +{covered.Length - 1}" : string.Empty);
-        if (muted)
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, text);
-        else
-            ImGui.TextUnformatted(text);
-        if (ImGui.IsItemHovered() && covered.Length > 0)
-            ImGui.SetTooltip(string.Join("\n", covered.Select(line =>
-                $"{line.ItemName ?? "Unnamed item"}: {line.Share * 100:0.##}% ({line.PlannedQuantity:N0}/{line.RemainingNeed:N0})")));
+        for (var rank = 0; rank < bars.Count && coverageColumns.SlotColumn(rank); rank++)
+            DrawCoverageBar($"slot{rank}", bars[rank], row);
+
+        if (coverageColumns.HandleCell(bars.Count))
+            HiddenEntriesTooltip(bars.Skip(coverageColumns.VisibleSlots).ToArray(),
+                (bar, width) => DrawCoverageBar("hidden", bar, row, width, interactive: false));
     }
+
+    private void DrawShortfallRow(IReadOnlyList<RouteCoverageShortfall> shortfalls)
+    {
+        ImGui.TableNextRow();
+        ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg1,
+            ImGui.GetColorU32(MarketMafiosoUiTheme.Error with { W = 0.07f }));
+        ImGui.PushID("short-after");
+        ImGui.TableSetColumnIndex(1);
+        ImGui.TextColored(MarketMafiosoUiTheme.Error, "Short after");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Target items still under their need after every route stop, biggest gap first.");
+
+        for (var rank = 0; rank < shortfalls.Count && coverageColumns.SlotColumn(rank); rank++)
+            DrawShortfallBar($"slot{rank}", shortfalls[rank]);
+
+        if (coverageColumns.HandleCell(shortfalls.Count))
+            HiddenEntriesTooltip(shortfalls.Skip(coverageColumns.VisibleSlots).ToArray(),
+                (shortfall, width) => DrawShortfallBar("hidden", shortfall, width, interactive: false));
+        ImGui.PopID();
+    }
+
+    private void HiddenEntriesTooltip<T>(IReadOnlyList<T> hidden, Action<T, float> draw)
+    {
+        const float width = 240;
+        ImGui.BeginTooltip();
+        for (var index = 0; index < hidden.Count; index++)
+        {
+            ImGui.PushID(index);
+            draw(hidden[index], width);
+            ImGui.PopID();
+        }
+
+        if (hidden.Count > 0 && (coverageColumns.CanReveal || coverageColumns.CanCollapse))
+            ImGui.Spacing();
+        coverageColumns.HandleHint();
+        ImGui.EndTooltip();
+    }
+
+    private void DrawCoverageBar(string id, RouteCoverageBar bar, CoverageRow row, float width = 0, bool interactive = true)
+    {
+        var flags = DalamudProgressCellFlags.IconSlot;
+        if (row == CoverageRow.Skipped)
+            flags |= DalamudProgressCellFlags.Muted;
+        if (bar.Complete)
+            flags |= DalamudProgressCellFlags.Complete;
+        if (bar.Overflow)
+            flags |= DalamudProgressCellFlags.Overflow;
+        if (coverageHighlight.IsHighlighted(bar.LineId))
+            flags |= DalamudProgressCellFlags.Highlighted;
+
+        var cell = new DalamudProgressCell(bar.ItemName, FormatShare(bar.Share), bar.PriorFraction,
+            bar.CumulativeFraction - bar.PriorFraction)
+        {
+            Flags = flags,
+            Icon = MarketMafiosoItemIcons.Handle(bar.ItemId),
+        };
+        if (!DalamudProgressCellRenderer.Draw(id, cell, CoverageStyle, width) || !interactive)
+            return;
+
+        coverageHighlight.MarkHovered(bar.LineId);
+        ImGui.BeginTooltip();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, bar.ItemName);
+        if (BeginFigures())
+        {
+            if (row == CoverageRow.Skipped)
+            {
+                Figure("Route plans", $"{bar.PriorQuantity:N0} / {bar.Need:N0}  ({FormatPercent(bar.PriorFraction)})");
+                Figure("This stop would add", $"{bar.StopQuantity:N0}  ({FormatPercent(bar.Share)})");
+            }
+            else
+            {
+                Figure("This stop", $"{bar.StopQuantity:N0}  ({FormatPercent(bar.Share)})");
+                if (bar.PriorQuantity > 0)
+                    Figure("Earlier stops", $"{bar.PriorQuantity:N0}  ({FormatPercent(bar.PriorFraction)})");
+                Figure("After this stop", $"{bar.CumulativeQuantity:N0} / {bar.Need:N0}  ({FormatPercent(bar.CumulativeFraction)})",
+                    bar.Complete ? MarketMafiosoUiTheme.Success : null);
+                if (bar.Overflow)
+                    Figure("Past need", $"+{bar.CumulativeQuantity - bar.Need:N0}", MarketMafiosoUiTheme.Warning);
+            }
+
+            ImGui.EndTable();
+        }
+
+        ImGui.EndTooltip();
+    }
+
+    private void DrawShortfallBar(string id, RouteCoverageShortfall shortfall, float width = 0, bool interactive = true)
+    {
+        var flags = DalamudProgressCellFlags.IconSlot | DalamudProgressCellFlags.Shortfall;
+        if (coverageHighlight.IsHighlighted(shortfall.LineId))
+            flags |= DalamudProgressCellFlags.Highlighted;
+
+        var cell = new DalamudProgressCell(shortfall.ItemName, FormatShare(shortfall.Fraction), 0, shortfall.Fraction)
+        {
+            Flags = flags,
+            Icon = MarketMafiosoItemIcons.Handle(shortfall.ItemId),
+        };
+        if (!DalamudProgressCellRenderer.Draw(id, cell, CoverageStyle, width) || !interactive)
+            return;
+
+        coverageHighlight.MarkHovered(shortfall.LineId);
+        ImGui.BeginTooltip();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, shortfall.ItemName);
+        if (BeginFigures())
+        {
+            Figure("Route plans", $"{shortfall.Planned:N0} / {shortfall.Need:N0}  ({FormatPercent(shortfall.Fraction)})");
+            Figure("Short", $"{shortfall.Gap:N0}", MarketMafiosoUiTheme.Error);
+            ImGui.EndTable();
+        }
+
+        ImGui.EndTooltip();
+    }
+
+    private static bool BeginFigures()
+    {
+        if (!ImGui.BeginTable("##coverage-figures", 2, ImGuiTableFlags.SizingFixedFit))
+            return false;
+        ImGui.TableSetupColumn("label");
+        ImGui.TableSetupColumn("value");
+        return true;
+    }
+
+    private static void Figure(string label, string value, Vector4? color = null)
+    {
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, label);
+        ImGui.TableNextColumn();
+        if (color is { } tint)
+            ImGui.TextColored(tint, value);
+        else
+            ImGui.TextUnformatted(value);
+    }
+
+    private static void DataCenterTooltip(string dataCenter)
+    {
+        if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(dataCenter))
+            ImGui.SetTooltip(dataCenter);
+    }
+
+    // Floor so "100%" only ever means the need is met; tiny shares stay visible as "<1%".
+    private static string FormatShare(double share) =>
+        share >= 1 ? "100%"
+        : share <= 0 ? "0%"
+        : share < 0.01 ? "<1%"
+        : $"{Math.Floor(share * 100):0}%";
+
+    private static string FormatPercent(double fraction) => $"{fraction * 100:0.##}%";
 
     private static string FormatSavings(ulong gil) => gil > 0 ? $"{gil:N0} gil" : "-";
 
-    private void DrawStopItems(MarketAcquisitionWorldBatch batch)
+    private void DrawStopItems(MarketAcquisitionWorldBatch batch, IReadOnlyList<RouteCoverageBar> bars,
+        MarketAcquisitionRouteCoverage routeCoverage)
     {
         var groups = batch.Listings
             .GroupBy(listing => listing.ItemId != 0 ? listing.ItemId.ToString() : FormatPlannedListingItem(listing))
@@ -162,7 +371,8 @@ internal sealed class MarketAcquisitionPlanPanel
             .ThenBy(group => group.Item, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        if (!ImGui.BeginTable($"PlanStopItems##{batch.WorldName}", 5,
+        // New ID for the added Coverage column; the old 5-column widths must not be reapplied.
+        if (!ImGui.BeginTable($"PlanStopItems##coverage-v1:{batch.WorldName}", 6,
                 DalamudNestedTableFlags.Parent()))
             return;
 
@@ -171,11 +381,13 @@ internal sealed class MarketAcquisitionPlanPanel
         ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 72);
         ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, 140);
         ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, 110);
+        ImGui.TableSetupColumn("Coverage", ImGuiTableColumnFlags.WidthFixed, ItemCoverageWidth);
         ImGui.TableHeadersRow();
 
         foreach (var group in groups)
         {
             ImGui.TableNextRow();
+            ImGui.PushID(group.Key);
             ImGui.TableNextColumn();
             expandedItems.DrawToggle(group.Key);
             ImGui.SameLine();
@@ -190,11 +402,37 @@ internal sealed class MarketAcquisitionPlanPanel
                 : $"{group.MinUnit:N0}-{group.MaxUnit:N0} gil");
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(FormatGil(group.Gil));
+            ImGui.TableNextColumn();
+            DrawItemCoverage(group, bars, routeCoverage);
+            ImGui.PopID();
 
             expandedItems.DrawDetail(group.Key, () => DrawItemListings(group));
         }
 
         ImGui.EndTable();
+    }
+
+    private void DrawItemCoverage(PlanItemGroup group, IReadOnlyList<RouteCoverageBar> bars,
+        MarketAcquisitionRouteCoverage routeCoverage)
+    {
+        var lineIds = group.Listings.Select(listing => listing.LineId).ToHashSet(StringComparer.Ordinal);
+        var bar = bars.FirstOrDefault(candidate => lineIds.Contains(candidate.LineId));
+        if (bar != null)
+        {
+            DrawCoverageBar("coverage", bar, CoverageRow.Route);
+            return;
+        }
+
+        var savings = group.Listings
+            .Where(listing => routeCoverage.IsBuyBelow(listing.LineId))
+            .Aggregate(0UL, (total, listing) =>
+            {
+                var ceiling = routeCoverage.Lines[listing.LineId].MaxUnitPrice;
+                return total + (ulong)(ceiling - Math.Min(ceiling, listing.UnitPrice)) * listing.Quantity;
+            });
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, savings > 0 ? $"saves {savings:N0} gil" : "-");
+        if (savings > 0 && ImGui.IsItemHovered())
+            ImGui.SetTooltip("Below the buy-below ceiling across this item's planned listings at this stop.");
     }
 
     private static void DrawItemListings(PlanItemGroup group)
