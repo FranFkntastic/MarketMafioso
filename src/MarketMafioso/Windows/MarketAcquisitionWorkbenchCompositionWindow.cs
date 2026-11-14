@@ -9,12 +9,14 @@ namespace MarketMafioso.Windows;
 
 public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDisposable
 {
+    private const float MinimumWidth = 760f;
+    private const float MinimumHeight = 440f;
     private readonly MarketAcquisitionWorkbenchCompositionPanel panel;
     private readonly Func<MarketAcquisitionWorkbenchCompositionContext> createContext;
     private readonly CompanionWindowActivationState activation = new();
     private Vector2 anchorPosition;
     private Vector2 anchorSize;
-    private Vector2 windowSize = new(680, 420);
+    private Vector2 windowSize = new(MinimumWidth, MinimumHeight);
     private DalamudOwnedWindowSurface? ownerSurface;
     private bool hasAnchor;
 
@@ -27,14 +29,19 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
         this.createContext = createContext ?? throw new ArgumentNullException(nameof(createContext));
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(680, 420),
+            MinimumSize = new Vector2(MinimumWidth, MinimumHeight),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
+
+        // The window can sit over the Workbench; a translucent background lets its controls ghost through.
+        BgAlpha = 1f;
     }
 
     public int Count => panel.Count;
 
     public void ToggleOpen() => IsOpen = activation.Toggle(IsOpen);
+
+    public override void OnOpen() => panel.OnOpened();
 
     public void AnchorTo(Vector2 position, Vector2 size, DalamudOwnedWindowSurface owner)
     {
@@ -54,8 +61,8 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
 
         const float gap = 8f;
         var viewport = ImGui.GetMainViewport();
-        var width = Math.Max(680f, windowSize.X);
-        var height = Math.Max(420f, windowSize.Y);
+        var width = Math.Max(MinimumWidth, windowSize.X);
+        var height = Math.Max(MinimumHeight, windowSize.Y);
         var placement = CompanionWindowPlacement.Calculate(
             anchorPosition,
             anchorSize,
@@ -63,8 +70,21 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
             viewport.WorkPos,
             viewport.WorkSize,
             gap);
+        var position = placement.Position;
+        if (placement.Kind == CompanionWindowPlacementKind.Overlay)
+        {
+            // No room beside the main window. The shared fallback hugs the main window's right edge,
+            // which hides the Workbench's On hand / Still need / Unit ceiling columns; cover the
+            // item names on the left instead so the numbers being compared stay visible.
+            var workMax = viewport.WorkPos + viewport.WorkSize;
+            position.X = Math.Clamp(
+                anchorPosition.X + gap,
+                viewport.WorkPos.X,
+                Math.Max(viewport.WorkPos.X, workMax.X - width));
+        }
+
         ownerSurface?.ApplyToNextWindow();
-        ImGui.SetNextWindowPos(placement.Position, ImGuiCond.Always);
+        ImGui.SetNextWindowPos(position, ImGuiCond.Always);
     }
 
     public override void Draw()

@@ -34,6 +34,7 @@ public class Configuration : IPluginConfiguration
     public string? ShardAcquisitionCheckpointStateJson { get; set; }
     public List<PersistedMarketAcquisitionWorkbenchComposition> MarketAcquisitionWorkbenchCompositions { get; set; } = [];
     public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
+    public PersistedMarketAcquisitionWorkbenchCompositionSource? MarketAcquisitionWorkbenchCompositionSource { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
@@ -344,6 +345,14 @@ public sealed class PersistedMarketAcquisitionWorkbenchComposition
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
     public DateTime CreatedAtUtc { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
+}
+
+[Serializable]
+public sealed class PersistedMarketAcquisitionWorkbenchCompositionSource
+{
+    public string CompositionId { get; set; } = string.Empty;
+    public string WorkbenchRequestId { get; set; } = string.Empty;
+    public bool LoadedFromComposition { get; set; }
 }
 
 [Serializable]

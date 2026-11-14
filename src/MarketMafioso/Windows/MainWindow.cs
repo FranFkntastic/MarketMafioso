@@ -440,9 +440,10 @@ public class MainWindow : Window, IDisposable
             RefreshAcquisitionRequestBuilderRemoteAsync,
             acquisitionWorkspace.OnDocumentAdopted,
             AgentReviewRegistry);
+        acquisitionCompositionCatalog = new MarketAcquisitionWorkbenchCompositionCatalog(
+            new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save));
         var acquisitionWorkbenchCompositions = new MarketAcquisitionWorkbenchCompositionPanel(
-            new MarketAcquisitionWorkbenchCompositionCatalog(
-            new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save)),
+            acquisitionCompositionCatalog,
             (composition, characterName, world) =>
                 _ = ReplaceWorkbenchFromCompositionAsync(composition, characterName, world),
             composition => acquisitionRequestBuilder.MergeComposition(composition),
@@ -530,6 +531,8 @@ public class MainWindow : Window, IDisposable
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
     public MarketAcquisitionWorkbenchCompositionWindow AcquisitionCompositionWindow { get; }
+
+    private readonly MarketAcquisitionWorkbenchCompositionCatalog acquisitionCompositionCatalog;
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
     public AutomationDiagnosticsWindow AutomationDiagnostics { get; }
 
@@ -1589,7 +1592,9 @@ public class MainWindow : Window, IDisposable
             world,
             hasScope,
             foregroundBusy,
-            IsMarketAcquisitionRouteActive());
+            IsMarketAcquisitionRouteActive(),
+            hasScope ? MarketAcquisitionWorkbenchCompositionInsights.RegionForWorld(world) : null,
+            acquisitionWorkspace.PreparedPlan is { Status: "Ready" } && !acquisitionWorkspace.IsPreparedPlanStale());
     }
 
     private void DrawMarketAcquisitionWorkbenchToolbar(MarketAcquisitionRequestBuilderContext context)
@@ -1812,6 +1817,10 @@ public class MainWindow : Window, IDisposable
             return;
 
         acquisitionRequestBuilder.LoadComposition(composition, characterName, world);
+        acquisitionCompositionCatalog.LinkSource(
+            composition.Id,
+            acquisitionRequestBuilder.CurrentDocument.LocalRequestId,
+            loadedFromComposition: true);
     }
 
     private void DrawMarketAcquisitionFinalizationBar(MarketAcquisitionRequestBuilderContext context)
