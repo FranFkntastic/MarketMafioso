@@ -63,7 +63,7 @@ internal sealed class MarketAcquisitionPlanPanel
             return;
 
         if (!ImGui.BeginTable("MarketAcquisitionPlanRouteStopTable", 5,
-                NestedTableFlags | ImGuiTableFlags.Resizable))
+                NestedTableFlags | ImGuiTableFlags.Resizable | ImGuiTableFlags.NoBordersInBodyUntilResize))
             return;
 
         ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 56);
