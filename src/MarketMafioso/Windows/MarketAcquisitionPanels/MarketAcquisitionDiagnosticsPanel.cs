@@ -275,7 +275,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
                 : "spent";
             ImGui.TextColored(
                 runSummary.FailedWorldCount > 0 || runSummary.Warnings.Count > 0 ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Success,
-                $"Run rollup: {purchaseVerb} {runSummary.PurchasedQuantity:N0}, {spendVerb} {FormatGil(runSummary.SpentGil)}; {runSummary.BoughtWorldCount:N0} bought / {runSummary.NothingBoughtWorldCount:N0} nothing bought / {runSummary.BlockedWorldCount:N0} blocked world(s).");
+                $"Run rollup: {(string.IsNullOrEmpty(snapshot.StockTargetProgress) ? "" : snapshot.StockTargetProgress + "; ")}{purchaseVerb} {runSummary.PurchasedQuantity:N0}, {spendVerb} {FormatGil(runSummary.SpentGil)}; {runSummary.BoughtWorldCount:N0} bought / {runSummary.NothingBoughtWorldCount:N0} nothing bought / {runSummary.BlockedWorldCount:N0} blocked world(s).");
 
             if (runSummary.OpportunisticPurchasedQuantity > 0 || runSummary.PlannedPurchasedQuantity > 0)
             {

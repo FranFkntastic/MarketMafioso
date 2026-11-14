@@ -18,6 +18,10 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public bool CanFinalizeInputCaptureLog { get; init; }
     public int CompletedOrProbedStopCount { get; init; }
     public string RouteState { get; init; } = string.Empty;
+    public string StockTargetProgress { get; init; } = string.Empty;
+    public ulong ConfirmedPurchaseQuantity { get; init; }
+    public ulong ConfirmedSpendGil { get; init; }
+    public int ConfirmedPurchaseWorldCount { get; init; }
     public MarketAcquisitionGuidedRouteStop? ActiveStop { get; init; }
     public IReadOnlyList<MarketAcquisitionGuidedRouteStop> Stops { get; init; } = [];
     public MarketAcquisitionPlan? ActivePlan { get; init; }

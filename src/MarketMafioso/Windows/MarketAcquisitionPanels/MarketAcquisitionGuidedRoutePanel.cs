@@ -392,7 +392,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         {
             ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 140);
             ImGui.TableSetupColumn("Data Center");
-            ImGui.TableSetupColumn("Route Lines");
+            ImGui.TableSetupColumn("Contribution (gil)");
             ImGui.TableSetupColumn("State");
             ImGui.TableSetupColumn("Planned");
             ImGui.TableSetupColumn("Bought");
@@ -413,7 +413,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                 if (!string.IsNullOrWhiteSpace(row.LineMix) && !string.Equals(row.LineMix, "No route lines", StringComparison.Ordinal))
                 {
                     if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip(row.LineMix);
+                        ImGui.SetTooltip(string.Join("\n", row.Lines.Select(line => $"{line.Item}: {line.Bought} · {line.State}")));
                 }
 
                 ImGui.TableNextColumn();

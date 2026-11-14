@@ -63,6 +63,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool activeSearchAllowsPriceCutoff = true;
     private bool ownsLocalApproachNavigation;
     private string? retainedRecoveryBrowseOperationId;
+    private string? lastFeedbackState;
+    private long lastFeedbackRunSequence;
+    public event Action<MarketAcquisitionRouteEngineSnapshot>? FeedbackTransition;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -171,6 +174,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         CanFinalizeInputCaptureLog = runner.CanFinalizeInputCaptureLog,
         CompletedOrProbedStopCount = runner.CompletedOrProbedStops.Count,
         RouteState = runner.State,
+        StockTargetProgress = runner.StockTargetProgress,
+        ConfirmedPurchaseQuantity = runner.ConfirmedPurchaseQuantity,
+        ConfirmedSpendGil = runner.ConfirmedSpendGil,
+        ConfirmedPurchaseWorldCount = runner.ConfirmedPurchaseWorldCount,
         ActiveStop = runner.ActiveStop,
         Stops = runner.Stops,
         ActivePlan = runner.ActivePlan,
@@ -785,6 +792,35 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     }
 
     public MarketAcquisitionRouteEngineTickResult TickRoute(bool isRequestBusy)
+    {
+        try { return TickRouteCore(isRequestBusy); }
+        finally { ObserveFeedbackTransition(); }
+    }
+
+    private void ObserveFeedbackTransition()
+    {
+        if (lastFeedbackRunSequence != runner.RunSequence)
+        {
+            lastFeedbackRunSequence = runner.RunSequence;
+            lastFeedbackState = null;
+        }
+        // Only this process's route transitions can produce feedback, never a
+        // restored authority session or a window reopening.
+        var feedbackState = runner.ActivePlan == null || runner.State is "Idle" or "Stopped"
+            ? null
+            : runner.State == "Failed" ? "Failed"
+            : state.ManualRecoveryBlockedReason != null || purchaseEvidenceRouteBlocked ||
+              exactAcquisitionAuthority?.State.Phase is ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded or ExactAcquisitionRouteAuthorityPhase.Paused ||
+              (runner.IsPaused && shardCheckpoints?.IsActive != true)
+                ? "Blocked" : runner.State == "Completed" ? "Completed" : null;
+        if (feedbackState == lastFeedbackState)
+            return;
+        lastFeedbackState = feedbackState;
+        if (feedbackState != null && state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
+            FeedbackTransition?.Invoke(CreateSnapshot());
+    }
+
+    private MarketAcquisitionRouteEngineTickResult TickRouteCore(bool isRequestBusy)
     {
         // Stop/Pause may race an async pathfind. Keep draining only the owned
         // leg at monitor cadence, even while ordinary route execution is stopped.
@@ -2472,8 +2508,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var claimed = claimedRequest;
             var activeSubtask = runner.ActiveStop?.ActiveItemSubtask ??
                                 runner.RetainedActiveStop?.ActiveItemSubtask;
+            var receiptLineId = activeSubtask?.LineId ?? state.ActivePurchaseLineId ?? string.Empty;
+            var receiptWorld = string.IsNullOrWhiteSpace(candidate.WorldName) ? context.GetCurrentWorldName() : candidate.WorldName;
+            // Local receipts belong to the route, not to the optional hosted claim.
+            runner.RecordPurchaseAudit(receiptLineId, activeSubtask?.ItemName, receiptWorld,
+                candidate.ListingId, candidate.RetainerId, candidate.Quantity, candidate.TotalGil,
+                "Purchased", activeSubtask?.Source, candidate.UnitPrice, candidate.IsHq, candidate.ItemId);
             if (claimed == null || activeSubtask == null || string.IsNullOrWhiteSpace(claimed.ClaimToken))
             {
+                runner.RecordLineProgress(receiptLineId, activeSubtask?.ItemName, "Running", linePurchasedQuantity,
+                    lineSpentGil, $"Purchased {candidate.Quantity:N0} on {receiptWorld} for {candidate.TotalGil:N0} gil.", activeSubtask?.Source);
                 failureStage = "confirmed-purchase.shard-checkpoint";
                 return shardCheckpoints?.RecordConfirmedPurchase(candidate) == true;
             }
@@ -2481,7 +2525,6 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var lineId = string.IsNullOrWhiteSpace(activeSubtask.LineId) ? GetActiveRouteLineId(claimed) : activeSubtask.LineId;
             var worldName = string.IsNullOrWhiteSpace(candidate.WorldName) ? context.GetCurrentWorldName() : candidate.WorldName;
             var message = $"Purchased {candidate.Quantity:N0} {FormatItem(GetActiveRouteLine(claimed))} on {worldName} for {candidate.TotalGil:N0} gil.";
-            runner.RecordPurchaseAudit(lineId, activeSubtask.ItemName, worldName, candidate.ListingId, candidate.RetainerId, candidate.Quantity, candidate.TotalGil, "Purchased", activeSubtask.Source);
             runner.RecordLineProgress(lineId, activeSubtask.ItemName, "Running", linePurchasedQuantity, lineSpentGil, message, activeSubtask.Source);
             failureStage = "confirmed-purchase.visit-checkpoint";
             evidence.RecordPurchaseVisit(candidate, activeSubtask, worldName, claimed.Id, state.ProgressNonce);
@@ -2509,11 +2552,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private void ReportAcquisitionLineProgress(MarketAcquisitionWorldItemSubtask subtask, string status, uint purchasedQuantity, uint spentGil, string message)
     {
         var claimed = claimedRequest;
+        var lineId = string.IsNullOrWhiteSpace(subtask.LineId) && claimed != null ? GetActiveRouteLineId(claimed) : subtask.LineId;
+        runner.RecordLineProgress(lineId, subtask.ItemName, status, purchasedQuantity, spentGil, message, subtask.Source);
         if (claimed == null || string.IsNullOrWhiteSpace(claimed.ClaimToken))
             return;
-
-        var lineId = string.IsNullOrWhiteSpace(subtask.LineId) ? GetActiveRouteLineId(claimed) : subtask.LineId;
-        runner.RecordLineProgress(lineId, subtask.ItemName, status, purchasedQuantity, spentGil, message, subtask.Source);
         ReportLineProgress(claimed, lineId, subtask.ItemName, status, purchasedQuantity, spentGil, message, null);
     }
 
@@ -2961,6 +3003,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private MarketAcquisitionRouteActionResult UpdateStatus(MarketAcquisitionRouteActionResult result)
     {
         state.AcquisitionStatus = result.Message;
+        ObserveFeedbackTransition();
         return result;
     }
 

@@ -36,6 +36,11 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live;
     private bool evaluateTargetFulfillmentRequested = true;
     private readonly Dictionary<string, (uint OnHand, uint CoveredPurchases)> reconciledInventory = [];
+    private readonly HashSet<string> confirmedPurchaseWorlds = new(StringComparer.OrdinalIgnoreCase);
+    public ulong ConfirmedPurchaseQuantity { get; private set; }
+    public ulong ConfirmedSpendGil { get; private set; }
+    public int ConfirmedPurchaseWorldCount => confirmedPurchaseWorlds.Count;
+    public long RunSequence { get; private set; }
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
         : this(diagnosticsDirectory, null, null)
@@ -74,6 +79,10 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; private set; }
 
     public MarketAcquisitionPlan? ActivePlan { get; private set; }
+
+    public string StockTargetProgress => ActivePlan == null ? string.Empty : string.Join(" · ",
+        ActivePlan.Lines.Where(line => line.QuantityMode == "TargetQuantity")
+            .Select(line => $"{line.ItemName} {(session == null ? line.InitialOnHandQuantity : ResolveFulfilledQuantity(line)):N0} / {line.RequestedQuantity:N0}"));
 
     public MarketAcquisitionRunDiagnosticSummary LastRunDiagnosticSummary => new()
     {
@@ -135,6 +144,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         if (!string.IsNullOrWhiteSpace(plan.Diagnostics.RouteOrderingBasis))
             plan = MarketAcquisitionPlanner.ApplyRoutePolicy(plan);
 
+        RunSequence++;
         CloseDiagnostics();
         diagnosticsRequested = enableDiagnostics;
         diagnosticsLevelRequested = enableDiagnostics
@@ -155,6 +165,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
         LastPurchaseRecordsCsvPath = diagnostics.PurchaseRecordsCsvPath;
         LastRunSummary = null;
+        ConfirmedPurchaseQuantity = 0;
+        ConfirmedSpendGil = 0;
+        confirmedPurchaseWorlds.Clear();
         CompletionOutcome = null;
         ActivePlan = plan;
         reconciledInventory.Clear();
@@ -277,6 +290,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public MarketAcquisitionRouteActionResult CompleteAlreadyMet(MarketAcquisitionPlan plan)
     {
+        RunSequence++;
         const string message = "Targets are already met by current inventory; no travel or purchases started.";
         Reset(message);
         ActivePlan = plan with { Status = "TargetsAlreadyMet" };
@@ -406,6 +420,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public void Reset(string statusMessage)
     {
         CloseDiagnostics();
+        ConfirmedPurchaseQuantity = 0;
+        ConfirmedSpendGil = 0;
+        confirmedPurchaseWorlds.Clear();
         session = null;
         reconciledInventory.Clear();
         ActivePlan = null;
@@ -1044,7 +1061,11 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         uint quantity,
         uint totalGil,
         string result,
-        string? source = null)
+        string? source = null,
+        uint? unitPrice = null,
+        bool? isHq = null,
+        uint? itemId = null,
+        uint? tax = null)
     {
         diagnostics.Record(
             "purchase-audit",
@@ -1077,11 +1098,19 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             totalGil,
             result,
             purchaseSource,
-            activeLine?.ItemId,
-            sourceCandidateStatus);
+            itemId ?? activeLine?.ItemId,
+            sourceCandidateStatus,
+            unitPrice,
+            isHq,
+            tax);
 
         if (result.Equals("Purchased", StringComparison.OrdinalIgnoreCase))
+        {
+            ConfirmedPurchaseQuantity = checked(ConfirmedPurchaseQuantity + quantity);
+            ConfirmedSpendGil = checked(ConfirmedSpendGil + totalGil);
+            confirmedPurchaseWorlds.Add(worldName);
             RecordFreshnessObservation(lineId, itemName, worldName, listingId);
+        }
     }
 
     public void RecordWorldSummary(MarketAcquisitionWorldCompletionSummary summary)
@@ -1347,8 +1376,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["targetPurchasedQuantity"] = CompletionOutcome.TargetPurchasedQuantity.ToString(CultureInfo.InvariantCulture),
                 ["targetRemainingQuantity"] = CompletionOutcome.TargetRemainingQuantity.ToString(CultureInfo.InvariantCulture),
             });
-        if (universalisFreshnessVerifier == null)
-            FinalizeCompletedDiagnostics();
+        // Route evidence is complete now; optional external freshness work must not
+        // keep receipts or the terminal manifest open indefinitely.
+        FinalizeCompletedDiagnostics();
         return MarketAcquisitionRouteActionResult.Ok(message);
     }
 

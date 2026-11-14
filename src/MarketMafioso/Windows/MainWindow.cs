@@ -570,6 +570,12 @@ public class MainWindow : Window, IDisposable
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
     public AutomationDiagnosticsWindow AutomationDiagnostics { get; }
 
+    public event Action<MarketAcquisitionRouteEngineSnapshot> AcquisitionFeedbackTransition
+    {
+        add => routeEngine.FeedbackTransition += value;
+        remove => routeEngine.FeedbackTransition -= value;
+    }
+
     public AgentBridgeTruth CreateAgentBridgeTruth()
     {
         var snapshot = routeEngine.CreateSnapshot();

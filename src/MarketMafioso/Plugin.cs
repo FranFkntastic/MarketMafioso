@@ -348,6 +348,7 @@ public sealed class Plugin : IDalamudPlugin
             mainWindow.CanStageContextMenuItemToWorkbench,
             mainWindow.StageContextMenuItemToWorkbench);
 
+        mainWindow.AcquisitionFeedbackTransition += OnAcquisitionFeedbackTransition;
         agentBridgeProofStore = new AgentBridgeProofStore();
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
         agentBridgeViewportCapture = new AgentBridgeViewportCaptureService(
@@ -780,6 +781,37 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void OnAcquisitionFeedbackTransition(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        if (!Configuration.MarketAcquisitionRouteAlerts)
+            return;
+        var completed = snapshot.RouteState == "Completed" && snapshot.RecoveryBlockedReason == null &&
+                        snapshot.ExactAcquisitionExecution?.Phase is not
+                            (MarketAcquisition.ExactAuthority.ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded or
+                             MarketAcquisition.ExactAuthority.ExactAcquisitionRouteAuthorityPhase.Paused);
+        var outcome = snapshot.CompletionOutcome;
+        // Completion kinds are extensible (budget, inventory, etc.). Do not
+        // whitelist kinds and accidentally suppress a newer terminal outcome.
+        var detail = outcome?.GetType().GetProperty("Detail")?.GetValue(outcome)?.ToString();
+        var reason = completed
+            ? $"{outcome?.Kind ?? snapshot.RouteState}: {detail ?? snapshot.StatusMessage}"
+            : snapshot.RecoveryBlockedReason ?? (snapshot.RouteState == "Failed" ? snapshot.StatusMessage :
+                snapshot.ExactAcquisitionExecution?.Message ?? snapshot.VisibleAcquisitionStatus);
+        var message = $"Acquisition {(completed ? "finished" : "needs attention")}: {snapshot.ConfirmedPurchaseQuantity:N0} items bought, {snapshot.ConfirmedSpendGil:N0} gil, {snapshot.ConfirmedPurchaseWorldCount:N0} worlds; {reason}";
+        message = message.Replace('\r', ' ').Replace('\n', ' ');
+        ChatGui.Print($"[MMF] {message}");
+        NotificationManager.AddNotification(new Dalamud.Interface.ImGuiNotification.Notification
+        {
+            Title = "MMF Acquisition Route",
+            Content = message,
+            Type = completed && outcome?.TargetRemainingQuantity == 0
+                ? Dalamud.Interface.ImGuiNotification.NotificationType.Success
+                : Dalamud.Interface.ImGuiNotification.NotificationType.Warning,
+            InitialDuration = TimeSpan.FromSeconds(12),
+            Minimized = false,
+        });
+    }
+
     private void OnFrameworkUpdate(IFramework framework)
     {
         Configuration.RetryPendingSave();
@@ -954,6 +986,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.RemoveAllWindows();
         mainWindow.ProjectBrowser.Dispose();
         mainWindow.AcquisitionCompositionWindow.Dispose();
+        mainWindow.AcquisitionFeedbackTransition -= OnAcquisitionFeedbackTransition;
         mainWindow.Dispose();
         remoteSummoningBellProbe.Dispose();
         workshopRestock.Dispose();
