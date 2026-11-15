@@ -35,6 +35,9 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
 
         // Opaque: the window often sits over the Workbench, and its controls must not ghost through.
         BgAlpha = 1f;
+
+        // A collapsed picker is just a stray title strip; closing it is the only way to put it away.
+        Flags |= ImGuiWindowFlags.NoCollapse;
     }
 
     public int Count => panel.Count;
@@ -59,8 +62,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
         if (!hasAnchor)
             return;
 
-        // Free-floating: the main window only suggests where it first appears. After that the
-        // user's own position (remembered by ImGui) wins.
+        // Free-floating: placed relative to the main window each time it opens, then movable.
         const float gap = 8f;
         var viewport = ImGui.GetMainViewport();
         var width = Math.Max(MinimumWidth, windowSize.X);
@@ -75,16 +77,16 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
         var position = placement.Position;
         if (placement.Kind == CompanionWindowPlacementKind.Overlay)
         {
-            // No room beside the main window: cover the Workbench's item names rather than the
-            // On hand / Still need / Unit ceiling columns being compared.
+            // No room beside the main window: float over the middle of the Workbench instead of
+            // sitting on the main window's title bar.
             var workMax = viewport.WorkPos + viewport.WorkSize;
-            position.X = Math.Clamp(
-                anchorPosition.X + gap,
-                viewport.WorkPos.X,
-                Math.Max(viewport.WorkPos.X, workMax.X - width));
+            var centered = anchorPosition + ((anchorSize - new Vector2(width, height)) * 0.5f);
+            position = new Vector2(
+                Math.Clamp(centered.X, viewport.WorkPos.X, Math.Max(viewport.WorkPos.X, workMax.X - width)),
+                Math.Clamp(centered.Y, viewport.WorkPos.Y, Math.Max(viewport.WorkPos.Y, workMax.Y - height)));
         }
 
-        ImGui.SetNextWindowPos(position, ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowPos(position, ImGuiCond.Appearing);
     }
 
     public override void Draw()
