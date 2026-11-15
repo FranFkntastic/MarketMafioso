@@ -315,17 +315,18 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
             line.QuantityMode == MarketAcquisitionWorkbenchCompositionInsights.StockUp && line.MaximumOverage > 0);
         var columns = showExtra ? 5 : 4;
         var height = Math.Max(140f, ImGui.GetContentRegionAvail().Y - (ImGui.GetFrameHeightWithSpacing() * 2f));
-        var tableId = showExtra ? "AcquisitionCompositionPreview##v2extra" : "AcquisitionCompositionPreview##v2";
+        var tableId = showExtra ? "AcquisitionCompositionPreview##v3extra" : "AcquisitionCompositionPreview##v3";
         if (!ImGui.BeginTable(tableId, columns, ImGuiUi.InteractiveTableFlags | ImGuiTableFlags.ScrollY, new Vector2(0, height)))
             return;
 
         ImGui.TableSetupScrollFreeze(0, 1);
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.NoHide);
-        ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthFixed, 112f);
-        ImGui.TableSetupColumn("Target on hand", ImGuiTableColumnFlags.WidthFixed, 64f);
+        // All columns stretch by weight so the item name keeps its share at the window's minimum width.
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.NoHide, 1.6f);
+        ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthStretch, 1.1f);
+        ImGui.TableSetupColumn("Target on hand", ImGuiTableColumnFlags.WidthStretch, 0.7f);
         if (showExtra)
-            ImGui.TableSetupColumn("Extra units allowed", ImGuiTableColumnFlags.WidthFixed, 56f);
-        ImGui.TableSetupColumn("Unit ceiling", ImGuiTableColumnFlags.WidthFixed, 76f);
+            ImGui.TableSetupColumn("Extra units allowed", ImGuiTableColumnFlags.WidthStretch, 0.6f);
+        ImGui.TableSetupColumn("Unit ceiling", ImGuiTableColumnFlags.WidthStretch, 0.75f);
         ImGui.TableHeadersRow();
         foreach (var line in selected.Lines)
         {
