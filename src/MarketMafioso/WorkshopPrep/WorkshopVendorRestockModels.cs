@@ -160,6 +160,8 @@ public sealed class PersistedWorkshopVendorPurchaseReceipt
 public sealed class WorkshopVendorRestockState
 {
     public string? QuartermasterPartialResult { get; set; }
+    // Set when Quartermaster reports an indeterminate retrieval; bounds the bag reconcile.
+    public DateTime? RetrievalReconcileStartedAtUtc { get; set; }
     public ulong LocalContentId { get; set; }
     public uint HomeWorldId { get; set; }
     public string CharacterName { get; set; } = string.Empty;
