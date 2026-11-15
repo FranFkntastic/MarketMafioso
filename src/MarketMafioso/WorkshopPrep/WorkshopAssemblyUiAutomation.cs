@@ -47,7 +47,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         this.log = log;
         this.faultMonitor = faultMonitor;
         this.externalAutomationCoordinator = externalAutomationCoordinator;
-        preparation = new(new DalamudInventoryMover(sigScanner, interopProvider, dataManager), dataManager);
+        preparation = new(new DalamudInventoryMover(sigScanner, interopProvider, dataManager, log), dataManager);
         uiDriver = new WorkshopAssemblyUiDriver(
             gameGui,
             log,
