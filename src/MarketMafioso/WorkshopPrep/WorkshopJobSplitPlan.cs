@@ -287,6 +287,15 @@ public static class WorkshopSavedJobHandoff
 {
     public static bool IsHandoff(WorkshopFrozenQueue queue) => !string.IsNullOrWhiteSpace(queue.HandoffTargetName);
 
+    /// <summary>A share this character accepted from another assembler: lineage but no target.</summary>
+    public static bool IsReceived(WorkshopFrozenQueue queue) =>
+        !IsHandoff(queue) && queue.HandoffId != null && !string.IsNullOrWhiteSpace(queue.HandoffSenderName);
+
+    public static WorkshopAssembler? Sender(WorkshopFrozenQueue queue) =>
+        string.IsNullOrWhiteSpace(queue.HandoffSenderName)
+            ? null
+            : new WorkshopAssembler(queue.HandoffSenderName!, queue.HandoffSenderWorld ?? string.Empty);
+
     public static WorkshopAssembler? Target(WorkshopFrozenQueue queue) =>
         IsHandoff(queue) ? new WorkshopAssembler(queue.HandoffTargetName!, queue.HandoffTargetWorld ?? string.Empty) : null;
 

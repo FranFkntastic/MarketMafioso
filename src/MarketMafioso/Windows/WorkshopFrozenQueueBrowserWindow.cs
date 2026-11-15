@@ -11,11 +11,13 @@ using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Windowing;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Windows;
+using MarketMafioso.TradeQueue;
+using MarketMafioso.Windows.Main;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
 
-public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
+public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 {
     private const string SurfaceId = "workshop-saved-jobs";
 
@@ -96,6 +98,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         while (completedHandoffCalls.TryDequeue(out var apply))
             apply();
         SyncHandoffStates();
+        actions.Handover.Pump();
     }
 
     public override void Draw()
@@ -183,11 +186,14 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         var flags = ImGuiTableFlags.Resizable |
                     ImGuiTableFlags.SizingStretchProp |
                     ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("WorkshopSavedJobsBrowserLayout", 2, flags, new Vector2(0, 0)))
+        // A sender's share needs the wider inspector for its handover table; a separate table id keeps
+        // each layout's own column weights.
+        var handover = selectedIncomingId == null && SelectedSenderShare() != null;
+        if (!ImGui.BeginTable(handover ? "WorkshopSavedJobsBrowserLayoutHandover" : "WorkshopSavedJobsBrowserLayout", 2, flags, new Vector2(0, 0)))
             return;
 
-        ImGui.TableSetupColumn("Saved Jobs", ImGuiTableColumnFlags.WidthStretch, 1.15f);
-        ImGui.TableSetupColumn("Inspector", ImGuiTableColumnFlags.WidthStretch, 0.85f);
+        ImGui.TableSetupColumn("Saved Jobs", ImGuiTableColumnFlags.WidthStretch, handover ? 0.8f : 1.15f);
+        ImGui.TableSetupColumn("Inspector", ImGuiTableColumnFlags.WidthStretch, handover ? 1.2f : 0.85f);
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
         DrawQueueTable(queues, incoming);
@@ -321,6 +327,19 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         ImGui.SameLine();
         var (statusLabel, statusColor) = FormatStatus(queue, actions.Handoff().Outgoing);
         ImGui.TextColored(statusColor, statusLabel);
+
+        if (WorkshopSavedJobHandoff.IsHandoff(queue) && IsSender(queue))
+        {
+            DrawProjectSummary(queue.Items);
+            if (!string.IsNullOrWhiteSpace(queue.HandoffError) && !delivering.Contains(queue.Id))
+                ImGui.TextColored(ColWarning, queue.HandoffError);
+            DrawHandover(queue);
+            DrawHandoffActions(queue);
+            return;
+        }
+
+        if (WorkshopSavedJobHandoff.IsReceived(queue))
+            DrawReceivedProgress(queue);
 
         if (WorkshopSavedJobHandoff.Target(queue) is { } target)
         {
@@ -504,19 +523,9 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         var busy = busyHandoffs.Contains(queue.Id);
         var isSender = IsSender(queue);
 
-        if (ImGui.Button("Trade Materials"))
-            RequestTradeMaterials(queue);
-        RegisterLastAction(
-            $"{SurfaceId}.handoff.trade-materials",
-            $"Replace the Trade Queue with {queue.Name}'s materials",
-            enabled: true,
-            queue.Id.ToString(),
-            _ =>
-            {
-                var replaced = actions.TradeMaterials(queue.Items, out var message);
-                SetShareStatus(message, !replaced);
-                return replaced ? AgentBridgeUiActionResult.Ok(message) : AgentBridgeUiActionResult.Fail(message);
-            });
+        // Receiver copies never show handover controls; only the sender hands materials over.
+        if (isSender)
+            DrawHandOverButton(queue);
 
         if (status == WorkshopSavedJobHandoffStatus.Offered && isSender)
         {
@@ -558,7 +567,8 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 
         if (status is WorkshopSavedJobHandoffStatus.NotDelivered or WorkshopSavedJobHandoffStatus.Declined or WorkshopSavedJobHandoffStatus.Withdrawn or WorkshopSavedJobHandoffStatus.Accepted)
         {
-            ImGui.SameLine();
+            if (isSender)
+                ImGui.SameLine();
             if (ImGuiUi.Button("Delete", actions.CanEditQueue && !busy))
                 pendingDeleteQueueId = queue.Id;
         }
@@ -568,14 +578,25 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         if (ImGui.Button("Close"))
             IsOpen = false;
 
-        if (pendingTradeReplaceQueueId == queue.Id)
+        if (isSender && pendingTradeReplaceQueueId == queue.Id)
         {
-            ImGui.TextColored(ColMuted, "Replace the current Trade Queue with these materials?");
+            ImGui.TextColored(ColMuted, "Replace the current Trade Queue with this share's owed materials?");
             if (ImGuiUi.PrimaryButton("Replace Trade Queue", true))
             {
                 pendingTradeReplaceQueueId = null;
-                TradeMaterials(queue);
+                HandOver(queue, confirmed: true);
             }
+
+            RegisterLastAction(
+                $"{SurfaceId}.handoff.hand-over.confirm",
+                $"Replace the Trade Queue with {queue.Name}'s owed materials",
+                enabled: true,
+                queue.Id.ToString(),
+                _ =>
+                {
+                    pendingTradeReplaceQueueId = null;
+                    return ToActionResult(HandOver(queue, confirmed: true));
+                });
 
             ImGui.SameLine();
             if (ImGui.Button("Cancel##workshopTradeReplace"))
@@ -613,7 +634,8 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             new WorkshopJobSplitPlan(queue, currentCharacter),
             id => projectNames.TryGetValue(id, out var name) ? name : $"Unknown project {id}",
             () => actions.Handoff().KnownAssemblers,
-            reviewRegistry);
+            reviewRegistry,
+            () => actions.Availability(queue.Items));
         actions.Handoff().RequestRefresh();
     }
 
@@ -792,8 +814,20 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
                 if (!imported.Success || imported.QueueId is not { } queueId)
                     return;
 
+                var created = config.FrozenWorkshopQueues.FirstOrDefault(queue => queue.Id == queueId);
+                if (created != null)
+                {
+                    // The receiver's copy keeps the share's lineage (never a target), so it can show
+                    // material-received progress relayed by the host.
+                    created.HandoffId = accepted.HandoffId;
+                    created.SplitSourceJobId = accepted.SourceJobId;
+                    created.HandoffSenderName = accepted.Sender.CharacterName;
+                    created.HandoffSenderWorld = accepted.Sender.World;
+                    created.HandoffState = WorkshopHandoffState.Accepted;
+                }
+
                 config.Save();
-                if (config.FrozenWorkshopQueues.FirstOrDefault(queue => queue.Id == queueId) is { } created)
+                if (created != null)
                     SelectQueue(created);
             });
     }
@@ -882,6 +916,13 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         if (status == WorkshopSavedJobHandoffStatus.None)
         {
             var state = WorkshopQueueService.GetFrozenQueueState(config, queue.Id);
+            if (WorkshopSavedJobHandoff.IsReceived(queue) && WorkshopSavedJobHandoff.Sender(queue) is { } sender)
+            {
+                return state is WorkshopFrozenQueueState.Loaded or WorkshopFrozenQueueState.Modified
+                    ? ($"{FormatState(state)} · from {sender.CharacterName}", GetStateColor(state))
+                    : ($"From {sender.CharacterName} @{sender.World}", ColSuccess);
+            }
+
             return (FormatState(state), GetStateColor(state));
         }
 
@@ -893,24 +934,14 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             WorkshopSavedJobHandoffStatus.NotDelivered => ColWarning,
             _ => ColMuted,
         };
-        return ($"{WorkshopSavedJobHandoff.Label(status)} · {queue.HandoffTargetName}", color);
-    }
-
-    private void RequestTradeMaterials(WorkshopFrozenQueue queue)
-    {
-        if (actions.TradeQueueHasItems())
+        var label = $"{WorkshopSavedJobHandoff.Label(status)} · {queue.HandoffTargetName}";
+        if (queue.HandoverTotal > 0)
         {
-            pendingTradeReplaceQueueId = queue.Id;
-            return;
+            var handed = queue.HandedOver.Sum(entry => Math.Max(0, entry.Quantity));
+            label += handed >= queue.HandoverTotal ? " · handed over" : $" · {handed:N0}/{queue.HandoverTotal:N0} handed";
         }
 
-        TradeMaterials(queue);
-    }
-
-    private void TradeMaterials(WorkshopFrozenQueue queue)
-    {
-        var replaced = actions.TradeMaterials(queue.Items, out var message);
-        SetShareStatus(message, !replaced);
+        return (label, color);
     }
 
     // ---- existing browser behavior ------------------------------------------------------
@@ -922,6 +953,11 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         pendingTradeReplaceQueueId = null;
         renameInput = queue.Name;
         duplicateNameInput = $"{queue.Name} copy";
+        if (WorkshopSavedJobHandoff.IsHandoff(queue) && IsSender(queue))
+        {
+            actions.Handover.RequestHoldings(queue, force: false);
+            actions.Handover.RequestReport(queue);
+        }
     }
 
     private void CopyToClipboard(WorkshopFrozenQueue queue)
@@ -1137,7 +1173,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
     }
 }
 
-public delegate bool WorkshopTradeMaterialsHandler(IReadOnlyList<WorkshopPrepQueueItem> items, out string message);
+public delegate bool WorkshopHandOverHandler(IReadOnlyList<TradeQueueItem> items, TradeQueueRecipientBinding binding, out string message);
 
 public sealed record WorkshopFrozenQueueBrowserActions(
     Func<bool> CanEditQueueProvider,
@@ -1151,7 +1187,12 @@ public sealed record WorkshopFrozenQueueBrowserActions(
     Func<WorkshopAssembler?> CurrentCharacter,
     Func<IWorkshopHandoffService> Handoff,
     Func<bool> TradeQueueHasItems,
-    WorkshopTradeMaterialsHandler TradeMaterials)
+    WorkshopHandoverTracker Handover,
+    Func<IReadOnlyDictionary<uint, int>?> TradeableBags,
+    WorkshopHandOverHandler HandOver,
+    Func<Guid?> BoundShareId,
+    Action ShowTradeQueue,
+    Func<IReadOnlyList<WorkshopPrepQueueItem>, IReadOnlyList<WorkshopMaterialAvailability>> Availability)
 {
     public bool CanEditQueue => CanEditQueueProvider();
 }

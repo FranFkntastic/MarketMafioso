@@ -49,6 +49,9 @@ internal sealed class WorkshopJobSplitPanel
     private readonly Func<uint, string> projectName;
     private readonly Func<IReadOnlyList<WorkshopAssembler>> knownAssemblers;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
+    private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>>? coverage;
+    private IReadOnlyList<WorkshopMaterialAvailability>? coverageCache;
+    private DateTimeOffset coverageAt;
     private readonly TableSelectionModel<int> selection = new();
     private DalamudTableProjection<SplitRow>? table;
     private string tableSignature = string.Empty;
@@ -66,12 +69,14 @@ internal sealed class WorkshopJobSplitPanel
         WorkshopJobSplitPlan plan,
         Func<uint, string> projectName,
         Func<IReadOnlyList<WorkshopAssembler>> knownAssemblers,
-        AgentBridgeUiReviewRegistry reviewRegistry)
+        AgentBridgeUiReviewRegistry reviewRegistry,
+        Func<IReadOnlyList<WorkshopMaterialAvailability>>? coverage = null)
     {
         this.plan = plan;
         this.projectName = projectName;
         this.knownAssemblers = knownAssemblers;
         this.reviewRegistry = reviewRegistry;
+        this.coverage = coverage;
     }
 
     public WorkshopJobSplitPlan Plan => plan;
@@ -137,6 +142,8 @@ internal sealed class WorkshopJobSplitPanel
                 FillColor: state,
                 FixedWidth: allottedWidth),
         };
+        if (MaterialsFact() is { } materials)
+            facts.Add(materials);
 
         for (var column = 0; column < plan.Columns.Count; column++)
         {
@@ -163,6 +170,52 @@ internal sealed class WorkshopJobSplitPanel
             FixedWidth: addWidth + (ImGui.GetStyle().ItemSpacing.X * 2f) + 4f));
 
         UtilityWorkspaceUi.DrawStatusStrip("##workshopSplitStatus", facts);
+    }
+
+    /// <summary>Whether bags + retainers cover the whole job. Informs only; never blocks the commit.</summary>
+    private UtilityStatusFact? MaterialsFact()
+    {
+        if (coverage == null)
+            return null;
+        var now = DateTimeOffset.UtcNow;
+        if (coverageCache == null || now - coverageAt > TimeSpan.FromSeconds(2))
+        {
+            coverageAt = now;
+            try
+            {
+                coverageCache = coverage();
+            }
+            catch (InvalidOperationException)
+            {
+                coverageCache ??= [];
+            }
+        }
+
+        const string source = "bags + retainers";
+        var sourceWidth = ImGui.CalcTextSize(source).X + 4f;
+        if (coverageCache.Count == 0)
+            return new("Materials", "Unknown", MarketMafiosoUiTheme.Muted, Tooltip: "No workshop materials resolved for this job.");
+
+        var shortItems = coverageCache.Where(material => material.TotalMissing > 0).ToArray();
+        var valueText = shortItems.Length == 0 ? "Covered" : $"{shortItems.Length:N0} short";
+        var width = Math.Max(150f, ImGui.CalcTextSize(valueText).X + sourceWidth + ImGui.GetStyle().ItemSpacing.X + (ImGui.GetStyle().CellPadding.X * 2f) + 12f);
+        var tooltip = shortItems.Length == 0
+            ? "Bags and retainers cover every material of this job."
+            : string.Join(
+                '\n',
+                shortItems
+                    .OrderByDescending(material => material.TotalMissing)
+                    .Select(material =>
+                        $"{material.ItemName}: {material.TotalMissing:N0} short{(material.StockUnverified ? " (retainer stock unverified)" : string.Empty)}"));
+        return new(
+            "Materials",
+            valueText,
+            shortItems.Length == 0 ? MarketMafiosoUiTheme.Success : MarketMafiosoUiTheme.Error,
+            () => ImGui.TextColored(MarketMafiosoUiTheme.Muted, source),
+            sourceWidth,
+            Accent: shortItems.Length == 0 ? null : MarketMafiosoUiTheme.Error,
+            FixedWidth: width,
+            Tooltip: tooltip);
     }
 
     private static float AllottedDetailWidth(int over, int unassigned)

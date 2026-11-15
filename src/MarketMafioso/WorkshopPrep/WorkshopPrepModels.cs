@@ -38,6 +38,34 @@ public sealed class WorkshopFrozenQueue
 
     /// <summary>Why delivery failed, shown in the inspector until a later offer succeeds.</summary>
     public string? HandoffError { get; set; }
+
+    /// <summary>
+    /// Sender only: material units verified as traded to this share's assembler, per item. Credited only
+    /// from verified Trade Queue batches to the bound recipient; never reduced.
+    /// </summary>
+    public List<WorkshopMaterialLedgerEntry> HandedOver { get; set; } = new();
+
+    /// <summary>
+    /// Sender only: the assembler's holdings when the handover started. Frozen once the ledger has units, so
+    /// later inventory reports (which include what was already handed over) are not subtracted twice.
+    /// </summary>
+    public List<WorkshopMaterialLedgerEntry>? HandoverBaseline { get; set; }
+
+    public DateTimeOffset? HandoverBaselineCapturedAt { get; set; }
+
+    /// <summary>Units the assembler needs from the sender: Σ max(0, Needed − TheyHold), as last reported.</summary>
+    public int HandoverTotal { get; set; }
+
+    /// <summary>True while the host has not acknowledged the current ledger and total; retried until it does.</summary>
+    public bool HandoverReportPending { get; set; }
+}
+
+/// <summary>A quantity of one material item, stored with the saved job.</summary>
+[Serializable]
+public sealed class WorkshopMaterialLedgerEntry
+{
+    public uint ItemId { get; set; }
+    public int Quantity { get; set; }
 }
 
 public sealed record WorkshopProjectDefinition(

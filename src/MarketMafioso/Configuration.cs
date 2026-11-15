@@ -110,6 +110,8 @@ public class Configuration : IPluginConfiguration
 
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
     public List<TradeQueueItem> TradeQueueItems { get; set; } = new();
+    /// <summary>When set, the Trade Queue only trades to this recipient and credits that share's handover ledger.</summary>
+    public TradeQueueRecipientBinding? TradeQueueBinding { get; set; }
     public TradeQueueRecoveryState TradeQueueRecovery { get; set; } = new();
     public bool AutoAcceptIncomingTrades { get; set; }
     public TradeQueueTimingOptions TradeQueueTiming
@@ -124,6 +126,8 @@ public class Configuration : IPluginConfiguration
     }
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
     public bool SplitWorkshopQueueAndMaterials { get; set; }
+    /// <summary>Share handover subtracts what the assembler already holds (from its host inventory report).</summary>
+    public bool WorkshopHandoverCountTheirInventory { get; set; } = true;
     [JsonProperty("RetainerRestockPlanItems")]
     public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();
 

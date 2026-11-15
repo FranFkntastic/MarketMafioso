@@ -95,6 +95,15 @@ public sealed class TradeQueueRunner : IDisposable
 
     public bool IsActive => Snapshot.IsActive;
 
+    /// <summary>
+    /// Optional recipient restriction checked before any run starts. Returns null to allow the partner, or the
+    /// refusal message (which must name the expected and the actual recipient).
+    /// </summary>
+    public Func<TradeQueuePartner, string?>? RecipientGuard { get; set; }
+
+    /// <summary>Raised on the framework thread after each batch's inventory delta is verified, before the queue is saved.</summary>
+    public event Action<TradeQueuePartner, TradeQueueBatch>? BatchVerified;
+
     /// <summary>Resolves capability evidence without selecting a recipient or starting any operation.</summary>
     public (bool Available, string Message) InspectExecutionCapability()
     {
@@ -138,6 +147,8 @@ public sealed class TradeQueueRunner : IDisposable
             return new(false, "Trade queue is already running.");
         if (!io.TryGetExecutionReadiness(out var readinessError))
             return RejectStart(selectedPartner, readinessError);
+        if (RecipientGuard?.Invoke(selectedPartner) is { } refusal)
+            return RejectStart(selectedPartner, refusal);
         if (!io.PartnerIsAvailable(selectedPartner))
             return RejectStart(selectedPartner, $"{selectedPartner.Name} @ {selectedPartner.HomeWorldName} is not an exact visible trade recipient.");
 
@@ -684,6 +695,7 @@ public sealed class TradeQueueRunner : IDisposable
         TradeQueuePlanner.ApplyCompletedBatch(queue, batch);
         completedUnitCount = checked(completedUnitCount + batch.UnitCount);
         completedBatchCount++;
+        NotifyBatchVerified(batch);
         save();
         checkpointQueueSignature = ComputeQueueSignature(queue);
         if (queue.Count == 0)
@@ -702,6 +714,21 @@ public sealed class TradeQueueRunner : IDisposable
             return;
 
         TickOpeningTrade(now);
+    }
+
+    private void NotifyBatchVerified(TradeQueueBatch verified)
+    {
+        if (partner == null || BatchVerified == null)
+            return;
+        try
+        {
+            BatchVerified(partner, verified);
+        }
+        catch (Exception exception)
+        {
+            // A ledger listener must never fail the trade run that already completed this batch.
+            log.Error(exception, "[MarketMafioso] Trade Queue batch listener failed run={RunId} batch={Batch}.", runId ?? "", batchNumber);
+        }
     }
 
     private bool PrepareBatch(IReadOnlyList<TradeQueueInventoryStack> inventory, string message)

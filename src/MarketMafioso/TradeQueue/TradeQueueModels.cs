@@ -59,6 +59,30 @@ public sealed record TradeQueuePartner(
     uint HomeWorldId,
     string HomeWorldName = "");
 
+/// <summary>Binds the Trade Queue to one workshop share's assembler (split-share material handover).</summary>
+[Serializable]
+public sealed class TradeQueueRecipientBinding
+{
+    public Guid ShareJobId { get; set; }
+    public Guid? HandoffId { get; set; }
+    public string ShareName { get; set; } = string.Empty;
+    public string RecipientName { get; set; } = string.Empty;
+    public string RecipientWorld { get; set; } = string.Empty;
+
+    [Newtonsoft.Json.JsonIgnore]
+    public string RecipientKey => $"{RecipientName} @{RecipientWorld}";
+
+    public bool Matches(TradeQueuePartner partner) =>
+        string.Equals(partner.Name, RecipientName, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(partner.HomeWorldName, RecipientWorld, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Null when the partner is the bound recipient; otherwise the refusal naming both.</summary>
+    public string? Mismatch(TradeQueuePartner partner) =>
+        Matches(partner)
+            ? null
+            : $"Trade Queue is bound to {RecipientKey} for {ShareName}; target is {partner.Name} @{(string.IsNullOrWhiteSpace(partner.HomeWorldName) ? "unknown world" : partner.HomeWorldName)}.";
+}
+
 [Serializable]
 public sealed class TradeQueueTimingOptions
 {
