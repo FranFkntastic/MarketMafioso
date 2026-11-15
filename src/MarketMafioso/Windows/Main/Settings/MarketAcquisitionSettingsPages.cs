@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -136,7 +137,7 @@ internal sealed class MarketAcquisitionSettingsPages
         {
             var value = config.MarketAcquisitionRecentWorldTtlHours;
             ImGui.SetNextItemWidth(120f);
-            if (ImGui.InputInt("All-world recent check TTL (hours)", ref value))
+            if (DalamudGroupedIntegerInput.InputGroupedInt("All-world recent check TTL (hours)", ref value, 1, 100))
             {
                 config.MarketAcquisitionRecentWorldTtlHours = Math.Clamp(value, 1, 168);
                 config.Save();
@@ -149,7 +150,7 @@ internal sealed class MarketAcquisitionSettingsPages
         {
             var value = config.MarketAcquisitionMinimumStopCoveragePercent;
             ImGui.SetNextItemWidth(120f);
-            if (ImGui.InputInt("Minimum stop target coverage (%)", ref value))
+            if (DalamudGroupedIntegerInput.InputGroupedInt("Minimum stop target coverage (%)", ref value, 1, 100))
             {
                 config.MarketAcquisitionMinimumStopCoveragePercent = Math.Clamp(value, 0, 100);
                 config.Save();
@@ -161,7 +162,7 @@ internal sealed class MarketAcquisitionSettingsPages
         {
             var value = config.MarketAcquisitionMinimumStopValueGil;
             ImGui.SetNextItemWidth(120f);
-            if (ImGui.InputInt("Minimum stop buy-below savings (gil)", ref value))
+            if (DalamudGroupedIntegerInput.InputGroupedInt("Minimum stop buy-below savings (gil)", ref value, 1, 100))
             {
                 config.MarketAcquisitionMinimumStopValueGil = Math.Max(0, value);
                 config.Save();
@@ -218,7 +219,7 @@ internal sealed class MarketAcquisitionSettingsPages
 
         var hotDays = config.MarketAcquisitionRouteDiagnosticsHotDays;
         ImGui.SetNextItemWidth(120f);
-        if (ImGui.InputInt("Keep raw for at least this many days", ref hotDays))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("Keep raw for at least this many days", ref hotDays, 1, 100))
         {
             config.MarketAcquisitionRouteDiagnosticsHotDays = Math.Clamp(hotDays, 1, 3_650);
             config.Save();
@@ -226,7 +227,7 @@ internal sealed class MarketAcquisitionSettingsPages
 
         var hotRuns = config.MarketAcquisitionRouteDiagnosticsHotRuns;
         ImGui.SetNextItemWidth(120f);
-        if (ImGui.InputInt("Always keep this many successful runs raw", ref hotRuns))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("Always keep this many successful runs raw", ref hotRuns, 1, 100))
         {
             config.MarketAcquisitionRouteDiagnosticsHotRuns = Math.Clamp(hotRuns, 0, 10_000);
             config.Save();

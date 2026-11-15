@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -508,7 +509,7 @@ internal sealed class WorkshopMaterialPanel
         var quantityEnabled = selectionEnabled && selected;
         ImGui.BeginDisabled(!quantityEnabled);
         ImGui.SetNextItemWidth(78f);
-        if (ImGui.InputInt($"##quantity-{line.Availability.ItemId}", ref quantity, 0))
+        if (DalamudGroupedIntegerInput.InputGroupedInt($"##quantity-{line.Availability.ItemId}", ref quantity, 0, 0))
         {
             quantity = Math.Clamp(quantity, 0, line.VendorNeed);
             SetQuantity(line.Availability.ItemId, quantity, line.VendorNeed);

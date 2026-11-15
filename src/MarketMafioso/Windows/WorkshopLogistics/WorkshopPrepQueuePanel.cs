@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -479,9 +480,9 @@ internal sealed class WorkshopPrepQueuePanel
         var quantity = row.Item?.Quantity ?? projectAddQuantity;
         ImGui.SetNextItemWidth(80);
         ImGui.BeginDisabled(!CanEditQueue);
-        if (ImGui.InputInt(
+        if (DalamudGroupedIntegerInput.InputGroupedInt(
                 row.IsEditor ? "##workshopQueueAddQty" : "##workshopQueueQty",
-                ref quantity))
+                ref quantity, 1, 100))
         {
             quantity = Math.Max(1, quantity);
             if (row.IsEditor)
