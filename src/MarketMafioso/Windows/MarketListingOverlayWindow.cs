@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -330,7 +331,7 @@ public sealed class MarketListingOverlayWindow : Window
         }
         ImGui.SameLine();
         ImGui.SetNextItemWidth(90f);
-        ImGui.InputInt("##cheapestTarget", ref cheapestTarget, 0, 0);
+        DalamudGroupedIntegerInput.InputGroupedInt("##cheapestTarget", ref cheapestTarget, 0, 0);
         cheapestTarget = Math.Clamp(cheapestTarget, 1, 99999);
         ImGui.SameLine();
         var canSelectCheapest = view.Listings.Any(listing => !listing.AlreadyPurchased);

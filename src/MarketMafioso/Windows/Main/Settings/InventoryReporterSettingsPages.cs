@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using Dalamud.Bindings.ImGui;
@@ -52,7 +53,7 @@ internal sealed class InventoryReporterSettingsPages
 
         var number = config.ServiceAccountNumber ?? 0;
         ImGui.SetNextItemWidth(120);
-        if (ImGui.InputInt("Service account number", ref number, 1, 1))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("Service account number", ref number, 1, 1))
         {
             int? normalized = number > 0 ? number : null;
             if (normalized != config.ServiceAccountNumber)
@@ -81,7 +82,7 @@ internal sealed class InventoryReporterSettingsPages
         if (!config.EnableAutoSendTimer) return;
         var interval = config.AutoSendIntervalMinutes;
         ImGui.SetNextItemWidth(120);
-        if (!ImGui.InputInt("Send interval (minutes)", ref interval, 1, 5)) return;
+        if (!DalamudGroupedIntegerInput.InputGroupedInt("Send interval (minutes)", ref interval, 1, 5)) return;
         interval = Math.Max(1, interval);
         if (interval == config.AutoSendIntervalMinutes) return;
         config.AutoSendIntervalMinutes = interval;

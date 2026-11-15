@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -65,7 +66,7 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
         ImGui.InputText("##workshopProjectBrowserSearch", ref selection.Search, 256);
 
         ImGui.SetNextItemWidth(100);
-        if (ImGui.InputInt("Quantity##workshopProjectBrowserQuantity", ref selection.Quantity))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("Quantity##workshopProjectBrowserQuantity", ref selection.Quantity, 1, 100))
             selection.Quantity = Math.Max(1, selection.Quantity);
 
         var filteredProjects = WorkshopProjectBrowserFilter.BuildVisibleProjects(

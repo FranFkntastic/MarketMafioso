@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -347,7 +348,7 @@ internal sealed class TradeQueuePanel
         if (runner.IsActive)
             ImGui.BeginDisabled();
         ImGui.SetNextItemWidth(BulkQuantityInputWidth);
-        ImGui.InputInt("##trade-queue-bulk-quantity", ref bulkQuantity, 0, 0);
+        DalamudGroupedIntegerInput.InputGroupedInt("##trade-queue-bulk-quantity", ref bulkQuantity, 0, 0);
         if (runner.IsActive)
             ImGui.EndDisabled();
         bulkQuantity = Math.Max(0, bulkQuantity);
@@ -541,12 +542,11 @@ internal sealed class TradeQueuePanel
             ImGui.SetKeyboardFocusHere();
             quantityEditorNeedsFocus = false;
         }
-        ImGui.InputInt(
+        DalamudGroupedIntegerInput.InputGroupedInt(
             $"##trade-queue-quantity-{row.Key.ItemId}",
             ref editingQuantityValue,
             0,
             0,
-            "%d",
             ImGuiInputTextFlags.AutoSelectAll);
         var active = ImGui.IsItemActive();
         var deactivated = ImGui.IsItemDeactivated();

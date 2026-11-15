@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -418,7 +419,7 @@ internal sealed class WorkshopJobSplitPanel
 
         ImGui.SameLine();
         ImGui.SetNextItemWidth(BulkQuantityWidth);
-        ImGui.InputInt("##workshop-split-bulk-quantity", ref bulkQuantity, 0, 0);
+        DalamudGroupedIntegerInput.InputGroupedInt("##workshop-split-bulk-quantity", ref bulkQuantity, 0, 0);
         bulkQuantity = Math.Clamp(bulkQuantity, 0, WorkshopJobSplitPlan.MaxCellQuantity);
 
         var target = plan.Columns[targetColumn].Assembler;
@@ -805,12 +806,11 @@ internal sealed class WorkshopJobSplitPanel
         }
 
         ImGui.PushStyleColor(ImGuiCol.Text, accent);
-        ImGui.InputInt(
+        DalamudGroupedIntegerInput.InputGroupedInt(
             $"##workshop-split-cell-edit-{row.Index}-{Slug(assembler)}",
             ref editingValue,
             0,
             0,
-            "%d",
             ImGuiInputTextFlags.AutoSelectAll);
         ImGui.PopStyleColor();
         var interaction = ImGui.IsItemActive() || ImGui.IsItemDeactivated();
