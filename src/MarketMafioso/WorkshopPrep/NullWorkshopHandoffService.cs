@@ -23,13 +23,13 @@ public sealed class NullWorkshopHandoffService : IWorkshopHandoffService
         IReadOnlyList<WorkshopPrepQueueItem> items,
         CancellationToken cancellationToken) => Task.FromResult(WorkshopHandoffResult.Fail(Reason));
 
-    public Task<WorkshopHandoffResult> WithdrawAsync(Guid handoffId, CancellationToken cancellationToken) =>
+    public Task<WorkshopHandoffResult> WithdrawAsync(Guid handoffId, DateTimeOffset? expectedUpdatedAt, CancellationToken cancellationToken) =>
         Task.FromResult(WorkshopHandoffResult.Fail(Reason));
 
-    public Task<WorkshopHandoffResult> AcceptAsync(Guid handoffId, CancellationToken cancellationToken) =>
+    public Task<WorkshopHandoffResult> AcceptAsync(Guid handoffId, DateTimeOffset? expectedUpdatedAt, CancellationToken cancellationToken) =>
         Task.FromResult(WorkshopHandoffResult.Fail(Reason));
 
-    public Task<WorkshopHandoffResult> DeclineAsync(Guid handoffId, CancellationToken cancellationToken) =>
+    public Task<WorkshopHandoffResult> DeclineAsync(Guid handoffId, DateTimeOffset? expectedUpdatedAt, CancellationToken cancellationToken) =>
         Task.FromResult(WorkshopHandoffResult.Fail(Reason));
 
     public void RequestRefresh()

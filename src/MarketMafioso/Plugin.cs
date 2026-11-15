@@ -889,6 +889,7 @@ public sealed class Plugin : IDalamudPlugin
         if (!mainWindow.IsOpen)
             mainWindow.AcquisitionCompositionWindow.IsOpen = false;
 
+        mainWindow.FrozenQueueBrowser.PumpHandoffResults();
         mainWindow.BeginAgentReviewFrame();
         try
         {

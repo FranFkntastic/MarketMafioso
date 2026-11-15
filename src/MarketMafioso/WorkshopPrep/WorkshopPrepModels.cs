@@ -25,6 +25,11 @@ public sealed class WorkshopFrozenQueue
     public string? HandoffTargetName { get; set; }
     public string? HandoffTargetWorld { get; set; }
 
+    /// <summary>The character that split this share off and may deliver or withdraw it.</summary>
+    public string? HandoffSenderName { get; set; }
+
+    public string? HandoffSenderWorld { get; set; }
+
     /// <summary>Workshop Host handoff id once the share was offered.</summary>
     public Guid? HandoffId { get; set; }
 

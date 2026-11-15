@@ -64,12 +64,14 @@ public interface IWorkshopHandoffService
         IReadOnlyList<WorkshopPrepQueueItem> items,
         CancellationToken cancellationToken);
 
-    Task<WorkshopHandoffResult> WithdrawAsync(Guid handoffId, CancellationToken cancellationToken);
+    // expectedUpdatedAt is the version the user acted on; the host refuses the command if the
+    // share changed since, so an accept never applies to items the user did not see.
+    Task<WorkshopHandoffResult> WithdrawAsync(Guid handoffId, DateTimeOffset? expectedUpdatedAt, CancellationToken cancellationToken);
 
-    /// <summary>Marks accepted on the host. The caller imports the items as a saved job on success.</summary>
-    Task<WorkshopHandoffResult> AcceptAsync(Guid handoffId, CancellationToken cancellationToken);
+    /// <summary>Marks accepted on the host. The caller imports the returned handoff's items as a saved job.</summary>
+    Task<WorkshopHandoffResult> AcceptAsync(Guid handoffId, DateTimeOffset? expectedUpdatedAt, CancellationToken cancellationToken);
 
-    Task<WorkshopHandoffResult> DeclineAsync(Guid handoffId, CancellationToken cancellationToken);
+    Task<WorkshopHandoffResult> DeclineAsync(Guid handoffId, DateTimeOffset? expectedUpdatedAt, CancellationToken cancellationToken);
 
     /// <summary>Requests an immediate background refresh of the cached lists.</summary>
     void RequestRefresh();

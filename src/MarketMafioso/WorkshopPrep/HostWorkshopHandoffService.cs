@@ -110,28 +110,37 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
         {
             while (!shutdown.IsCancellationRequested)
             {
-                await RefreshAsync(shutdown.Token).ConfigureAwait(false);
-                await wake.WaitAsync(TimeSpan.FromSeconds(30), shutdown.Token).ConfigureAwait(false);
+                // Right after login the character identity is not readable yet; retry soon instead of
+                // leaving incoming shares hidden for a full refresh interval.
+                var identityPending = await RefreshAsync(shutdown.Token).ConfigureAwait(false);
+                await wake.WaitAsync(TimeSpan.FromSeconds(identityPending ? 2 : 30), shutdown.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
         finally { http.Dispose(); }
     }
 
-    private async Task RefreshAsync(CancellationToken token)
+    /// <returns>True when logged in but the character identity is not readable yet.</returns>
+    private async Task<bool> RefreshAsync(CancellationToken token)
     {
         await gate.WaitAsync(token).ConfigureAwait(false);
         Context? owner = null;
         try
         {
             // Do not contact the host while logged out or without host configuration.
+            var identityPending = false;
             owner = await framework.RunOnFrameworkThread(() =>
-                !client.IsLoggedIn || ConfigurationReason is not null ? null : Capture()).ConfigureAwait(false);
-            if (owner is null) { Volatile.Write(ref cache, Cache.Empty); return; }
+            {
+                if (!client.IsLoggedIn || ConfigurationReason is not null) return null;
+                try { return Capture(); }
+                catch (InvalidOperationException) { identityPending = true; return null; }
+            }).ConfigureAwait(false);
+            if (owner is null) { Volatile.Write(ref cache, Cache.Empty); return identityPending; }
             var path = $"?characterName={Uri.EscapeDataString(owner.Actor.CharacterName)}&world={Uri.EscapeDataString(owner.Actor.World)}";
             var result = await SendAsync<WorkshopHandoffList>(owner, HttpMethod.Get, path, null, token).ConfigureAwait(false);
             var next = new Cache(owner, result.KnownAssemblers.Select(Map).ToArray(), result.Outgoing.Select(Map).ToArray(), result.Incoming.Select(Map).ToArray(), null);
             if (await StillCurrentAsync(owner).ConfigureAwait(false)) Volatile.Write(ref cache, next);
+            return false;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -143,6 +152,7 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
                 var old = Volatile.Read(ref cache);
                 Volatile.Write(ref cache, old.Owner == owner ? old with { Error = message } : new(owner, [], [], [], message));
             }
+            return false;
         }
         finally { gate.Release(); }
     }
@@ -155,14 +165,11 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
         return MutateAsync("offer", null, owner => new WorkshopHandoffOffer(sourceJobId, jobName,
             owner.Actor, new(target.CharacterName, target.World), copied), cancellationToken);
     }
-    public Task<WorkshopHandoffResult> WithdrawAsync(Guid id, CancellationToken token) => CommandAsync(id, "withdraw", token);
-    public Task<WorkshopHandoffResult> AcceptAsync(Guid id, CancellationToken token) => CommandAsync(id, "accept", token);
-    public Task<WorkshopHandoffResult> DeclineAsync(Guid id, CancellationToken token) => CommandAsync(id, "decline", token);
-    private Task<WorkshopHandoffResult> CommandAsync(Guid id, string action, CancellationToken token)
-    {
-        var view = Current.Outgoing.Concat(Current.Incoming).FirstOrDefault(x => x.HandoffId == id);
-        return MutateAsync(action, id, owner => new WorkshopHandoffCommand(owner.Actor, view?.UpdatedAt), token);
-    }
+    public Task<WorkshopHandoffResult> WithdrawAsync(Guid id, DateTimeOffset? expected, CancellationToken token) => CommandAsync(id, "withdraw", expected, token);
+    public Task<WorkshopHandoffResult> AcceptAsync(Guid id, DateTimeOffset? expected, CancellationToken token) => CommandAsync(id, "accept", expected, token);
+    public Task<WorkshopHandoffResult> DeclineAsync(Guid id, DateTimeOffset? expected, CancellationToken token) => CommandAsync(id, "decline", expected, token);
+    private Task<WorkshopHandoffResult> CommandAsync(Guid id, string action, DateTimeOffset? expected, CancellationToken token) =>
+        MutateAsync(action, id, owner => new WorkshopHandoffCommand(owner.Actor, expected), token);
 
     private Task<WorkshopHandoffResult> MutateAsync(string action, Guid? id, Func<Context, object> body, CancellationToken token) => Task.Run(async () =>
     {

@@ -936,10 +936,16 @@ internal sealed class WorkshopJobSplitPanel
 
     internal static string Slug(WorkshopAssembler assembler)
     {
+        // Readable part for agent-bridge ids, plus a stable FNV-1a hash of the exact key so names
+        // that differ only in punctuation (Ja'ra vs Ja-ra) never share an ImGui or action id.
+        var key = assembler.Key.ToLowerInvariant();
         var builder = new StringBuilder();
-        foreach (var character in assembler.Key.ToLowerInvariant())
+        foreach (var character in key)
             builder.Append(char.IsLetterOrDigit(character) ? character : '-');
-        return builder.ToString();
+        var hash = 2166136261u;
+        foreach (var character in key)
+            hash = (hash ^ character) * 16777619u;
+        return builder.Append('-').Append((hash & 0xFFFFFF).ToString("x6")).ToString();
     }
 
     private static Vector4 WithAlpha(Vector4 color, float alpha) => new(color.X, color.Y, color.Z, alpha);

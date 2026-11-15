@@ -87,11 +87,19 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         actions.Handoff().RequestRefresh();
     }
 
-    public override void Draw()
+    /// <summary>
+    /// Applies finished Workshop Host calls and remembers host state. Called every frame by the
+    /// plugin, so results land even while this window is closed.
+    /// </summary>
+    public void PumpHandoffResults()
     {
         while (completedHandoffCalls.TryDequeue(out var apply))
             apply();
         SyncHandoffStates();
+    }
+
+    public override void Draw()
+    {
 
         if (split != null)
         {
@@ -494,6 +502,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         var service = actions.Handoff();
         var status = WorkshopSavedJobHandoff.Resolve(queue, service.Outgoing, delivering.Contains(queue.Id));
         var busy = busyHandoffs.Contains(queue.Id);
+        var isSender = IsSender(queue);
 
         if (ImGui.Button("Trade Materials"))
             RequestTradeMaterials(queue);
@@ -509,7 +518,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
                 return replaced ? AgentBridgeUiActionResult.Ok(message) : AgentBridgeUiActionResult.Fail(message);
             });
 
-        if (status == WorkshopSavedJobHandoffStatus.Offered)
+        if (status == WorkshopSavedJobHandoffStatus.Offered && isSender)
         {
             ImGui.SameLine();
             if (ImGuiUi.Button("Withdraw", !busy))
@@ -528,7 +537,9 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
                 });
         }
 
-        if (status == WorkshopSavedJobHandoffStatus.NotDelivered && service.IsAvailable)
+        // Declined and withdrawn shares can be offered again; the host revives them under the same id.
+        if (status is WorkshopSavedJobHandoffStatus.NotDelivered or WorkshopSavedJobHandoffStatus.Declined or WorkshopSavedJobHandoffStatus.Withdrawn &&
+            isSender && service.IsAvailable)
         {
             ImGui.SameLine();
             if (ImGuiUi.Button("Deliver", !busy))
@@ -637,8 +648,13 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             return ex.Message;
         }
 
+        var sender = split.Plan.CurrentCharacter;
         foreach (var job in result.Delivered)
+        {
+            job.HandoffSenderName = sender.CharacterName;
+            job.HandoffSenderWorld = sender.World;
             Deliver(job, save: false);
+        }
 
         config.Save();
         split = null;
@@ -701,6 +717,17 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             });
     }
 
+    /// <summary>Only the character that split a share off may deliver or withdraw it.</summary>
+    private bool IsSender(WorkshopFrozenQueue job)
+    {
+        if (actions.CurrentCharacter() is not { } current)
+            return false;
+        if (job.HandoffSenderName is null || job.HandoffSenderWorld is null)
+            return job.HandoffId is { } id && actions.Handoff().Outgoing.Any(view => view.HandoffId == id);
+        return string.Equals(job.HandoffSenderName, current.CharacterName, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(job.HandoffSenderWorld, current.World, StringComparison.OrdinalIgnoreCase);
+    }
+
     private void Withdraw(WorkshopFrozenQueue job)
     {
         if (job.HandoffId is not { } handoffId)
@@ -708,9 +735,10 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 
         var service = actions.Handoff();
         var jobId = job.Id;
+        var expected = service.Outgoing.FirstOrDefault(view => view.HandoffId == handoffId)?.UpdatedAt;
         RunHandoff(
             jobId,
-            token => service.WithdrawAsync(handoffId, token),
+            token => service.WithdrawAsync(handoffId, expected, token),
             result =>
             {
                 var current = config.FrozenWorkshopQueues.FirstOrDefault(queue => queue.Id == jobId);
@@ -739,7 +767,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         var service = actions.Handoff();
         RunHandoff(
             view.HandoffId,
-            token => service.AcceptAsync(view.HandoffId, token),
+            token => service.AcceptAsync(view.HandoffId, view.UpdatedAt, token),
             result =>
             {
                 service.RequestRefresh();
@@ -753,7 +781,9 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
                 if (selectedIncomingId == view.HandoffId)
                     selectedIncomingId = null;
 
-                var imported = WorkshopQueueService.ImportFrozenQueue(config, view.JobName, view.Items, DateTime.UtcNow);
+                // Import what the host accepted, not what this frame captured.
+                var accepted = result.Handoff ?? view;
+                var imported = WorkshopQueueService.ImportFrozenQueue(config, accepted.JobName, accepted.Items, DateTime.UtcNow);
                 SetShareStatus(
                     imported.Success
                         ? $"Accepted {imported.Name} from {view.Sender.CharacterName}."
@@ -773,7 +803,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         var service = actions.Handoff();
         RunHandoff(
             view.HandoffId,
-            token => service.DeclineAsync(view.HandoffId, token),
+            token => service.DeclineAsync(view.HandoffId, view.UpdatedAt, token),
             result =>
             {
                 service.RequestRefresh();

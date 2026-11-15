@@ -239,20 +239,23 @@ public static class WorkshopJobSplitService
             delivered.Add(job);
         }
 
+        // The prep queue mirrors the loaded job. An unedited load follows the split; an edited one is
+        // the user's own work, so it is kept but unlinked and can no longer save back over the source.
+        var sourceState = WorkshopQueueService.GetFrozenQueueState(config, source.Id);
+        if (sourceState == WorkshopFrozenQueueState.Loaded)
+            config.WorkshopPrepQueue = WorkshopQueueService.CloneItems(commit.RetainedItems);
+        if (config.ActiveFrozenWorkshopQueueId == source.Id &&
+            (sourceState != WorkshopFrozenQueueState.Loaded || commit.RetainedItems.Count == 0))
+            config.ActiveFrozenWorkshopQueueId = null;
+
         if (commit.RetainedItems.Count == 0)
         {
             config.FrozenWorkshopQueues.Remove(source);
-            if (config.ActiveFrozenWorkshopQueueId == source.Id)
-                config.ActiveFrozenWorkshopQueueId = null;
-
             return new($"Handed {source.Name} off in {delivered.Count} share(s).", delivered, null);
         }
 
-        var wasLoaded = WorkshopQueueService.GetFrozenQueueState(config, source.Id) == WorkshopFrozenQueueState.Loaded;
         source.Items = WorkshopQueueService.CloneItems(commit.RetainedItems);
         source.UpdatedAt = nowUtc;
-        if (wasLoaded)
-            config.WorkshopPrepQueue = WorkshopQueueService.CloneItems(source.Items);
 
         return new($"Split {source.Name}: kept {source.Items.Sum(item => item.Quantity)} part(s), handed off {delivered.Count} share(s).", delivered, source);
     }
