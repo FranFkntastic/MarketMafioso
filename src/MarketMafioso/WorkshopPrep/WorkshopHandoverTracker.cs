@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
@@ -31,10 +33,14 @@ public sealed class WorkshopHandoverTracker : IDisposable
     private static readonly TimeSpan HoldingsFailureRetry = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan HoldingsRefreshAfter = TimeSpan.FromMinutes(10);
 
+    private static readonly Regex HostStatus = new(@"Workshop Host HTTP (\d{3})", RegexOptions.CultureInvariant);
+    private static readonly Regex HostState = new(@"\bis (\w+); material handover requires", RegexOptions.CultureInvariant);
+
     private readonly Configuration config;
     private readonly Func<IWorkshopHandoffService> service;
     private readonly Func<WorkshopFrozenQueue, IReadOnlyCollection<uint>> materialIds;
     private readonly Func<WorkshopAssembler?> currentCharacter;
+    private readonly Func<bool> tradeActive;
     private readonly IPluginLog log;
     private readonly ConcurrentQueue<Action> completed = new();
     private readonly Dictionary<Guid, WorkshopHoldingsLookup> holdings = [];
@@ -48,30 +54,144 @@ public sealed class WorkshopHandoverTracker : IDisposable
         Func<IWorkshopHandoffService> service,
         Func<WorkshopFrozenQueue, IReadOnlyCollection<uint>> materialIds,
         Func<WorkshopAssembler?> currentCharacter,
+        Func<bool> tradeActive,
         IPluginLog log)
     {
         this.config = config;
         this.service = service;
         this.materialIds = materialIds;
         this.currentCharacter = currentCharacter;
+        this.tradeActive = tradeActive;
         this.log = log;
     }
 
     public TradeQueueRecipientBinding? Binding => config.TradeQueueBinding;
 
+    /// <summary>True while the Trade Queue runner is trading (an in-flight record then belongs to the live batch).</summary>
+    public bool TradeActive => tradeActive();
+
+    /// <summary>
+    /// The binding and its share when the binding applies to the logged-in character. A binding whose share
+    /// no longer exists is cleared here and logged (once, since it is then gone).
+    /// </summary>
+    private (TradeQueueRecipientBinding Binding, WorkshopFrozenQueue Share)? ActiveBinding(string context)
+    {
+        if (config.TradeQueueBinding is not { } binding)
+            return null;
+        var current = currentCharacter();
+        if (!binding.IsActiveFor(current?.CharacterName, current?.World))
+            return null;
+
+        var share = config.FrozenWorkshopQueues.FirstOrDefault(queue => queue.Id == binding.ShareJobId);
+        if (share != null)
+            return (binding, share);
+
+        log.Warning(
+            "[MarketMafioso] Trade Queue binding cleared ({Context}): bound share {Share} ({ShareId}) no longer exists; trades to {Recipient} are no longer restricted or credited.",
+            context,
+            binding.ShareName,
+            binding.ShareJobId,
+            binding.RecipientKey);
+        config.TradeQueueBinding = null;
+        config.Save();
+        return null;
+    }
+
     /// <summary>Wire to <see cref="TradeQueueRunner.RecipientGuard"/>.</summary>
-    public string? CheckRecipient(TradeQueuePartner partner) => config.TradeQueueBinding?.Mismatch(partner);
+    public string? CheckRecipient(TradeQueuePartner partner)
+    {
+        if (ActiveBinding("trade start") is not { } active)
+            return null;
+        var (binding, share) = active;
+        ClearUnlockedInFlight(share);
+        if (share.HandoverInFlight is { } inFlight)
+            return $"{UnverifiedTradeText(inFlight)} for {share.Name}; count it as handed over or discard it before trading again.";
+        return binding.Mismatch(partner);
+    }
+
+    /// <summary>"Unverified trade: N unit(s) may have been handed over to X".</summary>
+    public static string UnverifiedTradeText(WorkshopHandoverInFlight inFlight) =>
+        $"Unverified trade: {inFlight.Units:N0} unit(s) may have been handed over to {inFlight.Recipient}";
 
     // ---- ledger --------------------------------------------------------------------------
 
     /// <summary>
+    /// Wire to <see cref="TradeQueueRunner.BatchStarting"/>. Persists the batch's material lines on the bound share
+    /// before the trade opens, so a batch that is traded but never verified is not silently lost.
+    /// </summary>
+    public void OnBatchStarting(TradeQueuePartner partner, TradeQueueBatch batch)
+    {
+        if (ActiveBinding("batch start") is not { } active || !active.Binding.Matches(partner))
+            return;
+        var (binding, share) = active;
+
+        var items = MaterialLines(batch, materialIds(share));
+        share.HandoverInFlight = items.Count == 0
+            ? null
+            : new WorkshopHandoverInFlight { Items = items, StartedAt = DateTimeOffset.UtcNow, Recipient = binding.RecipientKey };
+        config.Save();
+    }
+
+    /// <summary>
+    /// Wire to <see cref="TradeQueueRunner.BatchLocking"/>. Marks the in-flight record as possibly traded and saves
+    /// before the Ready click, so a reload can tell a batch that never locked from one that might have traded.
+    /// </summary>
+    public void OnBatchLocking(TradeQueuePartner partner, TradeQueueBatch batch)
+    {
+        if (ActiveBinding("batch locking") is not { } active || !active.Binding.Matches(partner))
+            return;
+        if (active.Share.HandoverInFlight is not { Locked: false } inFlight)
+            return;
+        inFlight.Locked = true;
+        config.Save();
+    }
+
+    /// <summary>Wire to <see cref="TradeQueueRunner.BatchAbandoned"/>. Drops a record whose batch never locked.</summary>
+    public void OnBatchAbandoned(TradeQueuePartner partner, TradeQueueBatch batch)
+    {
+        if (ActiveBinding("batch abandoned") is { } active)
+            ClearUnlockedInFlight(active.Share);
+    }
+
+    /// <summary>
+    /// Clears an in-flight record whose batch never reached this client's Ready click (nothing can have traded),
+    /// unless the Trade Queue is still running it. Returns true when a record was cleared.
+    /// </summary>
+    public bool ClearUnlockedInFlight(WorkshopFrozenQueue share)
+    {
+        if (share.HandoverInFlight is not { Locked: false } inFlight || tradeActive())
+            return false;
+        share.HandoverInFlight = null;
+        config.Save();
+        log.Information(
+            "[MarketMafioso] Cleared unlocked handover batch share={Share} recipient={Recipient} units={Units} startedAt={StartedAt:O}: Ready was never clicked, so nothing traded.",
+            share.Name,
+            inFlight.Recipient,
+            inFlight.Units,
+            inFlight.StartedAt);
+        return true;
+    }
+
+    /// <summary>
     /// Wire to <see cref="TradeQueueRunner.BatchVerified"/>. Credits the bound share's ledger with the batch's
-    /// material units. The runner saves the configuration right after this returns.
+    /// material units and clears its in-flight record. The runner saves the configuration right after this returns.
     /// </summary>
     public void OnBatchVerified(TradeQueuePartner partner, TradeQueueBatch batch)
     {
-        if (config.TradeQueueBinding is not { } binding)
+        var bound = config.TradeQueueBinding;
+        if (ActiveBinding("batch verified") is not { } active)
+        {
+            if (bound != null && config.TradeQueueBinding == bound)
+            {
+                log.Information(
+                    "[MarketMafioso] Handover ledger not credited: the Trade Queue binding belongs to {Sender}, not the logged-in character.",
+                    bound.SenderKey ?? "another character");
+            }
+
             return;
+        }
+
+        var (binding, share) = active;
         if (!binding.Matches(partner))
         {
             log.Warning(
@@ -80,33 +200,8 @@ public sealed class WorkshopHandoverTracker : IDisposable
             return;
         }
 
-        var share = config.FrozenWorkshopQueues.FirstOrDefault(queue => queue.Id == binding.ShareJobId);
-        if (share == null)
-        {
-            log.Warning(
-                "[MarketMafioso] Handover ledger not credited: bound share {Share} ({ShareId}) no longer exists.",
-                binding.ShareName,
-                binding.ShareJobId);
-            return;
-        }
-
-        var needed = materialIds(share);
-        var credited = 0;
-        foreach (var group in batch.Lines
-                     .Where(line => line.ItemId != TradeQueuePlanner.GilItemId && needed.Contains(line.ItemId))
-                     .GroupBy(line => line.ItemId))
-        {
-            var quantity = group.Sum(line => line.Quantity);
-            if (quantity <= 0)
-                continue;
-            var entry = share.HandedOver.FirstOrDefault(item => item.ItemId == group.Key);
-            if (entry == null)
-                share.HandedOver.Add(new WorkshopMaterialLedgerEntry { ItemId = group.Key, Quantity = quantity });
-            else
-                entry.Quantity = checked(entry.Quantity + quantity);
-            credited += quantity;
-        }
-
+        share.HandoverInFlight = null;
+        var credited = Credit(share, MaterialLines(batch, materialIds(share)));
         if (credited == 0)
             return;
 
@@ -121,6 +216,69 @@ public sealed class WorkshopHandoverTracker : IDisposable
         RequestReport(share);
     }
 
+    /// <summary>
+    /// Resolves a share's unverified in-flight batch: <paramref name="count"/> credits its lines to the ledger
+    /// and marks the report pending; otherwise the record is discarded. Refused while the Trade Queue trades.
+    /// </summary>
+    public (bool Success, string Message) ResolveInFlight(WorkshopFrozenQueue share, bool count)
+    {
+        if (share.HandoverInFlight is not { } inFlight)
+            return (false, $"{share.Name} has no unverified trade.");
+        if (tradeActive())
+            return (false, "The Trade Queue is trading; stop it before resolving the unverified trade.");
+
+        share.HandoverInFlight = null;
+        if (!count)
+        {
+            config.Save();
+            log.Information(
+                "[MarketMafioso] Unverified handover discarded share={Share} recipient={Recipient} units={Units} startedAt={StartedAt:O}.",
+                share.Name,
+                inFlight.Recipient,
+                inFlight.Units,
+                inFlight.StartedAt);
+            return (true, $"Discarded the unverified trade of {inFlight.Units:N0} unit(s) for {share.Name}.");
+        }
+
+        var credited = Credit(share, inFlight.Items);
+        share.HandoverReportPending = true;
+        config.Save();
+        log.Information(
+            "[MarketMafioso] Unverified handover counted share={Share} recipient={Recipient} units={Units} startedAt={StartedAt:O}.",
+            share.Name,
+            inFlight.Recipient,
+            credited,
+            inFlight.StartedAt);
+        RequestReport(share);
+        return (true, $"Counted {credited:N0} unit(s) as handed over to {inFlight.Recipient} for {share.Name}.");
+    }
+
+    private static List<WorkshopMaterialLedgerEntry> MaterialLines(TradeQueueBatch batch, IReadOnlyCollection<uint> needed) =>
+        batch.Lines
+            .Where(line => line.ItemId != TradeQueuePlanner.GilItemId && needed.Contains(line.ItemId))
+            .GroupBy(line => line.ItemId)
+            .Select(group => new WorkshopMaterialLedgerEntry { ItemId = group.Key, Quantity = group.Sum(line => line.Quantity) })
+            .Where(entry => entry.Quantity > 0)
+            .ToList();
+
+    private static int Credit(WorkshopFrozenQueue share, IEnumerable<WorkshopMaterialLedgerEntry> lines)
+    {
+        var credited = 0;
+        foreach (var line in lines)
+        {
+            if (line.Quantity <= 0)
+                continue;
+            var entry = share.HandedOver.FirstOrDefault(item => item.ItemId == line.ItemId);
+            if (entry == null)
+                share.HandedOver.Add(new WorkshopMaterialLedgerEntry { ItemId = line.ItemId, Quantity = line.Quantity });
+            else
+                entry.Quantity = checked(entry.Quantity + line.Quantity);
+            credited = checked(credited + line.Quantity);
+        }
+
+        return credited;
+    }
+
     /// <summary>Marks the share's ledger and total for relay to the host and sends it now when possible.</summary>
     public void MarkForReport(WorkshopFrozenQueue share)
     {
@@ -132,6 +290,32 @@ public sealed class WorkshopHandoverTracker : IDisposable
 
     /// <summary>Why the last relay of this share's ledger failed, or null.</summary>
     public string? ReportError(Guid shareId) => reportErrors.GetValueOrDefault(shareId);
+
+    /// <summary>
+    /// What the host is told: each item's handed units capped at its due, and the total due. The receiver only
+    /// sums, so an over-delivered item must not mask another item's shortfall. Shares without a per-item due
+    /// (earlier builds, until the window re-syncs it) report the raw ledger and stored total.
+    /// </summary>
+    public static (WorkshopMaterialCount[] Ledger, int Total) ReportPayload(WorkshopFrozenQueue share)
+    {
+        var handed = share.HandedOver
+            .GroupBy(item => item.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(item => Math.Max(0, item.Quantity)));
+        if (share.HandoverDue is not { } dueEntries)
+        {
+            return (handed.Where(item => item.Value > 0).Select(item => new WorkshopMaterialCount(item.Key, item.Value)).ToArray(),
+                share.HandoverTotal);
+        }
+
+        var due = dueEntries
+            .GroupBy(item => item.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(item => Math.Max(0, item.Quantity)));
+        var ledger = due
+            .Select(item => new WorkshopMaterialCount(item.Key, Math.Min(handed.GetValueOrDefault(item.Key), item.Value)))
+            .Where(item => item.Quantity > 0)
+            .ToArray();
+        return (ledger, due.Values.Sum());
+    }
 
     public void RequestReport(WorkshopFrozenQueue share)
     {
@@ -146,11 +330,7 @@ public sealed class WorkshopHandoverTracker : IDisposable
         }
 
         var shareId = share.Id;
-        var ledger = share.HandedOver
-            .Where(item => item.Quantity > 0)
-            .Select(item => new WorkshopMaterialCount(item.ItemId, item.Quantity))
-            .ToArray();
-        var total = share.HandoverTotal;
+        var (ledger, total) = ReportPayload(share);
         var signature = LedgerSignature(ledger, total);
         reporting.Add(shareId);
         var token = lifetime.Token;
@@ -183,6 +363,24 @@ public sealed class WorkshopHandoverTracker : IDisposable
 
         if (!result.Success)
         {
+            if (FinalRefusal(share, result.Message) is { } refusal)
+            {
+                reportErrors.Remove(shareId);
+                share.HandoverReportPending = false;
+                if (share.HandoverReportRefusal != refusal)
+                {
+                    log.Warning(
+                        "[MarketMafioso] Handover report for {Share} refused permanently; local ledger kept, not retried. {Refusal} Host: {Reason}",
+                        share.Name,
+                        refusal,
+                        result.Message);
+                }
+
+                share.HandoverReportRefusal = refusal;
+                config.Save();
+                return;
+            }
+
             if (reportErrors.GetValueOrDefault(shareId) != result.Message)
             {
                 log.Warning(
@@ -196,10 +394,9 @@ public sealed class WorkshopHandoverTracker : IDisposable
         }
 
         reportErrors.Remove(shareId);
-        var current = LedgerSignature(
-            share.HandedOver.Where(item => item.Quantity > 0).Select(item => new WorkshopMaterialCount(item.ItemId, item.Quantity)),
-            share.HandoverTotal);
-        if (current != signature)
+        share.HandoverReportRefusal = null;
+        var (ledger, total) = ReportPayload(share);
+        if (LedgerSignature(ledger, total) != signature)
         {
             // The ledger moved while the report was in flight; send the newer totals.
             RequestReport(share);
@@ -209,6 +406,30 @@ public sealed class WorkshopHandoverTracker : IDisposable
         share.HandoverReportPending = false;
         config.Save();
         service().RequestRefresh();
+    }
+
+    /// <summary>
+    /// A report the host will never accept: HTTP 404 (share unknown) or 409 (not Offered/Accepted), or, when the
+    /// status is not in the message, a share the host has withdrawn or declined. Null for retryable failures.
+    /// </summary>
+    private static string? FinalRefusal(WorkshopFrozenQueue share, string message)
+    {
+        var statusMatch = HostStatus.Match(message);
+        int? status = statusMatch.Success ? int.Parse(statusMatch.Groups[1].Value, CultureInfo.InvariantCulture) : null;
+        var localState = share.HandoffState is WorkshopHandoffState.Withdrawn or WorkshopHandoffState.Declined
+            ? share.HandoffState.ToString()
+            : null;
+        var stateMatch = HostState.Match(message);
+        return status switch
+        {
+            // Only the store's own 404 is final; a bare 404 means a host without the handover route (not yet
+            // updated), which must keep retrying so the ledger is relayed once the host is upgraded.
+            404 when message.Contains("Unknown handoff", StringComparison.Ordinal) =>
+                "Host no longer accepts handover for this share (unknown to this host login).",
+            409 => $"Host no longer accepts handover for this share ({(stateMatch.Success ? stateMatch.Groups[1].Value : localState ?? "not Offered or Accepted")}).",
+            null when localState != null => $"Host no longer accepts handover for this share ({localState}).",
+            _ => null,
+        };
     }
 
     private static string LedgerSignature(IEnumerable<WorkshopMaterialCount> ledger, int total) =>
@@ -320,6 +541,9 @@ public sealed record WorkshopHandoverRow(
     public int Due(bool countTheirs) => Math.Max(0, Needed - (countTheirs ? TheyHold ?? 0 : 0));
 
     public int Owed(bool countTheirs) => Math.Max(0, Due(countTheirs) - HandedOver);
+
+    /// <summary>Handed units that count toward this item's due: min(HandedOver, Due).</summary>
+    public int Credited(bool countTheirs) => Math.Min(Math.Max(0, HandedOver), Due(countTheirs));
 
     public int Short(bool countTheirs) => Math.Max(0, Owed(countTheirs) - InBags);
 

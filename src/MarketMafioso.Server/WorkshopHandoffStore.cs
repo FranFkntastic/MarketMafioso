@@ -87,10 +87,10 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
             throw Refuse(account, value, 403, "Only the sender may report material handover for this share.");
         if (value.State is not ("Offered" or "Accepted"))
             throw Refuse(account, value, 409, $"Handoff {id} is {value.State}; material handover requires Offered or Accepted state.");
-        if (request.HandoverTotal < 0 || request.HandedOver is null ||
-            request.HandedOver.Any(x => x is null || x.ItemId == 0 || x.Quantity < 0) ||
+        if (request.HandoverTotal is < 0 or > 10_000_000 || request.HandedOver is null || request.HandedOver.Count > 500 ||
+            request.HandedOver.Any(x => x is null || x.ItemId == 0 || x.Quantity is < 0 or > 1_000_000) ||
             request.HandedOver.Select(x => x.ItemId).Distinct().Count() != request.HandedOver.Count)
-            throw Refuse(account, value, 400, "Handover requires distinct item ids > 0, quantities >= 0, and HandoverTotal >= 0.");
+            throw Refuse(account, value, 400, "Handover requires at most 500 distinct item ids > 0, quantities 0..1,000,000, and HandoverTotal 0..10,000,000.");
         var items = request.HandedOver.OrderBy(x => x.ItemId).ToArray();
         // A repeated SET is a no-op, including its timestamp. Never advance the offer version.
         if (value.HandoverUpdatedAt is null || value.HandoverTotal != request.HandoverTotal ||
@@ -143,7 +143,9 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
             var bags = latest.Report.PlayerInventory.Concat(latest.Report.Retainers
                 .Where(r => (string.IsNullOrWhiteSpace(r.OwnerCharacterName) || string.Equals(r.OwnerCharacterName, character.CharacterName, StringComparison.OrdinalIgnoreCase)) &&
                     (string.IsNullOrWhiteSpace(r.OwnerHomeWorld) || string.Equals(r.OwnerHomeWorld, character.World, StringComparison.OrdinalIgnoreCase)))
-                .SelectMany(r => r.Bags));
+                // Only bags observed in this report: the reporter carries forward unobserved retainer bags from
+                // older reports, and counting those as current would under-send materials.
+                .SelectMany(r => r.Bags.Where(b => r.Storage.ObservedSources.Contains(b.Location ?? b.BagName, StringComparer.Ordinal))));
             foreach (var item in bags.SelectMany(b => b.Items))
                 if (totals.ContainsKey(item.ItemId))
                 {

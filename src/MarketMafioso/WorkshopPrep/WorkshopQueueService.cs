@@ -179,8 +179,16 @@ public static class WorkshopQueueService
         config.FrozenWorkshopQueues.Remove(frozen);
         if (config.ActiveFrozenWorkshopQueueId == queueId)
             config.ActiveFrozenWorkshopQueueId = null;
+        ReleaseTradeQueueBinding(config, queueId);
 
         return new(true, $"Deleted frozen workshop queue {frozen.Name}.");
+    }
+
+    /// <summary>Clears the Trade Queue recipient binding when it belongs to a share that is being deleted.</summary>
+    public static void ReleaseTradeQueueBinding(Configuration config, Guid deletedShareId)
+    {
+        if (config.TradeQueueBinding?.ShareJobId == deletedShareId)
+            config.TradeQueueBinding = null;
     }
 
     public static void NewActiveQueue(Configuration config)

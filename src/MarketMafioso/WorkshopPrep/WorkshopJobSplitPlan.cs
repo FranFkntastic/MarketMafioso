@@ -251,6 +251,7 @@ public static class WorkshopJobSplitService
         if (commit.RetainedItems.Count == 0)
         {
             config.FrozenWorkshopQueues.Remove(source);
+            WorkshopQueueService.ReleaseTradeQueueBinding(config, source.Id);
             return new($"Handed {source.Name} off in {delivered.Count} share(s).", delivered, null);
         }
 

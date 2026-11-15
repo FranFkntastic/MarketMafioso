@@ -41,7 +41,12 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         bool BagsKnown)
     {
         public int Due => WorkshopHandoverCalculator.HandoverTotal(Rows, CountTheirs);
-        public int Handed => Rows.Sum(row => row.HandedOver);
+
+        /// <summary>Handed units counted toward progress: Σ min(handed, due) per item, so surplus never hides a shortfall.</summary>
+        public int Handed => Rows.Sum(row => row.Credited(CountTheirs));
+
+        /// <summary>Handed units as traded, surplus included.</summary>
+        public int HandedRaw => Rows.Sum(row => row.HandedOver);
         public int Owed => Rows.Sum(row => row.Owed(CountTheirs));
         public int Short => Rows.Sum(row => row.Short(CountTheirs));
         public int Give => Rows.Sum(row => row.Give(CountTheirs));
@@ -73,17 +78,24 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
     private void DrawHandover(WorkshopFrozenQueue queue)
     {
         var tracker = actions.Handover;
+        // A record that never reached the Ready click (e.g. left over from a reload) cannot have traded.
+        tracker.ClearUnlockedInFlight(queue);
         tracker.RequestHoldings(queue, force: false);
         var view = BuildHandoverView(queue);
         SyncHandoverTotal(queue, view);
 
         ImGui.Spacing();
         DrawHandoverStrip(queue, view);
+        DrawUnverifiedTrade(queue);
         DrawHandoverOptions(queue, view);
         DrawHandoverTable(view);
 
-        if (queue.HandoverReportPending && queue.HandoffId != null &&
-            !tracker.IsReporting(queue.Id) && tracker.ReportError(queue.Id) is { } reportError)
+        if (queue.HandoverReportRefusal is { } refusal)
+        {
+            ImGui.TextColored(ColWarning, refusal);
+        }
+        else if (queue.HandoverReportPending && queue.HandoffId != null &&
+                 !tracker.IsReporting(queue.Id) && tracker.ReportError(queue.Id) is { } reportError)
         {
             ImGui.TextColored(ColWarning, $"Handover not relayed to the Workshop Host: {reportError} Retrying.");
         }
@@ -118,8 +130,11 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
                     $"{view.Handed:N0} / {due:N0}",
                     done ? MarketMafiosoUiTheme.Success : ColHeader,
                     Accent: done ? MarketMafiosoUiTheme.Success : null,
-                    Fill: due <= 0 ? 1f : (float)view.Handed / due,
-                    FillColor: done ? MarketMafiosoUiTheme.Success : ColHeader),
+                    Fill: due <= 0 ? 1f : Math.Clamp((float)view.Handed / due, 0f, 1f),
+                    FillColor: done ? MarketMafiosoUiTheme.Success : ColHeader,
+                    Tooltip: view.HandedRaw > view.Handed
+                        ? $"{view.HandedRaw:N0} traded; {view.HandedRaw - view.Handed:N0} beyond what is due is not counted."
+                        : null),
                 new(
                     "Owed",
                     done ? "Nothing" : owed.ToString("N0"),
@@ -144,6 +159,9 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
             return ("Checking...", ColMuted, null);
         if (view.Source == HoldingsSource.None)
             return (view.HoldingsProblem == null ? "No report" : "Unavailable", ColWarning, view.HoldingsProblem ?? "The Workshop Host has no inventory report for this character.");
+
+        if (view.Source == HoldingsSource.Frozen && view.CapturedAt == null)
+            return ("Not counted", ColWarning, "Unavailable when the handover started; nothing is subtracted.");
 
         var age = view.CapturedAt is { } captured ? DateTimeOffset.UtcNow - captured : (TimeSpan?)null;
         var stale = age == null || age > WorkshopHandoverTracker.HoldingsFreshness;
@@ -299,21 +317,23 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
     {
         var view = BuildHandoverView(queue);
         var give = view.Give;
+        var blocked = UnverifiedBlock(queue);
+        var enabled = give > 0 && blocked == null;
         var label = give > 0 ? $"Hand over {give:N0}##workshopHandOver" : "Hand over##workshopHandOver";
-        if (ImGuiUi.PrimaryButton(label, give > 0))
+        if (ImGuiUi.PrimaryButton(label, enabled))
         {
             var result = HandOver(queue, confirmed: false);
             if (!result.Success && result.Message.Length > 0)
                 SetShareStatus(result.Message, isError: true);
         }
 
-        if (give == 0 && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(NothingToHandOver(queue, view));
+        if (!enabled && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(blocked ?? NothingToHandOver(queue, view));
         RegisterLastAction(
             $"{SurfaceId}.handoff.hand-over",
             $"Fill the Trade Queue with {queue.Name}'s owed materials and bind it to {queue.HandoffTargetName}",
-            give > 0,
-            $"give={give:N0}; owed={view.Owed:N0}; short={view.Short:N0}",
+            enabled,
+            blocked ?? $"give={give:N0}; owed={view.Owed:N0}; short={view.Short:N0}",
             _ =>
             {
                 var result = HandOver(queue, confirmed: false);
@@ -339,8 +359,11 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
     /// </summary>
     private (bool Success, string Message) HandOver(WorkshopFrozenQueue queue, bool confirmed)
     {
-        if (WorkshopSavedJobHandoff.Target(queue) is not { } target || !IsSender(queue))
+        if (WorkshopSavedJobHandoff.Target(queue) is not { } target || !IsSender(queue) ||
+            actions.CurrentCharacter() is not { } sender)
             return (false, $"{queue.Name} is not a share this character sent.");
+        if (UnverifiedBlock(queue) is { } blocked)
+            return (false, blocked);
 
         var view = BuildHandoverView(queue, refreshBags: true);
         var items = view.Rows
@@ -363,6 +386,8 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
             ShareName = queue.Name,
             RecipientName = target.CharacterName,
             RecipientWorld = target.World,
+            SenderName = sender.CharacterName,
+            SenderWorld = sender.World,
         };
         if (!actions.HandOver(items, binding, out var message))
         {
@@ -370,9 +395,10 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
             return (false, message);
         }
 
-        // Until a unit is credited, re-baseline on the holdings this handover was planned from.
-        if (!queue.HandedOver.Any(entry => entry.Quantity > 0) &&
-            view.Source != HoldingsSource.None)
+        // Until a unit is credited, re-baseline on the holdings this handover was planned from. Freeze even
+        // when holdings were unavailable (an empty baseline): later reports include traded units, and using
+        // them live alongside the ledger would subtract those units twice.
+        if (!queue.HandedOver.Any(entry => entry.Quantity > 0))
         {
             queue.HandoverBaseline = view.Rows
                 .Where(row => row.TheyHold is > 0)
@@ -382,6 +408,7 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         }
 
         queue.HandoverTotal = view.Due;
+        queue.HandoverDue = DueEntries(view);
         config.Save();
         actions.Handover.MarkForReport(queue);
         pendingTradeReplaceQueueId = null;
@@ -402,17 +429,85 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         return $"Nothing to hand over: {view.Owed:N0} owed but none in bags ({string.Join(", ", missing)} short).";
     }
 
-    /// <summary>Keeps the reported total in step once a handover has started (or when it no longer depends on live holdings).</summary>
+    /// <summary>Keeps the reported per-item due and total in step once a handover has started.</summary>
     private void SyncHandoverTotal(WorkshopFrozenQueue queue, HandoverView view)
     {
-        if (queue.HandoverTotal <= 0 || view.Loading || view.Rows.Count == 0)
+        if ((queue.HandoverTotal <= 0 && queue.HandoverDue == null) || view.Loading || view.Rows.Count == 0)
             return;
-        var due = view.Due;
-        if (due == queue.HandoverTotal)
+        var due = DueEntries(view);
+        if (view.Due == queue.HandoverTotal && queue.HandoverDue is { } stored && DueSignature(stored) == DueSignature(due))
             return;
-        queue.HandoverTotal = due;
+        queue.HandoverTotal = view.Due;
+        queue.HandoverDue = due;
         config.Save();
         actions.Handover.MarkForReport(queue);
+    }
+
+    private static List<WorkshopMaterialLedgerEntry> DueEntries(HandoverView view) =>
+        view.Rows
+            .Select(row => new WorkshopMaterialLedgerEntry { ItemId = row.ItemId, Quantity = row.Due(view.CountTheirs) })
+            .Where(entry => entry.Quantity > 0)
+            .OrderBy(entry => entry.ItemId)
+            .ToList();
+
+    private static string DueSignature(IEnumerable<WorkshopMaterialLedgerEntry> due) =>
+        string.Join(',', due.OrderBy(entry => entry.ItemId).Select(entry => $"{entry.ItemId}:{entry.Quantity}"));
+
+    /// <summary>Why Hand over is blocked by an unresolved or still-trading batch, or null.</summary>
+    private string? UnverifiedBlock(WorkshopFrozenQueue queue)
+    {
+        if (queue.HandoverInFlight is not { } inFlight)
+            return null;
+        return actions.Handover.TradeActive
+            ? $"The Trade Queue is trading {inFlight.Units:N0} unit(s) to {inFlight.Recipient}; wait for it to verify."
+            : $"{WorkshopHandoverTracker.UnverifiedTradeText(inFlight)}; count it as handed over or discard it first.";
+    }
+
+    /// <summary>A bound batch that started but was never verified (reload, failure or stop mid-batch).</summary>
+    private void DrawUnverifiedTrade(WorkshopFrozenQueue queue)
+    {
+        if (queue.HandoverInFlight is not { } inFlight || actions.Handover.TradeActive)
+            return;
+
+        var names = Requirements(queue).ToDictionary(requirement => requirement.ItemId, requirement => requirement.ItemName);
+        var detail = string.Join(
+                         "\n",
+                         inFlight.Items.Select(item =>
+                             $"{(names.TryGetValue(item.ItemId, out var name) ? name : $"Item {item.ItemId}")} ×{item.Quantity:N0}")) +
+                     $"\nBatch started {inFlight.StartedAt.ToLocalTime():g}; its inventory change was never verified.";
+        var value = $"units={inFlight.Units:N0}; recipient={inFlight.Recipient}; startedAt={inFlight.StartedAt:O}";
+
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(ColWarning, $"{WorkshopHandoverTracker.UnverifiedTradeText(inFlight)}.");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(detail);
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Count as handed over##workshopHandoverInFlightCount", true))
+            ResolveUnverifiedTrade(queue, count: true);
+        RegisterLastAction(
+            $"{SurfaceId}.handover.unverified.count",
+            $"Credit {queue.Name}'s unverified trade to the handed-over ledger",
+            enabled: true,
+            value,
+            _ => ToActionResult(ResolveUnverifiedTrade(queue, count: true)));
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Discard##workshopHandoverInFlightDiscard", true))
+            ResolveUnverifiedTrade(queue, count: false);
+        RegisterLastAction(
+            $"{SurfaceId}.handover.unverified.discard",
+            $"Discard {queue.Name}'s unverified trade without crediting it",
+            enabled: true,
+            value,
+            _ => ToActionResult(ResolveUnverifiedTrade(queue, count: false)));
+    }
+
+    private (bool Success, string Message) ResolveUnverifiedTrade(WorkshopFrozenQueue queue, bool count)
+    {
+        var result = actions.Handover.ResolveInFlight(queue, count);
+        SetShareStatus(result.Message, isError: !result.Success);
+        return result;
     }
 
     private HandoverView BuildHandoverView(WorkshopFrozenQueue queue, bool refreshBags = false)

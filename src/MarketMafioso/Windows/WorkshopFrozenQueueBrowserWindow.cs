@@ -727,6 +727,12 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
                     current.HandoffId = result.Handoff.HandoffId;
                     current.HandoffState = result.Handoff.State;
                     current.HandoffError = null;
+                    // A revived share accepts handover again; relay the kept ledger.
+                    if (current.HandoverReportRefusal != null || current.HandedOver.Count > 0 || current.HandoverTotal > 0)
+                    {
+                        current.HandoverReportRefusal = null;
+                        actions.Handover.MarkForReport(current);
+                    }
                 }
                 else
                 {
@@ -935,10 +941,12 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
             _ => ColMuted,
         };
         var label = $"{WorkshopSavedJobHandoff.Label(status)} · {queue.HandoffTargetName}";
-        if (queue.HandoverTotal > 0)
+        if (queue.HandoverTotal > 0 || queue.HandoverDue != null)
         {
-            var handed = queue.HandedOver.Sum(entry => Math.Max(0, entry.Quantity));
-            label += handed >= queue.HandoverTotal ? " · handed over" : $" · {handed:N0}/{queue.HandoverTotal:N0} handed";
+            // Per-item capped: surplus of one material never reads as another material handed over.
+            var view = BuildHandoverView(queue);
+            if (view.Due > 0)
+                label += view.Owed == 0 ? " · handed over" : $" · {view.Handed:N0}/{view.Due:N0} handed";
         }
 
         return (label, color);

@@ -104,6 +104,22 @@ public sealed class TradeQueueRunner : IDisposable
     /// <summary>Raised on the framework thread after each batch's inventory delta is verified, before the queue is saved.</summary>
     public event Action<TradeQueuePartner, TradeQueueBatch>? BatchVerified;
 
+    /// <summary>
+    /// Raised on the framework thread when a batch is planned, before its trade is opened or offered. A rebuilt
+    /// batch raises it again; the latest one replaces the earlier plan.
+    /// </summary>
+    public event Action<TradeQueuePartner, TradeQueueBatch>? BatchStarting;
+
+    /// <summary>
+    /// Raised on the framework thread just before this client clicks Ready on a batch's offer (possibly on several
+    /// ticks until the click lands). A trade cannot complete without that click, so a batch that never raised this
+    /// cannot have been handed over.
+    /// </summary>
+    public event Action<TradeQueuePartner, TradeQueueBatch>? BatchLocking;
+
+    /// <summary>Raised when a run fails or stops with a planned batch still unverified.</summary>
+    public event Action<TradeQueuePartner, TradeQueueBatch>? BatchAbandoned;
+
     /// <summary>Resolves capability evidence without selecting a recipient or starting any operation.</summary>
     public (bool Available, string Message) InspectExecutionCapability()
     {
@@ -597,6 +613,7 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         batch = batch with { ExpectedInventoryBefore = TradeQueuePlanner.CountExactInventory(inventory.Stacks) };
 
+        NotifyBatch(BatchLocking, batch, "locking");
         if (!io.TryClickReady(out var error))
         {
             if (!string.IsNullOrWhiteSpace(error))
@@ -716,18 +733,20 @@ public sealed class TradeQueueRunner : IDisposable
         TickOpeningTrade(now);
     }
 
-    private void NotifyBatchVerified(TradeQueueBatch verified)
+    private void NotifyBatchVerified(TradeQueueBatch verified) => NotifyBatch(BatchVerified, verified, "verified");
+
+    private void NotifyBatch(Action<TradeQueuePartner, TradeQueueBatch>? listeners, TradeQueueBatch planned, string stage)
     {
-        if (partner == null || BatchVerified == null)
+        if (partner == null || listeners == null)
             return;
         try
         {
-            BatchVerified(partner, verified);
+            listeners(partner, planned);
         }
         catch (Exception exception)
         {
-            // A ledger listener must never fail the trade run that already completed this batch.
-            log.Error(exception, "[MarketMafioso] Trade Queue batch listener failed run={RunId} batch={Batch}.", runId ?? "", batchNumber);
+            // A ledger listener must never fail the trade run.
+            log.Error(exception, "[MarketMafioso] Trade Queue batch {Stage} listener failed run={RunId} batch={Batch}.", stage, runId ?? "", batchNumber);
         }
     }
 
@@ -744,6 +763,7 @@ public sealed class TradeQueueRunner : IDisposable
             queue.ToList(),
             inventory,
             allowHighQualityItems: !normalizeHighQualityItemsForRun);
+        NotifyBatch(BatchStarting, batch, "starting");
         batchRecoveryDeadline = clock() + OpenTradeTimeout + OfferItemsTimeout;
         offerLineOperation = null;
         offerGilOperation = null;
@@ -899,6 +919,8 @@ public sealed class TradeQueueRunner : IDisposable
         externalAutomation.RestoreTradeAutoConfirm();
         deadline = default;
         nextActionAt = default;
+        if (batch != null && state is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped)
+            NotifyBatch(BatchAbandoned, batch, "abandoned");
         batch = null;
         Snapshot = new(
             state,

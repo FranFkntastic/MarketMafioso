@@ -51,6 +51,8 @@ internal sealed class WorkshopJobSplitPanel
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>>? coverage;
     private IReadOnlyList<WorkshopMaterialAvailability>? coverageCache;
+    private string? coverageError;
+    private string? loggedCoverageError;
     private DateTimeOffset coverageAt;
     private readonly TableSelectionModel<int> selection = new();
     private DalamudTableProjection<SplitRow>? table;
@@ -184,12 +186,22 @@ internal sealed class WorkshopJobSplitPanel
             try
             {
                 coverageCache = coverage();
+                coverageError = null;
             }
-            catch (InvalidOperationException)
+            catch (Exception exception)
             {
-                coverageCache ??= [];
+                coverageCache = null;
+                coverageError = $"Material availability failed: {exception.GetType().Name}: {exception.Message}";
+                if (coverageError != loggedCoverageError)
+                {
+                    loggedCoverageError = coverageError;
+                    Plugin.Log.Warning(exception, "[MarketMafioso] Split Materials tile unavailable: {Reason}", coverageError);
+                }
             }
         }
+
+        if (coverageCache == null)
+            return new("Materials", "Unavailable", MarketMafiosoUiTheme.Warning, Tooltip: coverageError);
 
         const string source = "bags + retainers";
         var sourceWidth = ImGui.CalcTextSize(source).X + 4f;

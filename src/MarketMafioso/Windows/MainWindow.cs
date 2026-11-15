@@ -378,14 +378,19 @@ public class MainWindow : Window, IDisposable
             config,
             tradeQueueRunner,
             tradeQueueIo,
-            AgentReviewRegistry);
+            AgentReviewRegistry,
+            GetCurrentWorkshopAssembler);
         HandoverTracker = new WorkshopHandoverTracker(
             config,
             () => Plugin.Instance.WorkshopHandoffService,
             share => workshopCatalog.BuildRequirements(share.Items).Select(material => material.ItemId).ToHashSet(),
             GetCurrentWorkshopAssembler,
+            () => tradeQueueRunner.IsActive,
             log);
         tradeQueueRunner.RecipientGuard = HandoverTracker.CheckRecipient;
+        tradeQueueRunner.BatchStarting += HandoverTracker.OnBatchStarting;
+        tradeQueueRunner.BatchLocking += HandoverTracker.OnBatchLocking;
+        tradeQueueRunner.BatchAbandoned += HandoverTracker.OnBatchAbandoned;
         tradeQueueRunner.BatchVerified += HandoverTracker.OnBatchVerified;
         WorkshopProjectBrowserWindow? projectBrowser = null;
         WorkshopFrozenQueueBrowserWindow? frozenQueueBrowser = null;
@@ -2782,6 +2787,9 @@ public class MainWindow : Window, IDisposable
         craftQuoteHttpClient.Dispose();
         FrozenQueueBrowser.Dispose();
         tradeQueueRunner.BatchVerified -= HandoverTracker.OnBatchVerified;
+        tradeQueueRunner.BatchStarting -= HandoverTracker.OnBatchStarting;
+        tradeQueueRunner.BatchLocking -= HandoverTracker.OnBatchLocking;
+        tradeQueueRunner.BatchAbandoned -= HandoverTracker.OnBatchAbandoned;
         tradeQueueRunner.RecipientGuard = null;
         HandoverTracker.Dispose();
     }
