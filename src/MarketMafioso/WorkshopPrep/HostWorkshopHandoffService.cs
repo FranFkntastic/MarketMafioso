@@ -31,9 +31,9 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
 
     private sealed record Context(string Url, string Key, WorkshopCharacter Actor, ulong ContentId, int Epoch);
     private sealed record Cache(Context? Owner, WorkshopAssembler[] Known, WorkshopHandoffView[] Outgoing,
-        WorkshopHandoffView[] Incoming, string? Error)
+        WorkshopHandoffView[] Incoming, WorkshopHandoffView[] Received, string? Error)
     {
-        public static Cache Empty { get; } = new(null, [], [], [], "Workshop Host has not been contacted yet.");
+        public static Cache Empty { get; } = new(null, [], [], [], [], "Workshop Host has not been contacted yet.");
     }
 
     public HostWorkshopHandoffService(Configuration config, IPlayerState playerState, IClientState clientState,
@@ -91,14 +91,43 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
             catch (InvalidOperationException) { return false; }
         }).ConfigureAwait(false);
 
-    // TODO(handover): implemented by the host delegate; stubs keep the solution compiling meanwhile.
-    public IReadOnlyList<WorkshopHandoffView> Received => [];
+    public IReadOnlyList<WorkshopHandoffView> Received => Array.AsReadOnly(Current.Received);
 
-    public Task<WorkshopHoldingsResult> GetHoldingsAsync(WorkshopAssembler character, IReadOnlyCollection<uint> itemIds, CancellationToken cancellationToken) =>
-        Task.FromResult(WorkshopHoldingsResult.Fail("Recipient holdings are not implemented yet."));
+    public Task<WorkshopHoldingsResult> GetHoldingsAsync(WorkshopAssembler character, IReadOnlyCollection<uint> itemIds, CancellationToken cancellationToken)
+    {
+        var ids = itemIds.ToArray();
+        return Task.Run(async () =>
+        {
+            if (Volatile.Read(ref disposed) != 0) return WorkshopHoldingsResult.Fail("Workshop handoff service is disposed.");
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, shutdown.Token);
+            var entered = false;
+            try
+            {
+                await gate.WaitAsync(linked.Token).ConfigureAwait(false);
+                entered = true;
+                var owner = await framework.RunOnFrameworkThread(Capture).ConfigureAwait(false);
+                var path = $"?characterName={Uri.EscapeDataString(character.CharacterName)}&world={Uri.EscapeDataString(character.World)}&itemIds={string.Join(",", ids)}";
+                var result = await SendAsync<WorkshopCharacterHoldings>(owner, HttpMethod.Get, path, null, linked.Token, holdings: true).ConfigureAwait(false);
+                if (!await StillCurrentAsync(owner).ConfigureAwait(false))
+                    throw new InvalidOperationException("Character or host configuration changed while reading recipient holdings.");
+                return new WorkshopHoldingsResult(true, result.CapturedAt is null ? "No inventory report for this character." : "Recipient holdings loaded.",
+                    result.CapturedAt, result.Items.ToDictionary(x => x.ItemId, x => x.Quantity));
+            }
+            catch (Exception ex)
+            {
+                var reason = Failure(ex, linked.IsCancellationRequested);
+                log.Warning(ex, "Workshop recipient holdings failed for {Character}: {Reason}", character.Key, reason);
+                return WorkshopHoldingsResult.Fail(reason);
+            }
+            finally { if (entered) gate.Release(); }
+        });
+    }
 
-    public Task<WorkshopHandoffResult> ReportHandoverAsync(Guid handoffId, IReadOnlyList<WorkshopMaterialCount> handedOver, int handoverTotal, CancellationToken cancellationToken) =>
-        Task.FromResult(WorkshopHandoffResult.Fail("Handover reporting is not implemented yet."));
+    public Task<WorkshopHandoffResult> ReportHandoverAsync(Guid handoffId, IReadOnlyList<WorkshopMaterialCount> handedOver, int handoverTotal, CancellationToken cancellationToken)
+    {
+        var copied = handedOver.Select(x => new WorkshopMaterialQuantity(x.ItemId, x.Quantity)).ToArray();
+        return MutateAsync("handover", handoffId, owner => new WorkshopHandoverReport(owner.Actor, copied, handoverTotal), cancellationToken);
+    }
 
     public void RequestRefresh()
     {
@@ -147,7 +176,8 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
             if (owner is null) { Volatile.Write(ref cache, Cache.Empty); return identityPending; }
             var path = $"?characterName={Uri.EscapeDataString(owner.Actor.CharacterName)}&world={Uri.EscapeDataString(owner.Actor.World)}";
             var result = await SendAsync<WorkshopHandoffList>(owner, HttpMethod.Get, path, null, token).ConfigureAwait(false);
-            var next = new Cache(owner, result.KnownAssemblers.Select(Map).ToArray(), result.Outgoing.Select(Map).ToArray(), result.Incoming.Select(Map).ToArray(), null);
+            var next = new Cache(owner, result.KnownAssemblers.Select(Map).ToArray(), result.Outgoing.Select(Map).ToArray(), result.Incoming.Select(Map).ToArray(),
+                (result.Received ?? []).Select(Map).ToArray(), null);
             if (await StillCurrentAsync(owner).ConfigureAwait(false)) Volatile.Write(ref cache, next);
             return false;
         }
@@ -159,7 +189,7 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
             if (owner is not null && await StillCurrentAsync(owner).ConfigureAwait(false))
             {
                 var old = Volatile.Read(ref cache);
-                Volatile.Write(ref cache, old.Owner == owner ? old with { Error = message } : new(owner, [], [], [], message));
+                Volatile.Write(ref cache, old.Owner == owner ? old with { Error = message } : new(owner, [], [], [], [], message));
             }
             return false;
         }
@@ -195,7 +225,7 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
                 id is null ? "" : $"/{id}/{action}", body(owner), linked.Token).ConfigureAwait(false);
             if (!await StillCurrentAsync(owner).ConfigureAwait(false))
                 throw new InvalidOperationException($"Host recorded {action} for {owner.Actor}, but the logged-in character or host configuration changed; local import was not performed.");
-            return new WorkshopHandoffResult(true, $"Handoff {result.State.ToLowerInvariant()}.", Map(result));
+            return new WorkshopHandoffResult(true, action == "handover" ? "Material handover recorded." : $"Handoff {result.State.ToLowerInvariant()}.", Map(result));
         }
         catch (Exception ex)
         {
@@ -206,7 +236,7 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
                 await StillCurrentAsync(owner).ConfigureAwait(false))
             {
                 var old = Volatile.Read(ref cache);
-                Volatile.Write(ref cache, old.Owner == owner ? old with { Error = reason } : new(owner, [], [], [], reason));
+                Volatile.Write(ref cache, old.Owner == owner ? old with { Error = reason } : new(owner, [], [], [], [], reason));
             }
             return WorkshopHandoffResult.Fail(reason);
         }
@@ -217,10 +247,10 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
         }
     });
 
-    private async Task<T> SendAsync<T>(Context owner, HttpMethod method, string path, object? body, CancellationToken token)
+    private async Task<T> SendAsync<T>(Context owner, HttpMethod method, string path, object? body, CancellationToken token, bool holdings = false)
     {
         if (!await StillCurrentAsync(owner).ConfigureAwait(false)) throw new InvalidOperationException("Character or host configuration changed before the request was sent.");
-        using var request = new HttpRequestMessage(method, owner.Url + path);
+        using var request = new HttpRequestMessage(method, (holdings ? owner.Url[..^"/handoffs".Length] + "/holdings" : owner.Url) + path);
         request.Headers.Add("X-Api-Key", owner.Key);
         if (body is not null) request.Content = JsonContent.Create(body, options: Json);
         using var response = await http.SendAsync(request, token).ConfigureAwait(false);
@@ -243,7 +273,8 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
     private static WorkshopHandoffView Map(WorkshopHandoffDto value) => new(value.HandoffId, value.SourceJobId,
         value.JobName, Map(value.Sender), Map(value.Target), value.Items.Select(x => new WorkshopPrepQueueItem
         { WorkshopItemId = x.WorkshopItemId, Quantity = x.Quantity }).ToArray(),
-        Enum.Parse<WorkshopHandoffState>(value.State), value.UpdatedAt);
+        Enum.Parse<WorkshopHandoffState>(value.State), value.UpdatedAt,
+        value.HandedOver?.Select(x => new WorkshopMaterialCount(x.ItemId, x.Quantity)).ToArray(), value.HandoverTotal, value.HandoverUpdatedAt);
 
     public void Dispose()
     {
