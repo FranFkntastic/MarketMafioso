@@ -33,7 +33,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
 
-        // The window can sit over the Workbench; a translucent background lets its controls ghost through.
+        // Opaque: the window often sits over the Workbench, and its controls must not ghost through.
         BgAlpha = 1f;
     }
 
@@ -59,6 +59,8 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
         if (!hasAnchor)
             return;
 
+        // Free-floating: the main window only suggests where it first appears. After that the
+        // user's own position (remembered by ImGui) wins.
         const float gap = 8f;
         var viewport = ImGui.GetMainViewport();
         var width = Math.Max(MinimumWidth, windowSize.X);
@@ -73,9 +75,8 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
         var position = placement.Position;
         if (placement.Kind == CompanionWindowPlacementKind.Overlay)
         {
-            // No room beside the main window. The shared fallback hugs the main window's right edge,
-            // which hides the Workbench's On hand / Still need / Unit ceiling columns; cover the
-            // item names on the left instead so the numbers being compared stay visible.
+            // No room beside the main window: cover the Workbench's item names rather than the
+            // On hand / Still need / Unit ceiling columns being compared.
             var workMax = viewport.WorkPos + viewport.WorkSize;
             position.X = Math.Clamp(
                 anchorPosition.X + gap,
@@ -83,8 +84,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
                 Math.Max(viewport.WorkPos.X, workMax.X - width));
         }
 
-        ownerSurface?.ApplyToNextWindow();
-        ImGui.SetNextWindowPos(position, ImGuiCond.Always);
+        ImGui.SetNextWindowPos(position, ImGuiCond.FirstUseEver);
     }
 
     public override void Draw()
