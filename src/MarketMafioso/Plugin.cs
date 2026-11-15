@@ -85,6 +85,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
     private readonly WorkshopSavedJobIpcProvider workshopSavedJobIpc;
+
+    /// <summary>Workshop Host delivery for split saved-job shares.</summary>
+    public IWorkshopHandoffService WorkshopHandoffService { get; } = new NullWorkshopHandoffService();
     private readonly MarketAcquisitionItemContextMenu marketAcquisitionItemContextMenu;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
