@@ -145,7 +145,7 @@ internal sealed class WorkshopJobSplitPanel
             var accent = Accent(entry.AccentSlot);
             var captured = column;
             facts.Add(new(
-                $"{entry.Assembler.CharacterName}##split-tile-{Slug(entry.Assembler)}",
+                $"{Label(entry.Assembler)}##split-tile-{Slug(entry.Assembler)}",
                 total == 1 ? "1 part" : $"{total:N0} parts",
                 total > 0 ? accent : MarketMafiosoUiTheme.Muted,
                 () => DrawAssemblerMenu(captured),
@@ -243,6 +243,9 @@ internal sealed class WorkshopJobSplitPanel
             newAssemblerInput = string.Empty;
             ImGui.OpenPopup(popupId);
         }
+
+        // The button sits at the strip's right edge; open the picker leftward so it stays inside the window.
+        var buttonMax = ImGui.GetItemRectMax();
         RegisterLastAction(
             $"{SurfaceId}.add-assembler",
             "Add an assembler to the split",
@@ -261,6 +264,7 @@ internal sealed class WorkshopJobSplitPanel
                     : AgentBridgeUiActionResult.Fail($"{assembler.Key} is already an assembler in this split.");
             });
 
+        ImGui.SetNextWindowPos(new Vector2(buttonMax.X, buttonMax.Y), ImGuiCond.Appearing, new Vector2(1f, 0f));
         if (!ImGui.BeginPopup(popupId))
             return;
 
@@ -517,7 +521,7 @@ internal sealed class WorkshopJobSplitPanel
         var current = plan.Columns[targetColumn];
         ImGui.SetNextItemWidth(TargetComboWidth);
         ImGui.PushStyleColor(ImGuiCol.Text, Accent(current.AccentSlot));
-        var open = ImGui.BeginCombo("##workshop-split-target", current.Assembler.CharacterName);
+        var open = ImGui.BeginCombo("##workshop-split-target", Label(current.Assembler));
         ImGui.PopStyleColor();
         if (open)
         {
@@ -525,7 +529,7 @@ internal sealed class WorkshopJobSplitPanel
             {
                 var entry = plan.Columns[column];
                 ImGui.PushStyleColor(ImGuiCol.Text, Accent(entry.AccentSlot));
-                if (ImGui.Selectable($"{entry.Assembler.CharacterName}##split-target-{Slug(entry.Assembler)}", column == targetColumn))
+                if (ImGui.Selectable($"{Label(entry.Assembler)}##split-target-{Slug(entry.Assembler)}", column == targetColumn))
                     targetColumn = column;
                 ImGui.PopStyleColor();
             }
@@ -662,7 +666,7 @@ internal sealed class WorkshopJobSplitPanel
         {
             var assembler = entry.Assembler;
             columns.Add(new(
-                $"{assembler.CharacterName}##split-col-{Slug(assembler)}",
+                $"{Label(assembler)}##split-col-{Slug(assembler)}",
                 assemblerWidth,
                 row => CellValue(row, assembler).ToString("N0"),
                 row => CellValue(row, assembler),
@@ -933,6 +937,12 @@ internal sealed class WorkshopJobSplitPanel
             mutating: true,
             completionOperationKind: null,
             invoke);
+
+    /// <summary>Character name, plus the world when another assembler in this split shares the name.</summary>
+    private string Label(WorkshopAssembler assembler) =>
+        plan.Columns.Count(entry => string.Equals(entry.Assembler.CharacterName, assembler.CharacterName, StringComparison.OrdinalIgnoreCase)) > 1
+            ? $"{assembler.CharacterName} @{assembler.World}"
+            : assembler.CharacterName;
 
     internal static string Slug(WorkshopAssembler assembler)
     {
