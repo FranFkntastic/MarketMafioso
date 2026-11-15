@@ -14,9 +14,22 @@ internal sealed class WorkshopAssemblyInventoryPreparation(DalamudInventoryMover
     private int recoveries;
     private string? recoveryIdentity;
     private WorkshopCraftMaterialState? required;
+    // Identities follow stacks across our swaps; split pieces retain their
+    // parent's identity so splitting cannot circumvent a refused pairing.
+    private readonly Dictionary<(FFXIVClientStructs.FFXIV.Client.Game.InventoryType, int), int> stackIdentities = new();
+    private readonly HashSet<(int, int)> refusedPairs = new();
+    private readonly List<(uint ItemId, string Message)> refusalEvidence = new();
+    private int nextIdentity;
+    private DalamudInventoryStack? pendingSource;
+    private DalamudInventoryStack? pendingTarget;
     internal void Require(WorkshopCraftMaterialState material) => required = material;
     internal void NoteProgress() { recoveries = 0; recoveryIdentity = null; }
-    internal void BeginRun() { Suspend(); operations = 0; required = null; NoteProgress(); }
+    internal void BeginRun()
+    {
+        Suspend(); operations = 0; required = null; NoteProgress();
+        stackIdentities.Clear(); refusedPairs.Clear(); refusalEvidence.Clear(); nextIdentity = 0;
+        pendingSource = pendingTarget = null;
+    }
     internal WorkshopAssemblyActionResult Preflight()
     {
         var result = mover.Preflight();
@@ -33,8 +46,8 @@ internal sealed class WorkshopAssemblyInventoryPreparation(DalamudInventoryMover
         var stacks = read.Stacks.Where(x => x.ItemId == itemId && x.IsOrdinary).ToArray();
         if (stacks.Any(x => x.Quantity >= quantity)) return new(true, $"A stack can supply {quantity}x {name}.");
         var total = stacks.Sum(x => (long)x.Quantity);
-        var compatible = stacks.GroupBy(x => (x.Flags, x.CompatibilityMetadata)).Any(g => g.Sum(x => (long)x.Quantity) >= quantity);
-        return new(false, $"{name} ({itemId}) needs {quantity}; ordinary total={total}, stacks=[{string.Join(",", stacks.Select(x => $"{x.Quantity}{(x.IsHighQuality ? "HQ" : "NQ")}"))}]. " +
+        var compatible = stacks.GroupBy(x => x.IsHighQuality).Any(g => g.Sum(x => (long)x.Quantity) >= quantity);
+        return new(false, $"{name} ({itemId}) needs {quantity}; ordinary total={total}, stacks=[{string.Join(",", stacks.Select(Describe))}]. " +
             (total < quantity ? "Genuine material shortage." : compatible ? "Sufficient compatible stock is fragmented." : "Stock cannot supply one contribution without changing quality/metadata."),
             ActiveMaterialItemId: itemId, MaterialBlocker: total < quantity ? WorkshopMaterialBlocker.Shortage :
                 !compatible ? WorkshopMaterialBlocker.NativePreparationUnavailable : WorkshopMaterialBlocker.Fragmented);
@@ -48,12 +61,26 @@ internal sealed class WorkshopAssemblyInventoryPreparation(DalamudInventoryMover
             var observation = mover.Observe();
             if (observation.Waiting) return Waiting(observation.Message);
             diagnostics.Record("inventory-operation", observation.Message);
+            if (observation.Outcome == InventoryMoveOutcome.MergeRefusedSwapped && pendingSource != null && pendingTarget != null)
+            {
+                var sourceId = Identity(pendingSource);
+                var targetId = Identity(pendingTarget);
+                refusedPairs.Add(Pair(sourceId, targetId));
+                refusalEvidence.Add((pendingSource.ItemId, $"identities {sourceId}<->{targetId}: {Describe(pendingSource)} <-> {Describe(pendingTarget)}"));
+                stackIdentities[(pendingSource.Container, pendingSource.SlotIndex)] = targetId;
+                stackIdentities[(pendingTarget.Container, pendingTarget.SlotIndex)] = sourceId;
+            }
+            else if (observation.SplitDestination != null && pendingSource != null)
+                stackIdentities[(observation.SplitDestination.Container, observation.SplitDestination.SlotIndex)] = Identity(pendingSource);
+            pendingSource = pendingTarget = null;
             if (observation.Reconciled) mergeTarget = splitPiece = null;
             else if (!observation.Completed) return new(false, observation.Message);
             splitPiece = observation.SplitDestination;
         }
         var read = Read();
         if (!read.IsComplete) return Waiting(read.Message);
+        foreach (var empty in read.Stacks.Where(x => x.ItemId == 0))
+            stackIdentities.Remove((empty.Container, empty.SlotIndex));
         if (splitPiece != null && mergeTarget != null)
         {
             var piece = splitPiece;
@@ -97,7 +124,7 @@ internal sealed class WorkshopAssemblyInventoryPreparation(DalamudInventoryMover
             if (q <= 0 || cap < q) return new(false, $"Authoritative capacity {cap} cannot supply {q}x {batch.ItemName}.");
             var ordinary = read.Stacks.Where(x => x.ItemId == batch.ItemId && x.IsOrdinary).ToArray();
             if (ordinary.Sum(x => (long)x.Quantity / q) >= Math.Min(batch.Count, ordinary.Sum(x => (long)x.Quantity) / q)) continue;
-            foreach (var group in ordinary.GroupBy(x => (x.Flags, x.CompatibilityMetadata)))
+            foreach (var group in ordinary.GroupBy(x => x.IsHighQuality))
             {
                 var slots = group.OrderByDescending(x => x.Quantity).ToArray();
                 var total = slots.Sum(x => (long)x.Quantity);
@@ -114,28 +141,41 @@ internal sealed class WorkshopAssemblyInventoryPreparation(DalamudInventoryMover
                 if (!scratch)
                 {
                     if (slots.Any(x => x.Quantity >= q)) continue;
-                    return Dispatch(slots[1], slots[0], Math.Min(slots[1].Quantity, cap - slots[0].Quantity), diagnostics, authorized);
+                    foreach (var destination in slots)
+                        foreach (var source in slots.Where(x => x != destination && x.Quantity < cap && !Refused(x, destination)))
+                            return Dispatch(source, destination, Math.Min(source.Quantity, cap - destination.Quantity), diagnostics, authorized);
+                    continue;
                 }
                 var alignedCapacity = cap / q * q;
-                var full = unaligned.FirstOrDefault(x => x.Quantity > alignedCapacity);
+                var full = unaligned.FirstOrDefault(x => x.Quantity > alignedCapacity &&
+                    unaligned.Any(y => y != x && !Refused(x, y)));
                 if (full != null) return Dispatch(full, null, full.Quantity - alignedCapacity, diagnostics, authorized);
                 if (unaligned.Length == 1)
                     return Dispatch(unaligned[0], null, unaligned[0].Quantity % q, diagnostics, authorized);
-                var destination = unaligned[0];
-                var source = unaligned[^1];
-                var desired = Math.Min(alignedCapacity, (destination.Quantity / q + 1) * q);
-                var amount = Math.Min(source.Quantity, desired - destination.Quantity);
-                if (amount <= 0) continue;
-                if (source.Quantity < cap && amount == Math.Min(source.Quantity, cap - destination.Quantity))
-                    return Dispatch(source, destination, amount, diagnostics, authorized);
-                mergeTarget = destination;
-                return Dispatch(source, null, amount, diagnostics, authorized);
+                foreach (var destination in unaligned)
+                    foreach (var source in unaligned.Where(x => x != destination && !Refused(x, destination)))
+                    {
+                        var desired = Math.Min(alignedCapacity, (destination.Quantity / q + 1) * q);
+                        var amount = Math.Min(source.Quantity, desired - destination.Quantity);
+                        if (amount <= 0) continue;
+                        if (source.Quantity < cap && amount == Math.Min(source.Quantity, cap - destination.Quantity))
+                            return Dispatch(source, destination, amount, diagnostics, authorized);
+                        mergeTarget = destination;
+                        return Dispatch(source, null, amount, diagnostics, authorized);
+                    }
             }
+            // A usable stack permits a shorter safe horizon. Otherwise all
+            // eligible pairings have been tried or quality groups cannot supply q.
+            var refusedForItem = refusalEvidence.Where(x => x.ItemId == batch.ItemId).Select(x => x.Message).ToArray();
+            if (!ordinary.Any(x => x.Quantity >= q) && refusedForItem.Length != 0)
+                return new(false, $"{batch.ItemName} ({batch.ItemId}) needs {q}; stacks=[{string.Join(", ", ordinary.Select(Describe))}]. " +
+                    $"No remaining merge pairing can supply a contribution. Refused pairs=[{string.Join("; ", refusedForItem)}].",
+                    ActiveMaterialItemId: batch.ItemId, MaterialBlocker: WorkshopMaterialBlocker.MergeRefused);
         }
         if (required != null)
         {
             var check = CheckContribution(required.ItemId, required.ItemName, required.ItemCountPerStep);
-            if (!check.Success) return new(false, $"Preparation cannot satisfy the current native requirement: {check.Message}");
+            if (!check.Success) return check with { Message = $"Preparation cannot satisfy the current native requirement: {check.Message}" };
             required = null;
         }
         operations = 0;
@@ -148,8 +188,13 @@ internal sealed class WorkshopAssemblyInventoryPreparation(DalamudInventoryMover
         if (!authorized()) return new(false, "Assembly materials need preparation outside the station.",
             IsWaiting: true, MaterialBlocker: WorkshopMaterialBlocker.Fragmented);
         if (operations >= 1024) return new(false, "Assembly preparation did not converge within 1024 operations; queue intent retained.");
+        if (target != null && Refused(source, target))
+            return new(false, $"Refused merge pair cannot be dispatched again: {Describe(source)} <-> {Describe(target)}.",
+                MaterialBlocker: WorkshopMaterialBlocker.MergeRefused);
+        Identity(source);
+        if (target != null) Identity(target);
         var result = mover.Begin(source, target, amount, authorized);
-        if (result.Dispatched) operations++;
+        if (result.Dispatched) { operations++; pendingSource = source; pendingTarget = target; }
         diagnostics.Record("inventory-operation", result.Message);
         if (result.Reconciled) { mergeTarget = splitPiece = null; return Waiting(result.Message); }
         return result.Waiting ? Waiting(result.Message, result.Dispatched) : new(false, result.Message);
@@ -162,6 +207,16 @@ internal sealed class WorkshopAssemblyInventoryPreparation(DalamudInventoryMover
         if (++recoveries > 3) throw new InvalidOperationException("Assembly recovery repeatedly invalidated without workshop progress; queue retained. Check competing inventory automation.");
     }
     internal void Suspend() { mergeTarget = splitPiece = null; mover.Suspend(); }
+    private int Identity(DalamudInventoryStack stack)
+    {
+        var slot = (stack.Container, stack.SlotIndex);
+        if (!stackIdentities.TryGetValue(slot, out var identity)) stackIdentities[slot] = identity = ++nextIdentity;
+        return identity;
+    }
+    private static (int, int) Pair(int a, int b) => a <= b ? (a, b) : (b, a);
+    private bool Refused(DalamudInventoryStack a, DalamudInventoryStack b) => refusedPairs.Contains(Pair(Identity(a), Identity(b)));
+    private static string Describe(DalamudInventoryStack stack) =>
+        $"{stack.Container}/{stack.SlotIndex} {stack.Quantity}{(stack.IsHighQuality ? "HQ" : "NQ")} flags={stack.Flags} metadata={stack.Metadata}";
     private static WorkshopAssemblyActionResult Waiting(string message, bool action = false) =>
         new(false, message, IsWaiting: true, ActionTaken: action, MaterialBlocker: WorkshopMaterialBlocker.InventoryUnknown);
     public void Dispose() => mover.Dispose();
