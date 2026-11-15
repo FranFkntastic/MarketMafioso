@@ -49,7 +49,7 @@ public sealed record WorkshopAssemblyQueueEntry(
 
 public sealed record WorkshopContributionBatch(int Phase, uint ItemId, string ItemName, int Quantity, int Count, int StackCapacity);
 
-public enum WorkshopMaterialBlocker { None, InventoryUnknown, Shortage, Fragmented, NativePreparationUnavailable }
+public enum WorkshopMaterialBlocker { None, InventoryUnknown, Shortage, Fragmented, NativePreparationUnavailable, MergeRefused }
 
 public sealed record WorkshopAssemblyPlan(
     IReadOnlyList<WorkshopAssemblyQueueEntry> Entries,
