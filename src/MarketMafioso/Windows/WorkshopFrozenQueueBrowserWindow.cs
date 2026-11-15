@@ -1,11 +1,15 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Windowing;
+using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.WorkshopPrep;
 
@@ -13,35 +17,51 @@ namespace MarketMafioso.Windows;
 
 public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 {
+    private const string SurfaceId = "workshop-saved-jobs";
+
     private readonly Configuration config;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly WorkshopFrozenQueueBrowserActions actions;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private string search = string.Empty;
     private Guid? selectedQueueId;
+    private Guid? selectedIncomingId;
     private string renameInput = string.Empty;
     private string duplicateNameInput = string.Empty;
     private string newQueueNameInput = string.Empty;
     private Guid? pendingLoadQueueId;
     private Guid? pendingDeleteQueueId;
+    private Guid? pendingTradeReplaceQueueId;
     private readonly FileDialogManager fileDialogs = new();
     private string shareStatus = string.Empty;
     private bool shareStatusIsError;
     private readonly CompanionWindowActivationState activation = new();
+    private WorkshopJobSplitPanel? split;
+
+    // Handoff calls run off the draw thread; their results are applied here at the next Draw.
+    private readonly ConcurrentQueue<Action> completedHandoffCalls = new();
+    private readonly HashSet<Guid> busyHandoffs = [];
+    private readonly HashSet<Guid> delivering = [];
+    private readonly HashSet<Guid> resolvedIncoming = [];
+    private readonly CancellationTokenSource lifetime = new();
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
     private static readonly Vector4 ColWarning = new(1.00f, 0.75f, 0.35f, 1f);
+    private static readonly Vector4 ColError = new(1.00f, 0.40f, 0.40f, 1f);
     private static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
 
     public WorkshopFrozenQueueBrowserWindow(
         Configuration config,
         WorkshopProjectCatalog workshopCatalog,
-        WorkshopFrozenQueueBrowserActions actions)
+        WorkshopFrozenQueueBrowserActions actions,
+        AgentBridgeUiReviewRegistry reviewRegistry)
         : base("Saved Jobs##MarketMafiosoFrozenQueueBrowser", ImGuiWindowFlags.None)
     {
         this.config = config;
         this.workshopCatalog = workshopCatalog;
         this.actions = actions;
+        this.reviewRegistry = reviewRegistry;
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -62,13 +82,38 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             ImGui.SetNextWindowFocus();
     }
 
+    public override void OnOpen()
+    {
+        actions.Handoff().RequestRefresh();
+    }
+
+    /// <summary>
+    /// Applies finished Workshop Host calls and remembers host state. Called every frame by the
+    /// plugin, so results land even while this window is closed.
+    /// </summary>
+    public void PumpHandoffResults()
+    {
+        while (completedHandoffCalls.TryDequeue(out var apply))
+            apply();
+        SyncHandoffStates();
+    }
+
     public override void Draw()
     {
+
+        if (split != null)
+        {
+            DrawSplit(split);
+            fileDialogs.Draw();
+            return;
+        }
+
         DrawSearchAndCreate();
 
         var queues = BuildVisibleQueues();
+        var incoming = BuildVisibleIncoming();
         ImGui.Spacing();
-        DrawBrowserLayout(queues);
+        DrawBrowserLayout(queues, incoming);
         DrawConfirmations();
         fileDialogs.Draw();
     }
@@ -122,7 +167,18 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             .ToList();
     }
 
-    private void DrawBrowserLayout(IReadOnlyList<WorkshopFrozenQueue> queues)
+    private IReadOnlyList<WorkshopHandoffView> BuildVisibleIncoming()
+    {
+        var query = search.Trim();
+        return actions.Handoff().Incoming
+            .Where(view => view.State == WorkshopHandoffState.Offered && !resolvedIncoming.Contains(view.HandoffId))
+            .Where(view => query.Length == 0 ||
+                           view.JobName.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                           view.Sender.CharacterName.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private void DrawBrowserLayout(IReadOnlyList<WorkshopFrozenQueue> queues, IReadOnlyList<WorkshopHandoffView> incoming)
     {
         var flags = ImGuiTableFlags.Resizable |
                     ImGuiTableFlags.SizingStretchProp |
@@ -134,25 +190,40 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         ImGui.TableSetupColumn("Inspector", ImGuiTableColumnFlags.WidthStretch, 0.85f);
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
-        DrawQueueTable(queues);
+        DrawQueueTable(queues, incoming);
         ImGui.TableNextColumn();
-        DrawSelectedQueue();
+        var selectedIncoming = selectedIncomingId is { } incomingId
+            ? incoming.FirstOrDefault(view => view.HandoffId == incomingId)
+            : null;
+        if (selectedIncoming != null)
+            DrawSelectedIncoming(selectedIncoming);
+        else
+            DrawSelectedQueue();
         ImGui.EndTable();
     }
 
-    private void DrawQueueTable(IReadOnlyList<WorkshopFrozenQueue> queues)
+    private void DrawQueueTable(IReadOnlyList<WorkshopFrozenQueue> queues, IReadOnlyList<WorkshopHandoffView> incoming)
     {
-        if (queues.Count == 0)
+        if (queues.Count == 0 && incoming.Count == 0)
         {
             ImGui.TextColored(ColMuted, "No saved jobs match this search.");
             return;
         }
 
-        var nameWidth = CalculateNameColumnWidth(queues);
+        var outgoing = actions.Handoff().Outgoing;
+        var statusLabels = queues.ToDictionary(queue => queue.Id, queue => FormatStatus(queue, outgoing));
+        var incomingLabels = incoming.ToDictionary(view => view.HandoffId, view => $"Incoming · {view.Sender.CharacterName}");
+
         var projectWidth = Math.Max(ImGui.CalcTextSize("Projects").X, ImGui.CalcTextSize("9999").X) + 24;
-        var stateWidth = Math.Max(ImGui.CalcTextSize("Modified").X, ImGui.CalcTextSize("Not loaded").X) + 28;
+        var stateWidth = statusLabels.Values.Select(entry => entry.Label)
+            .Concat(incomingLabels.Values)
+            .Append("Not loaded")
+            .Max(label => ImGui.CalcTextSize(label).X) + 28;
         var etaWidth = Math.Max(ImGui.CalcTextSize("~1h 30m").X, ImGui.CalcTextSize("ETA").X) + 24;
         var updatedWidth = Math.Max(ImGui.CalcTextSize("Updated").X, ImGui.CalcTextSize(DateTime.Now.ToString("g")).X) + 24;
+        var nameWidth = CalculateNameColumnWidth(
+            queues.Select(queue => queue.Name).Concat(incoming.Select(view => view.JobName)),
+            projectWidth + stateWidth + etaWidth + updatedWidth);
         var flags = ImGuiUi.InteractiveTableFlags |
                     ImGuiTableFlags.ScrollY |
                     ImGuiTableFlags.SizingFixedFit;
@@ -166,17 +237,22 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             ImGui.TableSetupColumn("Updated", ImGuiTableColumnFlags.WidthFixed, updatedWidth);
             ImGui.TableHeadersRow();
 
+            foreach (var view in incoming)
+                DrawIncomingRow(view, incomingLabels[view.HandoffId]);
+
             foreach (var queue in queues)
             {
-                var isSelected = selectedQueueId == queue.Id;
-                var state = WorkshopQueueService.GetFrozenQueueState(config, queue.Id);
+                var isSelected = selectedIncomingId == null && selectedQueueId == queue.Id;
+                var (statusLabel, statusColor) = statusLabels[queue.Id];
 
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
                 if (ImGui.Selectable($"{queue.Name}##workshopFrozenQueue{queue.Id}", isSelected, ImGuiSelectableFlags.SpanAllColumns))
                     SelectQueue(queue);
 
-                if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+                if (!WorkshopSavedJobHandoff.IsHandoff(queue) &&
+                    ImGui.IsItemHovered() &&
+                    ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
                 {
                     SelectQueue(queue);
                     RequestLoad(queue.Id);
@@ -186,10 +262,10 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
                 ImGui.TextUnformatted(queue.Items.Sum(x => x.Quantity).ToString());
 
                 ImGui.TableNextColumn();
-                ImGui.TextColored(GetStateColor(state), FormatState(state));
+                ImGui.TextColored(statusColor, statusLabel);
 
                 ImGui.TableNextColumn();
-                var estimate = TryEstimateQueue(queue);
+                var estimate = TryEstimate(queue.Items);
                 ImGui.TextUnformatted(estimate == null
                     ? "-"
                     : WorkshopAssemblyEstimator.FormatDuration(estimate.Duration));
@@ -200,6 +276,33 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 
             ImGui.EndTable();
         }
+    }
+
+    private void DrawIncomingRow(WorkshopHandoffView view, string statusLabel)
+    {
+        ImGui.TableNextRow();
+        ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(new Vector4(ColHeader.X, ColHeader.Y, ColHeader.Z, 0.10f)));
+        ImGui.TableNextColumn();
+        ImGui.PushStyleColor(ImGuiCol.Text, ColHeader);
+        if (ImGui.Selectable($"{view.JobName}##workshopIncoming{view.HandoffId}", selectedIncomingId == view.HandoffId, ImGuiSelectableFlags.SpanAllColumns))
+        {
+            selectedIncomingId = view.HandoffId;
+            pendingTradeReplaceQueueId = null;
+        }
+
+        ImGui.PopStyleColor();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(view.Sender.Key);
+
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(view.Items.Sum(item => item.Quantity).ToString());
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColHeader, statusLabel);
+        ImGui.TableNextColumn();
+        var estimate = TryEstimate(view.Items);
+        ImGui.TextUnformatted(estimate == null ? "-" : WorkshopAssemblyEstimator.FormatDuration(estimate.Duration));
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(view.UpdatedAt.ToLocalTime().ToString("g"));
     }
 
     private void DrawSelectedQueue()
@@ -216,9 +319,82 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 
         ImGui.TextColored(ColHeader, queue.Name);
         ImGui.SameLine();
-        ImGui.TextColored(GetStateColor(WorkshopQueueService.GetFrozenQueueState(config, queue.Id)), FormatState(WorkshopQueueService.GetFrozenQueueState(config, queue.Id)));
+        var (statusLabel, statusColor) = FormatStatus(queue, actions.Handoff().Outgoing);
+        ImGui.TextColored(statusColor, statusLabel);
 
-        var estimate = TryEstimateQueue(queue);
+        if (WorkshopSavedJobHandoff.Target(queue) is { } target)
+        {
+            ImGui.TextColored(ColMuted, "Assembler:");
+            ImGui.SameLine();
+            ImGui.TextUnformatted(target.Key);
+            if (!string.IsNullOrWhiteSpace(queue.HandoffError) && !delivering.Contains(queue.Id))
+                ImGui.TextColored(ColWarning, queue.HandoffError);
+        }
+
+        DrawEstimate(queue.Items);
+        DrawProjectPreview("WorkshopFrozenQueuePreview", queue.Items);
+
+        if (WorkshopSavedJobHandoff.IsHandoff(queue))
+            DrawHandoffActions(queue);
+        else
+            DrawQueueActions(queue);
+    }
+
+    private void DrawSelectedIncoming(WorkshopHandoffView view)
+    {
+        ImGui.TextColored(ColHeader, view.JobName);
+        ImGui.SameLine();
+        ImGui.TextColored(ColHeader, "Incoming");
+        ImGui.TextColored(ColMuted, "From:");
+        ImGui.SameLine();
+        ImGui.TextUnformatted(view.Sender.Key);
+
+        DrawEstimate(view.Items);
+        DrawProjectPreview("WorkshopIncomingPreview", view.Items);
+
+        var busy = busyHandoffs.Contains(view.HandoffId);
+        var canAccept = !busy && actions.CanEditQueue;
+        if (ImGuiUi.PrimaryButton("Accept", canAccept))
+            AcceptIncoming(view);
+        RegisterLastAction(
+            $"{SurfaceId}.incoming.accept",
+            $"Accept {view.JobName} from {view.Sender.Key} as a saved job",
+            canAccept,
+            view.HandoffId.ToString(),
+            _ =>
+            {
+                if (!actions.CanEditQueue)
+                    return AgentBridgeUiActionResult.Fail("Saved jobs cannot change while an assembly run is active.");
+                if (busyHandoffs.Contains(view.HandoffId))
+                    return AgentBridgeUiActionResult.Fail("This share already has a Workshop Host request in flight.");
+                AcceptIncoming(view);
+                return AgentBridgeUiActionResult.Ok($"Accepting {view.JobName} from {view.Sender.Key}.");
+            });
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Decline", !busy))
+            DeclineIncoming(view);
+        RegisterLastAction(
+            $"{SurfaceId}.incoming.decline",
+            $"Decline {view.JobName} from {view.Sender.Key}",
+            !busy,
+            view.HandoffId.ToString(),
+            _ =>
+            {
+                if (busyHandoffs.Contains(view.HandoffId))
+                    return AgentBridgeUiActionResult.Fail("This share already has a Workshop Host request in flight.");
+                DeclineIncoming(view);
+                return AgentBridgeUiActionResult.Ok($"Declining {view.JobName} from {view.Sender.Key}.");
+            });
+
+        ImGui.SameLine();
+        if (ImGui.Button("Close"))
+            IsOpen = false;
+    }
+
+    private void DrawEstimate(IReadOnlyList<WorkshopPrepQueueItem> items)
+    {
+        var estimate = TryEstimate(items);
         if (estimate != null)
         {
             ImGui.TextColored(ColMuted, $"Estimated time: {WorkshopAssemblyEstimator.FormatDuration(estimate.Duration)}");
@@ -230,29 +406,30 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         {
             ImGui.TextColored(ColMuted, "Estimated time: unavailable");
         }
+    }
 
-        var projectNames = workshopCatalog.GetProjects().ToDictionary(x => x.WorkshopItemId, x => x.Name);
-        if (ImGui.BeginTable("WorkshopFrozenQueuePreview", 2, ImGuiUi.InteractiveTableFlags))
+    private void DrawProjectPreview(string id, IReadOnlyList<WorkshopPrepQueueItem> items)
+    {
+        var projectNames = ProjectNames();
+        if (!ImGui.BeginTable(id, 2, ImGuiUi.InteractiveTableFlags))
+            return;
+
+        ImGui.TableSetupColumn("Project", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 72);
+        ImGui.TableHeadersRow();
+
+        foreach (var item in items)
         {
-            ImGui.TableSetupColumn("Project", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 72);
-            ImGui.TableHeadersRow();
-
-            foreach (var item in queue.Items)
-            {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(projectNames.TryGetValue(item.WorkshopItemId, out var name)
-                    ? name
-                    : $"Unknown project {item.WorkshopItemId}");
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(item.Quantity.ToString());
-            }
-
-            ImGui.EndTable();
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(projectNames.TryGetValue(item.WorkshopItemId, out var name)
+                ? name
+                : $"Unknown project {item.WorkshopItemId}");
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(item.Quantity.ToString());
         }
 
-        DrawQueueActions(queue);
+        ImGui.EndTable();
     }
 
     private void DrawQueueActions(WorkshopFrozenQueue? queue)
@@ -276,20 +453,8 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         if (ImGuiUi.Button("Duplicate", actions.CanEditQueue))
             actions.Duplicate(queue.Id, duplicateNameInput);
 
-        if (ImGui.Button("Copy to Clipboard"))
-            CopyToClipboard(queue);
-
-        ImGui.SameLine();
-        if (ImGui.Button("Export to File..."))
-        {
-            var queueId = queue.Id;
-            fileDialogs.SaveFileDialog(
-                "Export Workshop Saved Job",
-                WorkshopSavedJobShare.FileExtension,
-                WorkshopSavedJobShare.BuildFileName(queue.Name),
-                WorkshopSavedJobShare.FileExtension,
-                (confirmed, path) => ExportToFile(queueId, confirmed, path));
-        }
+        DrawShareButtons(queue);
+        DrawSplitButton(queue);
 
         if (ImGuiUi.Button("Load", actions.CanEditQueue))
             RequestLoad(queue.Id);
@@ -307,9 +472,454 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             IsOpen = false;
     }
 
+    private void DrawSplitButton(WorkshopFrozenQueue queue)
+    {
+        var currentCharacter = actions.CurrentCharacter();
+        var canSplit = actions.CanEditQueue && currentCharacter != null && queue.Items.Sum(item => item.Quantity) >= 2;
+        if (canSplit)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Split..."))
+                StartSplit(queue, currentCharacter!);
+            RegisterLastAction(
+                $"{SurfaceId}.split",
+                $"Split {queue.Name} across assemblers",
+                enabled: true,
+                queue.Id.ToString(),
+                _ =>
+                {
+                    var character = actions.CurrentCharacter();
+                    if (character == null)
+                        return AgentBridgeUiActionResult.Fail("No character is logged in to split from.");
+                    StartSplit(queue, character);
+                    return AgentBridgeUiActionResult.Ok($"Opened split mode for {queue.Name}.");
+                });
+        }
+    }
+
+    private void DrawHandoffActions(WorkshopFrozenQueue queue)
+    {
+        var service = actions.Handoff();
+        var status = WorkshopSavedJobHandoff.Resolve(queue, service.Outgoing, delivering.Contains(queue.Id));
+        var busy = busyHandoffs.Contains(queue.Id);
+        var isSender = IsSender(queue);
+
+        if (ImGui.Button("Trade Materials"))
+            RequestTradeMaterials(queue);
+        RegisterLastAction(
+            $"{SurfaceId}.handoff.trade-materials",
+            $"Replace the Trade Queue with {queue.Name}'s materials",
+            enabled: true,
+            queue.Id.ToString(),
+            _ =>
+            {
+                var replaced = actions.TradeMaterials(queue.Items, out var message);
+                SetShareStatus(message, !replaced);
+                return replaced ? AgentBridgeUiActionResult.Ok(message) : AgentBridgeUiActionResult.Fail(message);
+            });
+
+        if (status == WorkshopSavedJobHandoffStatus.Offered && isSender)
+        {
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Withdraw", !busy))
+                Withdraw(queue);
+            RegisterLastAction(
+                $"{SurfaceId}.handoff.withdraw",
+                $"Withdraw {queue.Name} from {queue.HandoffTargetName}",
+                !busy,
+                queue.HandoffId?.ToString(),
+                _ =>
+                {
+                    if (busyHandoffs.Contains(queue.Id))
+                        return AgentBridgeUiActionResult.Fail("This share already has a Workshop Host request in flight.");
+                    Withdraw(queue);
+                    return AgentBridgeUiActionResult.Ok($"Withdrawing {queue.Name}.");
+                });
+        }
+
+        // Declined and withdrawn shares can be offered again; the host revives them under the same id.
+        if (status is WorkshopSavedJobHandoffStatus.NotDelivered or WorkshopSavedJobHandoffStatus.Declined or WorkshopSavedJobHandoffStatus.Withdrawn &&
+            isSender && service.IsAvailable)
+        {
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Deliver", !busy))
+                Deliver(queue);
+            RegisterLastAction(
+                $"{SurfaceId}.handoff.deliver",
+                $"Offer {queue.Name} to {queue.HandoffTargetName} through the Workshop Host",
+                !busy,
+                queue.HandoffError,
+                _ =>
+                {
+                    Deliver(queue);
+                    return AgentBridgeUiActionResult.Ok($"Offering {queue.Name}.");
+                });
+        }
+
+        if (status is WorkshopSavedJobHandoffStatus.NotDelivered or WorkshopSavedJobHandoffStatus.Declined or WorkshopSavedJobHandoffStatus.Withdrawn or WorkshopSavedJobHandoffStatus.Accepted)
+        {
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Delete", actions.CanEditQueue && !busy))
+                pendingDeleteQueueId = queue.Id;
+        }
+
+        DrawShareButtons(queue);
+        ImGui.SameLine();
+        if (ImGui.Button("Close"))
+            IsOpen = false;
+
+        if (pendingTradeReplaceQueueId == queue.Id)
+        {
+            ImGui.TextColored(ColMuted, "Replace the current Trade Queue with these materials?");
+            if (ImGuiUi.PrimaryButton("Replace Trade Queue", true))
+            {
+                pendingTradeReplaceQueueId = null;
+                TradeMaterials(queue);
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel##workshopTradeReplace"))
+                pendingTradeReplaceQueueId = null;
+        }
+    }
+
+    private void DrawShareButtons(WorkshopFrozenQueue queue)
+    {
+        if (ImGui.Button("Copy to Clipboard"))
+            CopyToClipboard(queue);
+
+        ImGui.SameLine();
+        if (ImGui.Button("Export to File..."))
+        {
+            var queueId = queue.Id;
+            fileDialogs.SaveFileDialog(
+                "Export Workshop Saved Job",
+                WorkshopSavedJobShare.FileExtension,
+                WorkshopSavedJobShare.BuildFileName(queue.Name),
+                WorkshopSavedJobShare.FileExtension,
+                (confirmed, path) => ExportToFile(queueId, confirmed, path));
+        }
+    }
+
+    // ---- split ---------------------------------------------------------------------------
+
+    private void StartSplit(WorkshopFrozenQueue queue, WorkshopAssembler currentCharacter)
+    {
+        pendingLoadQueueId = null;
+        pendingDeleteQueueId = null;
+        pendingTradeReplaceQueueId = null;
+        var projectNames = ProjectNames();
+        split = new WorkshopJobSplitPanel(
+            new WorkshopJobSplitPlan(queue, currentCharacter),
+            id => projectNames.TryGetValue(id, out var name) ? name : $"Unknown project {id}",
+            () => actions.Handoff().KnownAssemblers,
+            reviewRegistry);
+        actions.Handoff().RequestRefresh();
+    }
+
+    private void DrawSplit(WorkshopJobSplitPanel panel)
+    {
+        var source = config.FrozenWorkshopQueues.FirstOrDefault(queue => queue.Id == panel.Plan.SourceJobId);
+        if (source == null)
+        {
+            split = null;
+            SetShareStatus($"Saved job {panel.Plan.JobName} no longer exists.", isError: true);
+            return;
+        }
+
+        ImGuiUi.SectionHeader(source.Name, ColHeader);
+        panel.Draw(actions.CanEditQueue, CommitSplit, () => split = null);
+    }
+
+    private string? CommitSplit()
+    {
+        if (split == null)
+            return "Split mode is not open.";
+        if (!actions.CanEditQueue)
+            return "Saved jobs cannot change while an assembly run is active.";
+
+        WorkshopJobSplitApplyResult result;
+        try
+        {
+            result = WorkshopJobSplitService.Apply(config, split.Plan.BuildCommit(), DateTime.UtcNow);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return ex.Message;
+        }
+
+        var sender = split.Plan.CurrentCharacter;
+        foreach (var job in result.Delivered)
+        {
+            job.HandoffSenderName = sender.CharacterName;
+            job.HandoffSenderWorld = sender.World;
+            Deliver(job, save: false);
+        }
+
+        config.Save();
+        split = null;
+        search = string.Empty;
+        var focus = result.Retained ?? result.Delivered.FirstOrDefault();
+        if (focus != null)
+            SelectQueue(focus);
+        else
+            selectedQueueId = null;
+
+        SetShareStatus(result.Message, isError: false);
+        return null;
+    }
+
+    // ---- handoff calls -------------------------------------------------------------------
+
+    private void Deliver(WorkshopFrozenQueue job, bool save = true)
+    {
+        var service = actions.Handoff();
+        if (WorkshopSavedJobHandoff.Target(job) is not { } target)
+            return;
+
+        if (!service.IsAvailable)
+        {
+            job.HandoffError = service.UnavailableReason ?? "Workshop Host delivery is unavailable.";
+            if (save)
+                config.Save();
+            return;
+        }
+
+        job.HandoffError = null;
+        delivering.Add(job.Id);
+        var jobId = job.Id;
+        var jobName = job.Name;
+        var items = WorkshopQueueService.CloneItems(job.Items);
+        RunHandoff(
+            jobId,
+            token => service.OfferAsync(jobId, jobName, target, items, token),
+            result =>
+            {
+                delivering.Remove(jobId);
+                var current = config.FrozenWorkshopQueues.FirstOrDefault(queue => queue.Id == jobId);
+                if (current == null)
+                    return;
+
+                if (result.Success && result.Handoff != null)
+                {
+                    current.HandoffId = result.Handoff.HandoffId;
+                    current.HandoffState = result.Handoff.State;
+                    current.HandoffError = null;
+                }
+                else
+                {
+                    current.HandoffError = result.Success
+                        ? "The Workshop Host accepted the offer but returned no handoff."
+                        : result.Message;
+                }
+
+                config.Save();
+            });
+    }
+
+    /// <summary>Only the character that split a share off may deliver or withdraw it.</summary>
+    private bool IsSender(WorkshopFrozenQueue job)
+    {
+        if (actions.CurrentCharacter() is not { } current)
+            return false;
+        if (job.HandoffSenderName is null || job.HandoffSenderWorld is null)
+            return job.HandoffId is { } id && actions.Handoff().Outgoing.Any(view => view.HandoffId == id);
+        return string.Equals(job.HandoffSenderName, current.CharacterName, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(job.HandoffSenderWorld, current.World, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void Withdraw(WorkshopFrozenQueue job)
+    {
+        if (job.HandoffId is not { } handoffId)
+            return;
+
+        var service = actions.Handoff();
+        var jobId = job.Id;
+        var expected = service.Outgoing.FirstOrDefault(view => view.HandoffId == handoffId)?.UpdatedAt;
+        RunHandoff(
+            jobId,
+            token => service.WithdrawAsync(handoffId, expected, token),
+            result =>
+            {
+                var current = config.FrozenWorkshopQueues.FirstOrDefault(queue => queue.Id == jobId);
+                if (current == null)
+                    return;
+
+                if (result.Success)
+                {
+                    current.HandoffState = result.Handoff?.State ?? WorkshopHandoffState.Withdrawn;
+                    current.HandoffError = null;
+                    SetShareStatus($"Withdrew {current.Name}.", isError: false);
+                }
+                else
+                {
+                    current.HandoffError = result.Message;
+                    SetShareStatus(result.Message, isError: true);
+                }
+
+                config.Save();
+                service.RequestRefresh();
+            });
+    }
+
+    private void AcceptIncoming(WorkshopHandoffView view)
+    {
+        var service = actions.Handoff();
+        RunHandoff(
+            view.HandoffId,
+            token => service.AcceptAsync(view.HandoffId, view.UpdatedAt, token),
+            result =>
+            {
+                service.RequestRefresh();
+                if (!result.Success)
+                {
+                    SetShareStatus(result.Message, isError: true);
+                    return;
+                }
+
+                resolvedIncoming.Add(view.HandoffId);
+                if (selectedIncomingId == view.HandoffId)
+                    selectedIncomingId = null;
+
+                // Import what the host accepted, not what this frame captured.
+                var accepted = result.Handoff ?? view;
+                var imported = WorkshopQueueService.ImportFrozenQueue(config, accepted.JobName, accepted.Items, DateTime.UtcNow);
+                SetShareStatus(
+                    imported.Success
+                        ? $"Accepted {imported.Name} from {view.Sender.CharacterName}."
+                        : $"Accepted on the Workshop Host, but the saved job could not be created: {imported.Message}",
+                    isError: !imported.Success);
+                if (!imported.Success || imported.QueueId is not { } queueId)
+                    return;
+
+                config.Save();
+                if (config.FrozenWorkshopQueues.FirstOrDefault(queue => queue.Id == queueId) is { } created)
+                    SelectQueue(created);
+            });
+    }
+
+    private void DeclineIncoming(WorkshopHandoffView view)
+    {
+        var service = actions.Handoff();
+        RunHandoff(
+            view.HandoffId,
+            token => service.DeclineAsync(view.HandoffId, view.UpdatedAt, token),
+            result =>
+            {
+                service.RequestRefresh();
+                if (!result.Success)
+                {
+                    SetShareStatus(result.Message, isError: true);
+                    return;
+                }
+
+                resolvedIncoming.Add(view.HandoffId);
+                if (selectedIncomingId == view.HandoffId)
+                    selectedIncomingId = null;
+                SetShareStatus($"Declined {view.JobName} from {view.Sender.CharacterName}.", isError: false);
+            });
+    }
+
+    private void RunHandoff(
+        Guid key,
+        Func<CancellationToken, Task<WorkshopHandoffResult>> call,
+        Action<WorkshopHandoffResult> apply)
+    {
+        if (!busyHandoffs.Add(key))
+            return;
+
+        var token = lifetime.Token;
+        _ = Task.Run(async () =>
+        {
+            WorkshopHandoffResult result;
+            try
+            {
+                result = await call(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                result = WorkshopHandoffResult.Fail($"Workshop Host request failed: {ex.Message}");
+            }
+
+            completedHandoffCalls.Enqueue(() =>
+            {
+                busyHandoffs.Remove(key);
+                apply(result);
+            });
+        });
+    }
+
+    /// <summary>Remembers the latest host state so a share's status survives a host outage.</summary>
+    private void SyncHandoffStates()
+    {
+        var outgoing = actions.Handoff().Outgoing;
+        if (outgoing.Count == 0)
+            return;
+
+        var changed = false;
+        foreach (var queue in config.FrozenWorkshopQueues)
+        {
+            if (queue.HandoffId is not { } handoffId)
+                continue;
+            var view = outgoing.FirstOrDefault(handoff => handoff.HandoffId == handoffId);
+            if (view == null || view.State == queue.HandoffState)
+                continue;
+            queue.HandoffState = view.State;
+            changed = true;
+        }
+
+        if (changed)
+            config.Save();
+    }
+
+    private (string Label, Vector4 Color) FormatStatus(WorkshopFrozenQueue queue, IReadOnlyList<WorkshopHandoffView> outgoing)
+    {
+        var status = WorkshopSavedJobHandoff.Resolve(queue, outgoing, delivering.Contains(queue.Id));
+        if (status == WorkshopSavedJobHandoffStatus.None)
+        {
+            var state = WorkshopQueueService.GetFrozenQueueState(config, queue.Id);
+            return (FormatState(state), GetStateColor(state));
+        }
+
+        var color = status switch
+        {
+            WorkshopSavedJobHandoffStatus.Offered => ColHeader,
+            WorkshopSavedJobHandoffStatus.Accepted => ColSuccess,
+            WorkshopSavedJobHandoffStatus.Declined => ColError,
+            WorkshopSavedJobHandoffStatus.NotDelivered => ColWarning,
+            _ => ColMuted,
+        };
+        return ($"{WorkshopSavedJobHandoff.Label(status)} · {queue.HandoffTargetName}", color);
+    }
+
+    private void RequestTradeMaterials(WorkshopFrozenQueue queue)
+    {
+        if (actions.TradeQueueHasItems())
+        {
+            pendingTradeReplaceQueueId = queue.Id;
+            return;
+        }
+
+        TradeMaterials(queue);
+    }
+
+    private void TradeMaterials(WorkshopFrozenQueue queue)
+    {
+        var replaced = actions.TradeMaterials(queue.Items, out var message);
+        SetShareStatus(message, !replaced);
+    }
+
+    // ---- existing browser behavior ------------------------------------------------------
+
     private void SelectQueue(WorkshopFrozenQueue queue)
     {
         selectedQueueId = queue.Id;
+        selectedIncomingId = null;
+        pendingTradeReplaceQueueId = null;
         renameInput = queue.Name;
         duplicateNameInput = $"{queue.Name} copy";
     }
@@ -449,20 +1059,28 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         }
     }
 
-    private float CalculateNameColumnWidth(IReadOnlyList<WorkshopFrozenQueue> queues)
+    private static float CalculateNameColumnWidth(IEnumerable<string> names, float otherColumnsWidth)
     {
         var width = ImGui.CalcTextSize("Queue").X;
-        foreach (var queue in queues)
-            width = Math.Max(width, ImGui.CalcTextSize(queue.Name).X);
+        foreach (var name in names)
+            width = Math.Max(width, ImGui.CalcTextSize(name).X);
 
-        return Math.Clamp(width + 28, 220, Math.Max(260, ImGui.GetContentRegionAvail().X - 280));
+        return Math.Clamp(width + 28, 220, Math.Max(260, ImGui.GetContentRegionAvail().X - otherColumnsWidth - 24));
     }
 
-    private WorkshopAssemblyEstimate? TryEstimateQueue(WorkshopFrozenQueue queue)
+    private Dictionary<uint, string> ProjectNames()
+    {
+        var names = new Dictionary<uint, string>();
+        foreach (var project in workshopCatalog.GetProjects())
+            names.TryAdd(project.WorkshopItemId, project.Name);
+        return names;
+    }
+
+    private WorkshopAssemblyEstimate? TryEstimate(IReadOnlyList<WorkshopPrepQueueItem> items)
     {
         try
         {
-            var plan = WorkshopAssemblyPlanBuilder.Build(queue.Items, workshopCatalog.GetProjects());
+            var plan = WorkshopAssemblyPlanBuilder.Build(items, workshopCatalog.GetProjects());
             return WorkshopAssemblyEstimator.Estimate(plan);
         }
         catch (InvalidOperationException)
@@ -470,6 +1088,27 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             return null;
         }
     }
+
+    private void RegisterLastAction(
+        string id,
+        string label,
+        bool enabled,
+        string? value,
+        Func<System.Text.Json.JsonElement?, AgentBridgeUiActionResult> invoke) =>
+        reviewRegistry.Register(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            selected: false,
+            value,
+            arguments: null,
+            surfaceId: SurfaceId,
+            mutating: true,
+            completionOperationKind: null,
+            invoke);
 
     private static string FormatState(WorkshopFrozenQueueState state)
     {
@@ -493,8 +1132,12 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 
     public void Dispose()
     {
+        lifetime.Cancel();
+        lifetime.Dispose();
     }
 }
+
+public delegate bool WorkshopTradeMaterialsHandler(IReadOnlyList<WorkshopPrepQueueItem> items, out string message);
 
 public sealed record WorkshopFrozenQueueBrowserActions(
     Func<bool> CanEditQueueProvider,
@@ -504,7 +1147,11 @@ public sealed record WorkshopFrozenQueueBrowserActions(
     Action<Guid, string> Duplicate,
     Action<Guid> Delete,
     Action<string> NewFromCurrent,
-    Func<string?, WorkshopQueueOperationResult> Import)
+    Func<string?, WorkshopQueueOperationResult> Import,
+    Func<WorkshopAssembler?> CurrentCharacter,
+    Func<IWorkshopHandoffService> Handoff,
+    Func<bool> TradeQueueHasItems,
+    WorkshopTradeMaterialsHandler TradeMaterials)
 {
     public bool CanEditQueue => CanEditQueueProvider();
 }

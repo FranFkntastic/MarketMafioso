@@ -17,6 +17,27 @@ public sealed class WorkshopFrozenQueue
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public List<WorkshopPrepQueueItem> Items { get; set; } = new();
+
+    /// <summary>The saved job this one was split from, when it is a delivered share.</summary>
+    public Guid? SplitSourceJobId { get; set; }
+
+    /// <summary>Character this share is handed to; null for ordinary saved jobs.</summary>
+    public string? HandoffTargetName { get; set; }
+    public string? HandoffTargetWorld { get; set; }
+
+    /// <summary>The character that split this share off and may deliver or withdraw it.</summary>
+    public string? HandoffSenderName { get; set; }
+
+    public string? HandoffSenderWorld { get; set; }
+
+    /// <summary>Workshop Host handoff id once the share was offered.</summary>
+    public Guid? HandoffId { get; set; }
+
+    /// <summary>Last handoff state seen, so the status survives while the host is unreachable.</summary>
+    public WorkshopHandoffState? HandoffState { get; set; }
+
+    /// <summary>Why delivery failed, shown in the inspector until a later offer succeeds.</summary>
+    public string? HandoffError { get; set; }
 }
 
 public sealed record WorkshopProjectDefinition(

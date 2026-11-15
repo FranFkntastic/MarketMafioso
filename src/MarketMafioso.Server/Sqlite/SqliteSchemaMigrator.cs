@@ -36,6 +36,8 @@ public sealed class SqliteSchemaMigrator
         command.CommandText = MigrationSql;
         await command.ExecuteNonQueryAsync(cancellationToken);
 
+        await ExecuteAsync(connection, transaction, Persistence.WorkshopHandoffSchema.Sql, cancellationToken);
+
         await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "requested_sources_json", "TEXT NOT NULL DEFAULT '[]'", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "observed_sources_json", "TEXT NOT NULL DEFAULT '[]'", cancellationToken);

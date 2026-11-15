@@ -85,6 +85,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
     private readonly WorkshopSavedJobIpcProvider workshopSavedJobIpc;
+
+    /// <summary>Workshop Host delivery for split saved-job shares.</summary>
+    public IWorkshopHandoffService WorkshopHandoffService { get; }
     private readonly MarketAcquisitionItemContextMenu marketAcquisitionItemContextMenu;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
@@ -113,6 +116,7 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        WorkshopHandoffService = new HostWorkshopHandoffService(Configuration, PlayerState, ClientState, Framework, Log);
         profileDataCenterCoordinator = new ProfileDataCenterCoordinator(
             PluginInterface.GetPluginConfigDirectory(), new DalamudDataCenterConnection(DataManager, ClientState, ObjectTable, GameGui));
         var characterLoginDriver = new DalamudCharacterLoginDriver(new DalamudLifestreamLogin(PluginInterface),
@@ -885,6 +889,7 @@ public sealed class Plugin : IDalamudPlugin
         if (!mainWindow.IsOpen)
             mainWindow.AcquisitionCompositionWindow.IsOpen = false;
 
+        mainWindow.FrozenQueueBrowser.PumpHandoffResults();
         mainWindow.BeginAgentReviewFrame();
         try
         {
@@ -903,6 +908,7 @@ public sealed class Plugin : IDalamudPlugin
         marketAcquisitionItemContextMenu.Dispose();
         exactAcquisitionIpc.Dispose();
         workshopSavedJobIpc.Dispose();
+        (WorkshopHandoffService as IDisposable)?.Dispose();
         agentBridge.Dispose();
 
         PluginInterface.UiBuilder.Draw -= DrawUI;

@@ -429,7 +429,13 @@ public class MainWindow : Window, IDisposable
                 workshopPrepQueue.DuplicateFrozenQueue,
                 workshopPrepQueue.DeleteFrozenQueue,
                 workshopPrepQueue.SaveCurrentQueueAsNew,
-                workshopPrepQueue.ImportSavedJob));
+                workshopPrepQueue.ImportSavedJob,
+                GetCurrentWorkshopAssembler,
+                () => Plugin.Instance.WorkshopHandoffService,
+                () => tradeQueuePanel.HasItems,
+                (IReadOnlyList<WorkshopPrepQueueItem> items, out string message) =>
+                    tradeQueuePanel.TryReplaceWithWorkshopMaterials(GetWorkshopAvailability(items), out message)),
+            AgentReviewRegistry);
         frozenQueueBrowser = FrozenQueueBrowser;
         var acquisitionRequestBuilderCraftAppraisal = CreateAcquisitionRequestBuilderCraftAppraisalController();
         acquisitionRequestBuilder = new MarketAcquisitionRequestBuilderPanel(
@@ -2532,12 +2538,25 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability()
+    private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability() =>
+        GetWorkshopAvailability(config.WorkshopPrepQueue);
+
+    private WorkshopAssembler? GetCurrentWorkshopAssembler()
     {
-        if (config.WorkshopPrepQueue.Count == 0)
+        var owner = GetCurrentQuartermasterOwnerScope();
+        return owner.IsAvailable &&
+               !string.IsNullOrWhiteSpace(owner.CharacterName) &&
+               !string.IsNullOrWhiteSpace(owner.HomeWorldName)
+            ? new WorkshopAssembler(owner.CharacterName, owner.HomeWorldName)
+            : null;
+    }
+
+    private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability(IReadOnlyList<WorkshopPrepQueueItem> items)
+    {
+        if (items.Count == 0)
             return [];
 
-        var requirements = workshopCatalog.BuildRequirements(config.WorkshopPrepQueue);
+        var requirements = workshopCatalog.BuildRequirements(items);
         var playerInventory = scanner.CountWorkshopUsableInventory();
         var owner = GetCurrentQuartermasterOwnerScope();
         var retainers = new List<MarketMafioso.Contracts.Inventory.RetainerReport>();
@@ -2729,5 +2748,6 @@ public class MainWindow : Window, IDisposable
         marketPurchasePacketObserver.Dispose();
         acquisitionHttpClient.Dispose();
         craftQuoteHttpClient.Dispose();
+        FrozenQueueBrowser.Dispose();
     }
 }

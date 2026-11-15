@@ -29,6 +29,7 @@ builder.Services.AddSingleton<WorkshopHostCredentialStore>();
 builder.Services.AddSingleton<InventoryReportStore>();
 builder.Services.AddSingleton<JsonSnapshotImporter>();
 builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
+builder.Services.AddSingleton<WorkshopHandoffStore>();
 builder.Services.AddSingleton<DiagnosticEventStore>();
 builder.Services.AddSingleton<MarketDiagnosticStore>();
 builder.Services.AddSingleton<UniversalisMarketDiagnosticClient>();
@@ -125,6 +126,7 @@ app.MapGet("/health", () => Results.Ok(new
 app.MapWorkshopHostEndpoints(enableMarketAcquisition, requireApiKey);
 app.MapMarketAcquisitionEndpoints();
 app.MapMarketAcquisitionWorkOrderEndpoints();
+app.MapWorkshopHandoffEndpoints();
 app.MapDiagnosticEndpoints();
 app.MapMarketDiagnosticEndpoints();
 app.MapMarketIntelligenceEndpoints();
