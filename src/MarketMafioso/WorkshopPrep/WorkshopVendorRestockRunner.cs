@@ -315,6 +315,8 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         state.Phase = state.ResumePhase is WorkshopVendorRestockPhase.Idle or WorkshopVendorRestockPhase.Paused
             ? WorkshopVendorRestockPhase.RefreshInventory
             : state.ResumePhase;
+        // A pause must not spend the bounded retrieval reconcile window.
+        state.RetrievalReconcileStartedAtUtc = null;
         state.Message = "Workshop restock resumed.";
         runtime.BeginAutomation();
         PersistPolicy();
@@ -381,12 +383,66 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 PersistPolicy();
                 return;
             case WorkshopQuartermasterProgressState.Indeterminate:
-                FinishPolicy(WorkshopVendorRestockPhase.Indeterminate, progress.Message);
+                ReconcileIndeterminateRetrieval(state, progress.Message);
                 return;
             default:
                 FinishPolicy(WorkshopVendorRestockPhase.Failed, progress.Message);
                 return;
         }
+    }
+
+    private static readonly TimeSpan RetrievalReconcileDeadline = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// An indeterminate retrieval means movement may have happened. Bags are ground
+    /// truth: when every reviewed retainer pull is present, continue to the vendor
+    /// stage; otherwise stop. Never resubmits the retrieval, and the vendor stage
+    /// keeps its own approved quantities and gil ceilings.
+    /// </summary>
+    private void ReconcileIndeterminateRetrieval(WorkshopVendorRestockState state, string quartermasterMessage)
+    {
+        var now = utcNow().UtcDateTime;
+        if (state.RetrievalReconcileStartedAtUtc is null)
+        {
+            state.RetrievalReconcileStartedAtUtc = now;
+            PersistPolicy();
+        }
+        var pulled = state.Lines.Where(line => line.ReviewedRetainerQuantity > 0).ToArray();
+        var inventory = runtime.CaptureInventory(pulled.Select(line => line.ItemId).ToArray());
+        if (!inventory.IsComplete)
+        {
+            if (now - state.RetrievalReconcileStartedAtUtc.Value > RetrievalReconcileDeadline)
+            {
+                FinishPolicy(WorkshopVendorRestockPhase.Indeterminate,
+                    $"Quartermaster retrieval was indeterminate and inventory stayed unreadable past the {RetrievalReconcileDeadline.TotalSeconds:N0} s reconcile deadline ({inventory.Message}). Quartermaster: {quartermasterMessage}");
+                return;
+            }
+            state.Message = "Quartermaster retrieval was indeterminate; waiting for inventory to confirm the retainer pulls.";
+            return;
+        }
+
+        // LivePlayerQuantity still holds the pre-retrieval bag count in this phase.
+        var shortfalls = pulled
+            .Select(line => (Line: line,
+                Expected: line.LivePlayerQuantity + line.ReviewedRetainerQuantity,
+                Observed: inventory.ItemCounts.GetValueOrDefault(line.ItemId)))
+            .Where(entry => entry.Observed < entry.Expected)
+            .ToArray();
+        if (shortfalls.Length > 0)
+        {
+            var detail = string.Join("; ", shortfalls.Select(entry =>
+                $"{entry.Line.ItemName} bags {entry.Observed:N0}/{entry.Expected:N0} (short {entry.Expected - entry.Observed:N0})"));
+            FinishPolicy(WorkshopVendorRestockPhase.Indeterminate,
+                $"Quartermaster retrieval was indeterminate and bags do not hold every reviewed retainer pull: {detail}. No retrieval was resubmitted. Quartermaster: {quartermasterMessage}");
+            return;
+        }
+
+        var confirmed = $"Retrieval was reported indeterminate; bags confirm all {pulled.Length} retainer pull(s).";
+        diagnosticLog?.Invoke($"[MarketMafioso] Workshop restock retrieval reconciled from inventory: {confirmed} Continuing to vendor purchases. Quartermaster: {quartermasterMessage}");
+        state.QuartermasterPartialResult = confirmed;
+        state.Phase = WorkshopVendorRestockPhase.RefreshInventory;
+        state.Message = confirmed;
+        PersistPolicy();
     }
 
     private bool TryStartVendorEngine(bool waitForInventory, out string error)
