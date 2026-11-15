@@ -95,6 +95,31 @@ public sealed class TradeQueueRunner : IDisposable
 
     public bool IsActive => Snapshot.IsActive;
 
+    /// <summary>
+    /// Optional recipient restriction checked before any run starts. Returns null to allow the partner, or the
+    /// refusal message (which must name the expected and the actual recipient).
+    /// </summary>
+    public Func<TradeQueuePartner, string?>? RecipientGuard { get; set; }
+
+    /// <summary>Raised on the framework thread after each batch's inventory delta is verified, before the queue is saved.</summary>
+    public event Action<TradeQueuePartner, TradeQueueBatch>? BatchVerified;
+
+    /// <summary>
+    /// Raised on the framework thread when a batch is planned, before its trade is opened or offered. A rebuilt
+    /// batch raises it again; the latest one replaces the earlier plan.
+    /// </summary>
+    public event Action<TradeQueuePartner, TradeQueueBatch>? BatchStarting;
+
+    /// <summary>
+    /// Raised on the framework thread just before this client clicks Ready on a batch's offer (possibly on several
+    /// ticks until the click lands). A trade cannot complete without that click, so a batch that never raised this
+    /// cannot have been handed over.
+    /// </summary>
+    public event Action<TradeQueuePartner, TradeQueueBatch>? BatchLocking;
+
+    /// <summary>Raised when a run fails or stops with a planned batch still unverified.</summary>
+    public event Action<TradeQueuePartner, TradeQueueBatch>? BatchAbandoned;
+
     /// <summary>Resolves capability evidence without selecting a recipient or starting any operation.</summary>
     public (bool Available, string Message) InspectExecutionCapability()
     {
@@ -138,6 +163,8 @@ public sealed class TradeQueueRunner : IDisposable
             return new(false, "Trade queue is already running.");
         if (!io.TryGetExecutionReadiness(out var readinessError))
             return RejectStart(selectedPartner, readinessError);
+        if (RecipientGuard?.Invoke(selectedPartner) is { } refusal)
+            return RejectStart(selectedPartner, refusal);
         if (!io.PartnerIsAvailable(selectedPartner))
             return RejectStart(selectedPartner, $"{selectedPartner.Name} @ {selectedPartner.HomeWorldName} is not an exact visible trade recipient.");
 
@@ -586,6 +613,7 @@ public sealed class TradeQueueRunner : IDisposable
             return;
         batch = batch with { ExpectedInventoryBefore = TradeQueuePlanner.CountExactInventory(inventory.Stacks) };
 
+        NotifyBatch(BatchLocking, batch, "locking");
         if (!io.TryClickReady(out var error))
         {
             if (!string.IsNullOrWhiteSpace(error))
@@ -684,6 +712,7 @@ public sealed class TradeQueueRunner : IDisposable
         TradeQueuePlanner.ApplyCompletedBatch(queue, batch);
         completedUnitCount = checked(completedUnitCount + batch.UnitCount);
         completedBatchCount++;
+        NotifyBatchVerified(batch);
         save();
         checkpointQueueSignature = ComputeQueueSignature(queue);
         if (queue.Count == 0)
@@ -704,6 +733,23 @@ public sealed class TradeQueueRunner : IDisposable
         TickOpeningTrade(now);
     }
 
+    private void NotifyBatchVerified(TradeQueueBatch verified) => NotifyBatch(BatchVerified, verified, "verified");
+
+    private void NotifyBatch(Action<TradeQueuePartner, TradeQueueBatch>? listeners, TradeQueueBatch planned, string stage)
+    {
+        if (partner == null || listeners == null)
+            return;
+        try
+        {
+            listeners(partner, planned);
+        }
+        catch (Exception exception)
+        {
+            // A ledger listener must never fail the trade run.
+            log.Error(exception, "[MarketMafioso] Trade Queue batch {Stage} listener failed run={RunId} batch={Batch}.", stage, runId ?? "", batchNumber);
+        }
+    }
+
     private bool PrepareBatch(IReadOnlyList<TradeQueueInventoryStack> inventory, string message)
     {
         var validation = TradeQueuePlanner.Validate(queue.ToList(), inventory);
@@ -717,6 +763,7 @@ public sealed class TradeQueueRunner : IDisposable
             queue.ToList(),
             inventory,
             allowHighQualityItems: !normalizeHighQualityItemsForRun);
+        NotifyBatch(BatchStarting, batch, "starting");
         batchRecoveryDeadline = clock() + OpenTradeTimeout + OfferItemsTimeout;
         offerLineOperation = null;
         offerGilOperation = null;
@@ -872,6 +919,8 @@ public sealed class TradeQueueRunner : IDisposable
         externalAutomation.RestoreTradeAutoConfirm();
         deadline = default;
         nextActionAt = default;
+        if (batch != null && state is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped)
+            NotifyBatch(BatchAbandoned, batch, "abandoned");
         batch = null;
         Snapshot = new(
             state,

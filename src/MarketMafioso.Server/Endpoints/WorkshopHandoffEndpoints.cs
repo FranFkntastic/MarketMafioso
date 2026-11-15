@@ -17,6 +17,13 @@ internal static class WorkshopHandoffEndpoints
         MapCommand(group, "withdraw", "Withdrawn");
         MapCommand(group, "accept", "Accepted");
         MapCommand(group, "decline", "Declined");
+        group.MapPost("/{id:guid}/handover", (HttpContext context, Guid id, WorkshopHandoverReport request, WorkshopHandoffStore store) =>
+            Execute(context, id, request.Actor, null,
+                account => store.ReportHandoverAsync(account, id, request, context.RequestAborted)));
+        app.MapGet("/api/workshop/holdings", (HttpContext context, string? characterName, string? world, string? itemIds,
+            WorkshopHandoffStore store, InventoryReportStore reports) =>
+            Execute(context, null, null, new(characterName!, world!),
+                account => store.GetHoldingsAsync(account, new(characterName!, world!), itemIds, reports, context.RequestAborted)));
     }
 
     private static void MapCommand(RouteGroupBuilder group, string action, string state) =>

@@ -378,7 +378,20 @@ public class MainWindow : Window, IDisposable
             config,
             tradeQueueRunner,
             tradeQueueIo,
-            AgentReviewRegistry);
+            AgentReviewRegistry,
+            GetCurrentWorkshopAssembler);
+        HandoverTracker = new WorkshopHandoverTracker(
+            config,
+            () => Plugin.Instance.WorkshopHandoffService,
+            share => workshopCatalog.BuildRequirements(share.Items).Select(material => material.ItemId).ToHashSet(),
+            GetCurrentWorkshopAssembler,
+            () => tradeQueueRunner.IsActive,
+            log);
+        tradeQueueRunner.RecipientGuard = HandoverTracker.CheckRecipient;
+        tradeQueueRunner.BatchStarting += HandoverTracker.OnBatchStarting;
+        tradeQueueRunner.BatchLocking += HandoverTracker.OnBatchLocking;
+        tradeQueueRunner.BatchAbandoned += HandoverTracker.OnBatchAbandoned;
+        tradeQueueRunner.BatchVerified += HandoverTracker.OnBatchVerified;
         WorkshopProjectBrowserWindow? projectBrowser = null;
         WorkshopFrozenQueueBrowserWindow? frozenQueueBrowser = null;
         workshopPrepQueue = new WorkshopPrepQueuePanel(
@@ -433,8 +446,12 @@ public class MainWindow : Window, IDisposable
                 GetCurrentWorkshopAssembler,
                 () => Plugin.Instance.WorkshopHandoffService,
                 () => tradeQueuePanel.HasItems,
-                (IReadOnlyList<WorkshopPrepQueueItem> items, out string message) =>
-                    tradeQueuePanel.TryReplaceWithWorkshopMaterials(GetWorkshopAvailability(items), out message)),
+                HandoverTracker,
+                ObserveTradeableBags,
+                tradeQueuePanel.TryHandOver,
+                () => tradeQueuePanel.BoundShareId,
+                ShowTradeQueue,
+                GetWorkshopAvailability),
             AgentReviewRegistry);
         frozenQueueBrowser = FrozenQueueBrowser;
         var acquisitionRequestBuilderCraftAppraisal = CreateAcquisitionRequestBuilderCraftAppraisalController();
@@ -536,6 +553,7 @@ public class MainWindow : Window, IDisposable
 
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
+    public WorkshopHandoverTracker HandoverTracker { get; }
     public MarketAcquisitionWorkbenchCompositionWindow AcquisitionCompositionWindow { get; }
 
     private readonly MarketAcquisitionWorkbenchCompositionCatalog acquisitionCompositionCatalog;
@@ -1347,6 +1365,25 @@ public class MainWindow : Window, IDisposable
             return false;
 
         return true;
+    }
+
+    /// <summary>Opens the main window on the Trade Queue tab.</summary>
+    private void ShowTradeQueue()
+    {
+        IsOpen = true;
+        QueueAgentTabSelection("Trade Queue");
+    }
+
+    /// <summary>Tradeable player inventory (what the Trade Queue can trade), units per item.</summary>
+    private IReadOnlyDictionary<uint, int>? ObserveTradeableBags()
+    {
+        var observation = tradeQueueIo.ObserveTradeableInventory();
+        if (!observation.IsAuthoritative)
+            return null;
+        return observation.Stacks
+            .Where(stack => stack.ItemId != TradeQueuePlanner.GilItemId)
+            .GroupBy(stack => stack.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(stack => stack.Quantity));
     }
 
     private void QueueAgentTabSelection(string mainTab, string? workspaceView = null)
@@ -2749,5 +2786,11 @@ public class MainWindow : Window, IDisposable
         acquisitionHttpClient.Dispose();
         craftQuoteHttpClient.Dispose();
         FrozenQueueBrowser.Dispose();
+        tradeQueueRunner.BatchVerified -= HandoverTracker.OnBatchVerified;
+        tradeQueueRunner.BatchStarting -= HandoverTracker.OnBatchStarting;
+        tradeQueueRunner.BatchLocking -= HandoverTracker.OnBatchLocking;
+        tradeQueueRunner.BatchAbandoned -= HandoverTracker.OnBatchAbandoned;
+        tradeQueueRunner.RecipientGuard = null;
+        HandoverTracker.Dispose();
     }
 }

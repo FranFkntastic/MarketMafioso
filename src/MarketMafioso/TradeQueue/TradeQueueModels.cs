@@ -59,6 +59,46 @@ public sealed record TradeQueuePartner(
     uint HomeWorldId,
     string HomeWorldName = "");
 
+/// <summary>Binds the Trade Queue to one workshop share's assembler (split-share material handover).</summary>
+[Serializable]
+public sealed class TradeQueueRecipientBinding
+{
+    public Guid ShareJobId { get; set; }
+    public Guid? HandoffId { get; set; }
+    public string ShareName { get; set; } = string.Empty;
+    public string RecipientName { get; set; } = string.Empty;
+    public string RecipientWorld { get; set; } = string.Empty;
+
+    /// <summary>The character that bound the queue. Null on bindings from earlier builds (whoever is logged in).</summary>
+    public string? SenderName { get; set; }
+    public string? SenderWorld { get; set; }
+
+    [Newtonsoft.Json.JsonIgnore]
+    public string RecipientKey => $"{RecipientName} @{RecipientWorld}";
+
+    [Newtonsoft.Json.JsonIgnore]
+    public string? SenderKey => SenderName is null ? null : $"{SenderName} @{SenderWorld}";
+
+    /// <summary>
+    /// Whether the binding applies to the logged-in character. Bindings without a sender apply to anyone; an
+    /// unknown current character (logged out) is treated as the sender, since nothing can trade then.
+    /// </summary>
+    public bool IsActiveFor(string? characterName, string? world) =>
+        SenderName is null || characterName is null ||
+        (string.Equals(SenderName, characterName, StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(SenderWorld, world, StringComparison.OrdinalIgnoreCase));
+
+    public bool Matches(TradeQueuePartner partner) =>
+        string.Equals(partner.Name, RecipientName, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(partner.HomeWorldName, RecipientWorld, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Null when the partner is the bound recipient; otherwise the refusal naming both.</summary>
+    public string? Mismatch(TradeQueuePartner partner) =>
+        Matches(partner)
+            ? null
+            : $"Trade Queue is bound to {RecipientKey} for {ShareName}; target is {partner.Name} @{(string.IsNullOrWhiteSpace(partner.HomeWorldName) ? "unknown world" : partner.HomeWorldName)}.";
+}
+
 [Serializable]
 public sealed class TradeQueueTimingOptions
 {

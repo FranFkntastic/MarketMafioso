@@ -30,6 +30,7 @@ internal sealed class TradeQueuePanel
     private readonly MarketMafioso.TradeQueue.TradeQueueRunner runner;
     private readonly ITradeQueueIo io;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
+    private readonly Func<WorkshopAssembler?> currentCharacter;
     private readonly TableSelectionModel<uint> inventorySelection = new();
     private readonly DalamudTableProjection<TradeQueueInventoryRow> inventoryTable;
     private string inventoryFilter = string.Empty;
@@ -47,12 +48,14 @@ internal sealed class TradeQueuePanel
         Configuration config,
         MarketMafioso.TradeQueue.TradeQueueRunner runner,
         ITradeQueueIo io,
-        AgentBridgeUiReviewRegistry reviewRegistry)
+        AgentBridgeUiReviewRegistry reviewRegistry,
+        Func<WorkshopAssembler?> currentCharacter)
     {
         this.config = config;
         this.runner = runner;
         this.io = io;
         this.reviewRegistry = reviewRegistry;
+        this.currentCharacter = currentCharacter;
         inventoryTable = new DalamudTableProjection<TradeQueueInventoryRow>(
         [
             new(
@@ -122,8 +125,54 @@ internal sealed class TradeQueuePanel
         config.TradeQueueItems.Clear();
         foreach (var item in handoff.Items)
             config.TradeQueueItems.Add(Clone(item));
+        config.TradeQueueBinding = null;
         config.Save();
         confirmClear = false;
+        return true;
+    }
+
+    /// <summary>The bound share's id, or null when the Trade Queue is not bound to a recipient.</summary>
+    public Guid? BoundShareId => config.TradeQueueBinding?.ShareJobId;
+
+    /// <summary>Whether the binding applies to the logged-in character (bindings without a sender always do).</summary>
+    private bool BindingActive(TradeQueueRecipientBinding binding)
+    {
+        var current = currentCharacter();
+        return binding.IsActiveFor(current?.CharacterName, current?.World);
+    }
+
+    /// <summary>Replaces the queue with a share's owed materials and binds it to the share's assembler.</summary>
+    public bool TryHandOver(IReadOnlyList<TradeQueueItem> items, TradeQueueRecipientBinding binding, out string message)
+    {
+        if (runner.IsActive)
+        {
+            message = "Stop the active trade before handing over materials.";
+            return false;
+        }
+
+        var lines = items.Where(item => item.Quantity > 0).ToArray();
+        if (lines.Length == 0)
+        {
+            message = "Nothing to hand over: every owed material is either handed over or missing from your bags.";
+            return false;
+        }
+
+        config.TradeQueueItems.Clear();
+        foreach (var item in lines)
+            config.TradeQueueItems.Add(Clone(item));
+        config.TradeQueueBinding = binding;
+        config.Save();
+        confirmClear = false;
+        message = $"Trade Queue filled with {lines.Length:N0} line(s), {lines.Sum(item => item.Quantity):N0} units, for {binding.RecipientKey}.";
+        return true;
+    }
+
+    private bool Unbind()
+    {
+        if (runner.IsActive || config.TradeQueueBinding == null)
+            return false;
+        config.TradeQueueBinding = null;
+        config.Save();
         return true;
     }
 
@@ -182,13 +231,18 @@ internal sealed class TradeQueuePanel
                 new(
                     "Recipient",
                     displayedRecipient ?? "No selected player",
-                    displayedRecipient != null ? MainWindow.ColSuccess : MainWindow.ColWarning),
+                    displayedRecipient == null ||
+                    (!runner.IsActive && hasPartner && config.TradeQueueBinding is { } bound && BindingActive(bound) && !bound.Matches(partner))
+                        ? MainWindow.ColWarning
+                        : MainWindow.ColSuccess),
                 new(
                     "Progress",
                     ProgressLabel(snapshot),
                     snapshot.State is TradeQueueExecutionState.Failed ? MainWindow.ColError :
                         snapshot.IsActive ? MainWindow.ColHeader : MainWindow.ColMuted),
             ]);
+        if (config.TradeQueueBinding is { } binding)
+            DrawBindingRow(binding, hasPartner ? partner : null);
         ImGui.TextColored(StatusColor(snapshot.State), snapshot.Message);
         ImGui.Spacing();
 
@@ -218,6 +272,7 @@ internal sealed class TradeQueuePanel
             if (ImGuiUi.Button("Clear queue", HasItems && !runner.IsActive))
             {
                 config.TradeQueueItems.Clear();
+                config.TradeQueueBinding = null;
                 config.Save();
                 confirmClear = false;
                 ImGui.CloseCurrentPopup();
@@ -230,6 +285,73 @@ internal sealed class TradeQueuePanel
             }
         }
         ImGui.EndPopup();
+    }
+
+    /// <summary>The lock row shown while the queue is bound to a workshop share's assembler.</summary>
+    private void DrawBindingRow(TradeQueueRecipientBinding binding, TradeQueuePartner? target)
+    {
+        var active = BindingActive(binding);
+        var accent = active ? WorkshopJobSplitPanel.Accent(1) : MarketMafiosoUiTheme.Muted;
+        var mismatch = target == null || !active ? null : binding.Mismatch(target);
+        var border = mismatch != null || !active ? MarketMafiosoUiTheme.Warning : new Vector4(0.30f, 0.47f, 0.65f, 1f);
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.08f, 0.15f, 0.24f, 0.96f));
+        ImGui.PushStyleColor(ImGuiCol.Border, border);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 2f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(8f, 5f));
+        var open = ImGui.BeginChild(
+            "TradeQueueRecipientBinding",
+            new Vector2(0f, ImGui.GetFrameHeightWithSpacing() + 10f),
+            true,
+            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
+        if (open)
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Recipient");
+            ImGui.SameLine();
+            ImGui.TextColored(accent, binding.RecipientName);
+            ImGui.SameLine(0f, 4f);
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"@{binding.RecipientWorld}");
+            ImGui.SameLine();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"for {binding.ShareName}");
+            if (!active)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"inactive for this character · bound by {binding.SenderKey}");
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip($"Only {binding.SenderKey} is restricted to {binding.RecipientKey} and credits {binding.ShareName}.");
+            }
+            else if (mismatch != null && target != null)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"target is {target.Name} @{target.HomeWorldName}");
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(mismatch);
+            }
+
+            var unbindWidth = ImGui.CalcTextSize("Unbind").X + (ImGui.GetStyle().FramePadding.X * 2f);
+            ImGuiUi.SameLineRight(unbindWidth);
+            if (ImGuiUi.Button("Unbind", !runner.IsActive))
+                Unbind();
+            RegisterLastAction(
+                "trade-queue.unbind",
+                $"Unbind the Trade Queue from {binding.RecipientKey}",
+                !runner.IsActive,
+                $"recipient={binding.RecipientKey}; share={binding.ShareName}; sender={binding.SenderKey ?? "any"}; active={active}",
+                arguments: null,
+                _ =>
+                {
+                    if (runner.IsActive)
+                        return AgentBridgeUiActionResult.Fail("The Trade Queue binding cannot change while trading is active.");
+                    var recipient = config.TradeQueueBinding?.RecipientKey;
+                    return Unbind()
+                        ? AgentBridgeUiActionResult.Ok($"Unbound the Trade Queue from {recipient}; it now trades to the current target.")
+                        : AgentBridgeUiActionResult.Fail("The Trade Queue is not bound to a recipient.");
+                });
+        }
+
+        ImGui.EndChild();
+        ImGui.PopStyleVar(2);
+        ImGui.PopStyleColor(2);
     }
 
     private static void DrawInventoryHeader()

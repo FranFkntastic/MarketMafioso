@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -38,6 +39,64 @@ public sealed class WorkshopFrozenQueue
 
     /// <summary>Why delivery failed, shown in the inspector until a later offer succeeds.</summary>
     public string? HandoffError { get; set; }
+
+    /// <summary>
+    /// Sender only: material units verified as traded to this share's assembler, per item. Credited only
+    /// from verified Trade Queue batches to the bound recipient; never reduced.
+    /// </summary>
+    public List<WorkshopMaterialLedgerEntry> HandedOver { get; set; } = new();
+
+    /// <summary>
+    /// Sender only: the assembler's holdings when the handover started. Frozen once the ledger has units, so
+    /// later inventory reports (which include what was already handed over) are not subtracted twice.
+    /// </summary>
+    public List<WorkshopMaterialLedgerEntry>? HandoverBaseline { get; set; }
+
+    public DateTimeOffset? HandoverBaselineCapturedAt { get; set; }
+
+    /// <summary>Units the assembler needs from the sender: Σ max(0, Needed − TheyHold), as last reported.</summary>
+    public int HandoverTotal { get; set; }
+
+    /// <summary>
+    /// Sender only: per-item units owed before any handover, max(0, Needed − TheyHold-if-counted), kept in step with
+    /// <see cref="HandoverTotal"/>. Progress and host reports cap each item's handed units at its due.
+    /// </summary>
+    public List<WorkshopMaterialLedgerEntry>? HandoverDue { get; set; }
+
+    /// <summary>True while the host has not acknowledged the current ledger and total; retried until it does.</summary>
+    public bool HandoverReportPending { get; set; }
+
+    /// <summary>Why the host permanently refused the last handover report (HTTP 404/409); cleared by a later success.</summary>
+    public string? HandoverReportRefusal { get; set; }
+
+    /// <summary>
+    /// Sender only: the Trade Queue batch started for this share but not yet verified. Cleared when the batch is
+    /// verified and credited; otherwise resolved by the user (count it or discard it). Never auto-credited.
+    /// </summary>
+    public WorkshopHandoverInFlight? HandoverInFlight { get; set; }
+}
+
+/// <summary>A bound Trade Queue batch that was started but not verified: its material lines and start time.</summary>
+[Serializable]
+public sealed class WorkshopHandoverInFlight
+{
+    public List<WorkshopMaterialLedgerEntry> Items { get; set; } = new();
+    public DateTimeOffset StartedAt { get; set; }
+    public string Recipient { get; set; } = string.Empty;
+
+    /// <summary>True once this client was about to click Ready on the batch; only then can it have traded.</summary>
+    public bool Locked { get; set; }
+
+    [Newtonsoft.Json.JsonIgnore]
+    public int Units => Items.Sum(item => Math.Max(0, item.Quantity));
+}
+
+/// <summary>A quantity of one material item, stored with the saved job.</summary>
+[Serializable]
+public sealed class WorkshopMaterialLedgerEntry
+{
+    public uint ItemId { get; set; }
+    public int Quantity { get; set; }
 }
 
 public sealed record WorkshopProjectDefinition(

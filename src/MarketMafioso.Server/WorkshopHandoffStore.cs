@@ -19,7 +19,8 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
         var known = await KnownAsync(connection, null, account, token);
         var all = await ReadAsync(connection, null, account, token);
         return new(known, all.Where(x => Same(x.Sender, actor)).OrderByDescending(x => x.UpdatedAt).ToArray(),
-            all.Where(x => Same(x.Target, actor) && x.State == "Offered").OrderByDescending(x => x.UpdatedAt).ToArray());
+            all.Where(x => Same(x.Target, actor) && x.State == "Offered").OrderByDescending(x => x.UpdatedAt).ToArray(),
+            all.Where(x => Same(x.Target, actor) && x.State == "Accepted").OrderByDescending(x => x.UpdatedAt).ToArray());
     }
 
     public async Task<WorkshopHandoffDto> OfferAsync(long account, WorkshopHandoffOffer request, CancellationToken token)
@@ -44,7 +45,8 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
             if (previous.State == "Accepted") throw Refuse(account, previous, 409, Describe(previous));
         }
         var value = new WorkshopHandoffDto(previous?.HandoffId ?? Guid.NewGuid(), request.SourceJobId, name,
-            sender, target, request.Items.ToArray(), "Offered", NextTimestamp(previous));
+            sender, target, request.Items.ToArray(), "Offered", NextTimestamp(previous),
+            previous?.HandedOver, previous?.HandoverTotal ?? 0, previous?.HandoverUpdatedAt);
         await SaveAsync(connection, transaction, account, value, token);
         transaction.Commit();
         Transition(account, value);
@@ -73,6 +75,87 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
     private void Transition(long account, WorkshopHandoffDto value) => log.LogInformation(
         "Workshop handoff {HandoffId} account {Account} sender {Sender} target {Target}: {State}",
         value.HandoffId, account, value.Sender, value.Target, value.State);
+
+    public async Task<WorkshopHandoffDto> ReportHandoverAsync(long account, Guid id, WorkshopHandoverReport request, CancellationToken token)
+    {
+        var actor = Validate(request.Actor);
+        await using var connection = await connections.OpenConnectionAsync(token);
+        using var transaction = connection.BeginTransaction();
+        var value = (await ReadAsync(connection, transaction, account, token)).SingleOrDefault(x => x.HandoffId == id)
+            ?? throw new WorkshopHandoffException(404, $"Unknown handoff {id} for this host login.");
+        if (!Same(value.Sender, actor))
+            throw Refuse(account, value, 403, "Only the sender may report material handover for this share.");
+        if (value.State is not ("Offered" or "Accepted"))
+            throw Refuse(account, value, 409, $"Handoff {id} is {value.State}; material handover requires Offered or Accepted state.");
+        if (request.HandoverTotal is < 0 or > 10_000_000 || request.HandedOver is null || request.HandedOver.Count > 500 ||
+            request.HandedOver.Any(x => x is null || x.ItemId == 0 || x.Quantity is < 0 or > 1_000_000) ||
+            request.HandedOver.Select(x => x.ItemId).Distinct().Count() != request.HandedOver.Count)
+            throw Refuse(account, value, 400, "Handover requires at most 500 distinct item ids > 0, quantities 0..1,000,000, and HandoverTotal 0..10,000,000.");
+        var items = request.HandedOver.OrderBy(x => x.ItemId).ToArray();
+        // A repeated SET is a no-op, including its timestamp. Never advance the offer version.
+        if (value.HandoverUpdatedAt is null || value.HandoverTotal != request.HandoverTotal ||
+            !(value.HandedOver ?? []).OrderBy(x => x.ItemId).SequenceEqual(items))
+        {
+            value = value with { HandedOver = items, HandoverTotal = request.HandoverTotal,
+                HandoverUpdatedAt = value.HandoverUpdatedAt is { } previous && previous >= DateTimeOffset.UtcNow
+                    ? previous.AddTicks(1) : DateTimeOffset.UtcNow };
+            await SaveAsync(connection, transaction, account, value, token);
+        }
+        transaction.Commit();
+        log.LogInformation("Workshop handoff {HandoffId} account {Account} sender {Sender} target {Target}: {State} handover SET {ItemCount} items, total {HandoverTotal}",
+            value.HandoffId, account, value.Sender, value.Target, value.State, items.Length, value.HandoverTotal);
+        return value;
+    }
+
+    public async Task<WorkshopCharacterHoldings> GetHoldingsAsync(long account, WorkshopCharacter character,
+        string? itemIds, InventoryReportStore reports, CancellationToken token)
+    {
+        character = Validate(character);
+        var parts = itemIds?.Split(',') ?? [];
+        var ids = new HashSet<uint>();
+        if (parts.Length is < 1 or > 200 || parts.Any(part =>
+                !uint.TryParse(part, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var id) ||
+                id == 0 || !ids.Add(id)))
+            throw new ArgumentException("itemIds must contain 1..200 distinct positive integer item ids separated by commas.");
+        long characterId;
+        await using (var connection = await connections.OpenConnectionAsync(token))
+        {
+            var known = await KnownAsync(connection, null, account, token);
+            character = known.FirstOrDefault(x => Same(x, character))
+                ?? throw new WorkshopHandoffException(404, $"Unknown character {character.CharacterName}@{character.World}; no inventory identity reported to this host login.");
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT id FROM characters WHERE account_id = $account AND character_name = $name COLLATE NOCASE AND home_world = $world COLLATE NOCASE ORDER BY last_seen_at_utc DESC LIMIT 1";
+            command.Parameters.AddWithValue("$account", account);
+            command.Parameters.AddWithValue("$name", character.CharacterName);
+            command.Parameters.AddWithValue("$world", character.World);
+            characterId = (long)(await command.ExecuteScalarAsync(token)
+                ?? throw new WorkshopHandoffException(404, "Character inventory identity is no longer available."));
+        }
+        var latest = await reports.GetLatestAsync(account, characterId, token);
+        var totals = ids.ToDictionary(id => id, _ => 0);
+        DateTimeOffset? capturedAt = null;
+        if (latest is not null)
+        {
+            if (!DateTimeOffset.TryParse(latest.Report.Timestamp, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var captured))
+                throw new WorkshopHandoffException(503, "Latest inventory report has an invalid capture timestamp.");
+            capturedAt = captured;
+            var bags = latest.Report.PlayerInventory.Concat(latest.Report.Retainers
+                .Where(r => (string.IsNullOrWhiteSpace(r.OwnerCharacterName) || string.Equals(r.OwnerCharacterName, character.CharacterName, StringComparison.OrdinalIgnoreCase)) &&
+                    (string.IsNullOrWhiteSpace(r.OwnerHomeWorld) || string.Equals(r.OwnerHomeWorld, character.World, StringComparison.OrdinalIgnoreCase)))
+                // Only bags observed in this report: the reporter carries forward unobserved retainer bags from
+                // older reports, and counting those as current would under-send materials.
+                .SelectMany(r => r.Bags.Where(b => r.Storage.ObservedSources.Contains(b.Location ?? b.BagName, StringComparer.Ordinal))));
+            foreach (var item in bags.SelectMany(b => b.Items))
+                if (totals.ContainsKey(item.ItemId))
+                {
+                    var total = (long)totals[item.ItemId] + item.Quantity;
+                    if (total > int.MaxValue) throw new WorkshopHandoffException(503, $"Inventory quantity for item {item.ItemId} exceeds the supported holdings range.");
+                    totals[item.ItemId] = (int)total;
+                }
+        }
+        return new(character, capturedAt, ids.Order().Select(id => new WorkshopMaterialQuantity(id, totals[id])).ToArray());
+    }
 
     private WorkshopHandoffException Refuse(long account, WorkshopHandoffDto value, int status, string reason)
     {

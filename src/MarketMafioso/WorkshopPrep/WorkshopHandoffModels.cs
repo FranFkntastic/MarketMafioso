@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -28,7 +29,33 @@ public sealed record WorkshopHandoffView(
     WorkshopAssembler Target,
     IReadOnlyList<WorkshopPrepQueueItem> Items,
     WorkshopHandoffState State,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    IReadOnlyList<WorkshopMaterialCount>? HandedOver = null,
+    int HandoverTotal = 0,
+    DateTimeOffset? HandoverUpdatedAt = null)
+{
+    /// <summary>Material units the sender has verified as traded to the target, per item.</summary>
+    public IReadOnlyList<WorkshopMaterialCount> HandedOverItems => HandedOver ?? [];
+
+    /// <summary>Units handed over so far, summed across items.</summary>
+    public int HandedOverUnits => HandedOverItems.Sum(item => item.Quantity);
+}
+
+/// <summary>A quantity of one material item (game item id).</summary>
+public sealed record WorkshopMaterialCount(uint ItemId, int Quantity);
+
+/// <summary>
+/// A character's material holdings from its latest Workshop Host inventory report.
+/// CapturedAt is null when the host has no report for that character.
+/// </summary>
+public sealed record WorkshopHoldingsResult(
+    bool Success,
+    string Message,
+    DateTimeOffset? CapturedAt,
+    IReadOnlyDictionary<uint, int> Quantities)
+{
+    public static WorkshopHoldingsResult Fail(string message) => new(false, message, null, new Dictionary<uint, int>());
+}
 
 public sealed record WorkshopHandoffResult(bool Success, string Message, WorkshopHandoffView? Handoff = null)
 {
@@ -56,6 +83,9 @@ public interface IWorkshopHandoffService
     /// <summary>Shares addressed to this character in Offered state, newest first.</summary>
     IReadOnlyList<WorkshopHandoffView> Incoming { get; }
 
+    /// <summary>Shares addressed to this character in Accepted state, newest first (for material-received progress).</summary>
+    IReadOnlyList<WorkshopHandoffView> Received { get; }
+
     /// <summary>Publishes or updates (idempotent on sourceJobId + target) a share.</summary>
     Task<WorkshopHandoffResult> OfferAsync(
         Guid sourceJobId,
@@ -72,6 +102,25 @@ public interface IWorkshopHandoffService
     Task<WorkshopHandoffResult> AcceptAsync(Guid handoffId, DateTimeOffset? expectedUpdatedAt, CancellationToken cancellationToken);
 
     Task<WorkshopHandoffResult> DeclineAsync(Guid handoffId, DateTimeOffset? expectedUpdatedAt, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reads another known character's holdings of the given material items from its latest host inventory
+    /// report (bags, saddlebag and retainers combined). Items the report does not contain are reported as 0.
+    /// </summary>
+    Task<WorkshopHoldingsResult> GetHoldingsAsync(
+        WorkshopAssembler character,
+        IReadOnlyCollection<uint> itemIds,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Sender only. Replaces the share's handed-over ledger with the given totals (set semantics, so a retry
+    /// is harmless) and the expected total units. Does not change the share's UpdatedAt version.
+    /// </summary>
+    Task<WorkshopHandoffResult> ReportHandoverAsync(
+        Guid handoffId,
+        IReadOnlyList<WorkshopMaterialCount> handedOver,
+        int handoverTotal,
+        CancellationToken cancellationToken);
 
     /// <summary>Requests an immediate background refresh of the cached lists.</summary>
     void RequestRefresh();
