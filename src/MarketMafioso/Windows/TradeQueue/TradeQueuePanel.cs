@@ -101,19 +101,29 @@ internal sealed class TradeQueuePanel
 
     public string ReplaceWithWorkshopMaterials(IReadOnlyList<WorkshopMaterialAvailability> availability)
     {
+        TryReplaceWithWorkshopMaterials(availability, out var message);
+        return message;
+    }
+
+    public bool TryReplaceWithWorkshopMaterials(IReadOnlyList<WorkshopMaterialAvailability> availability, out string message)
+    {
         if (runner.IsActive)
-            return "Stop the active trade before replacing Trade Queue.";
+        {
+            message = "Stop the active trade before replacing Trade Queue.";
+            return false;
+        }
 
         var handoff = WorkshopTradeQueueHandoffService.Build(availability);
+        message = handoff.Message;
         if (!handoff.Success)
-            return handoff.Message;
+            return false;
 
         config.TradeQueueItems.Clear();
         foreach (var item in handoff.Items)
             config.TradeQueueItems.Add(Clone(item));
         config.Save();
         confirmClear = false;
-        return handoff.Message;
+        return true;
     }
 
     public void Draw()
