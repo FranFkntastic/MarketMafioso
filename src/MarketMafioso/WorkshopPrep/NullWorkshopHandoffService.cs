@@ -16,6 +16,14 @@ public sealed class NullWorkshopHandoffService : IWorkshopHandoffService
     public IReadOnlyList<WorkshopHandoffView> Outgoing => [];
     public IReadOnlyList<WorkshopHandoffView> Incoming => [];
 
+    public IReadOnlyList<WorkshopHandoffView> Received => [];
+
+    public Task<WorkshopHoldingsResult> GetHoldingsAsync(WorkshopAssembler character, IReadOnlyCollection<uint> itemIds, CancellationToken cancellationToken) =>
+        Task.FromResult(WorkshopHoldingsResult.Fail(UnavailableReason ?? "Workshop Host sync is not configured."));
+
+    public Task<WorkshopHandoffResult> ReportHandoverAsync(Guid handoffId, IReadOnlyList<WorkshopMaterialCount> handedOver, int handoverTotal, CancellationToken cancellationToken) =>
+        Task.FromResult(WorkshopHandoffResult.Fail(UnavailableReason ?? "Workshop Host sync is not configured."));
+
     public Task<WorkshopHandoffResult> OfferAsync(
         Guid sourceJobId,
         string jobName,

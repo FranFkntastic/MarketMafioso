@@ -91,6 +91,15 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
             catch (InvalidOperationException) { return false; }
         }).ConfigureAwait(false);
 
+    // TODO(handover): implemented by the host delegate; stubs keep the solution compiling meanwhile.
+    public IReadOnlyList<WorkshopHandoffView> Received => [];
+
+    public Task<WorkshopHoldingsResult> GetHoldingsAsync(WorkshopAssembler character, IReadOnlyCollection<uint> itemIds, CancellationToken cancellationToken) =>
+        Task.FromResult(WorkshopHoldingsResult.Fail("Recipient holdings are not implemented yet."));
+
+    public Task<WorkshopHandoffResult> ReportHandoverAsync(Guid handoffId, IReadOnlyList<WorkshopMaterialCount> handedOver, int handoverTotal, CancellationToken cancellationToken) =>
+        Task.FromResult(WorkshopHandoffResult.Fail("Handover reporting is not implemented yet."));
+
     public void RequestRefresh()
     {
         if (Volatile.Read(ref disposed) != 0) return;
