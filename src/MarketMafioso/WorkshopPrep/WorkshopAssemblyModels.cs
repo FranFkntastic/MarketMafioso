@@ -3,6 +3,12 @@ using System.Collections.Generic;
 
 namespace MarketMafioso.WorkshopPrep;
 
+public enum WorkshopAssemblyOrder
+{
+    Sequential,
+    RoundRobin,
+}
+
 public enum WorkshopAssemblyRunnerState
 {
     Idle,

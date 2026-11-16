@@ -27,7 +27,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private DateTimeOffset continueAt = DateTimeOffset.MinValue;
     private DateTimeOffset stateStartedAt = DateTimeOffset.MinValue;
     private int activeEntryIndex;
-    private int activeEntryCompletedQuantity;
+    private int[] completedQuantities = [];
+    private bool[] skippedEntries = [];
+    private readonly Func<WorkshopAssemblyOrder> getAssemblyOrder;
+    private WorkshopAssemblyOrder activeOrder;
+    private int ActiveEntryCompletedQuantity => activeEntryIndex < completedQuantities.Length
+        ? completedQuantities[activeEntryIndex] : 0;
     private uint? activeMaterialItemId;
     private uint? pendingProgressMaterialItemId;
     private uint? pendingProgressStepsComplete;
@@ -55,7 +60,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         IWorkshopAssemblyUiAutomation uiAutomation,
         string diagnosticsDirectory,
         Action<WorkshopAssemblyQueueEntry>? onProjectRetrieved = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        Func<WorkshopAssemblyOrder>? getAssemblyOrder = null)
     {
         this.framework = framework;
         this.log = log;
@@ -63,6 +69,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         this.diagnosticsDirectory = diagnosticsDirectory;
         this.onProjectRetrieved = onProjectRetrieved ?? (_ => { });
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.getAssemblyOrder = getAssemblyOrder ?? (() => WorkshopAssemblyOrder.Sequential);
         Progress = BuildProgress(WorkshopAssemblyRunnerState.Idle, "Workshop assembly has not run.");
     }
 
@@ -124,7 +131,9 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         LastDiagnosticFilePath = diagnostics.FilePath;
         activePlan = plan;
         activeEntryIndex = 0;
-        activeEntryCompletedQuantity = 0;
+        completedQuantities = new int[plan.Entries.Count];
+        skippedEntries = new bool[plan.Entries.Count];
+        activeOrder = inspect ? WorkshopAssemblyOrder.Sequential : getAssemblyOrder();
         activeMaterialItemId = null;
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
@@ -152,6 +161,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             new Dictionary<string, string?>
             {
                 ["entryCount"] = plan.Entries.Count.ToString(),
+                ["order"] = activeOrder.ToString(),
                 ["totalProjects"] = plan.Entries.Sum(x => x.Quantity).ToString(),
                 ["totalMaterialRows"] = plan.TotalMaterials.Count.ToString(),
             });
@@ -319,9 +329,15 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     private void TickPreparingMaterials()
     {
-        var remaining = activePlan!.Entries.Skip(activeEntryIndex).ToArray();
-        if (remaining.Length != 0)
-            remaining[0] = remaining[0] with { Quantity = remaining[0].Quantity - activeEntryCompletedQuantity };
+        // Preparation reconciles live progress against entries[0], so keep the
+        // in-flight row first even when unfinished rows precede it in the plan.
+        var remaining = Enumerable.Range(0, activePlan!.Entries.Count)
+            .Where(IsEntryPending)
+            .OrderBy(index => index == activeEntryIndex ? 0 : 1)
+            .Select(index => activePlan.Entries[index] with
+            {
+                Quantity = activePlan.Entries[index].Quantity - completedQuantities[index],
+            }).ToArray();
         var result = uiAutomation.TryPrepareMaterials(remaining);
         if (result.MaterialBlocker == WorkshopMaterialBlocker.InventoryUnknown)
         {
@@ -672,18 +688,15 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         uiAutomation.NotePreparationProgress();
         onProjectRetrieved(entry);
         actionGuard.NoteProgress();
-        activeEntryCompletedQuantity++;
+        completedQuantities[activeEntryIndex]++;
         stalledMaterialRequestRecoveryCount = 0;
         activeMaterialItemId = null;
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
         pendingProgressPhase = null;
         progressReopenAttempts = 0;
-        if (activeEntryCompletedQuantity >= entry.Quantity)
-        {
-            activeEntryIndex++;
-            activeEntryCompletedQuantity = 0;
-        }
+        diagnostics.Record("project-complete", message, BuildActiveDetails(entry));
+        PickNextEntry();
 
         if (activePlan != null && activeEntryIndex >= activePlan.Entries.Count)
         {
@@ -691,10 +704,6 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return;
         }
 
-        diagnostics.Record(
-            "project-complete",
-            message,
-            BuildActiveDetails(entry));
         SetState(WorkshopAssemblyRunnerState.PreparingMaterials, "Preparing assembly materials...");
     }
 
@@ -702,7 +711,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     // unlocked) is left out and the rest of the plan carries on.
     private void SkipActiveEntry(WorkshopAssemblyQueueEntry entry, string message)
     {
-        var remaining = Math.Max(0, entry.Quantity - activeEntryCompletedQuantity);
+        var remaining = Math.Max(0, entry.Quantity - ActiveEntryCompletedQuantity);
         skippedProjects.Add(remaining == 1 ? entry.ProjectName : $"{entry.ProjectName} x{remaining}");
         skippedQuantity += remaining;
         pendingProgressMaterialItemId = null;
@@ -712,8 +721,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         diagnostics.Record("project-skipped", message, BuildActiveDetails(entry));
         log.Warning("[MarketMafioso] {Message}", message);
         actionGuard.NoteProgress();
-        activeEntryIndex++;
-        activeEntryCompletedQuantity = 0;
+        skippedEntries[activeEntryIndex] = true;
+        PickNextEntry();
         activeMaterialItemId = null;
         stalledMaterialRequestRecoveryCount = 0;
         if (activePlan != null && activeEntryIndex >= activePlan.Entries.Count)
@@ -781,7 +790,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return "Workshop assembly complete.";
 
         var skipped = string.Join(", ", skippedProjects);
-        var assembled = (activePlan?.Entries.Sum(x => x.Quantity) ?? 0) - skippedQuantity;
+        var assembled = completedQuantities.Sum();
         return assembled <= 0
             ? $"Nothing was assembled: the Free Company can't craft any queued project yet (usually a schematic it hasn't unlocked). Skipped: {skipped}."
             : $"Workshop assembly complete. Skipped {skippedProjects.Count} project(s) the Free Company can't craft yet (usually a schematic it hasn't unlocked): {skipped}.";
@@ -920,7 +929,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                     ["previousState"] = Progress.State.ToString(),
                     ["message"] = message,
                     ["activeProjectIndex"] = activeEntryIndex.ToString(),
-                    ["activeCompletedQuantity"] = activeEntryCompletedQuantity.ToString(),
+                    ["activeCompletedQuantity"] = ActiveEntryCompletedQuantity.ToString(),
+                    ["order"] = activeOrder.ToString(),
                     ["activeMaterialItemId"] = activeMaterialItemId?.ToString(),
                 });
         }
@@ -957,7 +967,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             ["workshopItemId"] = entry.WorkshopItemId.ToString(),
             ["resultItemId"] = entry.ResultItemId.ToString(),
             ["activeEntryIndex"] = activeEntryIndex.ToString(),
-            ["activeEntryCompletedQuantity"] = activeEntryCompletedQuantity.ToString(),
+            ["activeEntryCompletedQuantity"] = ActiveEntryCompletedQuantity.ToString(),
+            ["order"] = activeOrder.ToString(),
             ["entryQuantity"] = entry.Quantity.ToString(),
             ["activeMaterialItemId"] = activeMaterialItemId?.ToString(),
         };
@@ -973,9 +984,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private WorkshopAssemblyProgress BuildProgress(WorkshopAssemblyRunnerState state, string message)
     {
         var entry = activePlan?.Entries.ElementAtOrDefault(activeEntryIndex);
-        var completedProjects = activePlan == null
-            ? 0
-            : activePlan.Entries.Take(activeEntryIndex).Sum(x => x.Quantity) - skippedQuantity + activeEntryCompletedQuantity;
+        var completedProjects = completedQuantities.Sum();
         var totalProjects = (activePlan?.Entries.Sum(x => x.Quantity) ?? 0) - skippedQuantity;
 
         return new WorkshopAssemblyProgress(
@@ -990,6 +999,26 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     }
 
     private DateTimeOffset Now => timeProvider.GetLocalNow();
+
+    private bool IsEntryPending(int index) => !skippedEntries[index] &&
+        completedQuantities[index] < activePlan!.Entries[index].Quantity;
+
+    private void PickNextEntry()
+    {
+        // Sample only after retrieval or a whole-row skip, never mid-project.
+        activeOrder = getAssemblyOrder();
+        var count = activePlan!.Entries.Count;
+        var start = activeOrder == WorkshopAssemblyOrder.RoundRobin ? activeEntryIndex + 1 : 0;
+        for (var offset = 0; offset < count; offset++)
+        {
+            var index = (start + offset) % count;
+            if (!IsEntryPending(index)) continue;
+            activeEntryIndex = index;
+            return;
+        }
+
+        activeEntryIndex = count;
+    }
 
     public void Dispose()
     {

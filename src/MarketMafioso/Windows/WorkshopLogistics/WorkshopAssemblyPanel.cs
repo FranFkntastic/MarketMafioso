@@ -14,6 +14,8 @@ internal sealed class WorkshopAssemblyPanel
     private readonly Action<string> setWorkshopStatus;
     private readonly Action<bool> startWorkshopAssembly;
     private readonly Action inspectCraftingLog;
+    private readonly Func<WorkshopAssemblyOrder> getAssemblyOrder;
+    private readonly Action<WorkshopAssemblyOrder> setAssemblyOrder;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public WorkshopAssemblyPanel(
@@ -22,6 +24,8 @@ internal sealed class WorkshopAssemblyPanel
         Action<string> setWorkshopStatus,
         Action<bool> startWorkshopAssembly,
         Action inspectCraftingLog,
+        Func<WorkshopAssemblyOrder> getAssemblyOrder,
+        Action<WorkshopAssemblyOrder> setAssemblyOrder,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.workshopAssemblyRunner = workshopAssemblyRunner ?? throw new ArgumentNullException(nameof(workshopAssemblyRunner));
@@ -29,6 +33,8 @@ internal sealed class WorkshopAssemblyPanel
         this.setWorkshopStatus = setWorkshopStatus ?? throw new ArgumentNullException(nameof(setWorkshopStatus));
         this.startWorkshopAssembly = startWorkshopAssembly ?? throw new ArgumentNullException(nameof(startWorkshopAssembly));
         this.inspectCraftingLog = inspectCraftingLog ?? throw new ArgumentNullException(nameof(inspectCraftingLog));
+        this.getAssemblyOrder = getAssemblyOrder ?? throw new ArgumentNullException(nameof(getAssemblyOrder));
+        this.setAssemblyOrder = setAssemblyOrder ?? throw new ArgumentNullException(nameof(setAssemblyOrder));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
@@ -118,8 +124,10 @@ internal sealed class WorkshopAssemblyPanel
         if (workshopAssemblyRunner.HasActiveRun)
             ImGui.SameLine();
 
-        if (ImGuiUi.MenuButton("Start Options", !workshopAssemblyRunner.HasActiveRun && hasPrepQueue))
+        if (ImGuiUi.MenuButton("Start Options"))
             ImGui.OpenPopup("WorkshopAssemblyStartMenu");
+        RegisterOrderAction("Top to bottom", "sequential", WorkshopAssemblyOrder.Sequential);
+        RegisterOrderAction("Round robin", "round-robin", WorkshopAssemblyOrder.RoundRobin);
         RegisterAction(
             "workshop-logistics.assembly.start-diagnostics",
             "Start Workshop assembly with diagnostics",
@@ -135,17 +143,37 @@ internal sealed class WorkshopAssemblyPanel
 
         if (ImGui.BeginPopup("WorkshopAssemblyStartMenu"))
         {
-            if (ImGuiUi.MenuItem("Start Assembly", hasPrepQueue))
+            if (ImGuiUi.MenuItem("Start Assembly", !workshopAssemblyRunner.HasActiveRun && hasPrepQueue))
                 startWorkshopAssembly(false);
 
-            if (ImGuiUi.MenuItem("Start With Diagnostics", hasPrepQueue))
+            if (ImGuiUi.MenuItem("Start With Diagnostics", !workshopAssemblyRunner.HasActiveRun && hasPrepQueue))
                 startWorkshopAssembly(true);
 
-            if (ImGuiUi.MenuItem("Inspect Crafting Log", true))
+            if (ImGuiUi.MenuItem("Inspect Crafting Log", !workshopAssemblyRunner.HasActiveRun))
                 inspectCraftingLog();
+
+            ImGui.Separator();
+            DrawOrderItem("Top to bottom", WorkshopAssemblyOrder.Sequential);
+            DrawOrderItem("Round robin", WorkshopAssemblyOrder.RoundRobin);
 
             ImGui.EndPopup();
         }
+    }
+
+    private void DrawOrderItem(string label, WorkshopAssemblyOrder order)
+    {
+        if (ImGuiUi.MenuItem(label, true, getAssemblyOrder() == order))
+            setAssemblyOrder(order);
+    }
+
+    private void RegisterOrderAction(string label, string id, WorkshopAssemblyOrder order)
+    {
+        RegisterAction(
+            $"workshop-logistics.assembly.order.{id}",
+            label,
+            true,
+            (getAssemblyOrder() == order).ToString(),
+            () => setAssemblyOrder(order));
     }
 
     private void RegisterAction(
