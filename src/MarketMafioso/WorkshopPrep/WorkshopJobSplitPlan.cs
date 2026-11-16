@@ -115,6 +115,38 @@ public sealed class WorkshopJobSplitPlan
             Set(row, column, quantity);
     }
 
+    /// <summary>
+    /// Moves up to <paramref name="quantity"/> units per row into the target from the other assemblers,
+    /// largest holder first, so each row's allotted total is unchanged. Returns the units moved.
+    /// </summary>
+    public int MoveFromOthers(IEnumerable<int> rows, int column, int quantity)
+    {
+        var moved = 0;
+        foreach (var row in rows)
+        {
+            var wanted = Math.Min(Math.Max(0, quantity), MaxCellQuantity - cells[row][column]);
+            while (wanted > 0)
+            {
+                var donor = -1;
+                for (var index = 0; index < columns.Count; index++)
+                {
+                    if (index != column && cells[row][index] > 0 && (donor < 0 || cells[row][index] > cells[row][donor]))
+                        donor = index;
+                }
+
+                if (donor < 0)
+                    break;
+                var take = Math.Min(wanted, cells[row][donor]);
+                cells[row][donor] -= take;
+                cells[row][column] += take;
+                wanted -= take;
+                moved += take;
+            }
+        }
+
+        return moved;
+    }
+
     /// <summary>The target gets each row's plan quantity; every other assembler is zeroed.</summary>
     public void AssignAll(IEnumerable<int> rows, int column)
     {

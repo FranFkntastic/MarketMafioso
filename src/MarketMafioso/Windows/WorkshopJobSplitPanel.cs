@@ -508,6 +508,28 @@ internal sealed class WorkshopJobSplitPanel
             });
 
         ImGui.SameLine();
+        if (ImGuiUi.Button("Move from others", hasSelection && bulkQuantity > 0))
+            plan.MoveFromOthers(SelectedRows(), targetColumn, bulkQuantity);
+        RegisterLastAction(
+            $"{SurfaceId}.move-from-others",
+            "Move the quantity on each selected row into the target assembler from the other assemblers",
+            hasSelection && bulkQuantity > 0,
+            $"selected={selection.Count:N0}; target={target.Key}; quantity={bulkQuantity:N0}",
+            QuantitySchema,
+            arguments =>
+            {
+                var quantity = arguments!.Value.GetProperty("quantity").GetInt32();
+                if (!TrySelected(out var failure))
+                    return failure;
+                var moved = plan.MoveFromOthers(SelectedRows(), targetColumn, quantity);
+                return moved > 0
+                    ? AgentBridgeUiActionResult.Ok(
+                        $"Moved {moved:N0} unit(s) to {plan.Columns[targetColumn].Assembler.Key} across {selection.Count:N0} row(s).")
+                    : AgentBridgeUiActionResult.Fail(
+                        $"Nothing moved: the other assemblers hold no units on the selected rows (requested {quantity:N0} per row).");
+            });
+
+        ImGui.SameLine();
         if (ImGuiUi.PrimaryButton("Assign all", hasSelection))
             plan.AssignAll(SelectedRows(), targetColumn);
         RegisterLastAction(
@@ -632,7 +654,7 @@ internal sealed class WorkshopJobSplitPanel
     private static float SelectionActionWidth(bool includeSplitEvenly)
     {
         var style = ImGui.GetStyle();
-        var labels = new List<string> { "Select visible", "Set quantity", "Assign all", "Unassign", "Clear row selection" };
+        var labels = new List<string> { "Select visible", "Set quantity", "Move from others", "Assign all", "Unassign", "Clear row selection" };
         if (includeSplitEvenly)
             labels.Add("Split evenly");
         return TargetComboWidth + BulkQuantityWidth +
