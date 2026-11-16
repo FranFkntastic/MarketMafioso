@@ -1,11 +1,9 @@
-using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
-using Franthropy.Dalamud.Automation.Vendors;
 using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.MarketAcquisition;
@@ -17,8 +15,6 @@ namespace MarketMafioso.Windows.WorkshopLogistics;
 
 internal sealed class WorkshopMaterialPanel
 {
-    private static readonly AgentBridgeActionArgumentSchema QuantityArguments = new(
-        [new("quantity", AgentBridgeActionArgumentKind.Integer, Minimum: 0)]);
     private readonly Configuration config;
     private readonly QuartermasterIpcClient quartermaster;
     private readonly WorkshopVendorProcurementPlanner planner;
@@ -29,6 +25,7 @@ internal sealed class WorkshopMaterialPanel
     private readonly Func<WorkshopMaterialProcurement, string> stageMarketAcquisition;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly DalamudTableProjection<MaterialTableRow> materialTable;
+    private readonly WorkshopAcquisitionCell acquisitionCell;
     private bool shortagesOnly;
     private string? actionStatus;
 
@@ -54,6 +51,17 @@ internal sealed class WorkshopMaterialPanel
         this.stageMarketAcquisition = stageMarketAcquisition ??
                                       throw new ArgumentNullException(nameof(stageMarketAcquisition));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
+        acquisitionCell = new WorkshopAcquisitionCell(
+            config,
+            runner,
+            getOwnerScope,
+            canStageMarketAcquisition,
+            stageMarketAcquisition,
+            reviewRegistry,
+            "workshop-logistics",
+            "workshop-material",
+            (itemId, buy) => StartSingleLineRestock(itemId, buy),
+            status => actionStatus = status);
         materialTable = CreateMaterialTable();
     }
 
@@ -151,6 +159,7 @@ internal sealed class WorkshopMaterialPanel
             .Select(line => new MaterialTableRow(
                 line,
                 active is not null &&
+                active.DemandShareJobId is null &&
                 string.Equals(active.QueueSignature, queueSignature, StringComparison.Ordinal)
                     ? active.Lines.FirstOrDefault(item => item.ItemId == line.Availability.ItemId)
                     : null))
@@ -213,8 +222,8 @@ internal sealed class WorkshopMaterialPanel
                 row => BuildAcquisitionFilterText(row.Line, row.ActiveLine),
                 row => BuildAcquisitionFilterText(row.Line, row.ActiveLine),
                 ImGuiTableColumnFlags.WidthStretch,
-                Draw: DrawAcquisitionCell,
-                DrawContextMenu: DrawAcquisitionContextMenu),
+                Draw: row => acquisitionCell.Draw(row.Line, row.ActiveLine),
+                DrawContextMenu: row => acquisitionCell.DrawContextMenu(row.Line, row.ActiveLine)),
         ]);
 
     internal static WorkshopMaterialStockState ResolveStockState(WorkshopMaterialProcurement line)
@@ -265,7 +274,7 @@ internal sealed class WorkshopMaterialPanel
         if (ResolveStockState(line) == WorkshopMaterialStockState.Ready)
             return string.Empty;
         if (activeLine is not null)
-            return RunStatusForLine(activeLine, null);
+            return WorkshopAcquisitionCell.RunStatusForLine(activeLine, null);
 
         var parts = new List<string>();
         if (line.Availability.RetrievalNotice is { } notice)
@@ -342,121 +351,6 @@ internal sealed class WorkshopMaterialPanel
         return new(color.X, color.Y, color.Z, alpha);
     }
 
-    private void DrawAcquisitionCell(MaterialTableRow row) =>
-        DrawAcquisition(row);
-
-    private void DrawAcquisition(
-        MaterialTableRow row)
-    {
-        var line = row.Line;
-        var activeLine = row.ActiveLine;
-        if (ResolveStockState(line) == WorkshopMaterialStockState.Ready)
-        {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
-            return;
-        }
-
-        if (activeLine is not null)
-        {
-            var status = RunStatusForLine(activeLine, runner.ActiveRun);
-            ImGui.TextColored(LineStatusColor(status), status);
-            return;
-        }
-
-        if (line.Availability.RetrievalNotice is { } notice)
-            ImGui.TextColored(MarketMafiosoUiTheme.Warning, notice);
-        if (line.RetainerPlannedQuantity > 0)
-        {
-            ImGui.TextColored(
-                MarketMafiosoUiTheme.Warning,
-                $"Retrieve {line.RetainerPlannedQuantity:N0} from retainers");
-            if (line.VendorNeed <= 0)
-            {
-                DrawAcquisitionActionButton(row);
-                return;
-            }
-        }
-
-        var candidate = line.SelectedCandidate ?? line.Candidates.FirstOrDefault();
-        if (candidate is null)
-        {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Craft / gather / market");
-            DrawAcquisitionActionButton(row);
-            return;
-        }
-
-        ImGui.TextUnformatted($"{candidate.Offer.NpcName} · {candidate.Offer.UnitPriceGil:N0} gil each");
-        DrawAcquisitionActionButton(row);
-        if (!line.CanBuyAutomatically)
-        {
-            DrawAccessState(candidate);
-            return;
-        }
-
-        DrawVendorControls(line);
-    }
-
-    private void DrawAcquisitionActionButton(MaterialTableRow row)
-    {
-        if (!HasAcquisitionActions(row))
-            return;
-        ImGui.SameLine();
-        if (ImGui.SmallButton($"Actions...##workshop-material-actions-{row.Line.Availability.ItemId}"))
-            ImGui.OpenPopup($"WorkshopMaterialActions{row.Line.Availability.ItemId}");
-        if (!ImGui.BeginPopup($"WorkshopMaterialActions{row.Line.Availability.ItemId}"))
-            return;
-        DrawAcquisitionContextMenu(row);
-        ImGui.EndPopup();
-    }
-
-    private bool HasAcquisitionActions(MaterialTableRow row) =>
-        row.ActiveLine is null &&
-        ResolveStockState(row.Line) != WorkshopMaterialStockState.Ready &&
-        (row.Line.RetainerPlannedQuantity > 0 ||
-         row.Line.SelectedCandidate is not null ||
-         row.Line.Candidates.Count > 0 ||
-         row.Line.VendorNeed > 0);
-
-    private void DrawAcquisitionContextMenu(MaterialTableRow row)
-    {
-        var line = row.Line;
-        if (!HasAcquisitionActions(row))
-        {
-            ImGui.TextDisabled("No acquisition action");
-            return;
-        }
-
-        var runAvailable = !runner.IsRunning &&
-                           runner.ActiveRun?.Phase != WorkshopVendorRestockPhase.Paused &&
-                           getOwnerScope().IsAvailable;
-        if (line.RetainerPlannedQuantity > 0 &&
-            ImGuiUi.MenuItem($"Retrieve {line.RetainerPlannedQuantity:N0} now", runAvailable))
-        {
-            StartSingleLineRestock(line.Availability.ItemId, automaticallyBuyVendorMaterials: false);
-        }
-
-        var candidate = line.SelectedCandidate ?? line.Candidates.FirstOrDefault();
-        if (candidate is not null && line.VendorNeed > 0)
-        {
-            if (line.Selected &&
-                line.ApprovedVendorQuantity > 0 &&
-                ImGuiUi.MenuItem(
-                    $"Buy {line.ApprovedVendorQuantity:N0} now",
-                    runAvailable && line.CanBuyAutomatically))
-            {
-                StartSingleLineRestock(line.Availability.ItemId, automaticallyBuyVendorMaterials: true);
-            }
-        }
-
-        if (line.VendorNeed > 0 &&
-            ImGuiUi.MenuItem(
-                $"Add {line.VendorNeed:N0} to Market Acquisition",
-                canStageMarketAcquisition()))
-        {
-            actionStatus = stageMarketAcquisition(line);
-        }
-    }
-
     private void StartSingleLineRestock(
         uint itemId,
         bool automaticallyBuyVendorMaterials)
@@ -484,88 +378,6 @@ internal sealed class WorkshopMaterialPanel
             : $"Retrieving {line.RetainerPlannedQuantity:N0} {line.Availability.ItemName}.";
     }
 
-    private void DrawVendorControls(WorkshopMaterialProcurement line)
-    {
-        var selected = line.Selected;
-        var selectionEnabled = !runner.IsRunning &&
-                               runner.ActiveRun?.Phase != WorkshopVendorRestockPhase.Paused;
-        ImGui.BeginDisabled(!selectionEnabled);
-        if (ImGui.Checkbox($"Buy##selected-{line.Availability.ItemId}", ref selected))
-            SetSelected(line.Availability.ItemId, selected);
-        ImGui.EndDisabled();
-        reviewRegistry.Register(
-            $"workshop-logistics.vendor-item.{line.Availability.ItemId}.selected",
-            $"Include {line.Availability.ItemName} in vendor restock",
-            AgentBridgeUiControlKind.Toggle,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
-            selectionEnabled,
-            selected,
-            selected ? "Included" : "Excluded",
-            () => SetSelected(line.Availability.ItemId, !line.Selected));
-
-        ImGui.SameLine();
-        var quantity = line.ApprovedVendorQuantity;
-        var quantityEnabled = selectionEnabled && selected;
-        ImGui.BeginDisabled(!quantityEnabled);
-        ImGui.SetNextItemWidth(78f);
-        if (DalamudGroupedIntegerInput.InputGroupedInt($"##quantity-{line.Availability.ItemId}", ref quantity, 0, 0))
-        {
-            quantity = Math.Clamp(quantity, 0, line.VendorNeed);
-            SetQuantity(line.Availability.ItemId, quantity, line.VendorNeed);
-        }
-        ImGui.EndDisabled();
-        reviewRegistry.Register(
-            $"workshop-logistics.vendor-item.{line.Availability.ItemId}.quantity",
-            $"Set {line.Availability.ItemName} vendor quantity",
-            AgentBridgeUiControlKind.Input,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
-            quantityEnabled,
-            false,
-            line.ApprovedVendorQuantity.ToString(),
-            QuantityArguments with
-            {
-                Properties =
-                [
-                    new(
-                        "quantity",
-                        AgentBridgeActionArgumentKind.Integer,
-                        Minimum: 0,
-                        Maximum: line.VendorNeed),
-                ],
-            },
-            arguments =>
-            {
-                var requested = arguments!.Value.GetProperty("quantity").GetInt32();
-                SetQuantity(line.Availability.ItemId, requested, line.VendorNeed);
-                return AgentBridgeUiActionResult.Ok(
-                    $"{line.Availability.ItemName} vendor quantity set to {requested:N0}.");
-            });
-
-        ImGui.SameLine();
-        var displayQuantity = Math.Clamp(quantity, 0, line.VendorNeed);
-        var approvedGil = checked((ulong)displayQuantity * line.SelectedCandidate!.Offer.UnitPriceGil);
-        ImGui.TextColored(
-            line.IsCraftable ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
-            line.IsCraftable
-                ? $"{approvedGil:N0} gil · Craftable {(selected ? "override" : "— review price")}"
-                : $"{approvedGil:N0} gil");
-    }
-
-    private static void DrawAccessState(WorkshopVendorCandidate candidate)
-    {
-        ImGui.TextColored(
-            candidate.Access.IsEligible ? MarketMafiosoUiTheme.Muted : MarketMafiosoUiTheme.Warning,
-            candidate.Access.State switch
-            {
-                GilVendorAccessState.Verified => "Access verified",
-                GilVendorAccessState.Probeable => "Route available",
-                GilVendorAccessState.Unavailable => "No accessible route",
-                _ => "Access unknown",
-            });
-    }
-
     private void DrawHeaderActions(WorkshopVendorRestockReview review)
     {
         var active = runner.ActiveRun;
@@ -591,7 +403,7 @@ internal sealed class WorkshopMaterialPanel
         if (active?.Phase == WorkshopVendorRestockPhase.Paused)
         {
             if (ImGuiUi.PrimaryButton("Resume", true) &&
-                !runner.Resume(getOwnerScope(), review.QueueSignature, out var resumeError))
+                !runner.Resume(getOwnerScope(), runner.ResolveDemandSignature(() => review.QueueSignature), out var resumeError))
             {
                 actionStatus = resumeError;
             }
@@ -606,7 +418,7 @@ internal sealed class WorkshopMaterialPanel
                 active.Message,
                 () =>
                 {
-                    if (!runner.Resume(getOwnerScope(), review.QueueSignature, out var error))
+                    if (!runner.Resume(getOwnerScope(), runner.ResolveDemandSignature(() => review.QueueSignature), out var error))
                         throw new InvalidOperationException(error);
                 });
             ImGui.SameLine();
@@ -665,23 +477,6 @@ internal sealed class WorkshopMaterialPanel
             () => invoke());
     }
 
-    private void SetSelected(uint itemId, bool selected)
-    {
-        config.WorkshopVendorExcludedItems.RemoveAll(candidate => candidate == itemId);
-        config.WorkshopVendorIncludedItems.RemoveAll(candidate => candidate == itemId);
-        if (selected)
-            config.WorkshopVendorIncludedItems.Add(itemId);
-        else
-            config.WorkshopVendorExcludedItems.Add(itemId);
-        config.Save();
-    }
-
-    private void SetQuantity(uint itemId, int quantity, int maximum)
-    {
-        config.WorkshopVendorApprovedQuantities[itemId] = Math.Clamp(quantity, 0, maximum);
-        config.Save();
-    }
-
     internal static string BuildActionLabel(WorkshopVendorRestockReview review, bool automatic)
     {
         if (review.RetainerUnits > 0 && automatic && review.VendorUnits > 0)
@@ -713,14 +508,6 @@ internal sealed class WorkshopMaterialPanel
             ? "Retainer retrieval is temporarily unavailable. Vendor restock can still continue."
             : quartermaster.LastStatus;
 
-    private static string RunStatusForLine(
-        WorkshopVendorRestockLineView line,
-        WorkshopVendorRestockRunView? run) =>
-        run?.Phase == WorkshopVendorRestockPhase.Failed &&
-        line.Status.Equals("Waiting", StringComparison.OrdinalIgnoreCase)
-            ? "Not bought"
-            : line.Status;
-
     private System.Numerics.Vector4 GetQuartermasterStatusColor() =>
         quartermaster.LastStatus.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
         quartermaster.LastStatus.Contains("not loaded", StringComparison.OrdinalIgnoreCase) ||
@@ -738,16 +525,6 @@ internal sealed class WorkshopMaterialPanel
             WorkshopVendorRestockPhase.Paused => MarketMafiosoUiTheme.Warning,
             _ => MarketMafiosoUiTheme.Muted,
         };
-
-    private static System.Numerics.Vector4 LineStatusColor(string status) =>
-        status.Contains("Verified", StringComparison.OrdinalIgnoreCase) ||
-        status.Equals("Ready", StringComparison.OrdinalIgnoreCase)
-            ? MarketMafiosoUiTheme.Success
-            : status.Contains("Remaining", StringComparison.OrdinalIgnoreCase) ||
-              status.Contains("Ceiling", StringComparison.OrdinalIgnoreCase) ||
-              status.Contains("No accessible vendor", StringComparison.OrdinalIgnoreCase)
-                ? MarketMafiosoUiTheme.Warning
-                : MarketMafiosoUiTheme.Muted;
 
     private sealed record MaterialTableRow(
         WorkshopMaterialProcurement Line,

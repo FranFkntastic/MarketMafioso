@@ -121,11 +121,24 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// The signature the active run must be ticked and resumed against. A share run's demand is
+    /// frozen, so it never follows the prep queue; prep-queue runs use <paramref name="prepQueueSignature"/>.
+    /// </summary>
+    public string ResolveDemandSignature(Func<string> prepQueueSignature)
+    {
+        ArgumentNullException.ThrowIfNull(prepQueueSignature);
+        return config.ActiveWorkshopVendorRestockState?.FrozenRequirements is { } frozen
+            ? WorkshopShareRestockDemand.Signature(frozen)
+            : prepQueueSignature();
+    }
+
     public bool TryStart(
         WorkshopVendorRestockReview review,
         QuartermasterOwnerScope owner,
         bool automaticallyBuyVendorMaterials,
-        out string error)
+        out string error,
+        WorkshopRestockDemandSource? demand = null)
     {
         ArgumentNullException.ThrowIfNull(review);
         ArgumentNullException.ThrowIfNull(owner);
@@ -136,7 +149,20 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         }
         if (IsRunning || ActiveRun?.Phase == WorkshopVendorRestockPhase.Paused)
         {
-            error = "A workshop restock run is already active.";
+            var active = config.ActiveWorkshopVendorRestockState?.DemandShareName;
+            error = active is null
+                ? "A workshop restock run is already active."
+                : $"A workshop restock run for {active} is already active.";
+            return false;
+        }
+        if (demand is not null &&
+            WorkshopShareRestockDemand.Signature(demand.FrozenRequirements) is var frozenSignature &&
+            !string.Equals(frozenSignature, review.QueueSignature, StringComparison.Ordinal))
+        {
+            // Tick would pause this run on its first frame; refuse instead of starting a run that cannot advance.
+            error = $"Restock for {demand.ShareName} was not started: its reviewed demand ({review.Materials.Count:N0} line(s)) " +
+                    $"does not match the frozen demand ({demand.FrozenRequirements.Count:N0} line(s)).";
+            diagnosticLog?.Invoke($"[MarketMafioso] Share restock refused: review signature {review.QueueSignature} != frozen signature {frozenSignature} for share {demand.ShareJobId}.");
             return false;
         }
         if (!owner.IsAvailable || string.IsNullOrWhiteSpace(owner.CharacterName))
@@ -185,11 +211,20 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             HomeWorldId = owner.HomeWorldId!.Value,
             CharacterName = owner.CharacterName!,
             QueueSignature = review.QueueSignature,
+            DemandShareJobId = demand?.ShareJobId,
+            DemandShareName = demand?.ShareName,
+            FrozenRequirements = demand?.FrozenRequirements.Select(line => new WorkshopRestockDemandLine
+            {
+                ItemId = line.ItemId,
+                ItemName = line.ItemName,
+                IconId = line.IconId,
+                Quantity = line.Quantity,
+            }).ToList(),
             AutomaticallyBuyVendorMaterials = automaticallyBuyVendorMaterials,
             Phase = selected.Any(line => line.RetainerPlannedQuantity > 0)
                 ? WorkshopVendorRestockPhase.RetrieveFromQuartermaster
                 : WorkshopVendorRestockPhase.RefreshInventory,
-            Message = "Workshop restock started.",
+            Message = demand is null ? "Workshop restock started." : $"Workshop restock for {demand.ShareName} started.",
             StartedAtUtc = now,
             UpdatedAtUtc = now,
             Lines = selected.Select(line => new WorkshopVendorRestockPolicyLine
@@ -555,6 +590,8 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         {
             RunId = engine?.RunId ?? $"workshop-{state.StartedAtUtc.Ticks.ToString(CultureInfo.InvariantCulture)}",
             QueueSignature = state.QueueSignature,
+            DemandShareJobId = state.DemandShareJobId,
+            DemandShareName = state.DemandShareName,
             AutomaticallyBuyVendorMaterials = state.AutomaticallyBuyVendorMaterials,
             Phase = engine is null ? state.Phase : ToWorkshopPhase(engine.Phase),
             Message = NormalizeMessage(engine?.Message ?? state.Message) +
