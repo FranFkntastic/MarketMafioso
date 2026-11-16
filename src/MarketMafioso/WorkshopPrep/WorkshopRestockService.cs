@@ -115,10 +115,8 @@ public sealed class WorkshopRestockService : IDisposable
             nextPolicyAt = now.AddSeconds(1);
             var owner = GetOwner();
             if (config.ActiveWorkshopVendorBuyRun is not null) Access.RefreshAttunedAetherytes();
-            var requirements = catalog.BuildRequirements(config.WorkshopPrepQueue);
-            var availability = WorkshopMaterialAvailabilityService.BuildAvailabilityFromRetainers(
-                requirements, new Dictionary<uint, int>(), []);
-            Runner.Tick(WorkshopVendorProcurementPlanner.BuildQueueSignature(availability), owner);
+            // Share runs tick against their frozen demand, so editing or loading the prep queue never pauses them.
+            Runner.Tick(Runner.ResolveDemandSignature(PrepQueueSignature), owner);
         }
         catch (Exception ex)
         {
@@ -130,6 +128,11 @@ public sealed class WorkshopRestockService : IDisposable
             persistence.Flush();
         }
     }
+
+    private string PrepQueueSignature() =>
+        WorkshopVendorProcurementPlanner.BuildQueueSignature(
+            WorkshopMaterialAvailabilityService.BuildAvailabilityFromRetainers(
+                catalog.BuildRequirements(config.WorkshopPrepQueue), new Dictionary<uint, int>(), []));
 
     internal static bool TickRequestReconciliation(WorkshopQuartermasterRequestService requests,
         Func<QuartermasterOwnerScope> getOwner)

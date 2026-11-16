@@ -175,6 +175,21 @@ public sealed class WorkshopVendorRestockState
     public DateTime UpdatedAtUtc { get; set; }
     public List<WorkshopVendorRestockPolicyLine> Lines { get; set; } = [];
     public List<GilVendorBuyStopSnapshot> Stops { get; set; } = [];
+    // Share runs only: the split share this run restocks for and its raw-terms demand, frozen at
+    // start. Null on prep-queue runs (and on every run saved before share restock existed).
+    public Guid? DemandShareJobId { get; set; }
+    public string? DemandShareName { get; set; }
+    public List<WorkshopRestockDemandLine>? FrozenRequirements { get; set; }
+}
+
+/// <summary>One frozen raw-terms demand line: Quantity is the total bag target (owed + kept for the active plan).</summary>
+[Serializable]
+public sealed class WorkshopRestockDemandLine
+{
+    public uint ItemId { get; set; }
+    public string ItemName { get; set; } = string.Empty;
+    public ushort IconId { get; set; }
+    public int Quantity { get; set; }
 }
 
 [Serializable]
@@ -196,6 +211,8 @@ public sealed class WorkshopVendorRestockRunView
 {
     public string RunId { get; init; } = string.Empty;
     public string QueueSignature { get; init; } = string.Empty;
+    public Guid? DemandShareJobId { get; init; }
+    public string? DemandShareName { get; init; }
     public bool AutomaticallyBuyVendorMaterials { get; init; }
     public WorkshopVendorRestockPhase Phase { get; init; }
     public string Message { get; init; } = string.Empty;
@@ -246,6 +263,10 @@ public static class WorkshopVendorRestockPresentation
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(review);
+        if (run.DemandShareName is { } share)
+            return IsActive(run)
+                ? $"Restocking for {share} · {run.Message}"
+                : $"Restock for {share} · {run.Message}";
         if (run.Phase == WorkshopVendorRestockPhase.Completed)
         {
             var remainingLines = review.Materials.Count(line => line.Availability.Shortage > 0);
@@ -255,4 +276,10 @@ public static class WorkshopVendorRestockPresentation
         }
         return run.Message;
     }
+
+    /// <summary>Running or paused: the run still owns the restock slot.</summary>
+    public static bool IsActive(WorkshopVendorRestockRunView run) => run.Phase is not (
+        WorkshopVendorRestockPhase.Completed or WorkshopVendorRestockPhase.Stopped or
+        WorkshopVendorRestockPhase.Failed or WorkshopVendorRestockPhase.Indeterminate or
+        WorkshopVendorRestockPhase.Idle);
 }

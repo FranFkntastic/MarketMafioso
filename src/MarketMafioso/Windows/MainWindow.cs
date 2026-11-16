@@ -451,7 +451,16 @@ public class MainWindow : Window, IDisposable
                 tradeQueuePanel.TryHandOver,
                 () => tradeQueuePanel.BoundShareId,
                 ShowTradeQueue,
-                GetWorkshopAvailability),
+                GetWorkshopAvailability,
+                new WorkshopShareRestockActions(
+                    workshopVendorRestockRunner,
+                    vendorPlanner,
+                    GetCurrentQuartermasterOwnerScope,
+                    scanner.CountWorkshopUsableInventory,
+                    GetWorkshopAvailability,
+                    CanStageWorkshopMarketAcquisition,
+                    StageWorkshopMarketAcquisition,
+                    message => log.Warning(message))),
             AgentReviewRegistry);
         frozenQueueBrowser = FrozenQueueBrowser;
         var acquisitionRequestBuilderCraftAppraisal = CreateAcquisitionRequestBuilderCraftAppraisalController();
@@ -2588,13 +2597,21 @@ public class MainWindow : Window, IDisposable
             : null;
     }
 
-    private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability(IReadOnlyList<WorkshopPrepQueueItem> items)
+    private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability(IReadOnlyList<WorkshopPrepQueueItem> items) =>
+        items.Count == 0 ? [] : GetWorkshopAvailability(workshopCatalog.BuildRequirements(items), null);
+
+    /// <summary>
+    /// Availability for arbitrary requirements against workshop-usable bags (or <paramref name="playerInventory"/>
+    /// when the caller already counted them), plus owner-scoped retainer reports and the Quartermaster snapshot.
+    /// </summary>
+    private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability(
+        IReadOnlyList<WorkshopMaterialRequirement> requirements,
+        IReadOnlyDictionary<uint, int>? playerInventory)
     {
-        if (items.Count == 0)
+        if (requirements.Count == 0)
             return [];
 
-        var requirements = workshopCatalog.BuildRequirements(items);
-        var playerInventory = scanner.CountWorkshopUsableInventory();
+        playerInventory ??= scanner.CountWorkshopUsableInventory();
         var owner = GetCurrentQuartermasterOwnerScope();
         var retainers = new List<MarketMafioso.Contracts.Inventory.RetainerReport>();
         var hasDirectRetainerEvidence = false;

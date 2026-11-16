@@ -1200,7 +1200,19 @@ public sealed record WorkshopFrozenQueueBrowserActions(
     WorkshopHandOverHandler HandOver,
     Func<Guid?> BoundShareId,
     Action ShowTradeQueue,
-    Func<IReadOnlyList<WorkshopPrepQueueItem>, IReadOnlyList<WorkshopMaterialAvailability>> Availability)
+    Func<IReadOnlyList<WorkshopPrepQueueItem>, IReadOnlyList<WorkshopMaterialAvailability>> Availability,
+    WorkshopShareRestockActions ShareRestock)
 {
     public bool CanEditQueue => CanEditQueueProvider();
 }
+
+/// <summary>What the split-share view needs to plan and run a restock for a share.</summary>
+public sealed record WorkshopShareRestockActions(
+    WorkshopVendorRestockRunner Runner,
+    WorkshopVendorProcurementPlanner Planner,
+    Func<MarketMafioso.Quartermaster.QuartermasterOwnerScope> OwnerScope,
+    Func<IReadOnlyDictionary<uint, int>> UsableBags,
+    Func<IReadOnlyList<WorkshopMaterialRequirement>, IReadOnlyDictionary<uint, int>?, IReadOnlyList<WorkshopMaterialAvailability>> Availability,
+    Func<bool> CanStageMarketAcquisition,
+    Func<WorkshopMaterialProcurement, string> StageMarketAcquisition,
+    Action<string> LogWarning);

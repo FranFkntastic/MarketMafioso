@@ -6,6 +6,7 @@ using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.TradeQueue;
 using MarketMafioso.Windows.Main;
+using MarketMafioso.Windows.WorkshopLogistics;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
@@ -20,6 +21,9 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
     private readonly Dictionary<Guid, (string Signature, IReadOnlyList<WorkshopMaterialRequirement> Requirements)> requirementCache = [];
     private IReadOnlyDictionary<uint, int>? tradeableBags;
     private DateTimeOffset tradeableBagsAt;
+    private (string Signature, IReadOnlyList<WorkshopMaterialRequirement> Requirements)? planRequirementCache;
+    private WorkshopAcquisitionCell? shareAcquisitionCell;
+    private (Guid QueueId, ShareRestockPlan Plan)? drawnShareRestock;
 
     private static Vector4 SenderAccent => WorkshopJobSplitPanel.Accent(0);
     private static Vector4 TargetAccent => WorkshopJobSplitPanel.Accent(1);
@@ -31,6 +35,10 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         Frozen,
     }
 
+    /// <param name="Rows">Rows whose InBags is spare: bags less what is kept for the active plan.</param>
+    /// <param name="RawBags">Tradeable bag counts before anything is kept.</param>
+    /// <param name="Reserved">Units kept for the active plan: min(bags, plan need); empty when not kept.</param>
+    /// <param name="Plan">The active plan other than this share, or null.</param>
     private sealed record HandoverView(
         IReadOnlyList<WorkshopHandoverRow> Rows,
         bool CountTheirs,
@@ -38,8 +46,27 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         DateTimeOffset? CapturedAt,
         bool Loading,
         string? HoldingsProblem,
-        bool BagsKnown)
+        bool BagsKnown,
+        IReadOnlyDictionary<uint, int> RawBags,
+        IReadOnlyDictionary<uint, int> Reserved,
+        bool KeepMyPlan,
+        ActivePlan? Plan)
     {
+        public int Kept => Rows.Sum(row => Reserved.GetValueOrDefault(row.ItemId));
+
+        /// <summary>
+        /// The active plan's own shortfall on items this share still owes. A share restock fills it first
+        /// (it targets owed + full plan need), so it explains a Restock count above Short.
+        /// </summary>
+        public IReadOnlyDictionary<uint, int> PlanShort =>
+            KeepMyPlan && Plan is { } plan
+                ? WorkshopShareRestockDemand.PlanClaim(plan.Requirements)
+                    .Where(need => Rows.Any(row => row.ItemId == need.Key && row.Owed(CountTheirs) > 0))
+                    .Select(need => (need.Key, Short: need.Value - RawBags.GetValueOrDefault(need.Key)))
+                    .Where(entry => entry.Short > 0)
+                    .ToDictionary(entry => entry.Key, entry => entry.Short)
+                : new Dictionary<uint, int>();
+
         public int Due => WorkshopHandoverCalculator.HandoverTotal(Rows, CountTheirs);
 
         /// <summary>Handed units counted toward progress: Σ min(handed, due) per item, so surplus never hides a shortfall.</summary>
@@ -83,12 +110,15 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         tracker.RequestHoldings(queue, force: false);
         var view = BuildHandoverView(queue);
         SyncHandoverTotal(queue, view);
+        var restock = BuildShareRestockPlan(queue, view);
+        drawnShareRestock = (queue.Id, restock);
 
         ImGui.Spacing();
         DrawHandoverStrip(queue, view);
         DrawUnverifiedTrade(queue);
         DrawHandoverOptions(queue, view);
-        DrawHandoverTable(view);
+        DrawShareRestockStatus(queue, restock);
+        DrawHandoverTable(queue, view, restock);
 
         if (queue.HandoverReportRefusal is { } refusal)
         {
@@ -116,9 +146,8 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         var inventoryChip = view.CountTheirs ? $"{view.Counted:N0} counted" : "ignored";
         var (inventoryValue, inventoryColor, inventoryTooltip) = DescribeHoldings(view);
 
-        UtilityWorkspaceUi.DrawStatusStrip(
-            "##workshopHandoverStatus",
-            [
+        var facts = new List<UtilityStatusFact>
+        {
                 new(
                     "Assembler",
                     target.Key,
@@ -150,8 +179,36 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
                     () => DrawChip(inventoryChip, view.CountTheirs ? ColHeader : ColWarning),
                     ChipWidth(inventoryChip),
                     Tooltip: inventoryTooltip),
-            ]);
+        };
+        if (view.Plan is { } plan)
+        {
+            var planShort = view.PlanShort;
+            var planShortUnits = planShort.Values.Sum();
+            var planChip = !view.KeepMyPlan
+                ? "not kept"
+                : planShortUnits > 0
+                    ? $"{view.Kept:N0} kept · {planShortUnits:N0} short"
+                    : $"{view.Kept:N0} kept";
+            facts.Add(new(
+                "Your plan",
+                plan.Name,
+                ColMuted,
+                () => DrawChip(planChip, view.KeepMyPlan && planShortUnits == 0 ? ColHeader : ColWarning),
+                ChipWidth(planChip),
+                Tooltip: view.KeepMyPlan && (view.Kept > 0 || planShortUnits > 0) ? KeptTooltip(view, planShort) : null));
+        }
+
+        UtilityWorkspaceUi.DrawStatusStrip("##workshopHandoverStatus", facts);
     }
+
+    private static string KeptTooltip(HandoverView view, IReadOnlyDictionary<uint, int> planShort) =>
+        string.Join(
+            "\n",
+            view.Rows
+                .Where(row => view.Reserved.GetValueOrDefault(row.ItemId) > 0 || planShort.ContainsKey(row.ItemId))
+                .Select(row => planShort.TryGetValue(row.ItemId, out var missing)
+                    ? $"{row.ItemName}: {view.Reserved.GetValueOrDefault(row.ItemId):N0} kept, {missing:N0} short"
+                    : $"{row.ItemName}: {view.Reserved[row.ItemId]:N0} kept"));
 
     private static (string Value, Vector4 Color, string? Tooltip) DescribeHoldings(HandoverView view)
     {
@@ -185,16 +242,22 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
 
     private void DrawHandoverOptions(WorkshopFrozenQueue queue, HandoverView view)
     {
+        // The run's demand is frozen at start; locking the inputs keeps the table in step with it.
+        var locked = RestockActiveFor(queue);
+        var lockedReason = $"Restock for {queue.Name} is running; stop it first.";
+
         var count = config.WorkshopHandoverCountTheirInventory;
+        ImGui.BeginDisabled(locked);
         if (ImGui.Checkbox("Count their inventory##workshopHandoverCount", ref count))
             SetCountTheirInventory(count);
+        ImGui.EndDisabled();
         reviewRegistry.Register(
             $"{SurfaceId}.handover.count-their-inventory",
             "Subtract what the assembler already holds from what is owed",
             AgentBridgeUiControlKind.Toggle,
             ImGui.GetItemRectMin(),
             ImGui.GetItemRectMax(),
-            enabled: true,
+            enabled: !locked,
             selected: count,
             count ? "enabled" : "disabled",
             HandoverToggleSchema,
@@ -203,6 +266,8 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
             completionOperationKind: null,
             arguments =>
             {
+                if (RestockActiveFor(queue))
+                    return AgentBridgeUiActionResult.Fail(lockedReason);
                 var enabled = arguments!.Value.GetProperty("enabled").GetBoolean();
                 SetCountTheirInventory(enabled);
                 return AgentBridgeUiActionResult.Ok(enabled
@@ -210,11 +275,76 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
                     : "Handover ignores the assembler's inventory.");
             });
 
+        ImGui.SameLine(0f, 14f);
+        var keep = config.WorkshopHandoverKeepMyPlan;
+        ImGui.BeginDisabled(locked);
+        if (ImGui.Checkbox("Keep my plan's materials##workshopHandoverKeepMyPlan", ref keep))
+            SetKeepMyPlan(keep);
+        ImGui.EndDisabled();
+        reviewRegistry.Register(
+            $"{SurfaceId}.handover.keep-my-plan",
+            "Leave the active plan's materials in the bags when handing over or restocking a share",
+            AgentBridgeUiControlKind.Toggle,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled: !locked,
+            selected: keep,
+            keep ? $"enabled; kept={view.Kept:N0}" : "disabled",
+            HandoverToggleSchema,
+            SurfaceId,
+            mutating: true,
+            completionOperationKind: null,
+            arguments =>
+            {
+                if (RestockActiveFor(queue))
+                    return AgentBridgeUiActionResult.Fail(lockedReason);
+                var enabled = arguments!.Value.GetProperty("enabled").GetBoolean();
+                SetKeepMyPlan(enabled);
+                return AgentBridgeUiActionResult.Ok(enabled
+                    ? "Share handover and restock keep the active plan's materials."
+                    : "Share handover and restock use every unit in the bags.");
+            });
+
+        ImGui.SameLine(0f, 14f);
+        var runner = actions.ShareRestock.Runner;
+        var anyRun = RestockSlotTaken(runner);
+        var run = runner.ActiveRun;
+        var automatic = anyRun && run is not null
+            ? run.AutomaticallyBuyVendorMaterials
+            : config.AutomaticallyBuyWorkshopVendorMaterials;
+        ImGui.BeginDisabled(anyRun);
+        if (ImGui.Checkbox("Automatically buy vendor materials##workshopShareAutoBuy", ref automatic))
+            SetAutomaticallyBuy(automatic);
+        ImGui.EndDisabled();
+        reviewRegistry.Register(
+            $"{SurfaceId}.handover.vendor-autobuy",
+            "Automatically buy vendor materials",
+            AgentBridgeUiControlKind.Toggle,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled: !anyRun,
+            selected: automatic,
+            automatic ? "enabled" : "disabled",
+            HandoverToggleSchema,
+            SurfaceId,
+            mutating: true,
+            completionOperationKind: null,
+            arguments =>
+            {
+                if (RestockSlotTaken(actions.ShareRestock.Runner))
+                    return AgentBridgeUiActionResult.Fail("A workshop restock run is active; stop it first.");
+                var enabled = arguments!.Value.GetProperty("enabled").GetBoolean();
+                SetAutomaticallyBuy(enabled);
+                return AgentBridgeUiActionResult.Ok(enabled
+                    ? "Workshop restock buys vendor materials."
+                    : "Workshop restock only retrieves from retainers.");
+            });
+
         // Once units are handed over the holdings baseline is frozen, so a refresh would change nothing.
         if (view.Source == HoldingsSource.Frozen)
             return;
 
-        ImGui.SameLine();
+        ImGui.SameLine(0f, 14f);
         var loading = view.Loading;
         if (ImGuiUi.Button(loading ? "Checking...##workshopHandoverRefresh" : "Refresh their inventory##workshopHandoverRefresh", !loading))
             actions.Handover.RequestHoldings(queue, force: true);
@@ -238,26 +368,50 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         config.Save();
     }
 
-    private void DrawHandoverTable(HandoverView view)
+    private void SetKeepMyPlan(bool enabled)
+    {
+        if (config.WorkshopHandoverKeepMyPlan == enabled)
+            return;
+        config.WorkshopHandoverKeepMyPlan = enabled;
+        config.Save();
+    }
+
+    private void SetAutomaticallyBuy(bool enabled)
+    {
+        if (config.AutomaticallyBuyWorkshopVendorMaterials == enabled)
+            return;
+        config.AutomaticallyBuyWorkshopVendorMaterials = enabled;
+        config.Save();
+    }
+
+    private void DrawHandoverTable(WorkshopFrozenQueue queue, HandoverView view, ShareRestockPlan restock)
     {
         var flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.ScrollY;
         var rowHeight = ImGui.GetFrameHeight() + (ImGui.GetStyle().CellPadding.Y * 2f);
         var desired = rowHeight * (Math.Max(1, view.Rows.Count) + 1) + 4f;
         var available = ImGui.GetContentRegionAvail().Y - (ImGui.GetFrameHeightWithSpacing() * 3f);
         var height = Math.Min(desired, Math.Max(rowHeight * 4f, available));
-        if (!ImGui.BeginTable("WorkshopHandoverTable", 7, flags, new Vector2(0f, height)))
+        if (!ImGui.BeginTable("WorkshopHandoverTable", 8, flags, new Vector2(0f, height)))
             return;
 
         var numberWidth = Math.Max(ImGui.CalcTextSize("99,999").X, ImGui.CalcTextSize("They hold").X) + 8f;
+        var bagsWidth = view.Reserved.Count > 0 ? ImGui.CalcTextSize("99,999 / 99,999").X + 8f : numberWidth;
         ImGui.TableSetupScrollFreeze(0, 1);
-        ImGui.TableSetupColumn("Material", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Material", ImGuiTableColumnFlags.WidthStretch, 1f);
         ImGui.TableSetupColumn("Needed", ImGuiTableColumnFlags.WidthFixed, numberWidth);
         ImGui.TableSetupColumn("They hold", ImGuiTableColumnFlags.WidthFixed, numberWidth);
         ImGui.TableSetupColumn("Handed over", ImGuiTableColumnFlags.WidthFixed, numberWidth + 48f);
         ImGui.TableSetupColumn("Owed", ImGuiTableColumnFlags.WidthFixed, numberWidth);
-        ImGui.TableSetupColumn("In bags", ImGuiTableColumnFlags.WidthFixed, numberWidth);
+        ImGui.TableSetupColumn("In bags", ImGuiTableColumnFlags.WidthFixed, bagsWidth);
         ImGui.TableSetupColumn("Short", ImGuiTableColumnFlags.WidthFixed, numberWidth);
+        ImGui.TableSetupColumn("Acquisition", ImGuiTableColumnFlags.WidthStretch, 1.6f);
         ImGui.TableHeadersRow();
+
+        var run = actions.ShareRestock.Runner.ActiveRun;
+        var runLines = run is not null && run.DemandShareJobId == queue.Id && WorkshopVendorRestockPresentation.IsActive(run)
+            ? run.Lines.ToDictionary(line => line.ItemId)
+            : null;
+        var plan = restock.Review.Materials.ToDictionary(line => line.Availability.ItemId);
 
         if (view.Rows.Count == 0)
         {
@@ -300,7 +454,7 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
                 DrawNumber(owed.ToString("N0"), text);
 
             ImGui.TableNextColumn();
-            DrawNumber(row.InBags.ToString("N0"), text ?? (row.InBags == 0 ? ColMuted : null));
+            DrawInBagsCell(row, view, text);
 
             ImGui.TableNextColumn();
             var shortUnits = row.Short(count);
@@ -308,16 +462,67 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
                 DrawNumber(shortUnits.ToString("N0"), MarketMafiosoUiTheme.Error);
             else
                 DrawNumber("—", ColMuted);
+
+            ImGui.TableNextColumn();
+            var activeLine = runLines?.GetValueOrDefault(row.ItemId);
+            if ((shortUnits > 0 || activeLine is not null) && plan.TryGetValue(row.ItemId, out var line))
+            {
+                ImGui.AlignTextToFramePadding();
+                ImGui.PushID((int)row.ItemId);
+                ShareAcquisitionCell.Draw(line, activeLine);
+                ImGui.PopID();
+            }
+            else
+            {
+                ImGui.AlignTextToFramePadding();
+                ImGui.TextColored(ColMuted, "—");
+            }
         }
 
         ImGui.EndTable();
     }
 
+    /// <summary>Spare units, with the raw bag count muted after it when some are kept for the active plan.</summary>
+    private static void DrawInBagsCell(WorkshopHandoverRow row, HandoverView view, Vector4? color)
+    {
+        var reserved = view.Reserved.GetValueOrDefault(row.ItemId);
+        var spare = row.InBags.ToString("N0");
+        var tint = color ?? (row.InBags == 0 ? ColMuted : (Vector4?)null);
+        if (reserved <= 0)
+        {
+            DrawNumber(spare, tint);
+            return;
+        }
+
+        var raw = view.RawBags.GetValueOrDefault(row.ItemId);
+        var suffix = $" / {raw:N0}";
+        var width = ImGui.CalcTextSize(spare).X + ImGui.CalcTextSize(suffix).X;
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0f, ImGui.GetContentRegionAvail().X - width));
+        ImGui.AlignTextToFramePadding();
+        ImGui.BeginGroup();
+        if (tint is { } value)
+            ImGui.TextColored(value, spare);
+        else
+            ImGui.TextUnformatted(spare);
+        ImGui.SameLine(0f, 0f);
+        ImGui.TextColored(ColMuted, suffix);
+        ImGui.EndGroup();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip($"{raw:N0} in bags − {reserved:N0} for your plan");
+    }
+
     private void DrawHandOverButton(WorkshopFrozenQueue queue)
     {
         var view = BuildHandoverView(queue);
+        // DrawHandover planned this share earlier in the same frame; reuse it rather than re-reading retainers.
+        var restock = drawnShareRestock is { } drawn && drawn.QueueId == queue.Id
+            ? drawn.Plan
+            : BuildShareRestockPlan(queue, view);
+        DrawShareRestockActions(queue, restock);
+        ImGui.SameLine();
+
         var give = view.Give;
-        var blocked = UnverifiedBlock(queue);
+        var blocked = UnverifiedBlock(queue) ?? RestockBlock();
         var enabled = give > 0 && blocked == null;
         var label = give > 0 ? $"Hand over {give:N0}##workshopHandOver" : "Hand over##workshopHandOver";
         if (ImGuiUi.PrimaryButton(label, enabled))
@@ -362,7 +567,7 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         if (WorkshopSavedJobHandoff.Target(queue) is not { } target || !IsSender(queue) ||
             actions.CurrentCharacter() is not { } sender)
             return (false, $"{queue.Name} is not a share this character sent.");
-        if (UnverifiedBlock(queue) is { } blocked)
+        if ((UnverifiedBlock(queue) ?? RestockBlock()) is { } blocked)
             return (false, blocked);
 
         var view = BuildHandoverView(queue, refreshBags: true);
@@ -426,7 +631,8 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         var missing = view.Rows
             .Where(row => row.Short(view.CountTheirs) > 0)
             .Select(row => $"{row.ItemName} {row.Short(view.CountTheirs):N0}");
-        return $"Nothing to hand over: {view.Owed:N0} owed but none in bags ({string.Join(", ", missing)} short).";
+        var where = view.Kept > 0 ? "none spare after keeping your plan's materials" : "none in bags";
+        return $"Nothing to hand over: {view.Owed:N0} owed but {where} ({string.Join(", ", missing)} short).";
     }
 
     /// <summary>Keeps the reported per-item due and total in step once a handover has started.</summary>
@@ -537,11 +743,18 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
             (theyHold, capturedAt, source) = (baseline, queue.HandoverBaselineCapturedAt, HoldingsSource.Frozen);
         }
 
+        var rawBags = bags ?? new Dictionary<uint, int>();
+        var plan = ActivePlanFor(queue);
+        var keep = config.WorkshopHandoverKeepMyPlan;
+        var reserved = keep && plan != null
+            ? WorkshopShareRestockDemand.Reserve(rawBags, plan.Requirements)
+            : new Dictionary<uint, int>();
+        var spare = rawBags.ToDictionary(entry => entry.Key, entry => entry.Value - reserved.GetValueOrDefault(entry.Key));
         var rows = WorkshopHandoverCalculator.Build(
             requirements,
             queue.HandedOver,
             theyHold,
-            bags ?? new Dictionary<uint, int>());
+            spare);
         return new HandoverView(
             rows,
             config.WorkshopHandoverCountTheirInventory,
@@ -549,7 +762,31 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
             capturedAt,
             loading,
             problem,
-            bags != null);
+            bags != null,
+            rawBags,
+            reserved,
+            keep,
+            plan);
+    }
+
+    private sealed record ActivePlan(string Name, IReadOnlyList<WorkshopMaterialRequirement> Requirements);
+
+    /// <summary>
+    /// The sender's active prep queue as a plan whose materials a share leaves in the bags.
+    /// Null when the queue is empty or the active saved job is this share itself.
+    /// </summary>
+    private ActivePlan? ActivePlanFor(WorkshopFrozenQueue share)
+    {
+        var queue = config.WorkshopPrepQueue;
+        if (queue.Count == 0 || config.ActiveFrozenWorkshopQueueId == share.Id)
+            return null;
+        var signature = string.Join(',', queue.Select(item => $"{item.WorkshopItemId}:{item.Quantity}"));
+        if (planRequirementCache?.Signature != signature)
+            planRequirementCache = (signature, workshopCatalog.BuildRequirements(queue));
+        var name = config.ActiveFrozenWorkshopQueueId is { } activeId
+            ? config.FrozenWorkshopQueues.FirstOrDefault(saved => saved.Id == activeId)?.Name
+            : null;
+        return new ActivePlan(name ?? "Current queue", planRequirementCache.Value.Requirements);
     }
 
     private IReadOnlyList<WorkshopMaterialRequirement> Requirements(WorkshopFrozenQueue queue)
@@ -571,6 +808,228 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         // Keep the last readable inventory through brief unreadable frames (zoning, loading).
         tradeableBags = actions.TradeableBags() ?? tradeableBags;
         return tradeableBags;
+    }
+
+    // ---- share restock -------------------------------------------------------------------
+
+    /// <param name="Review">The restock plan in raw bag terms (Required = owed + kept, PlayerInventory = bags).</param>
+    /// <param name="Demand">The raw demand the plan was built from; frozen onto the run at start.</param>
+    private sealed record ShareRestockPlan(WorkshopVendorRestockReview Review, IReadOnlyList<WorkshopRestockDemandLine> Demand);
+
+    /// <summary>
+    /// Plans a share restock against workshop-usable bags (the runner's counting basis). Owed comes from
+    /// the handover view; the active plan claims its full need on owed items (see PlanClaim).
+    /// </summary>
+    private ShareRestockPlan BuildShareRestockPlan(WorkshopFrozenQueue queue, HandoverView view)
+    {
+        var restock = actions.ShareRestock;
+        var usable = restock.UsableBags();
+        // Claim the plan's full need, not min(bags, need): handover re-keeps min(bags, need) after the run,
+        // so anything less would leave newly acquired share stock kept for a short plan.
+        var reserved = view.KeepMyPlan && view.Plan is { } plan
+            ? WorkshopShareRestockDemand.PlanClaim(plan.Requirements)
+            : new Dictionary<uint, int>();
+        var icons = Requirements(queue)
+            .GroupBy(requirement => requirement.ItemId)
+            .ToDictionary(group => group.Key, group => group.First().IconId);
+        var owed = view.Rows
+            .Select(row => new WorkshopMaterialRequirement(
+                row.ItemId, row.ItemName, icons.GetValueOrDefault(row.ItemId), row.Owed(view.CountTheirs)))
+            .ToArray();
+        var demand = WorkshopShareRestockDemand.ToRawDemand(owed, reserved);
+        var availability = restock.Availability(WorkshopShareRestockDemand.ToRequirements(demand), usable);
+        var review = restock.Planner.Build(
+            availability,
+            config.WorkshopVendorApprovedQuantities,
+            config.WorkshopVendorIncludedItems.ToHashSet(),
+            config.WorkshopVendorExcludedItems.ToHashSet());
+        return new ShareRestockPlan(review, demand);
+    }
+
+    private WorkshopAcquisitionCell ShareAcquisitionCell => shareAcquisitionCell ??= new WorkshopAcquisitionCell(
+        config,
+        actions.ShareRestock.Runner,
+        actions.ShareRestock.OwnerScope,
+        actions.ShareRestock.CanStageMarketAcquisition,
+        actions.ShareRestock.StageMarketAcquisition,
+        reviewRegistry,
+        "saved-jobs.share-restock",
+        "workshop-share-material",
+        (itemId, buy) =>
+        {
+            if (SelectedSenderShare() is { } share)
+                StartShareRestock(share, itemId, buy);
+        },
+        message => SetShareStatus(message, isError: false));
+
+    /// <summary>Any restock run, for any demand, is running or paused.</summary>
+    private static bool RestockSlotTaken(WorkshopVendorRestockRunner runner) =>
+        runner.IsRunning || runner.ActiveRun?.Phase == WorkshopVendorRestockPhase.Paused;
+
+    private bool RestockActiveFor(WorkshopFrozenQueue queue) =>
+        actions.ShareRestock.Runner.ActiveRun is { } run &&
+        run.DemandShareJobId == queue.Id &&
+        RestockSlotTaken(actions.ShareRestock.Runner);
+
+    /// <summary>Why Hand over must wait for a restock, or null. Trading while restock automation moves items is unsafe.</summary>
+    private string? RestockBlock()
+    {
+        var runner = actions.ShareRestock.Runner;
+        if (!runner.IsRunning)
+            return null;
+        return runner.ActiveRun?.DemandShareName is { } share
+            ? $"Restocking for {share}; wait for it to finish or stop it."
+            : "A workshop restock is running; wait for it to finish or stop it.";
+    }
+
+    private void DrawShareRestockStatus(WorkshopFrozenQueue queue, ShareRestockPlan restock)
+    {
+        if (actions.ShareRestock.Runner.ActiveRun is not { } run || run.DemandShareJobId != queue.Id)
+            return;
+        var color = run.Phase switch
+        {
+            WorkshopVendorRestockPhase.Completed => MarketMafiosoUiTheme.Success,
+            WorkshopVendorRestockPhase.Failed or WorkshopVendorRestockPhase.Indeterminate => MarketMafiosoUiTheme.Error,
+            WorkshopVendorRestockPhase.Paused or WorkshopVendorRestockPhase.Stopped => MarketMafiosoUiTheme.Warning,
+            _ => MarketMafiosoUiTheme.Success,
+        };
+        ImGui.PushTextWrapPos(0f);
+        ImGui.TextColored(color, WorkshopVendorRestockPresentation.Describe(run, restock.Review));
+        ImGui.PopTextWrapPos();
+    }
+
+    private void DrawShareRestockActions(WorkshopFrozenQueue queue, ShareRestockPlan restock)
+    {
+        var runner = actions.ShareRestock.Runner;
+        var run = runner.ActiveRun;
+        var mine = run is not null && run.DemandShareJobId == queue.Id;
+        var runId = run?.RunId;
+
+        if (mine && runner.IsRunning)
+        {
+            if (ImGuiUi.PrimaryButton("Pause##workshopShareRestockPause", true))
+                runner.Pause();
+            RegisterLastAction("saved-jobs.share-restock.pause", $"Pause the restock for {queue.Name}", true, runId,
+                _ => runner.Pause()
+                    ? AgentBridgeUiActionResult.Ok($"Paused the restock for {queue.Name}.")
+                    : AgentBridgeUiActionResult.Fail("No running restock to pause."));
+            ImGui.SameLine();
+            DrawShareRestockStop(queue, runner, runId);
+            return;
+        }
+
+        if (mine && run!.Phase == WorkshopVendorRestockPhase.Paused)
+        {
+            if (ImGuiUi.PrimaryButton("Resume##workshopShareRestockResume", true))
+            {
+                var resumed = ResumeShareRestock(queue, restock);
+                if (!resumed.Success)
+                    SetShareStatus(resumed.Message, isError: true);
+            }
+            RegisterLastAction("saved-jobs.share-restock.resume", $"Resume the restock for {queue.Name}", true, run.Message,
+                _ => ToActionResult(ResumeShareRestock(queue, restock)));
+            ImGui.SameLine();
+            DrawShareRestockStop(queue, runner, runId);
+            return;
+        }
+
+        var review = restock.Review;
+        var automatic = config.AutomaticallyBuyWorkshopVendorMaterials;
+        var owner = actions.ShareRestock.OwnerScope();
+        var units = review.RetainerUnits + (automatic ? review.VendorUnits : 0);
+        var slotTaken = RestockSlotTaken(runner);
+        var enabled = !slotTaken && owner.IsAvailable && units > 0;
+        var label = WorkshopMaterialPanel.BuildActionLabel(review, automatic);
+        if (string.IsNullOrEmpty(label))
+            label = "Restock";
+        if (ImGuiUi.PrimaryButton($"{label}##workshopShareRestock", enabled))
+            StartShareRestock(queue, itemId: null, automatic);
+        if (!enabled && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(RestockUnavailable(review, automatic, slotTaken, owner.IsAvailable));
+        RegisterLastAction(
+            "saved-jobs.share-restock.start",
+            $"{label} for {queue.Name}",
+            enabled,
+            $"{review.QueueSignature} · retainers={review.RetainerUnits:N0} · vendor={review.VendorUnits:N0} · {review.MaximumGil:N0} gil · {review.Stops.Count:N0} stop(s)",
+            _ => ToActionResult(StartShareRestock(queue, itemId: null, config.AutomaticallyBuyWorkshopVendorMaterials)));
+    }
+
+    private void DrawShareRestockStop(WorkshopFrozenQueue queue, WorkshopVendorRestockRunner runner, string? runId)
+    {
+        if (ImGui.Button("Stop##workshopShareRestockStop"))
+            runner.Stop();
+        RegisterLastAction("saved-jobs.share-restock.stop", $"Stop the restock for {queue.Name}", true, runId,
+            _ => runner.Stop()
+                ? AgentBridgeUiActionResult.Ok($"Stopped the restock for {queue.Name}.")
+                : AgentBridgeUiActionResult.Fail("No active restock to stop."));
+    }
+
+    private string RestockUnavailable(WorkshopVendorRestockReview review, bool automatic, bool slotTaken, bool ownerAvailable)
+    {
+        if (slotTaken)
+            return actions.ShareRestock.Runner.ActiveRun?.DemandShareName is { } share
+                ? $"Restocking for {share}."
+                : "A workshop restock is already running.";
+        if (!ownerAvailable)
+            return "Restock needs the logged-in character and home world.";
+        var shortLines = review.Materials.Count(line => line.Availability.Shortage > 0);
+        if (shortLines == 0)
+            return "Nothing short.";
+        if (!automatic && review.Materials.Any(line => line.Selected && line.ApprovedVendorQuantity > 0))
+            return "Vendor materials need Automatically buy vendor materials.";
+        return $"{shortLines:N0} short material(s) have no retainer stock or approved vendor purchase.";
+    }
+
+    /// <summary>
+    /// Starts a restock for this share's owed materials (or one material). The demand is translated to
+    /// raw bag terms and frozen on the run, so prep-queue edits never move its target.
+    /// </summary>
+    private (bool Success, string Message) StartShareRestock(WorkshopFrozenQueue queue, uint? itemId, bool automatic)
+    {
+        if (!IsSender(queue) || WorkshopSavedJobHandoff.Target(queue) is null)
+            return (false, $"{queue.Name} is not a share this character sent.");
+
+        var restock = actions.ShareRestock;
+        var view = BuildHandoverView(queue, refreshBags: true);
+        var plan = BuildShareRestockPlan(queue, view);
+        var review = itemId is { } id ? WorkshopMaterialPanel.BuildSingleLineReview(plan.Review, id) : plan.Review;
+        if (review.Materials.Count == 0)
+        {
+            var name = view.Rows.FirstOrDefault(row => row.ItemId == itemId)?.ItemName ?? $"item {itemId}";
+            var message = itemId is null
+                ? $"Nothing to restock for {queue.Name}: nothing is owed."
+                : $"Nothing to restock for {queue.Name}: {name} is no longer owed.";
+            SetShareStatus(message, isError: true);
+            return (false, message);
+        }
+
+        var demand = new WorkshopRestockDemandSource(queue.Id, queue.Name, plan.Demand);
+        if (!restock.Runner.TryStart(review, restock.OwnerScope(), automatic, out var error, demand))
+        {
+            restock.LogWarning(
+                $"[MarketMafioso] Share restock for {queue.Name} ({queue.Id}) refused: {error} " +
+                $"Plan: lines={review.Materials.Count:N0}, retainers={review.RetainerUnits:N0}, vendor={review.VendorUnits:N0}, " +
+                $"maxGil={review.MaximumGil:N0}, stops={review.Stops.Count:N0}, autoBuy={automatic}, item={itemId?.ToString() ?? "all"}, " +
+                $"kept={view.Kept:N0}, signature={review.QueueSignature}.");
+            SetShareStatus(error, isError: true);
+            return (false, error);
+        }
+
+        var units = review.RetainerUnits + (automatic ? review.VendorUnits : 0);
+        var started = $"Restocking {units:N0} unit(s) for {queue.Name}.";
+        SetShareStatus(started, isError: false);
+        return (true, started);
+    }
+
+    private (bool Success, string Message) ResumeShareRestock(WorkshopFrozenQueue queue, ShareRestockPlan restock)
+    {
+        var runner = actions.ShareRestock.Runner;
+        // A share run resumes against its frozen demand, never the prep queue or a re-planned share.
+        var signature = runner.ResolveDemandSignature(() => restock.Review.QueueSignature);
+        if (runner.Resume(actions.ShareRestock.OwnerScope(), signature, out var error))
+            return (true, $"Resumed the restock for {queue.Name}.");
+        actions.ShareRestock.LogWarning($"[MarketMafioso] Share restock for {queue.Name} ({queue.Id}) did not resume: {error}");
+        return (false, error);
     }
 
     // ---- receiver ------------------------------------------------------------------------
