@@ -111,7 +111,8 @@ public sealed class HostWorkshopHandoffService : IWorkshopHandoffService, IDispo
                 if (!await StillCurrentAsync(owner).ConfigureAwait(false))
                     throw new InvalidOperationException("Character or host configuration changed while reading recipient holdings.");
                 return new WorkshopHoldingsResult(true, result.CapturedAt is null ? "No inventory report for this character." : "Recipient holdings loaded.",
-                    result.CapturedAt, result.Items.ToDictionary(x => x.ItemId, x => x.Quantity));
+                    result.CapturedAt, result.Items.ToDictionary(x => x.ItemId, x => x.Quantity),
+                    result.Retainers?.ToDictionary(x => x.ItemId, x => x.Quantity));
             }
             catch (Exception ex)
             {

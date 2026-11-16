@@ -47,10 +47,13 @@ public sealed class WorkshopFrozenQueue
     public List<WorkshopMaterialLedgerEntry> HandedOver { get; set; } = new();
 
     /// <summary>
-    /// Sender only: the assembler's holdings when the handover started. Frozen once the ledger has units, so
+    /// Sender only: the assembler's bag holdings when the handover started (legacy unsplit values stay as-is). Frozen once the ledger has units, so
     /// later inventory reports (which include what was already handed over) are not subtracted twice.
     /// </summary>
     public List<WorkshopMaterialLedgerEntry>? HandoverBaseline { get; set; }
+
+    /// <summary>Observed retainer holdings at the same baseline; null for legacy unsplit baselines.</summary>
+    public List<WorkshopMaterialLedgerEntry>? HandoverRetainerBaseline { get; set; }
 
     public DateTimeOffset? HandoverBaselineCapturedAt { get; set; }
 

@@ -52,7 +52,8 @@ public sealed record WorkshopHoldingsResult(
     bool Success,
     string Message,
     DateTimeOffset? CapturedAt,
-    IReadOnlyDictionary<uint, int> Quantities)
+    IReadOnlyDictionary<uint, int> Quantities,
+    IReadOnlyDictionary<uint, int>? Retainers = null)
 {
     public static WorkshopHoldingsResult Fail(string message) => new(false, message, null, new Dictionary<uint, int>());
 }

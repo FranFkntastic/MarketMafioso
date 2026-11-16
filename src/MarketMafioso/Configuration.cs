@@ -128,6 +128,7 @@ public class Configuration : IPluginConfiguration
     public bool SplitWorkshopQueueAndMaterials { get; set; }
     /// <summary>Share handover subtracts what the assembler already holds (from its host inventory report).</summary>
     public bool WorkshopHandoverCountTheirInventory { get; set; } = true;
+    public bool WorkshopHandoverIncludeTheirRetainers { get; set; }
     /// <summary>Share handover and share restock leave min(bags, active prep queue need) in the sender's bags.</summary>
     public bool WorkshopHandoverKeepMyPlan { get; set; } = true;
     [JsonProperty("RetainerRestockPlanItems")]

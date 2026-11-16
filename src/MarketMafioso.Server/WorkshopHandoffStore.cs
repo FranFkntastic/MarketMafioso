@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MarketMafioso.Contracts.Inventory;
 using MarketMafioso.Contracts.Workshop;
 using MarketMafioso.Server.Sqlite;
 using Microsoft.Data.Sqlite;
@@ -133,6 +134,7 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
         }
         var latest = await reports.GetLatestAsync(account, characterId, token);
         var totals = ids.ToDictionary(id => id, _ => 0);
+        var retainers = ids.ToDictionary(id => id, _ => 0);
         DateTimeOffset? capturedAt = null;
         if (latest is not null)
         {
@@ -140,21 +142,29 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
                     System.Globalization.DateTimeStyles.AssumeUniversal, out var captured))
                 throw new WorkshopHandoffException(503, "Latest inventory report has an invalid capture timestamp.");
             capturedAt = captured;
-            var bags = latest.Report.PlayerInventory.Concat(latest.Report.Retainers
+            var retainerBags = latest.Report.Retainers
                 .Where(r => (string.IsNullOrWhiteSpace(r.OwnerCharacterName) || string.Equals(r.OwnerCharacterName, character.CharacterName, StringComparison.OrdinalIgnoreCase)) &&
                     (string.IsNullOrWhiteSpace(r.OwnerHomeWorld) || string.Equals(r.OwnerHomeWorld, character.World, StringComparison.OrdinalIgnoreCase)))
                 // Only bags observed in this report: the reporter carries forward unobserved retainer bags from
                 // older reports, and counting those as current would under-send materials.
-                .SelectMany(r => r.Bags.Where(b => r.Storage.ObservedSources.Contains(b.Location ?? b.BagName, StringComparer.Ordinal))));
+                .SelectMany(r => r.Bags.Where(b => r.Storage.ObservedSources.Contains(b.Location ?? b.BagName, StringComparer.Ordinal)));
+            AddBags(latest.Report.PlayerInventory, totals);
+            AddBags(retainerBags, retainers);
+        }
+        return new(character, capturedAt,
+            ids.Order().Select(id => new WorkshopMaterialQuantity(id, totals[id])).ToArray(),
+            ids.Order().Select(id => new WorkshopMaterialQuantity(id, retainers[id])).ToArray());
+
+        void AddBags(IEnumerable<InventoryBag> bags, Dictionary<uint, int> quantities)
+        {
             foreach (var item in bags.SelectMany(b => b.Items))
-                if (totals.ContainsKey(item.ItemId))
+                if (quantities.ContainsKey(item.ItemId))
                 {
-                    var total = (long)totals[item.ItemId] + item.Quantity;
+                    var total = (long)quantities[item.ItemId] + item.Quantity;
                     if (total > int.MaxValue) throw new WorkshopHandoffException(503, $"Inventory quantity for item {item.ItemId} exceeds the supported holdings range.");
-                    totals[item.ItemId] = (int)total;
+                    quantities[item.ItemId] = (int)total;
                 }
         }
-        return new(character, capturedAt, ids.Order().Select(id => new WorkshopMaterialQuantity(id, totals[id])).ToArray());
     }
 
     private WorkshopHandoffException Refuse(long account, WorkshopHandoffDto value, int status, string reason)
