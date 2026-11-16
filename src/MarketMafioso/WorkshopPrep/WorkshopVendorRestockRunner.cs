@@ -19,6 +19,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
     private readonly Action<string>? diagnosticLog;
     private bool disposed;
     private readonly Func<string?> persistenceError;
+    private readonly Func<string?> retainerAccessBlock;
 
     public WorkshopVendorRestockRunner(
         Configuration config,
@@ -27,8 +28,10 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         Action save,
         Action<string>? diagnosticLog = null,
         Func<DateTimeOffset>? utcNow = null,
-        Func<string?>? persistenceError = null)
+        Func<string?>? persistenceError = null,
+        Func<string?>? retainerAccessBlock = null)
     {
+        this.retainerAccessBlock = retainerAccessBlock ?? (() => null);
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
@@ -178,6 +181,13 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         if (selected.Length == 0)
         {
             error = "No reviewed workshop materials need restocking.";
+            return false;
+        }
+        // The game refuses the summoning bell off the home world; Quartermaster would only see a retainer-list timeout.
+        if (selected.Any(line => line.RetainerPlannedQuantity > 0) && retainerAccessBlock() is { } retainerBlock)
+        {
+            error = retainerBlock;
+            diagnosticLog?.Invoke($"[MarketMafioso] Workshop restock refused before retainer retrieval: {retainerBlock}");
             return false;
         }
         if (automaticallyBuyVendorMaterials && review.VendorUnits > 0)
