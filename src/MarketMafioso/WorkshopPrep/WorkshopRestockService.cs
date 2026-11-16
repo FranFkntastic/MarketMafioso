@@ -88,7 +88,13 @@ public sealed class WorkshopRestockService : IDisposable
             Requests,
             persistence.Request,
             message => log.Warning(message),
-            persistenceError: () => persistence.Error);
+            persistenceError: () => persistence.Error,
+            retainerAccessBlock: () =>
+                playerState.CurrentWorld.IsValid && playerState.HomeWorld.IsValid &&
+                playerState.CurrentWorld.RowId != playerState.HomeWorld.RowId
+                    ? $"Retainers can only be summoned on your home world. Return to {playerState.HomeWorld.Value.Name} " +
+                      $"(you're visiting {playerState.CurrentWorld.Value.Name}) to restock."
+                    : null);
         Requests.DiagnosticLog = message => log.Warning(message);
         Plugin.ClientState.Login += OnLogin;
         Plugin.ClientState.TerritoryChanged += OnTerritoryChanged;
