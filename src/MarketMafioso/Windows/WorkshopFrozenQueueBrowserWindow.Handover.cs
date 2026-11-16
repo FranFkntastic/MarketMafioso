@@ -54,6 +54,19 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
     {
         public int Kept => Rows.Sum(row => Reserved.GetValueOrDefault(row.ItemId));
 
+        /// <summary>
+        /// The active plan's own shortfall on items this share still owes. A share restock fills it first
+        /// (it targets owed + full plan need), so it explains a Restock count above Short.
+        /// </summary>
+        public IReadOnlyDictionary<uint, int> PlanShort =>
+            KeepMyPlan && Plan is { } plan
+                ? WorkshopShareRestockDemand.PlanClaim(plan.Requirements)
+                    .Where(need => Rows.Any(row => row.ItemId == need.Key && row.Owed(CountTheirs) > 0))
+                    .Select(need => (need.Key, Short: need.Value - RawBags.GetValueOrDefault(need.Key)))
+                    .Where(entry => entry.Short > 0)
+                    .ToDictionary(entry => entry.Key, entry => entry.Short)
+                : new Dictionary<uint, int>();
+
         public int Due => WorkshopHandoverCalculator.HandoverTotal(Rows, CountTheirs);
 
         /// <summary>Handed units counted toward progress: Σ min(handed, due) per item, so surplus never hides a shortfall.</summary>
@@ -169,25 +182,33 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         };
         if (view.Plan is { } plan)
         {
-            var planChip = view.KeepMyPlan ? $"{view.Kept:N0} kept" : "not kept";
+            var planShort = view.PlanShort;
+            var planShortUnits = planShort.Values.Sum();
+            var planChip = !view.KeepMyPlan
+                ? "not kept"
+                : planShortUnits > 0
+                    ? $"{view.Kept:N0} kept · {planShortUnits:N0} short"
+                    : $"{view.Kept:N0} kept";
             facts.Add(new(
                 "Your plan",
                 plan.Name,
                 ColMuted,
-                () => DrawChip(planChip, view.KeepMyPlan ? ColHeader : ColWarning),
+                () => DrawChip(planChip, view.KeepMyPlan && planShortUnits == 0 ? ColHeader : ColWarning),
                 ChipWidth(planChip),
-                Tooltip: view.KeepMyPlan && view.Kept > 0 ? KeptTooltip(view) : null));
+                Tooltip: view.KeepMyPlan && (view.Kept > 0 || planShortUnits > 0) ? KeptTooltip(view, planShort) : null));
         }
 
         UtilityWorkspaceUi.DrawStatusStrip("##workshopHandoverStatus", facts);
     }
 
-    private static string KeptTooltip(HandoverView view) =>
+    private static string KeptTooltip(HandoverView view, IReadOnlyDictionary<uint, int> planShort) =>
         string.Join(
             "\n",
             view.Rows
-                .Where(row => view.Reserved.GetValueOrDefault(row.ItemId) > 0)
-                .Select(row => $"{row.ItemName}: {view.Reserved[row.ItemId]:N0} kept"));
+                .Where(row => view.Reserved.GetValueOrDefault(row.ItemId) > 0 || planShort.ContainsKey(row.ItemId))
+                .Select(row => planShort.TryGetValue(row.ItemId, out var missing)
+                    ? $"{row.ItemName}: {view.Reserved.GetValueOrDefault(row.ItemId):N0} kept, {missing:N0} short"
+                    : $"{row.ItemName}: {view.Reserved[row.ItemId]:N0} kept"));
 
     private static (string Value, Vector4 Color, string? Tooltip) DescribeHoldings(HandoverView view)
     {
@@ -797,14 +818,16 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
 
     /// <summary>
     /// Plans a share restock against workshop-usable bags (the runner's counting basis). Owed comes from
-    /// the handover view; what is kept for the active plan is recomputed against usable bags.
+    /// the handover view; the active plan claims its full need on owed items (see PlanClaim).
     /// </summary>
     private ShareRestockPlan BuildShareRestockPlan(WorkshopFrozenQueue queue, HandoverView view)
     {
         var restock = actions.ShareRestock;
         var usable = restock.UsableBags();
+        // Claim the plan's full need, not min(bags, need): handover re-keeps min(bags, need) after the run,
+        // so anything less would leave newly acquired share stock kept for a short plan.
         var reserved = view.KeepMyPlan && view.Plan is { } plan
-            ? WorkshopShareRestockDemand.Reserve(usable, plan.Requirements)
+            ? WorkshopShareRestockDemand.PlanClaim(plan.Requirements)
             : new Dictionary<uint, int>();
         var icons = Requirements(queue)
             .GroupBy(requirement => requirement.ItemId)

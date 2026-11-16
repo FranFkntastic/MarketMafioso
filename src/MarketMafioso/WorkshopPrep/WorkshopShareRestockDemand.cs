@@ -34,6 +34,21 @@ public static class WorkshopShareRestockDemand
     }
 
     /// <summary>
+    /// The active plan's full need per item: the restock-side claim. Handover keeps min(bags, need),
+    /// so a restock that targeted owed + min(bags, need) would have its new units re-kept for the plan
+    /// whenever the plan is itself short. Targeting owed + need leaves exactly owed spare afterwards.
+    /// </summary>
+    public static IReadOnlyDictionary<uint, int> PlanClaim(IReadOnlyList<WorkshopMaterialRequirement> activePlanNeed)
+    {
+        ArgumentNullException.ThrowIfNull(activePlanNeed);
+        return activePlanNeed
+            .GroupBy(requirement => requirement.ItemId)
+            .Select(group => (ItemId: group.Key, Need: group.Sum(item => Math.Max(0, item.Quantity))))
+            .Where(entry => entry.Need > 0)
+            .ToDictionary(entry => entry.ItemId, entry => entry.Need);
+    }
+
+    /// <summary>
     /// Raw-terms demand: owed + reserved per item with something owed. Items owing nothing are
     /// dropped so the run never targets (or buys toward) the sender's own plan on its own.
     /// </summary>
