@@ -50,7 +50,9 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         IReadOnlyDictionary<uint, int> RawBags,
         IReadOnlyDictionary<uint, int> Reserved,
         bool KeepMyPlan,
-        ActivePlan? Plan)
+        ActivePlan? Plan,
+        IReadOnlyDictionary<uint, int>? TheirBags,
+        IReadOnlyDictionary<uint, int>? TheirRetainers)
     {
         public int Kept => Rows.Sum(row => Reserved.GetValueOrDefault(row.ItemId));
 
@@ -276,6 +278,38 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
             });
 
         ImGui.SameLine(0f, 14f);
+        var includeRetainers = config.WorkshopHandoverIncludeTheirRetainers;
+        ImGui.BeginDisabled(locked || !count);
+        if (ImGui.Checkbox("Include their retainers##workshopHandoverRetainers", ref includeRetainers))
+            SetIncludeTheirRetainers(includeRetainers);
+        ImGui.EndDisabled();
+        reviewRegistry.Register(
+            $"{SurfaceId}.handover.include-their-retainers",
+            "Include the assembler's observed retainer holdings",
+            AgentBridgeUiControlKind.Toggle,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled: !locked && count,
+            selected: includeRetainers,
+            includeRetainers ? "enabled" : "disabled",
+            HandoverToggleSchema,
+            SurfaceId,
+            mutating: true,
+            completionOperationKind: null,
+            arguments =>
+            {
+                if (RestockActiveFor(queue))
+                    return AgentBridgeUiActionResult.Fail(lockedReason);
+                if (!config.WorkshopHandoverCountTheirInventory)
+                    return AgentBridgeUiActionResult.Fail("Count their inventory is off.");
+                var enabled = arguments!.Value.GetProperty("enabled").GetBoolean();
+                SetIncludeTheirRetainers(enabled);
+                return AgentBridgeUiActionResult.Ok(enabled
+                    ? "Handover includes the assembler's observed retainers."
+                    : "Handover counts only the assembler's bags.");
+            });
+
+        ImGui.SameLine(0f, 14f);
         var keep = config.WorkshopHandoverKeepMyPlan;
         ImGui.BeginDisabled(locked);
         if (ImGui.Checkbox("Keep my plan's materials##workshopHandoverKeepMyPlan", ref keep))
@@ -373,6 +407,14 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         if (config.WorkshopHandoverKeepMyPlan == enabled)
             return;
         config.WorkshopHandoverKeepMyPlan = enabled;
+        config.Save();
+    }
+
+    private void SetIncludeTheirRetainers(bool enabled)
+    {
+        if (config.WorkshopHandoverIncludeTheirRetainers == enabled)
+            return;
+        config.WorkshopHandoverIncludeTheirRetainers = enabled;
         config.Save();
     }
 
@@ -605,9 +647,13 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         // them live alongside the ledger would subtract those units twice.
         if (!queue.HandedOver.Any(entry => entry.Quantity > 0))
         {
-            queue.HandoverBaseline = view.Rows
-                .Where(row => row.TheyHold is > 0)
-                .Select(row => new WorkshopMaterialLedgerEntry { ItemId = row.ItemId, Quantity = row.TheyHold!.Value })
+            queue.HandoverBaseline = (view.TheirBags ?? new Dictionary<uint, int>())
+                .Where(entry => entry.Value > 0)
+                .Select(entry => new WorkshopMaterialLedgerEntry { ItemId = entry.Key, Quantity = entry.Value })
+                .ToList();
+            queue.HandoverRetainerBaseline = (view.TheirRetainers ?? new Dictionary<uint, int>())
+                .Where(entry => entry.Value > 0)
+                .Select(entry => new WorkshopMaterialLedgerEntry { ItemId = entry.Key, Quantity = entry.Value })
                 .ToList();
             queue.HandoverBaselineCapturedAt = view.CapturedAt;
         }
@@ -727,21 +773,31 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
             problem = "The Workshop Host has no inventory report for this character.";
 
         IReadOnlyDictionary<uint, int>? theyHold = null;
+        IReadOnlyDictionary<uint, int>? theirRetainers = null;
         DateTimeOffset? capturedAt = null;
         var source = HoldingsSource.None;
         var baseline = queue.HandoverBaseline?.ToDictionary(entry => entry.ItemId, entry => entry.Quantity);
         if (baseline != null && queue.HandedOver.Any(entry => entry.Quantity > 0))
         {
             (theyHold, capturedAt, source) = (baseline, queue.HandoverBaselineCapturedAt, HoldingsSource.Frozen);
+            theirRetainers = queue.HandoverRetainerBaseline?.ToDictionary(entry => entry.ItemId, entry => entry.Quantity);
         }
         else if (lookup?.Result is { CapturedAt: { } captured } live)
         {
             (theyHold, capturedAt, source) = (live.Quantities, captured, HoldingsSource.Live);
+            theirRetainers = live.Retainers;
         }
         else if (baseline != null)
         {
             (theyHold, capturedAt, source) = (baseline, queue.HandoverBaselineCapturedAt, HoldingsSource.Frozen);
+            theirRetainers = queue.HandoverRetainerBaseline?.ToDictionary(entry => entry.ItemId, entry => entry.Quantity);
         }
+
+        var theirBags = theyHold;
+        if (theirBags != null && config.WorkshopHandoverIncludeTheirRetainers)
+            theyHold = requirements.ToDictionary(requirement => requirement.ItemId, requirement =>
+                (int)Math.Min(int.MaxValue, (long)theirBags.GetValueOrDefault(requirement.ItemId) +
+                    (theirRetainers?.GetValueOrDefault(requirement.ItemId) ?? 0)));
 
         var rawBags = bags ?? new Dictionary<uint, int>();
         var plan = ActivePlanFor(queue);
@@ -766,7 +822,9 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
             rawBags,
             reserved,
             keep,
-            plan);
+            plan,
+            theirBags,
+            theirRetainers);
     }
 
     private sealed record ActivePlan(string Name, IReadOnlyList<WorkshopMaterialRequirement> Requirements);

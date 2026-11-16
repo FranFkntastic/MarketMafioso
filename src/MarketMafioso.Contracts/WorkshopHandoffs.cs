@@ -15,5 +15,6 @@ public sealed record WorkshopHandoffList(IReadOnlyList<WorkshopCharacter> KnownA
     IReadOnlyList<WorkshopHandoffDto>? Received = null);
 public sealed record WorkshopHandoverReport(WorkshopCharacter Actor,
     IReadOnlyList<WorkshopMaterialQuantity> HandedOver, int HandoverTotal);
+/// <summary>Items counts player bags only; Retainers counts only retainer bags observed in the same report.</summary>
 public sealed record WorkshopCharacterHoldings(WorkshopCharacter Character, DateTimeOffset? CapturedAt,
-    IReadOnlyList<WorkshopMaterialQuantity> Items);
+    IReadOnlyList<WorkshopMaterialQuantity> Items, IReadOnlyList<WorkshopMaterialQuantity>? Retainers = null);
