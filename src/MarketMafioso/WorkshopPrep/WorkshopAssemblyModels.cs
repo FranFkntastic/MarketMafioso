@@ -3,6 +3,12 @@ using System.Collections.Generic;
 
 namespace MarketMafioso.WorkshopPrep;
 
+public enum WorkshopAssemblyOrder
+{
+    Sequential,
+    RoundRobin,
+}
+
 public enum WorkshopAssemblyRunnerState
 {
     Idle,
@@ -81,7 +87,8 @@ public sealed record WorkshopAssemblyActionResult(
     bool IsProjectUnavailable = false,
     bool IsWaiting = false,
     WorkshopMaterialBlocker MaterialBlocker = WorkshopMaterialBlocker.None,
-    WorkshopAssemblyPhaseContext? ContributionPhase = null);
+    WorkshopAssemblyPhaseContext? ContributionPhase = null,
+    uint? LiveResultItemId = null);
 
 public sealed record WorkshopAssemblyPreflightResult(
     bool CanStart,

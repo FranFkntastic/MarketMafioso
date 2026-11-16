@@ -74,12 +74,12 @@ internal static class ImGuiUi
         return clicked;
     }
 
-    public static bool MenuItem(string label, bool enabled)
+    public static bool MenuItem(string label, bool enabled, bool selected = false)
     {
         if (!enabled)
             ImGui.BeginDisabled();
 
-        var clicked = ImGui.MenuItem(label);
+        var clicked = ImGui.MenuItem(label, string.Empty, selected);
 
         if (!enabled)
             ImGui.EndDisabled();

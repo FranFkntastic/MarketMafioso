@@ -126,6 +126,7 @@ public class Configuration : IPluginConfiguration
     }
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
     public bool SplitWorkshopQueueAndMaterials { get; set; }
+    public WorkshopAssemblyOrder WorkshopAssemblyOrder { get; set; } = WorkshopAssemblyOrder.Sequential;
     /// <summary>Share handover subtracts what the assembler already holds (from its host inventory report).</summary>
     public bool WorkshopHandoverCountTheirInventory { get; set; } = true;
     public bool WorkshopHandoverIncludeTheirRetainers { get; set; }

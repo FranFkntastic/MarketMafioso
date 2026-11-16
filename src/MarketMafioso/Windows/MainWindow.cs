@@ -424,6 +424,12 @@ public class MainWindow : Window, IDisposable
             status => workshopStatus = status,
             StartWorkshopAssembly,
             InspectWorkshopCraftingLog,
+            () => config.WorkshopAssemblyOrder,
+            order =>
+            {
+                config.WorkshopAssemblyOrder = order;
+                config.Save();
+            },
             AgentReviewRegistry);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,

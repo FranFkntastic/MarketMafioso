@@ -155,6 +155,9 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
             if (activeCraft.ResultItem == entry.ResultItemId)
                 return new(true, $"Matching workshop project {entry.ProjectName} is already open.");
+            if (pendingConfirmationKind == WorkshopAssemblyPendingConfirmationKind.None)
+                return new(false, $"Open workshop project result item {activeCraft.ResultItem} does not match queued project {entry.ProjectName} ({entry.ResultItemId}).",
+                    LiveResultItemId: activeCraft.ResultItem);
         }
 
         var confirmation = TryConfirmPendingConfirmation();
@@ -356,7 +359,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         {
             return new(
                 false,
-                $"Open workshop project result item {craftState.ResultItem} does not match queued project {entry.ProjectName} ({entry.ResultItemId}).");
+                $"Open workshop project result item {craftState.ResultItem} does not match queued project {entry.ProjectName} ({entry.ResultItemId}).",
+                LiveResultItemId: craftState.ResultItem);
         }
 
         if (craftState.IsPhaseComplete())

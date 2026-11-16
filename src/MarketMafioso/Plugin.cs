@@ -257,7 +257,8 @@ public sealed class Plugin : IDalamudPlugin
                     Log.Warning("[MarketMafioso] {Message}", result.Message);
 
                 Configuration.Save();
-            });
+            },
+            getAssemblyOrder: () => Configuration.WorkshopAssemblyOrder);
         var workshopCraftRecipeResolver = new LuminaWorkshopMaterialCraftRecipeResolver(DataManager);
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
             workshopCraftRecipeResolver);
