@@ -407,6 +407,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var result = uiAutomation.TryOpenProject(entry);
         activeMaterialItemId = result.ActiveMaterialItemId;
         RecordActionResult("open-project", entry, result);
+        if (TryRetargetToLiveProject(entry, result))
+            return;
         // Crafting-log navigation stays paced: it is a handful of actions per
         // project, and re-firing it is what crashed the game on Nov 6.
         NoteAction(result, alwaysPace: true);
@@ -467,6 +469,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         var result = uiAutomation.TrySubmitNextMaterial(entry);
         activeMaterialItemId = result.ActiveMaterialItemId;
+        if (TryRetargetToLiveProject(entry, result))
+            return;
         if (result.MaterialBlocker == WorkshopMaterialBlocker.Fragmented)
         {
             diagnostics.Record("fragmented-material", result.Message, BuildActiveDetails(entry));
@@ -1002,6 +1006,27 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     private bool IsEntryPending(int index) => !skippedEntries[index] &&
         completedQuantities[index] < activePlan!.Entries[index].Quantity;
+
+    // The station resumes whichever project is already underway (e.g. after a
+    // Stop mid-unit), which need not be the row the order picked. Before any
+    // contribution to this unit, adopt the queued row that matches it.
+    private bool TryRetargetToLiveProject(WorkshopAssemblyQueueEntry entry, WorkshopAssemblyActionResult result)
+    {
+        if (result.LiveResultItemId is not { } live || live == entry.ResultItemId || pendingProgressMaterialItemId != null)
+            return false;
+
+        var match = Enumerable.Range(0, activePlan!.Entries.Count)
+            .FirstOrDefault(index => IsEntryPending(index) && activePlan.Entries[index].ResultItemId == live, -1);
+        if (match < 0)
+            return false;
+
+        var message = $"Resuming in-progress {activePlan.Entries[match].ProjectName} before {entry.ProjectName}.";
+        diagnostics.Record("project-retarget", message, BuildActiveDetails(entry));
+        activeEntryIndex = match;
+        activeMaterialItemId = null;
+        Progress = BuildProgress(Progress.State, message);
+        return true;
+    }
 
     private void PickNextEntry()
     {
