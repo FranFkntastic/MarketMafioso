@@ -205,6 +205,12 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
 
         var now = utcNow().UtcDateTime;
         config.ActiveWorkshopVendorBuyRun = null;
+        // The coordinator keeps its own copy of the previous (finished) vendor run; without a fresh one the
+        // new run is reported through that stale engine (its phase, message and receipts), hiding this run's
+        // retrieval progress and failures behind "Workshop vendor restock completed."
+        coordinator.Dispose();
+        coordinator = new GilVendorBuyCoordinator(
+            new ConfigurationGilVendorBuyRunStore(config, save), runtime, utcNow);
         config.ActiveWorkshopVendorRestockState = new WorkshopVendorRestockState
         {
             LocalContentId = owner.LocalContentId!.Value,
