@@ -46,11 +46,13 @@ internal sealed class MarketAcquisitionPlanPanel
     private readonly DalamudExpandableRows expandedItems = new();
     private readonly DalamudCrossRowHighlight coverageHighlight = new();
     private readonly DalamudRankedColumns coverageColumns;
+    private readonly Configuration config;
     private MarketAcquisitionPlan? coveragePlan;
     private MarketAcquisitionRouteCoverage? coverage;
 
     public MarketAcquisitionPlanPanel(Configuration config)
     {
+        this.config = config;
         coverageColumns = new DalamudRankedColumns(DefaultCoverageSlots, MaximumCoverageSlots, slots =>
         {
             config.MarketAcquisitionCoverageColumns = slots;
@@ -96,7 +98,7 @@ internal sealed class MarketAcquisitionPlanPanel
     {
         var routeCoverage = ResolveCoverage(plan);
         var skipped = routeCoverage.Skipped;
-        if (plan.WorldBatches.Count == 0 && skipped.Count == 0)
+        if (plan.WorldBatches.Count == 0 && skipped.Count == 0 && routeCoverage.EmptyBuyBelow.Count == 0)
             return;
 
         var label = skipped.Count == 0
@@ -168,6 +170,9 @@ internal sealed class MarketAcquisitionPlanPanel
         if (routeCoverage.Shortfalls.Count > 0)
             DrawShortfallRow(routeCoverage.Shortfalls);
 
+        if (routeCoverage.EmptyBuyBelow.Count > 0)
+            DrawEmptyBuyBelowRow(routeCoverage.EmptyBuyBelow);
+
         for (var index = 0; index < skipped.Count; index++)
         {
             var decision = skipped[index];
@@ -226,6 +231,66 @@ internal sealed class MarketAcquisitionPlanPanel
             HiddenEntriesTooltip(shortfalls.Skip(coverageColumns.VisibleSlots).ToArray(),
                 (shortfall, width) => DrawShortfallBar("hidden", shortfall, width, interactive: false));
         ImGui.PopID();
+    }
+
+    private void DrawEmptyBuyBelowRow(IReadOnlyList<RouteCoverageEmptyBuyBelow> lines)
+    {
+        ImGui.TableNextRow();
+        ImGui.PushID("nothing-to-buy");
+        ImGui.TableSetColumnIndex(1);
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Nothing to buy");
+
+        for (var rank = 0; rank < lines.Count && coverageColumns.SlotColumn(rank); rank++)
+            DrawEmptyBuyBelowBar($"slot{rank}", lines[rank]);
+
+        if (coverageColumns.HandleCell(lines.Count))
+            HiddenEntriesTooltip(lines.Skip(coverageColumns.VisibleSlots).ToArray(),
+                (line, width) => DrawEmptyBuyBelowBar("hidden", line, width, interactive: false));
+        ImGui.PopID();
+    }
+
+    private void DrawEmptyBuyBelowBar(string id, RouteCoverageEmptyBuyBelow line, float width = 0, bool interactive = true)
+    {
+        var flags = DalamudProgressCellFlags.IconSlot | DalamudProgressCellFlags.Muted;
+        if (coverageHighlight.IsHighlighted(line.LineId))
+            flags |= DalamudProgressCellFlags.Highlighted;
+        var cell = new DalamudProgressCell(line.ItemName, "0", 0, 0)
+        {
+            Flags = flags,
+            Icon = MarketMafiosoItemIcons.Handle(line.ItemId),
+        };
+        if (!DalamudProgressCellRenderer.Draw(id, cell, CoverageStyle, width) || !interactive)
+            return;
+
+        coverageHighlight.MarkHovered(line.LineId);
+        ImGui.BeginTooltip();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, line.ItemName);
+        if (BeginFigures())
+        {
+            Figure("Ceiling", FormatGil(line.Ceiling));
+            if (line.RecentlyClearedWorlds > 0)
+                Figure("Recently cleared", $"{line.RecentlyClearedWorlds:N0} worlds");
+            if (line.LastCheckedAtUtc is { } lastChecked)
+                Figure("Last checked", FormatCheckedAge(lastChecked));
+            if (line.OldestCheckedAtUtc is { } oldestChecked)
+            {
+                var ttl = TimeSpan.FromHours(Math.Clamp(config.MarketAcquisitionRecentWorldTtlHours, 1, 168));
+                var recheck = DateTime.SpecifyKind(oldestChecked, DateTimeKind.Utc).Add(ttl).ToLocalTime();
+                Figure("Rechecks", recheck.Date == DateTime.Today ? recheck.ToString("t") : recheck.ToString("ddd t"));
+            }
+            Figure("Elsewhere", "none under ceiling");
+            ImGui.EndTable();
+        }
+        ImGui.EndTooltip();
+    }
+
+    private static string FormatCheckedAge(DateTime checkedAtUtc)
+    {
+        var age = DateTime.UtcNow - DateTime.SpecifyKind(checkedAtUtc, DateTimeKind.Utc);
+        return age.TotalMinutes < 1 ? "just now"
+            : age.TotalHours < 1 ? $"{Math.Floor(age.TotalMinutes):N0} min ago"
+            : age.TotalDays < 1 ? $"{Math.Floor(age.TotalHours):N0} hr ago"
+            : $"{Math.Floor(age.TotalDays):N0} days ago";
     }
 
     private void HiddenEntriesTooltip<T>(IReadOnlyList<T> hidden, Action<T, float> draw)
