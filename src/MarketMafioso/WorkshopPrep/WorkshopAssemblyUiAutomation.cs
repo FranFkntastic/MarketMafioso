@@ -469,7 +469,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
         if (!DalamudInventoryMover.CanMove)
             return PreparationWait("Waiting for native inventory movement permission after station exit.");
-        var result = preparation.Evaluate(remainingEntries, preparationCraft, Diagnostics, () => runActive);
+        var result = preparation.Evaluate(remainingEntries, preparationCraft, Diagnostics, () => runActive, consolidate: true);
         if (result.Success)
         {
             preparing = false;

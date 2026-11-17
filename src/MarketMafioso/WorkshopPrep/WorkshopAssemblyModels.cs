@@ -53,7 +53,7 @@ public sealed record WorkshopAssemblyQueueEntry(
     public IReadOnlyList<WorkshopContributionBatch> ContributionSchedule { get; init; } = [];
 }
 
-public sealed record WorkshopContributionBatch(int Phase, uint ItemId, string ItemName, int Quantity, int Count, int StackCapacity);
+public sealed record WorkshopContributionBatch(uint ItemId, string ItemName, int Quantity, int Count);
 
 public enum WorkshopMaterialBlocker { None, InventoryUnknown, Shortage, Fragmented, NativePreparationUnavailable, MergeRefused }
 

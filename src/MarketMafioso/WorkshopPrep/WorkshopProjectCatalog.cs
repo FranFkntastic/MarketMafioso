@@ -115,8 +115,8 @@ public sealed class WorkshopProjectCatalog
             sequence.CompanyCraftDraft.ValueNullable?.Name.ToString())
         {
             ContributionSchedule = processRows.Select(row => new WorkshopContributionBatch(
-                row.Phase, supplyItems[row.SupplyItemId].RowId, supplyItems[row.SupplyItemId].Name.ToString(),
-                row.SetQuantity, row.SetsRequired, checked((int)supplyItems[row.SupplyItemId].StackSize))).ToArray(),
+                supplyItems[row.SupplyItemId].RowId, supplyItems[row.SupplyItemId].Name.ToString(),
+                row.SetQuantity, row.SetsRequired)).ToArray(),
         };
     }
 }
