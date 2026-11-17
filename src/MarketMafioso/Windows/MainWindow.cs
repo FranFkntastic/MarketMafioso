@@ -185,7 +185,9 @@ public class MainWindow : Window, IDisposable
             config,
             acquisitionHttpClient,
             Plugin.PluginInterface.GetPluginConfigDirectory(),
-            ex => log.Warning(ex, "[MarketMafioso] Market intelligence reporting requires attention."));
+            ex => log.Warning(ex, "[MarketMafioso] Market intelligence reporting requires attention."),
+            message => log.Information("[MarketMafioso] {Message}", message),
+            (exception, message) => log.Warning(exception, "[MarketMafioso] {Message}", message));
         var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
@@ -329,11 +331,16 @@ public class MainWindow : Window, IDisposable
             exactAcquisitionRouteStateStore,
             new FileMarketAcquisitionReportOutbox(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
-                "market-acquisition-report-outbox.json")),
+                "market-acquisition-report-outbox.json"),
+                message => log.Information("[MarketMafioso] {Message}", message),
+                (exception, message) => log.Warning(exception, "[MarketMafioso] {Message}", message)),
             shardCheckpoints,
             new FileMarketAcquisitionReportOutbox(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
-                "market-acquisition-report-dead-letter.json")),
+                "market-acquisition-report-dead-letter.json"),
+                message => log.Information("[MarketMafioso] {Message}", message),
+                (exception, message) => log.Warning(exception, "[MarketMafioso] {Message}", message),
+                deadLetterOnly: true),
             config.PluginInstanceId,
             PluginBuildInfo.DisplayVersion,
             () => config.MarketAcquisitionExhaustiveResearchMode,

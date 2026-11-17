@@ -87,7 +87,7 @@ internal sealed class WorkshopPrepQueuePanel
                 row => row.IsEditor ? "Add or browse" : "Remove",
                 Flags: ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoSort,
                 Draw: DrawQueueActions),
-        ]);
+        ], DalamudTableSelection<WorkshopQueueTableRow>.None);
     }
 
     public bool CanEditQueue => !workshopAssemblyRunner.HasActiveRun;
@@ -437,17 +437,21 @@ internal sealed class WorkshopPrepQueuePanel
             return;
         }
 
-        foreach (var row in queueTable.Apply(rows, ImGui.TableGetSortSpecs()))
+        var visible = queueTable.Apply(rows, ImGui.TableGetSortSpecs());
+        for (var index = 0; index < visible.Count; index++)
         {
+            var row = visible[index];
             ImGui.PushID(checked((int)row.Item!.WorkshopItemId));
-            queueTable.DrawRow(row);
+            queueTable.DrawSaneRow(visible, index, $"workshop-queue-{row.Item.WorkshopItemId}");
             ImGui.PopID();
         }
 
         ImGui.PushID("WorkshopQueueAddRow");
         var accent = MarketMafiosoUiTheme.Header;
-        queueTable.DrawRow(
-            WorkshopQueueTableRow.Editor,
+        queueTable.DrawSaneRow(
+            [WorkshopQueueTableRow.Editor],
+            0,
+            "workshop-queue-editor",
             new(accent.X, accent.Y, accent.Z, 0.10f),
             ImGui.GetFrameHeight() + 8f);
         ImGui.PopID();

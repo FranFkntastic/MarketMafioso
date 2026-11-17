@@ -179,12 +179,14 @@ internal sealed class WorkshopMaterialPanel
             return;
         }
 
-        foreach (var row in visible)
+        for (var index = 0; index < visible.Count; index++)
         {
-            materialTable.DrawRow(
-                row,
-                ResolveRowBackground(row.Line),
-                id: $"workshop-material-{row.Line.Availability.ItemId}");
+            var row = visible[index];
+            materialTable.DrawSaneRow(
+                visible,
+                index,
+                $"workshop-material-{row.Line.Availability.ItemId}",
+                background: ResolveRowBackground(row.Line));
         }
 
         materialTable.End();
@@ -224,7 +226,7 @@ internal sealed class WorkshopMaterialPanel
                 ImGuiTableColumnFlags.WidthStretch,
                 Draw: row => acquisitionCell.Draw(row.Line, row.ActiveLine),
                 DrawContextMenu: row => acquisitionCell.DrawContextMenu(row.Line, row.ActiveLine)),
-        ]);
+        ], DalamudTableSelection<MaterialTableRow>.None);
 
     internal static WorkshopMaterialStockState ResolveStockState(WorkshopMaterialProcurement line)
     {

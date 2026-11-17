@@ -46,21 +46,31 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
         WriteIndented = false,
     };
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
-    private const long StartupCompactionSizeThresholdBytes = 8 * 1024 * 1024;
-    private const int StartupCompactionMinimumRecordCount = 1024;
+    private const int CompactionMinimumRecordCount = 64;
+    private static readonly TimeSpan RetentionWindow = TimeSpan.FromDays(30);
 
     private readonly object sync = new();
     private readonly string path;
     private readonly string backupPath;
     private readonly Action<long>? observePhysicalWrite;
+    private readonly Action<string>? logInformation;
+    private readonly Action<Exception, string>? logWarning;
+    private readonly bool deadLetterOnly;
+    private int journalRecordCount;
     private List<MarketAcquisitionReportOutboxEntry> entries;
 
-    public FileMarketAcquisitionReportOutbox(string path)
-        : this(path, observePhysicalWrite: null)
+    public FileMarketAcquisitionReportOutbox(string path,
+        Action<string>? logInformation = null,
+        Action<Exception, string>? logWarning = null,
+        bool deadLetterOnly = false)
+        : this(path, null, logInformation, logWarning, deadLetterOnly)
     {
     }
 
-    internal FileMarketAcquisitionReportOutbox(string path, Action<long>? observePhysicalWrite)
+    internal FileMarketAcquisitionReportOutbox(string path, Action<long>? observePhysicalWrite,
+        Action<string>? logInformation = null,
+        Action<Exception, string>? logWarning = null,
+        bool deadLetterOnly = false)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("An outbox path is required.", nameof(path));
@@ -68,21 +78,24 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
         this.path = Path.GetFullPath(path);
         backupPath = this.path + ".bak";
         this.observePhysicalWrite = observePhysicalWrite;
+        this.logInformation = logInformation;
+        this.logWarning = logWarning;
+        this.deadLetterOnly = deadLetterOnly;
         if (TryLoadJournal(
                 this.path,
                 out entries,
-                out var journalRecordCount,
+                out journalRecordCount,
                 out var requiresTailRepair))
         {
             if (requiresTailRepair)
                 RewriteJournal();
-            else
-                CompactJournalAtStartupWhenNeeded(journalRecordCount);
+            MaintainJournal();
             return;
         }
 
         entries = LoadLegacySnapshot(this.path) ?? LoadLegacySnapshot(backupPath) ?? [];
         RewriteJournal();
+        MaintainJournal();
     }
 
     public MarketAcquisitionReportOutboxEntry Put<T>(string id, string reportType, string requestId, T payload)
@@ -114,6 +127,7 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
                 Entry = entry,
             });
             entries.Add(entry);
+            MaintainJournal();
             return entry;
         }
     }
@@ -151,6 +165,7 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
                 Entry = quarantined,
             }, flushToDisk: true);
             entries[index] = quarantined;
+            MaintainJournal();
             return quarantined;
         }
     }
@@ -178,6 +193,7 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
                 Ids = removed.Select(entry => entry.Id).ToArray(),
             });
             entries.RemoveAll(entry => idSet.Contains(entry.Id));
+            MaintainJournal();
         }
     }
 
@@ -299,6 +315,7 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
         if (flushToDisk)
             stream.Flush(flushToDisk: true);
         observePhysicalWrite?.Invoke(bytes.LongLength);
+        journalRecordCount++;
     }
 
     private static string PayloadHash(string payload) =>
@@ -328,20 +345,43 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
         }
     }
 
-    private void CompactJournalAtStartupWhenNeeded(int recordCount)
+    private void MaintainJournal()
     {
-        var recordThreshold = Math.Max(StartupCompactionMinimumRecordCount, entries.Count * 4);
-        if (new FileInfo(path).Length < StartupCompactionSizeThresholdBytes
-            && recordCount < recordThreshold)
+        var operation = "purge expired entries";
+        try
         {
-            return;
-        }
+            var cutoff = DateTimeOffset.UtcNow - RetentionWindow;
+            var expired = entries.Where(entry =>
+                entry.Quarantine is { } quarantine
+                    ? quarantine.QuarantinedAtUtc < cutoff
+                    : deadLetterOnly && entry.EnqueuedAtUtc < cutoff).ToArray();
+            if (expired.Length > 0)
+            {
+                var expiredIds = expired.Select(entry => entry.Id).ToHashSet(StringComparer.Ordinal);
+                var retained = entries.Where(entry => !expiredIds.Contains(entry.Id)).ToList();
+                // Publish retention only after atomic replacement succeeds. Never append
+                // remove records for quarantines: older readers reject those records.
+                RewriteJournal(retained);
+                entries = retained;
+                var times = expired.Select(entry => entry.Quarantine?.QuarantinedAtUtc ?? entry.EnqueuedAtUtc).ToArray();
+                logInformation?.Invoke($"Outbox '{Path.GetFileName(path)}' dropped {expired.Length} expired entries; " +
+                    $"oldest/newest quarantine time (dead-letter enqueue time): {times.Min():O} / {times.Max():O}.");
+                return;
+            }
 
-        RewriteJournal();
+            operation = "compact journal";
+            if (journalRecordCount > CompactionMinimumRecordCount && journalRecordCount > (long)entries.Count * 2)
+                RewriteJournal();
+        }
+        catch (Exception exception)
+        {
+            logWarning?.Invoke(exception, $"Outbox '{Path.GetFileName(path)}' failed to {operation}; continuing with uncompacted data.");
+        }
     }
 
-    private void RewriteJournal()
+    private void RewriteJournal(List<MarketAcquisitionReportOutboxEntry>? retained = null)
     {
+        retained ??= entries;
         EnsureParentDirectory();
         var temporaryPath = path + $".{Guid.NewGuid():N}.tmp";
         try
@@ -355,7 +395,7 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
                        bufferSize: 4096,
                        FileOptions.WriteThrough))
             {
-                foreach (var entry in entries.OrderBy(entry => entry.EnqueuedAtUtc))
+                foreach (var entry in retained.OrderBy(entry => entry.EnqueuedAtUtc))
                 {
                     var record = new OutboxJournalRecord
                     {
@@ -375,6 +415,7 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
                 File.Replace(temporaryPath, path, destinationBackupFileName: null, ignoreMetadataErrors: true);
             else
                 File.Move(temporaryPath, path);
+            journalRecordCount = retained.Count;
         }
         finally
         {

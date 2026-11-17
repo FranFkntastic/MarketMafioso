@@ -22,8 +22,10 @@ public sealed class MarketIntelligenceQuarantinePersistenceTests
         Assert.Equal(before, File.ReadAllBytes(fixture.Backup));
     }
 
-    [Fact]
-    public void Compaction_PreservesQuarantineAndBackup()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Compaction_PreservesQuarantineAndBackup(bool denyReplacement)
     {
         using var fixture = new Fixture();
         var original = fixture.Seed();
@@ -37,6 +39,49 @@ public sealed class MarketIntelligenceQuarantinePersistenceTests
         Assert.Single(File.ReadAllLines(fixture.Path));
         Assert.Equal(before, File.ReadAllBytes(fixture.Backup));
         Assert.Equal(recovered, Assert.Single(new FileMarketAcquisitionReportOutbox(fixture.Path).Snapshot()));
+
+        // Old sendable reports must survive the same rewrite that expires conflicts.
+        var oldTime = DateTimeOffset.UtcNow.AddDays(-40);
+        var expired = recovered with
+        {
+            Id = "expired-conflict",
+            Quarantine = recovered.Quarantine! with { QuarantinedAtUtc = oldTime },
+        };
+        var pending = original with { Id = "old-pending", EnqueuedAtUtc = oldTime };
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        foreach (var entry in new[] { expired, pending })
+            File.AppendAllText(fixture.Path,
+                System.Text.Json.JsonSerializer.Serialize(new { operation = "put", entry }, options) + Environment.NewLine);
+        var uncompacted = File.ReadAllBytes(fixture.Path);
+        var warnings = new List<string>();
+        var information = new List<string>();
+        using (var heldFile = denyReplacement
+                   ? new FileStream(fixture.Path, FileMode.Open, FileAccess.Read, FileShare.Read)
+                   : null)
+        {
+            var maintained = new FileMarketAcquisitionReportOutbox(fixture.Path,
+                information.Add, (_, message) => warnings.Add(message));
+            Assert.Contains(pending, maintained.Snapshot());
+            Assert.Contains(recovered, maintained.Snapshot());
+            if (denyReplacement)
+            {
+                Assert.Contains(expired, maintained.Snapshot());
+                Assert.Equal(uncompacted, File.ReadAllBytes(fixture.Path));
+                Assert.Single(warnings);
+                Assert.Empty(information);
+            }
+            else
+            {
+                Assert.DoesNotContain(expired, maintained.Snapshot());
+                Assert.Empty(warnings);
+                Assert.Single(information);
+            }
+        }
+        var reloaded = new FileMarketAcquisitionReportOutbox(fixture.Path).Snapshot();
+        Assert.Equal(2, reloaded.Count);
+        Assert.Contains(pending, reloaded);
+        Assert.Contains(recovered, reloaded);
+        Assert.Equal(before, File.ReadAllBytes(fixture.Backup));
     }
 
     private sealed class Fixture : IDisposable
