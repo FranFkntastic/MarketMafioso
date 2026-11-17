@@ -100,6 +100,7 @@ public sealed class WorkshopRestockService : IDisposable
                       $"(you're visiting {playerState.CurrentWorld.Value.Name}) to restock."
                     : null);
         Requests.DiagnosticLog = message => log.Warning(message);
+        Requests.ProgressLog = message => log.Debug(message);
         Plugin.ClientState.Login += OnLogin;
         Plugin.ClientState.TerritoryChanged += OnTerritoryChanged;
         if (!quartermaster.IsChangedSubscribed)
