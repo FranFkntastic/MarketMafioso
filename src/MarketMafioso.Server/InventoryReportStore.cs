@@ -72,6 +72,43 @@ public sealed class InventoryReportStore
     public Task<bool> CanApplyDeltaBaseAsync(long accountId, string id, CancellationToken cancellationToken) =>
         readQueries.CanApplyDeltaBaseAsync(accountId, id, cancellationToken);
 
+    public async Task<StoredInventoryReport> SaveDeltaAsync(long accountId, InventoryReportDelta delta,
+        string? apiKeyLabel, CancellationToken token)
+    {
+        await writeGate.WaitAsync(token);
+        try
+        {
+            var before = await GetAsync(accountId, delta.BaseSnapshotId, token)
+                ?? throw new InventoryDeltaConflictException("The inventory delta base is missing.");
+            var report = InventoryReportDeltaApplier.Apply(before.Id, before.Report, delta);
+            if (!InventoryReportEvidence.HasSnapshotEvidence(report))
+                throw new InventoryDeltaConflictException("The inventory delta removes all observation evidence.");
+            var hash = InventorySemanticFingerprint.Compute(report);
+            var receivedAt = DateTimeOffset.UtcNow;
+            var id = $"{receivedAt:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..26];
+            // The response needs only a summary, not another full database reconstruction.
+            var summary = InventoryReportRowMapper.CreateSummary(id, receivedAt, report);
+            await using var connection = await connectionFactory.OpenConnectionAsync(token);
+            using (var write = connectionFactory.BeginWrite(connection))
+            {
+                var result = await writePersistence.WriteDeltaAsync(connection, write.Transaction, accountId,
+                    before, report, delta, id, receivedAt, apiKeyLabel, hash, token);
+                if (result.SnapshotId != id)
+                    throw new InventoryDeltaConflictException("The inventory head changed during delta persistence.");
+                await write.Transaction.CommitAsync(token);
+            }
+            return new StoredInventoryReport
+            {
+                Id = id,
+                ReceivedAt = receivedAt,
+                ApiKeyLabel = string.IsNullOrWhiteSpace(apiKeyLabel) ? null : "provided",
+                Report = report,
+                Summary = summary,
+            };
+        }
+        finally { writeGate.Release(); }
+    }
+
     private async Task<StoredInventoryReport> SaveCoreAsync(
         long accountId,
         string id,
@@ -89,20 +126,23 @@ public sealed class InventoryReportStore
             var metadata = report.Metadata ?? new InventoryReportMetadata();
 
             await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-            using var write = connectionFactory.BeginWrite(connection);
-            var transaction = write.Transaction;
-            var writeResult = await writePersistence.WriteSnapshotAsync(
-                connection,
-                transaction,
-                accountId,
-                id,
-                receivedAt,
-                report,
-                metadata,
-                apiKeyLabel,
-                rawReportJson,
-                cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            InventoryWriteResult writeResult;
+            using (var write = connectionFactory.BeginWrite(connection))
+            {
+                var transaction = write.Transaction;
+                writeResult = await writePersistence.WriteSnapshotAsync(
+                    connection,
+                    transaction,
+                    accountId,
+                    id,
+                    receivedAt,
+                    report,
+                    metadata,
+                    apiKeyLabel,
+                    rawReportJson,
+                    cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
 
             return (await GetAsync(accountId, writeResult.SnapshotId, cancellationToken))
                 ?? throw new InvalidOperationException($"Saved inventory head {writeResult.SnapshotId} could not be reloaded.");

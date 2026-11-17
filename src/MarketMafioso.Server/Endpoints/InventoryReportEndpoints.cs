@@ -327,32 +327,10 @@ internal static class InventoryReportEndpoints
             return Results.BadRequest(new { error = "invalid_inventory_delta" });
 
         var accountId = await accountResolver.ResolveAccountIdAsync(suppliedApiKey, token) ?? 1;
-        var baseSnapshot = await store.GetAsync(accountId, delta.BaseSnapshotId, token);
-        if (baseSnapshot == null)
-        {
-            return Results.Conflict(new
-            {
-                error = "inventory_delta_base_missing",
-                baseSnapshotId = delta.BaseSnapshotId,
-            });
-        }
-
-        if (!await store.CanApplyDeltaBaseAsync(accountId, delta.BaseSnapshotId, token))
-        {
-            return Results.Conflict(new
-            {
-                error = "inventory_delta_base_stale",
-                baseSnapshotId = delta.BaseSnapshotId,
-            });
-        }
-
-        InventoryReport reconstructed;
+        StoredInventoryReport stored;
         try
         {
-            reconstructed = InventoryReportDeltaApplier.Apply(
-                baseSnapshot.Id,
-                baseSnapshot.Report,
-                delta);
+            stored = await store.SaveDeltaAsync(accountId, delta, suppliedApiKey, token);
         }
         catch (InventoryDeltaConflictException exception)
         {
@@ -363,21 +341,6 @@ internal static class InventoryReportEndpoints
             });
         }
 
-        if (!InventoryReportEvidence.HasSnapshotEvidence(reconstructed))
-            return Results.BadRequest(new { error = "Report must include player inventory or retainer observation evidence." });
-
-        var rawJson = JsonSerializer.Serialize(
-            reconstructed,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web)
-            {
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-            });
-        var stored = await store.SaveAsync(
-            accountId,
-            reconstructed,
-            suppliedApiKey ?? string.Empty,
-            rawJson,
-            token);
         return Results.Created(
             AppUrl(request.PathBase, $"/api/reports/{stored.Id}"),
             CreateInventoryReportResponse(request, publicOrigin, stored));

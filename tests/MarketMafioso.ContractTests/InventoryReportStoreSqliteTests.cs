@@ -9,6 +9,78 @@ namespace MarketMafioso.Server.ContractTests;
 
 public sealed class InventoryReportStoreSqliteTests
 {
+    // Admission: partial persistence can silently mix old/new bags, listings and
+    // owner evidence. That corrupts stock authority and is difficult to diagnose
+    // from a successful upload; compare against the independent full-save path.
+    [Fact]
+    public async Task DeltaInPlace_MatchesFullPersistenceAndFencesStaleBases()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var baseline = await StoreFixture.CreateAsync();
+        var initial = CreateReport("Wei Ning", "Siren", 42) with
+        {
+            PlayerInventory = Enumerable.Range(0, 100).Select(i =>
+                Bag($"Bag{i}", Enumerable.Range(0, 35).Select(j => Slot(42, 12, j, 100)).ToArray())).ToList(),
+            Retainers = [Retainer("Taffy", 12345, "Wei Ning", "Siren", 12)],
+        };
+        var current = await fixture.Store.SaveAsync(fixture.AccountId, initial, null, null, CancellationToken.None);
+        current = (await fixture.Store.GetAsync(fixture.AccountId, current.Id, CancellationToken.None))!;
+        async Task<string> UntouchedItemRows()
+        {
+            await using var connection = await fixture.OpenConnectionAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT group_concat(i.id) FROM inventory_items i
+                JOIN inventory_bags b ON b.id = i.bag_id WHERE b.bag_name = 'Bag99';
+                """;
+            return (string)(await command.ExecuteScalarAsync())!;
+        }
+        var untouched = await UntouchedItemRows();
+        var next = current.Report with
+        {
+            Timestamp = "2026-06-24T12:00:00Z", PlayerGil = 987,
+            PlayerInventory = [Bag("Bag0", Slot(42, 99, 0, 95)), .. current.Report.PlayerInventory.Skip(2), Bag("New", Slot(43, 2, 0, 100))],
+            Retainers = [current.Report.Retainers[0] with
+            {
+                Gil = 456, Bags = [Bag("RetainerPage1", Slot(42, 88, 0, 100))],
+                MarketListings = [new RetainerMarketListing { ItemId = 42, Quantity = 3, UnitPrice = 123 }],
+            }, Retainer("New retainer", 54321, "Wei Ning", "Siren", 45)],
+        };
+        foreach (var desired in new[] { next, next with { Timestamp = "2026-06-24T13:00:00Z" }, next with
+                 { Timestamp = "2026-06-25T12:00:00Z", Retainers = [next.Retainers[1]] } })
+        {
+            var oldId = current.Id;
+            var revision = await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None);
+            var delta = InventoryReportDeltaBuilder.Build(oldId, current.Report, desired).Delta!;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            current = await fixture.Store.SaveDeltaAsync(fixture.AccountId, delta, null, CancellationToken.None);
+            Console.WriteLine($"Delta including full base read: {watch.Elapsed.TotalMilliseconds:F2} ms; 3500-item fixture");
+            var reloaded = (await fixture.Store.GetAsync(fixture.AccountId, current.Id, CancellationToken.None))!;
+            var full = await baseline.Store.SaveAsync(baseline.AccountId, desired, null, null, CancellationToken.None);
+            Assert.Equal(System.Text.Json.JsonSerializer.Serialize(full.Report), System.Text.Json.JsonSerializer.Serialize(reloaded.Report));
+            Assert.NotEqual(revision.Token, (await fixture.Store.GetRevisionAsync([fixture.AccountId], CancellationToken.None)).Token);
+            Assert.False(await fixture.Store.CanApplyDeltaBaseAsync(fixture.AccountId, oldId, CancellationToken.None));
+            await Assert.ThrowsAsync<InventoryDeltaConflictException>(() => fixture.Store.SaveDeltaAsync(fixture.AccountId, delta, null, CancellationToken.None));
+            Assert.Single(await fixture.Store.ListSummariesAsync(CancellationToken.None));
+            Assert.Equal(untouched, await UntouchedItemRows());
+            current = reloaded;
+        }
+        // Interval rollover preserves the prior head; received-at refreshes must not
+        // reset the history clock and prevent history forever.
+        await using (var connection = await fixture.OpenConnectionAsync())
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE snapshots SET head_started_at_utc = '2020-01-01T00:00:00Z'";
+            await command.ExecuteNonQueryAsync();
+        }
+        var rollover = current.Report with { PlayerGil = 999, Timestamp = "2026-06-26T12:00:00Z" };
+        var rolled = await fixture.Store.SaveDeltaAsync(fixture.AccountId,
+            InventoryReportDeltaBuilder.Build(current.Id, current.Report, rollover).Delta!, null, CancellationToken.None);
+        Assert.NotNull(await fixture.Store.GetAsync(fixture.AccountId, current.Id, CancellationToken.None));
+        Assert.Equal(2, (await fixture.Store.ListSummariesAsync(CancellationToken.None)).Count);
+        Assert.NotEqual(current.Id, rolled.Id);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
