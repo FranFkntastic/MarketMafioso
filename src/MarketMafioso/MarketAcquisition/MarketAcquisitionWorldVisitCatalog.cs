@@ -170,7 +170,30 @@ public sealed class MarketAcquisitionWorldVisitCatalog : IDisposable
         // Disable callbacks before draining; keep the timer valid until an in-flight writer exits.
         writer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         // Drain the same worker without doing the final serialization/write on the framework thread.
-        System.Threading.Tasks.Task.Run(FlushStore).GetAwaiter().GetResult();
+        // The store can be briefly held by an external scanner at unload, so retry a few times
+        // before giving up rather than dropping every visit since the last successful write.
+        const int finalFlushAttempts = 5;
+        var stillDirty = true;
+        for (var attempt = 1; attempt <= finalFlushAttempts; attempt++)
+        {
+            System.Threading.Tasks.Task.Run(FlushStore).GetAwaiter().GetResult();
+            lock (sync)
+                stillDirty = dirty;
+            if (!stillDirty)
+                break;
+            if (attempt < finalFlushAttempts)
+                Thread.Sleep(200);
+        }
+        if (stillDirty)
+        {
+            int inMemory;
+            lock (sync)
+                inMemory = visits.Count;
+            Plugin.Log.Warning(
+                $"[MarketMafioso] World-visit store final flush failed after {finalFlushAttempts} attempts at unload; " +
+                $"changes since the last successful write are lost ({inMemory} visit(s) held in memory, {path}). " +
+                "Legacy config history is retained if migration had not yet committed.");
+        }
         Tick();
         lock (writerSync)
         {
