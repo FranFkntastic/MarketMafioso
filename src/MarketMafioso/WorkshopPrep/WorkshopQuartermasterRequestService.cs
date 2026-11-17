@@ -22,6 +22,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
     private bool disposed;
     private int changePending;
     public Action<string>? DiagnosticLog { get; set; }
+    public Action<string>? ProgressLog { get; set; }
     public bool IsRefreshDue => Volatile.Read(ref changePending) != 0 || utcNow() >= nextOperationPollAtUtc;
 
     public WorkshopQuartermasterRequestService(
@@ -270,16 +271,18 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             IsTerminalStatus(persisted.Status))
             return;
 
-        DiagnosticLog?.Invoke($"[MarketMafioso] RQ restock wake={wakeReason} operation={persisted.OperationId}");
+        ProgressLog?.Invoke($"[MarketMafioso] RQ restock wake={wakeReason} operation={persisted.OperationId}");
         if (!client.TryGetOperation(persisted.OperationId, ownerScope, out var operation, out var error))
         {
             LastStatus = error;
+            DiagnosticLog?.Invoke(LastStatus);
             return;
         }
         if (!string.Equals(operation!.Status, "not_found", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(operation.RequestId, persisted.RequestId, StringComparison.Ordinal))
         {
             LastStatus = "Quartermaster operation response did not match persisted request identity.";
+            DiagnosticLog?.Invoke(LastStatus);
             return;
         }
         if (persisted.Revision is { } persistedRevision)
@@ -287,6 +290,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             if (operation.Revision is not { } operationRevision || operationRevision < persistedRevision)
             {
                 LastStatus = "Quartermaster operation response regressed its persisted revision.";
+                DiagnosticLog?.Invoke(LastStatus);
                 return;
             }
             if (operationRevision == persistedRevision &&
@@ -296,6 +300,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
                  !ReceiptsEquivalent(persisted.Receipts, operation.Receipts)))
             {
                 LastStatus = "Quartermaster operation response changed state without advancing its revision.";
+                DiagnosticLog?.Invoke(LastStatus);
                 return;
             }
         }
@@ -303,6 +308,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         if (!TryMergeReceipts(candidate, operation, out var receiptsChanged, out error))
         {
             LastStatus = error;
+            DiagnosticLog?.Invoke(LastStatus);
             return;
         }
 
@@ -319,7 +325,8 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         candidate.Status = operation.Status;
         candidate.Message = operation.Message;
         candidate.Code = operation.Code;
-        DiagnosticLog?.Invoke($"[MarketMafioso] RQ restock operation={persisted.OperationId} result={operation.Status} code={operation.Code ?? "unspecified"} message={operation.Message} wake={wakeReason}");
+        var routine = operation.Status.ToLowerInvariant() is "running" or "pending" or "queued" or "accepted" or "succeeded" or "completed";
+        (routine ? ProgressLog : DiagnosticLog)?.Invoke($"[MarketMafioso] RQ restock operation={persisted.OperationId} result={operation.Status} code={operation.Code ?? "unspecified"} message={operation.Message} wake={wakeReason}");
         if (changed || receiptsChanged)
         {
             config.QuartermasterWorkshopRequests[key] = candidate;
@@ -331,6 +338,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             {
                 config.QuartermasterWorkshopRequests[key] = persisted;
                 LastStatus = $"{operationStatus} MMF could not persist latest Quartermaster operation evidence: {ex.Message}";
+                DiagnosticLog?.Invoke(LastStatus);
                 nextOperationPollAtUtc = DateTimeOffset.MinValue;
                 return;
             }

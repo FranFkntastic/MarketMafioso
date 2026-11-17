@@ -11,14 +11,42 @@ internal sealed class InventoryRetentionWorker(
     ILogger<InventoryRetentionWorker> log) : BackgroundService
 {
     private int nextAccountOffset;
+    private TimeSpan nextPause = TimeSpan.FromSeconds(10);
+    private sealed class BackoffException : Exception { }
+
+    private void BackOff(string stage, TimeSpan duration, Exception? failure = null)
+    {
+        var threshold = TimeSpan.FromSeconds(configuration.GetValue("MarketMafioso:InventoryRetentionSlowWriteSeconds", 2d));
+        if (threshold <= TimeSpan.Zero) throw new InvalidOperationException("InventoryRetentionSlowWriteSeconds must be positive.");
+        if (failure is null && duration <= threshold) return;
+        nextPause = TimeSpan.FromSeconds(Math.Max(nextPause.TotalSeconds, Math.Clamp(duration.TotalSeconds * 10, 10, 300)));
+        log.LogWarning(failure,
+            "Inventory retention backing off stage {Stage}: threshold {Threshold}, measured {Duration}, pause {Pause}",
+            stage, threshold, duration, nextPause);
+        throw new BackoffException();
+    }
+
+    private async Task TimeWriteAsync(string stage, Func<Task> action)
+    {
+        var clock = Stopwatch.StartNew();
+        try { await action(); }
+        catch (SqliteException exception) when (exception.SqliteErrorCode is 5 or 6)
+        {
+            BackOff(stage, clock.Elapsed, exception);
+            throw;
+        }
+        BackOff(stage, clock.Elapsed);
+        nextPause = TimeSpan.FromSeconds(10);
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Let startup and foreground requests win before starting maintenance.
         while (!stoppingToken.IsCancellationRequested)
         {
-            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+            await Task.Delay(nextPause, stoppingToken);
             try { await PrunePassAsync(stoppingToken); }
+            catch (BackoffException) { }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception)
             {
@@ -44,16 +72,22 @@ internal sealed class InventoryRetentionWorker(
         {
             var account = accounts[(start + offset) % accounts.Count];
             await RunStageAsync("snapshot prune", account, () => PruneSnapshotsAsync(account, policy, token), token);
-            await RunStageAsync("raw-JSON prune", account, () => PruneRawAsync(account, token), token);
+            await RunStageAsync("raw-JSON prune", account, () => TimeWriteAsync("raw-JSON prune", () => PruneRawAsync(account, token)), token);
         }
         await RunStageAsync("projection-row prune", null, () => PruneProjectionRowsAsync(token), token);
-        await RunStageAsync("empty projection-generation prune", null, () => PruneEmptyProjectionGenerationsAsync(token), token);
+        await RunStageAsync("empty projection-generation prune", null, () => TimeWriteAsync("empty projection-generation prune", () => PruneEmptyProjectionGenerationsAsync(token)), token);
     }
 
     private async Task RunStageAsync(string stage, long? account, Func<Task> action, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        var clock = Stopwatch.StartNew();
         try { await action(); }
+        catch (BackoffException) { throw; }
+        catch (SqliteException exception) when (exception.SqliteErrorCode is 5 or 6)
+        {
+            BackOff(stage, clock.Elapsed, exception);
+        }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
@@ -85,26 +119,29 @@ internal sealed class InventoryRetentionWorker(
         {
             // One snapshot (including indexed FK cascades) is the atomic unit.
             // Never expose a partially pruned historical report.
-            await using (var connection = await factory.OpenConnectionAsync(token))
+            await TimeWriteAsync("snapshot prune", async () =>
             {
-                connection.DefaultTimeout = 1;
-                using var write = factory.BeginWrite(connection, "PruneSnapshot");
-                await using var command = connection.CreateCommand();
-                command.Transaction = write.Transaction;
-                command.CommandText = """
-                    DELETE FROM snapshots WHERE account_id = $account AND id = $id AND is_current = 0
-                    AND (SELECT COUNT(*) FROM snapshots newer
-                        WHERE newer.account_id = $account AND newer.is_current = 0
-                        AND newer.character_id IS snapshots.character_id
-                        AND (newer.received_at_utc > snapshots.received_at_utc OR
-                            (newer.received_at_utc = snapshots.received_at_utc AND newer.id > snapshots.id))) >= $minimum
-                    """;
-                command.Parameters.AddWithValue("$account", account);
-                command.Parameters.AddWithValue("$id", id);
-                command.Parameters.AddWithValue("$minimum", policy.MinimumRecent);
-                deleted += await command.ExecuteNonQueryAsync(token);
-                await write.Transaction.CommitAsync(token);
-            }
+                await using (var connection = await factory.OpenConnectionAsync(token))
+                {
+                    connection.DefaultTimeout = 1;
+                    using var write = factory.BeginWrite(connection, "PruneSnapshot");
+                    await using var command = connection.CreateCommand();
+                    command.Transaction = write.Transaction;
+                    command.CommandText = """
+                        DELETE FROM snapshots WHERE account_id = $account AND id = $id AND is_current = 0
+                        AND (SELECT COUNT(*) FROM snapshots newer
+                            WHERE newer.account_id = $account AND newer.is_current = 0
+                            AND newer.character_id IS snapshots.character_id
+                            AND (newer.received_at_utc > snapshots.received_at_utc OR
+                                (newer.received_at_utc = snapshots.received_at_utc AND newer.id > snapshots.id))) >= $minimum
+                        """;
+                    command.Parameters.AddWithValue("$account", account);
+                    command.Parameters.AddWithValue("$id", id);
+                    command.Parameters.AddWithValue("$minimum", policy.MinimumRecent);
+                    deleted += await command.ExecuteNonQueryAsync(token);
+                    await write.Transaction.CommitAsync(token);
+                }
+            });
             await Task.Delay(250, token);
         }
         if (deleted > 0) log.LogInformation("Inventory retention pruned {Count} historical snapshots for account {Account}", deleted, account);
@@ -137,27 +174,30 @@ internal sealed class InventoryRetentionWorker(
         var elapsed = Stopwatch.StartNew();
         do
         {
-            int deleted;
-            await using (var connection = await factory.OpenConnectionAsync(token))
+            var deleted = 0;
+            await TimeWriteAsync("projection-row prune", async () =>
             {
-                connection.DefaultTimeout = 1;
-                using var write = factory.BeginWrite(connection);
-                await using var command = connection.CreateCommand();
-                command.Transaction = write.Transaction;
-                command.CommandText = """
-                    DELETE FROM market_intelligence_market_rows WHERE rowid IN (
-                        SELECT r.rowid FROM market_intelligence_market_rows r
-                        WHERE r.generation_id = (
-                            SELECT g.generation_id FROM market_intelligence_projection_generations g
-                            WHERE g.status IN ('Published', 'Failed') AND NOT EXISTS (
-                                SELECT 1 FROM market_intelligence_current_projection c WHERE c.generation_id = g.generation_id)
-                            AND EXISTS (SELECT 1 FROM market_intelligence_market_rows rows WHERE rows.generation_id = g.generation_id)
-                            LIMIT 1)
-                        LIMIT 100)
-                    """;
-                deleted = await command.ExecuteNonQueryAsync(token);
-                await write.Transaction.CommitAsync(token);
-            }
+                await using (var connection = await factory.OpenConnectionAsync(token))
+                {
+                    connection.DefaultTimeout = 1;
+                    using var write = factory.BeginWrite(connection);
+                    await using var command = connection.CreateCommand();
+                    command.Transaction = write.Transaction;
+                    command.CommandText = """
+                        DELETE FROM market_intelligence_market_rows WHERE rowid IN (
+                            SELECT r.rowid FROM market_intelligence_market_rows r
+                            WHERE r.generation_id = (
+                                SELECT g.generation_id FROM market_intelligence_projection_generations g
+                                WHERE g.status IN ('Published', 'Failed') AND NOT EXISTS (
+                                    SELECT 1 FROM market_intelligence_current_projection c WHERE c.generation_id = g.generation_id)
+                                AND EXISTS (SELECT 1 FROM market_intelligence_market_rows rows WHERE rows.generation_id = g.generation_id)
+                                LIMIT 1)
+                            LIMIT 100)
+                        """;
+                    deleted = await command.ExecuteNonQueryAsync(token);
+                    await write.Transaction.CommitAsync(token);
+                }
+            });
             if (deleted == 0) break;
             // A short final batch can finish one generation while others still need
             // pruning, so only an empty batch means the projection backlog is drained.
