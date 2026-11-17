@@ -7,6 +7,7 @@ namespace MarketMafioso.Server.Sqlite;
 
 public sealed class SqliteConnectionFactory
 {
+    private const string WaitingOperationKey = "MarketMafioso.Sqlite.WaitingOperation";
     private readonly string databasePath;
     private readonly int busyTimeoutSeconds;
     private readonly ILogger<SqliteConnectionFactory> log;
@@ -59,16 +60,25 @@ public sealed class SqliteConnectionFactory
         }
         catch (SqliteException exception) when (exception.SqliteErrorCode is 5 or 6)
         {
+            exception.Data[WaitingOperationKey] = name;
             log.LogWarning(exception, "SQLite busy waiting for write operation {Operation}", name);
             throw;
         }
     }
 
-    internal static string WaitingOperation(Exception exception) =>
-        new StackTrace(exception).GetFrames()
-            .Select(frame => frame.GetMethod()?.DeclaringType?.FullName)
-            .FirstOrDefault(name => name?.StartsWith("MarketMafioso.Server.", StringComparison.Ordinal) == true)
-        ?? "unknown server operation";
+    internal static string WaitingOperation(Exception exception)
+    {
+        if (exception.Data[WaitingOperationKey] is string operation && !string.IsNullOrWhiteSpace(operation))
+            return operation;
+
+        return new StackTrace(exception).GetFrames()
+            .Select(frame => frame.GetMethod())
+            .Where(method => method?.DeclaringType?.FullName is { } name &&
+                name.StartsWith("MarketMafioso.Server.", StringComparison.Ordinal) &&
+                !name.StartsWith("MarketMafioso.Server.Sqlite.", StringComparison.Ordinal))
+            .Select(method => method!.DeclaringType!.FullName + "." + method.Name)
+            .FirstOrDefault() ?? "unknown server operation";
+    }
 
     internal sealed class WriteLease(SqliteTransaction transaction, string operation, ILogger log) : IDisposable
     {

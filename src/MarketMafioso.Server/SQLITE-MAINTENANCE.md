@@ -2,14 +2,16 @@
 
 ## Retention and catch-up
 
-An explicitly configured `MarketMafioso:SnapshotRetentionCount` now selects Count
-retention unless `MarketMafioso:InventoryHistory:Policy` explicitly selects another
-policy. Count retains that many **non-current** snapshots per character, plus its
+`MarketMafioso:InventoryHistory:Policy` defaults to Tiered, including when the
+deprecated `MarketMafioso:SnapshotRetentionCount` alias is configured. The alias
+supplies Tiered's minimum, not a cap, and never selects Count implicitly.
+Explicit Count retains that many **non-current** snapshots per character, plus its
 current head. `InventoryHistoryRetentionPerCharacter`, if supplied, takes precedence
-over the legacy count value. Explicit Tiered remains intentional long-term history:
+over the legacy count value. Tiered remains intentional long-term history:
 all changes for 14 days by default, hourly to 90 days, daily to 365 days, weekly
-forever; its count is a minimum, not a maximum. Previously Tiered was selected even
-when only SnapshotRetentionCount was configured, so 500 never imposed a cap.
+forever; its count is a minimum, not a maximum. The hosted deployment workflow
+explicitly writes `MarketMafioso__InventoryHistory__Policy=Count` alongside
+`MarketMafioso__SnapshotRetentionCount=500`, resolving the hosted cap to 500.
 
 The hosted retention worker starts after ten seconds and rescans persisted state
 after each ten-second rest. It does not depend on new uploads. For each account it
@@ -20,12 +22,18 @@ together. It rechecks account, non-current status and minimum recent history und
 the write lock. One unusually large snapshot can still take longer than a second;
 transaction-scope warnings identify this, rather than promising a hard time bound.
 Maintenance lock acquisition times out after one second and retries on a later pass.
+Each account's snapshot and raw-JSON stages, projection-row pruning, and empty-generation
+cleanup fail independently with a stage/account Warning, so one failure cannot skip
+later stages. The starting account rotates between passes; shutdown cancellation
+still stops the pass immediately.
 
 Raw JSON is cleared in batches of ten per account per pass, independently of semantic
 changes. Superseded Published/Failed projection rows are removed in batches of 100,
-up to 20 batches per pass with 250 ms yields; ten empty obsolete generations are
-then removed. Current and Building generations are protected. Interrupted staging
-is marked Failed at the next projection attempt or startup. Run one host process
+until no eligible rows remain or a ten-second budget expires, with 25 ms yields
+outside each transaction; ten empty obsolete generations are then removed in an
+independent stage. A partially filled batch can finish one generation and does not
+stop catch-up for other generations. Current and Building generations are protected.
+Interrupted staging is marked Failed at the next projection attempt or startup. Run one host process
 per database; startup assumes there is no other host actively building projections.
 
 Inventory owners, bags, items and retainer_market_listings are snapshot children,
@@ -34,8 +42,15 @@ holdings. Their absolute row counts also depend on inventory size. Market eviden
 payloads, actor/name/listing evidence, owned-listing versions, sale events, acquisition
 records and handoff receipts are intentional audit/history, not disposable inventory
 copies; this change does not silently delete them. World/region diagnostic observations
-use their existing time windows, now deleting at most 100 rows of each per collection
-pass. Diagnostic events retain their existing count policy with 100-row catch-up batches.
+use their existing time windows. Each collection pass prunes 100-row batches in
+separate transactions, yielding 25 ms between batches, until a batch deletes fewer
+than 100 rows or a five-second budget per table expires. Candidate IDs are selected
+before taking the write lock, then their cutoff is rechecked during deletion.
+These are between-batch budgets, not hard query/transaction timeouts; catch-up
+resumes next pass. No new observation-time index is created at startup: building
+one on a multi-million-row live table can hold the writer lock and delay startup.
+The unindexed candidate scan remains a read, not a long write transaction.
+Diagnostic events retain their existing count policy with 100-row catch-up batches.
 
 Projection computation and JSON serialization happen before writing. Generations
 stage in 50-row transactions with 25 ms yields, then publish atomically; only outbox

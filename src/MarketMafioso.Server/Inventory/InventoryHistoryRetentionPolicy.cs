@@ -38,9 +38,8 @@ internal sealed record InventoryHistoryRetentionPolicy(
     public static InventoryHistoryRetentionPolicy Resolve(IConfiguration configuration)
     {
         var modeText = configuration.GetValue<string?>("MarketMafioso:InventoryHistory:Policy");
-        // An explicitly configured legacy count is a cap, not a tiered minimum.
-        var mode = configuration["MarketMafioso:SnapshotRetentionCount"] is not null
-            ? InventoryHistoryRetentionMode.Count : InventoryHistoryRetentionMode.Tiered;
+        // The deprecated count alias supplies the minimum, never the retention mode.
+        var mode = InventoryHistoryRetentionMode.Tiered;
         if (!string.IsNullOrWhiteSpace(modeText) &&
             !Enum.TryParse(modeText.Trim(), ignoreCase: true, out mode))
         {
