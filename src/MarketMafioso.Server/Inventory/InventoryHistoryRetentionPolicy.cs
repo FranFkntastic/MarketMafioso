@@ -38,7 +38,9 @@ internal sealed record InventoryHistoryRetentionPolicy(
     public static InventoryHistoryRetentionPolicy Resolve(IConfiguration configuration)
     {
         var modeText = configuration.GetValue<string?>("MarketMafioso:InventoryHistory:Policy");
-        var mode = InventoryHistoryRetentionMode.Tiered;
+        // An explicitly configured legacy count is a cap, not a tiered minimum.
+        var mode = configuration["MarketMafioso:SnapshotRetentionCount"] is not null
+            ? InventoryHistoryRetentionMode.Count : InventoryHistoryRetentionMode.Tiered;
         if (!string.IsNullOrWhiteSpace(modeText) &&
             !Enum.TryParse(modeText.Trim(), ignoreCase: true, out mode))
         {
@@ -73,13 +75,20 @@ internal sealed record InventoryHistoryRetentionPolicy(
         : $"All changes for {KeepAllDays:N0} days, hourly to {HourlyDays:N0} days, daily to {DailyDays:N0} days, weekly forever" +
           (MinimumRecent > 0 ? $" (newest {MinimumRecent:N0} always kept)" : string.Empty);
 
-    /// <summary>Returns the ids of tiered-mode candidates that should be pruned.</summary>
+    /// <summary>Returns the non-current history ids permitted by the selected policy.</summary>
     public IReadOnlyList<string> SelectPrunable(IEnumerable<InventoryHistoryCandidate> candidates, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         var prunable = new List<string>();
         foreach (var character in candidates.GroupBy(candidate => candidate.CharacterId))
         {
+            if (Mode == InventoryHistoryRetentionMode.Count)
+            {
+                prunable.AddRange(character.OrderByDescending(candidate => candidate.ReceivedAt)
+                    .ThenByDescending(candidate => candidate.Id, StringComparer.Ordinal)
+                    .Skip(MinimumRecent).Select(candidate => candidate.Id));
+                continue;
+            }
             var buckets = character
                 .OrderByDescending(candidate => candidate.ReceivedAt)
                 .ThenByDescending(candidate => candidate.Id, StringComparer.Ordinal)

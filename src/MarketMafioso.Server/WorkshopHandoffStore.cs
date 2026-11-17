@@ -35,7 +35,8 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
             request.Items.Select(x => x.WorkshopItemId).Distinct().Count() != request.Items.Count)
             throw new ArgumentException("Provide 1..200 distinct projects, each with project id > 0 and quantity 1..9999.");
         await using var connection = await connections.OpenConnectionAsync(token);
-        using var transaction = connection.BeginTransaction();
+        using var write = connections.BeginWrite(connection);
+        var transaction = write.Transaction;
         var known = await KnownAsync(connection, transaction, account, token);
         if (!known.Any(x => Same(x, target))) throw new WorkshopHandoffException(400, $"Unknown target character {target.CharacterName}@{target.World}; no inventory identity reported to this host login.");
         var all = await ReadAsync(connection, transaction, account, token);
@@ -58,7 +59,8 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
     {
         var actor = Validate(request.Actor);
         await using var connection = await connections.OpenConnectionAsync(token);
-        using var transaction = connection.BeginTransaction();
+        using var write = connections.BeginWrite(connection);
+        var transaction = write.Transaction;
         var value = (await ReadAsync(connection, transaction, account, token)).SingleOrDefault(x => x.HandoffId == id)
             ?? throw new WorkshopHandoffException(404, $"Unknown handoff {id} for this host login.");
         if (!Same(state == "Withdrawn" ? value.Sender : value.Target, actor))
@@ -81,7 +83,8 @@ public sealed class WorkshopHandoffStore(SqliteConnectionFactory connections, IL
     {
         var actor = Validate(request.Actor);
         await using var connection = await connections.OpenConnectionAsync(token);
-        using var transaction = connection.BeginTransaction();
+        using var write = connections.BeginWrite(connection);
+        var transaction = write.Transaction;
         var value = (await ReadAsync(connection, transaction, account, token)).SingleOrDefault(x => x.HandoffId == id)
             ?? throw new WorkshopHandoffException(404, $"Unknown handoff {id} for this host login.");
         if (!Same(value.Sender, actor))

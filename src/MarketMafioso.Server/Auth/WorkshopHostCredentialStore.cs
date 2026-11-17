@@ -33,12 +33,14 @@ public sealed class WorkshopHostCredentialStore
 
     private readonly SqliteConnectionFactory connectionFactory;
     private readonly ConfiguredWorkshopHostKeys configuredKeys;
+    private readonly ILogger<WorkshopHostCredentialStore>? log;
     private readonly ConcurrentDictionary<long, DateTimeOffset> lastUsedWrites = new();
 
     public WorkshopHostCredentialStore(
         SqliteConnectionFactory connectionFactory,
-        IConfiguration configuration)
+        IConfiguration configuration, ILogger<WorkshopHostCredentialStore>? log = null)
     {
+        this.log = log;
         this.connectionFactory = connectionFactory;
         configuredKeys = ConfiguredWorkshopHostKeys.FromConfiguration(configuration);
     }
@@ -74,7 +76,15 @@ public sealed class WorkshopHostCredentialStore
             return false;
 
         await reader.DisposeAsync();
-        await RecordUseAsync(connection, id, cancellationToken);
+        try
+        {
+            await RecordUseAsync(connection, id, cancellationToken);
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException exception) when (exception.SqliteErrorCode is 5 or 6)
+        {
+            // Last-used telemetry must not turn a validated credential into a 503.
+            log?.LogWarning("SQLite busy during WorkshopHostCredentialStore.RecordUseAsync; last-used bookkeeping skipped");
+        }
         return true;
     }
 
@@ -216,6 +226,7 @@ public sealed class WorkshopHostCredentialStore
 
         lastUsedWrites[id] = now;
         await using var command = connection.CreateCommand();
+        command.CommandTimeout = 1;
         command.CommandText = """
             UPDATE ingest_keys
             SET last_used_at_utc = $lastUsedAt

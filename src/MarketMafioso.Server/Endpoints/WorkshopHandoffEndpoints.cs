@@ -55,7 +55,7 @@ internal static class WorkshopHandoffEndpoints
         }
         catch (Exception ex) when (!context.RequestAborted.IsCancellationRequested)
         {
-            log.LogWarning(ex, "Workshop handoff {HandoffId} account {Account} sender {Sender} target {Target} failed: {Reason}", id, account, sender, target, ex.Message);
+            log.LogWarning(ex, "Workshop handoff {Method} {Path} {HandoffId} account {Account} sender {Sender} target {Target} failed: {Reason}", context.Request.Method, context.Request.Path, id, account, sender, target, ex.Message);
             var reason = ex is Microsoft.Data.Sqlite.SqliteException sqlite
                 ? $"Host storage failed (SQLite error {sqlite.SqliteErrorCode}); handoff outcome may be unknown."
                 : $"Host handoff processing failed ({ex.GetType().Name}); handoff outcome may be unknown.";

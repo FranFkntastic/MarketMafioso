@@ -216,12 +216,12 @@ public sealed class DiagnosticEventStore
         await using var command = connection.CreateCommand();
         command.CommandText = """
             DELETE FROM diagnostic_events
-            WHERE id NOT IN (
+            WHERE id IN (SELECT id FROM diagnostic_events WHERE id NOT IN (
                 SELECT id
                 FROM diagnostic_events
                 ORDER BY id DESC
                 LIMIT $retention
-            );
+            ) LIMIT 100);
             """;
         command.Parameters.AddWithValue("$retention", retention);
         await command.ExecuteNonQueryAsync(cancellationToken);

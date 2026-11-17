@@ -30,7 +30,8 @@ public sealed class SqliteSchemaMigrator
             }
         }
 
-        await using var transaction = (Microsoft.Data.Sqlite.SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = MigrationSql;
@@ -89,6 +90,14 @@ public sealed class SqliteSchemaMigrator
             ON inventory_owners(retainer_id, snapshot_id) WHERE owner_type = 'retainer';
             """, cancellationToken);
         await InventoryCharacterLineage.RepairAsync(connection, transaction, cancellationToken);
+
+        // Startup precedes all host workers. A committed staging generation left by
+        // an interrupted process is not published and can be reclaimed in row batches.
+        await ExecuteAsync(connection, transaction, """
+            UPDATE market_intelligence_projection_generations
+            SET status = 'Failed', error = 'Projection staging interrupted by host restart.'
+            WHERE status = 'Building';
+            """, cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
         await BackfillCurrentSemanticHashesAsync(cancellationToken);

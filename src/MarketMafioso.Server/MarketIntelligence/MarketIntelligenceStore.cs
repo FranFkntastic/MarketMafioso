@@ -48,8 +48,9 @@ public sealed class MarketIntelligenceStore
         string payloadHash;
 
         await using (var connection = await connectionFactory.OpenConnectionAsync(cancellationToken))
-        await using (var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken))
+        using (var write = connectionFactory.BeginWrite(connection))
         {
+            var transaction = write.Transaction;
             var actorKeyMaterial = await GetOrCreateActorKeyMaterialAsync(connection, transaction, accountId, cancellationToken);
             var canonicalListings = canonicalUploadListings
                 .Select(listing => NormalizeListing(actorKeyMaterial, request, listing))
@@ -183,19 +184,19 @@ public sealed class MarketIntelligenceStore
         byte[] actorKeyMaterial,
         MarketEvidenceUploadRequest request,
         MarketEvidenceUploadListing listing) => new()
-    {
-        ListingId = listing.ListingId.Trim(),
-        RetainerId = listing.RetainerId.Trim(),
-        RetainerName = NormalizeOptional(listing.RetainerName),
-        RetainerNameSource = NormalizeOptional(listing.RetainerNameSource),
-        SellerOwnerActorKey = ActorKey(actorKeyMaterial, TrustedSellerOwnerContentId(request, listing)),
-        SellerOwnerIdentityState = IdentityState(TrustedSellerOwnerContentId(request, listing)),
-        ArtisanActorKey = ActorKey(actorKeyMaterial, listing.ArtisanContentId),
-        ArtisanIdentityState = IdentityState(listing.ArtisanContentId),
-        Quantity = listing.Quantity,
-        UnitPrice = listing.UnitPrice,
-        IsHq = listing.IsHq,
-    };
+        {
+            ListingId = listing.ListingId.Trim(),
+            RetainerId = listing.RetainerId.Trim(),
+            RetainerName = NormalizeOptional(listing.RetainerName),
+            RetainerNameSource = NormalizeOptional(listing.RetainerNameSource),
+            SellerOwnerActorKey = ActorKey(actorKeyMaterial, TrustedSellerOwnerContentId(request, listing)),
+            SellerOwnerIdentityState = IdentityState(TrustedSellerOwnerContentId(request, listing)),
+            ArtisanActorKey = ActorKey(actorKeyMaterial, listing.ArtisanContentId),
+            ArtisanIdentityState = IdentityState(listing.ArtisanContentId),
+            Quantity = listing.Quantity,
+            UnitPrice = listing.UnitPrice,
+            IsHq = listing.IsHq,
+        };
 
     private static ulong? TrustedSellerOwnerContentId(
         MarketEvidenceUploadRequest request,
@@ -513,7 +514,8 @@ public sealed class MarketIntelligenceStore
         var normalizedSourceObservationId = NormalizeOptional(request.SourceObservationId);
         var now = DateTimeOffset.UtcNow;
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         var actorKeyMaterial = await GetOrCreateActorKeyMaterialAsync(connection, transaction, accountId, cancellationToken);
         var actorKey = ActorKey(actorKeyMaterial, request.ContentId)!;
 
@@ -641,7 +643,8 @@ public sealed class MarketIntelligenceStore
                 await using var reader = await namesCommand.ExecuteReaderAsync(cancellationToken);
                 while (await reader.ReadAsync(cancellationToken)) names.Add(new()
                 {
-                    Name = reader.GetString(0), ResolutionMethod = reader.GetString(1),
+                    Name = reader.GetString(0),
+                    ResolutionMethod = reader.GetString(1),
                     ObservedAtUtc = DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture),
                     SourceObservationId = reader.IsDBNull(3) ? null : reader.GetString(3),
                 });
@@ -656,10 +659,16 @@ public sealed class MarketIntelligenceStore
                 await using var reader = await listingsCommand.ExecuteReaderAsync(cancellationToken);
                 while (await reader.ReadAsync(cancellationToken)) listings.Add(new()
                 {
-                    ObservationId = reader.GetString(0), ListingId = reader.GetString(1), Role = reader.GetString(2),
-                    ItemId = checked((uint)reader.GetInt64(3)), ItemName = reader.IsDBNull(4) ? $"Item {reader.GetInt64(3)}" : reader.GetString(4),
-                    WorldName = reader.GetString(5), RetainerId = reader.GetString(6), RetainerName = reader.IsDBNull(7) ? null : reader.GetString(7),
-                    ObservedAtUtc = DateTimeOffset.Parse(reader.GetString(8), CultureInfo.InvariantCulture), IsSelfCraftedSale = reader.GetInt64(9) != 0,
+                    ObservationId = reader.GetString(0),
+                    ListingId = reader.GetString(1),
+                    Role = reader.GetString(2),
+                    ItemId = checked((uint)reader.GetInt64(3)),
+                    ItemName = reader.IsDBNull(4) ? $"Item {reader.GetInt64(3)}" : reader.GetString(4),
+                    WorldName = reader.GetString(5),
+                    RetainerId = reader.GetString(6),
+                    RetainerName = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    ObservedAtUtc = DateTimeOffset.Parse(reader.GetString(8), CultureInfo.InvariantCulture),
+                    IsSelfCraftedSale = reader.GetInt64(9) != 0,
                 });
             }
             return new() { Actor = summary, Names = names, Listings = listings };
@@ -707,12 +716,31 @@ public sealed class MarketIntelligenceStore
         CancellationToken cancellationToken) =>
         ProjectAccountAsync(accountId, cancellationToken, classifierVersion, failBeforePublish);
 
-    private async Task<long> ProjectAccountAsync(
+    private readonly SemaphoreSlim projectionGate = new(1, 1);
+
+    private async Task<long> ProjectAccountAsync(long accountId, CancellationToken cancellationToken,
+        string classifierVersion = ClassifierVersion, bool failBeforePublish = false)
+    {
+        await projectionGate.WaitAsync(cancellationToken);
+        try { return await ProjectAccountCoreAsync(accountId, cancellationToken, classifierVersion, failBeforePublish); }
+        finally { projectionGate.Release(); }
+    }
+
+    private async Task<long> ProjectAccountCoreAsync(
         long accountId,
         CancellationToken cancellationToken,
         string classifierVersion = ClassifierVersion,
         bool failBeforePublish = false)
     {
+        // Capture work before reading evidence: arrivals during staging must stay pending.
+        long watermark;
+        await using (var read = await connectionFactory.OpenConnectionAsync(cancellationToken))
+        await using (var command = read.CreateCommand())
+        {
+            command.CommandText = "SELECT COALESCE(MAX(id), 0) FROM market_intelligence_outbox WHERE account_id = $account AND status = 'Pending'";
+            command.Parameters.AddWithValue("$account", accountId);
+            watermark = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
+        }
         var evidence = await LoadEvidenceAsync(accountId, cancellationToken);
         var rows = evidence
             .GroupBy(x => (x.ItemId, World: x.WorldName.ToUpperInvariant()))
@@ -722,66 +750,94 @@ public sealed class MarketIntelligenceStore
             .ToArray();
         var now = DateTimeOffset.UtcNow;
         var generationId = $"mig-{now:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..35];
+        var serializedRows = rows.Select(row => (Row: row, Json: JsonSerializer.Serialize(row, JsonOptions))).ToArray();
 
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         long revision;
-        await using (var revisionCommand = connection.CreateCommand())
+        using (var write = connectionFactory.BeginWrite(connection))
         {
-            revisionCommand.Transaction = transaction;
-            revisionCommand.CommandText = "SELECT COALESCE(MAX(revision), 0) + 1 FROM market_intelligence_projection_generations WHERE account_id = $accountId";
-            revisionCommand.Parameters.AddWithValue("$accountId", accountId);
-            revision = (long)(await revisionCommand.ExecuteScalarAsync(cancellationToken))!;
-        }
+            var transaction = write.Transaction;
+            await using (var abandoned = connection.CreateCommand())
+            {
+                abandoned.Transaction = transaction;
+                abandoned.CommandText = "UPDATE market_intelligence_projection_generations SET status = 'Failed', error = 'Superseded interrupted staging.' WHERE account_id = $account AND status = 'Building'";
+                abandoned.Parameters.AddWithValue("$account", accountId);
+                await abandoned.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await using (var revisionCommand = connection.CreateCommand())
+            {
+                revisionCommand.Transaction = transaction;
+                revisionCommand.CommandText = "SELECT COALESCE(MAX(revision), 0) + 1 FROM market_intelligence_projection_generations WHERE account_id = $accountId";
+                revisionCommand.Parameters.AddWithValue("$accountId", accountId);
+                revision = (long)(await revisionCommand.ExecuteScalarAsync(cancellationToken))!;
+            }
 
-        await using (var generation = connection.CreateCommand())
-        {
-            generation.Transaction = transaction;
-            generation.CommandText = "INSERT INTO market_intelligence_projection_generations(generation_id, account_id, classifier_version, revision, status, created_at_utc) VALUES($id, $accountId, $version, $revision, 'Building', $now)";
-            generation.Parameters.AddWithValue("$id", generationId);
-            generation.Parameters.AddWithValue("$accountId", accountId);
-            generation.Parameters.AddWithValue("$version", classifierVersion);
-            generation.Parameters.AddWithValue("$revision", revision);
-            generation.Parameters.AddWithValue("$now", now.ToString("O"));
-            await generation.ExecuteNonQueryAsync(cancellationToken);
-        }
+            await using (var generation = connection.CreateCommand())
+            {
+                generation.Transaction = transaction;
+                generation.CommandText = "INSERT INTO market_intelligence_projection_generations(generation_id, account_id, classifier_version, revision, status, created_at_utc) VALUES($id, $accountId, $version, $revision, 'Building', $now)";
+                generation.Parameters.AddWithValue("$id", generationId);
+                generation.Parameters.AddWithValue("$accountId", accountId);
+                generation.Parameters.AddWithValue("$version", classifierVersion);
+                generation.Parameters.AddWithValue("$revision", revision);
+                generation.Parameters.AddWithValue("$now", now.ToString("O"));
+                await generation.ExecuteNonQueryAsync(cancellationToken);
+            }
 
-        if (failBeforePublish)
-        {
-            await using var fail = connection.CreateCommand();
-            fail.Transaction = transaction;
-            fail.CommandText = """
+            if (failBeforePublish)
+            {
+                await using var fail = connection.CreateCommand();
+                fail.Transaction = transaction;
+                fail.CommandText = """
                 UPDATE market_intelligence_projection_generations
                 SET status = 'Failed', error = 'Configured projection failure.'
                 WHERE generation_id = $generationId;
                 UPDATE market_intelligence_outbox
                 SET attempts = attempts + 1, last_error = 'Configured projection failure.'
-                WHERE account_id = $accountId AND status = 'Pending';
+                WHERE account_id = $accountId AND status = 'Pending' AND id <= $watermark;
                 """;
-            fail.Parameters.AddWithValue("$generationId", generationId);
-            fail.Parameters.AddWithValue("$accountId", accountId);
-            await fail.ExecuteNonQueryAsync(cancellationToken);
+                fail.Parameters.AddWithValue("$generationId", generationId);
+                fail.Parameters.AddWithValue("$accountId", accountId);
+                fail.Parameters.AddWithValue("$watermark", watermark);
+                await fail.ExecuteNonQueryAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return await GetRevisionAsync(accountId, cancellationToken);
+            }
+
             await transaction.CommitAsync(cancellationToken);
-            return await GetRevisionAsync(accountId, cancellationToken);
         }
 
-        foreach (var row in rows)
+        foreach (var batch in serializedRows.Chunk(50))
         {
-            await using var insert = connection.CreateCommand();
-            insert.Transaction = transaction;
-            insert.CommandText = "INSERT INTO market_intelligence_market_rows(generation_id, account_id, item_id, world_name, row_json) VALUES($generationId, $accountId, $itemId, $worldName, $rowJson)";
-            insert.Parameters.AddWithValue("$generationId", generationId);
-            insert.Parameters.AddWithValue("$accountId", accountId);
-            insert.Parameters.AddWithValue("$itemId", checked((long)row.ItemId));
-            insert.Parameters.AddWithValue("$worldName", row.WorldName);
-            insert.Parameters.AddWithValue("$rowJson", JsonSerializer.Serialize(row, JsonOptions));
-            await insert.ExecuteNonQueryAsync(cancellationToken);
+            using (var write = connectionFactory.BeginWrite(connection))
+            {
+                var transaction = write.Transaction;
+                foreach (var prepared in batch)
+                {
+                    var row = prepared.Row;
+                    await using var insert = connection.CreateCommand();
+                    insert.Transaction = transaction;
+                    insert.CommandText = "INSERT INTO market_intelligence_market_rows(generation_id, account_id, item_id, world_name, row_json) VALUES($generationId, $accountId, $itemId, $worldName, $rowJson)";
+                    insert.Parameters.AddWithValue("$generationId", generationId);
+                    insert.Parameters.AddWithValue("$accountId", accountId);
+                    insert.Parameters.AddWithValue("$itemId", checked((long)row.ItemId));
+                    insert.Parameters.AddWithValue("$worldName", row.WorldName);
+                    insert.Parameters.AddWithValue("$rowJson", prepared.Json);
+                    await insert.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                await transaction.CommitAsync(cancellationToken);
+            }
+            await Task.Delay(25, cancellationToken);
         }
 
-        await using (var publish = connection.CreateCommand())
+        using (var write = connectionFactory.BeginWrite(connection))
         {
-            publish.Transaction = transaction;
-            publish.CommandText = """
+            var transaction = write.Transaction;
+            await using (var publish = connection.CreateCommand())
+            {
+                publish.Transaction = transaction;
+                publish.CommandText = """
                 UPDATE market_intelligence_projection_generations
                 SET status = 'Published', published_at_utc = $now WHERE generation_id = $generationId;
                 INSERT INTO market_intelligence_current_projection(account_id, generation_id, revision, updated_at_utc)
@@ -792,15 +848,17 @@ public sealed class MarketIntelligenceStore
                     updated_at_utc = excluded.updated_at_utc;
                 UPDATE market_intelligence_outbox
                 SET status = 'Completed', attempts = attempts + 1, completed_at_utc = $now, last_error = NULL
-                WHERE account_id = $accountId AND status = 'Pending';
+                WHERE account_id = $accountId AND status = 'Pending' AND id <= $watermark;
                 """;
-            publish.Parameters.AddWithValue("$now", now.ToString("O"));
-            publish.Parameters.AddWithValue("$generationId", generationId);
-            publish.Parameters.AddWithValue("$accountId", accountId);
-            publish.Parameters.AddWithValue("$revision", revision);
-            await publish.ExecuteNonQueryAsync(cancellationToken);
+                publish.Parameters.AddWithValue("$now", now.ToString("O"));
+                publish.Parameters.AddWithValue("$generationId", generationId);
+                publish.Parameters.AddWithValue("$accountId", accountId);
+                publish.Parameters.AddWithValue("$revision", revision);
+                publish.Parameters.AddWithValue("$watermark", watermark);
+                await publish.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await transaction.CommitAsync(cancellationToken);
         }
-        await transaction.CommitAsync(cancellationToken);
         return revision;
     }
 

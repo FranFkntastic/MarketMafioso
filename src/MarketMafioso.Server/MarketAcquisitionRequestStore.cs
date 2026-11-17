@@ -90,7 +90,8 @@ public sealed partial class MarketAcquisitionRequestStore
             primaryRequest,
             latestEvent: null);
 
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         await using var command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText =
@@ -159,7 +160,8 @@ public sealed partial class MarketAcquisitionRequestStore
 
         var now = DateTimeOffset.UtcNow;
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (current == null)
@@ -260,7 +262,8 @@ public sealed partial class MarketAcquisitionRequestStore
 
         var now = DateTimeOffset.UtcNow;
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (current == null)
@@ -491,7 +494,8 @@ public sealed partial class MarketAcquisitionRequestStore
         await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var request = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (request == null)
@@ -539,7 +543,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var claimExpiresAtUtc = now.AddSeconds(claimExpirySeconds);
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var view = await GetForClaimAsync(
             connection,
@@ -714,7 +719,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var eventCreatedAtUtc = DateTimeOffset.UtcNow;
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var current = await GetByIdAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
         if (current == null)
@@ -831,7 +837,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var createdAtUtc = DateTimeOffset.UtcNow;
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var current = await GetByIdAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
         if (current == null)
@@ -949,7 +956,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var createdAtUtc = DateTimeOffset.UtcNow;
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         var current = await GetByIdAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
         if (current == null)
             return null;
@@ -1170,7 +1178,8 @@ public sealed partial class MarketAcquisitionRequestStore
         await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (current == null)
@@ -1214,7 +1223,8 @@ public sealed partial class MarketAcquisitionRequestStore
         await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (current == null)
@@ -1277,7 +1287,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var payloadJson = JsonSerializer.Serialize(request, JsonOptions);
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (current == null)
@@ -1380,7 +1391,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payloadJson)));
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (current == null)
@@ -1541,7 +1553,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var staleExecutionCutoff = now.AddSeconds(-executionLeaseSeconds).ToString("O");
         var recoveryExpiresAt = now.AddSeconds(recoveryPickupExpirySeconds).ToString("O");
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         await using (var command = connection.CreateCommand())
         {
