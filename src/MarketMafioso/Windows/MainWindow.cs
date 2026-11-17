@@ -120,7 +120,7 @@ public class MainWindow : Window, IDisposable
     internal static readonly Vector4 ColWarning = MarketMafiosoUiTheme.Warning;
     internal static readonly Vector4 ColMuted = MarketMafiosoUiTheme.Muted;
 
-    public MainWindow(
+    internal MainWindow(
         Configuration config,
         HttpReporter reporter,
         InventoryScanner scanner,
@@ -141,7 +141,8 @@ public class MainWindow : Window, IDisposable
         IRetainerListingRefreshControls retainerListingRefreshControls,
         string marketAcquisitionRouteDiagnosticsDirectory,
         IPluginLog log,
-        WorkshopRestockService restock)
+        WorkshopRestockService restock,
+        RemoteSummoningBellProbe remoteSummoningBellProbe)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
     {
@@ -240,22 +241,7 @@ public class MainWindow : Window, IDisposable
             Plugin.PluginInterface,
             Plugin.PluginInterface.GetPluginConfigDirectory(),
             ReportPassiveMarketObservation);
-        remoteSummoningBellProbe = new RemoteSummoningBellProbe(
-            config,
-            Plugin.ClientState,
-            Plugin.ObjectTable,
-            Plugin.TargetManager,
-            Plugin.DataManager,
-            Plugin.GameInteropProvider,
-            Plugin.SigScanner,
-            Plugin.Framework,
-            Plugin.GameGui,
-            Plugin.Condition,
-            Plugin.KeyState,
-            Plugin.ChatGui,
-            log,
-            Plugin.PluginInterface,
-            Plugin.PluginInterface.GetPluginConfigDirectory());
+        this.remoteSummoningBellProbe = remoteSummoningBellProbe;
         controlledMarketActorListingProbe = new ControlledMarketActorListingProbe(
             config,
             Plugin.DataManager,
@@ -1198,76 +1184,6 @@ public class MainWindow : Window, IDisposable
     public string OpenMarketListings() => marketBoardAcquisition.OpenMarketBoard();
 
     public string OpenMarketListing(uint itemId) => marketBoardAcquisition.OpenMarketItem(itemId);
-
-    public string BeginRemoteSummoningBellProbe() => remoteSummoningBellProbe.BeginProbe();
-
-    public string BeginNormalSummoningBellCapture() => remoteSummoningBellProbe.BeginNormalCapture();
-
-    public string BeginNormalSummoningBellLifecycleCapture() =>
-        remoteSummoningBellProbe.BeginNormalLifecycleCapture();
-
-    public string GetNormalSummoningBellCaptureStatus() => remoteSummoningBellProbe.GetNormalCaptureStatus();
-
-    public string CancelNormalSummoningBellCapture() => remoteSummoningBellProbe.CancelNormalCapture();
-
-    public string BeginYieldEventSceneControl() => remoteSummoningBellProbe.BeginYieldControl();
-
-    public string BeginYieldEventSceneDirectProbe() => remoteSummoningBellProbe.BeginYieldSessionFreeReplay();
-
-    public string BeginNativeCallRetainerProbe() =>
-        remoteSummoningBellProbe.BeginNativeRetainerVerb(NativeRetainerVerb.CallRetainer);
-
-    public string BeginNativeSelectRetainerProbe() =>
-        remoteSummoningBellProbe.BeginNativeRetainerVerb(NativeRetainerVerb.SelectRetainer);
-
-    public string GetYieldEventSceneProbeStatus() => remoteSummoningBellProbe.GetYieldProbeStatus();
-
-    public string CancelYieldEventSceneProbe() => remoteSummoningBellProbe.CancelYieldProbe();
-
-    public string BeginRetainerRpcControlProbe() =>
-        remoteSummoningBellProbe.BeginRetainerRpcControl();
-
-    public string BeginRetainerRpcBindProbe() =>
-        remoteSummoningBellProbe.BeginRetainerRpcBindTest();
-
-    public string GetRetainerRpcProbeStatus() =>
-        remoteSummoningBellProbe.GetRetainerRpcProbeStatus();
-
-    public string CancelRetainerRpcProbe() =>
-        remoteSummoningBellProbe.CancelRetainerRpcProbe();
-
-    public string BeginWarmSessionRetentionProbe() =>
-        remoteSummoningBellProbe.BeginWarmSessionRetentionProbe();
-
-    public string BeginDelayedWarmSessionRetentionProbe(TimeSpan delay) =>
-        remoteSummoningBellProbe.BeginDelayedWarmSessionRetentionProbe(delay);
-
-    public string BeginDistanceWarmSessionRetentionProbe(float movementDistance) =>
-        remoteSummoningBellProbe.BeginDistanceWarmSessionRetentionProbe(movementDistance);
-
-    public string BeginLocallyUnlockedDistanceWarmSessionRetentionProbe(float movementDistance) =>
-        remoteSummoningBellProbe.BeginLocallyUnlockedDistanceWarmSessionRetentionProbe(movementDistance);
-
-    public string BeginManualWarmSessionRetentionProbe() =>
-        remoteSummoningBellProbe.BeginManualWarmSessionRetentionProbe();
-
-    public string BeginScene2UiResurrectionProbe() =>
-        remoteSummoningBellProbe.BeginScene2UiResurrectionProbe();
-
-    public string BeginScene2DistanceContinuationProbe(float movementDistance) =>
-        remoteSummoningBellProbe.BeginScene2DistanceContinuationProbe(movementDistance);
-
-    public string BeginManualUiWarmSessionRetentionProbe() =>
-        remoteSummoningBellProbe.BeginManualUiWarmSessionRetentionProbe();
-
-    public string ReplayHeldWarmSession() =>
-        remoteSummoningBellProbe.ReplayHeldWarmSession();
-
-    public string GetWarmSessionRetentionProbeStatus() =>
-        remoteSummoningBellProbe.GetWarmSessionProbeStatus();
-
-    public string CancelWarmSessionRetentionProbe() =>
-        remoteSummoningBellProbe.CancelWarmSessionProbe();
 
     public void BeginAgentReviewFrame() => AgentReviewRegistry.BeginFrame();
 
@@ -2814,7 +2730,6 @@ public class MainWindow : Window, IDisposable
         marketAcquisitionWorldVisitCatalog.Dispose();
         marketBoardAcquisition.Dispose();
         marketIntelligencePassiveReporter.Dispose();
-        remoteSummoningBellProbe.Dispose();
         controlledMarketActorListingProbe.Dispose();
         marketPurchasePacketObserver.Dispose();
         acquisitionHttpClient.Dispose();
