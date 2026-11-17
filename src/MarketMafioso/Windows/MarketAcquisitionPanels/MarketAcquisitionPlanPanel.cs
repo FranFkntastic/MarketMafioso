@@ -264,6 +264,7 @@ internal sealed class MarketAcquisitionPlanPanel
 
         coverageHighlight.MarkHovered(line.LineId);
         ImGui.BeginTooltip();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, line.ItemName);
         if (BeginFigures())
         {
             Figure("Ceiling", FormatGil(line.Ceiling));
@@ -274,7 +275,8 @@ internal sealed class MarketAcquisitionPlanPanel
             if (line.OldestCheckedAtUtc is { } oldestChecked)
             {
                 var ttl = TimeSpan.FromHours(Math.Clamp(config.MarketAcquisitionRecentWorldTtlHours, 1, 168));
-                Figure("Rechecks", DateTime.SpecifyKind(oldestChecked, DateTimeKind.Utc).Add(ttl).ToLocalTime().ToString("t"));
+                var recheck = DateTime.SpecifyKind(oldestChecked, DateTimeKind.Utc).Add(ttl).ToLocalTime();
+                Figure("Rechecks", recheck.Date == DateTime.Today ? recheck.ToString("t") : recheck.ToString("ddd t"));
             }
             Figure("Elsewhere", "none under ceiling");
             ImGui.EndTable();
