@@ -115,7 +115,8 @@ internal sealed class MarketAcquisitionRouteCoverage
             .ToArray();
         var skippedBars = skipped
             .Select(decision => Rank(Covered(decision.LineCoverage, lines, lineId => planned.GetValueOrDefault(lineId))
-                .Concat(BuyBelowBars(decision.BuyBelowStock, lines, routeStock, lineId => routeStock.GetValueOrDefault(lineId)))))
+                // No prior segment: the route's whole stock would fill the bar and hide what this stop adds.
+                .Concat(BuyBelowBars(decision.BuyBelowStock, lines, routeStock, _ => 0UL))))
             .ToArray();
 
         // Older persisted plans lack per-stop coverage; without it every line would look short.
