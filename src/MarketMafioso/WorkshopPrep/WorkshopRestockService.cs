@@ -34,12 +34,16 @@ public sealed class WorkshopRestockService : IDisposable
         this.catalog = catalog;
         this.playerState = playerState;
         this.log = log;
-        persistence = new(config.Save, ex => log.Error(ex, "[MarketMafioso] Restock checkpoint save failed; in-memory state retained."));
+        persistence = new(() => config.SaveRequired("WorkshopRestockService.Checkpoint"), ex =>
+        {
+            if (!PersistenceWarning.IsStorageFailure(ex))
+                log.Error(ex, "[MarketMafioso] Restock checkpoint save failed; in-memory state retained.");
+        });
         Requests = new WorkshopQuartermasterRequestService(
             config,
             quartermaster,
             persistence.Request,
-            persistIdentity: config.Save);
+            persistIdentity: () => config.SaveRequired("WorkshopRestockService.PersistRequestIdentity"));
         automation = new ExternalAutomationCoordinator(
             new DalamudPluginDataStore(Plugin.PluginInterface),
             log);
