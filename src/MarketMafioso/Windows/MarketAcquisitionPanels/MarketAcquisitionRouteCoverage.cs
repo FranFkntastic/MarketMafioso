@@ -5,22 +5,24 @@ using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 
-/// <summary>One target line's coverage at one stop, with what earlier stops already planned.</summary>
+/// <summary>One line's coverage at one stop, with what earlier stops already planned.</summary>
 /// <remarks>For a skipped stop, <see cref="PriorQuantity"/> is the whole route's plan for the line.</remarks>
 internal sealed record RouteCoverageBar(
     string LineId,
     uint ItemId,
     string ItemName,
-    uint Need,
+    ulong Need,
     ulong StopQuantity,
     double Share,
-    ulong PriorQuantity)
+    ulong PriorQuantity,
+    bool IsBuyBelow = false,
+    ulong SavingsGil = 0)
 {
     public ulong CumulativeQuantity => PriorQuantity + StopQuantity;
     public double PriorFraction => Fraction(PriorQuantity);
     public double CumulativeFraction => Fraction(CumulativeQuantity);
-    public bool Complete => CumulativeQuantity >= Need;
-    public bool Overflow => CumulativeQuantity > Need;
+    public bool Complete => !IsBuyBelow && CumulativeQuantity >= Need;
+    public bool Overflow => !IsBuyBelow && CumulativeQuantity > Need;
 
     private double Fraction(ulong quantity) => Need == 0 ? 0 : Math.Min(1d, (double)quantity / Need);
 }
@@ -79,11 +81,28 @@ internal sealed class MarketAcquisitionRouteCoverage
             .GroupBy(line => line.LineId, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         var planned = new Dictionary<string, ulong>(StringComparer.Ordinal);
+        var routeStock = plan.WorldBatches.SelectMany(batch => batch.ItemSubtasks)
+            .GroupBy(task => task.LineId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.Aggregate(0UL, (total, task) => total + task.PlannedQuantity), StringComparer.Ordinal);
 
         // Batches are already in route order, so a running total is "covered by earlier stops".
         var stops = plan.WorldBatches.Select(batch =>
         {
-            var bars = Covered(batch.LineCoverage, lines, lineId => planned.GetValueOrDefault(lineId));
+            var stock = batch.ItemSubtasks.GroupBy(task => task.LineId, StringComparer.Ordinal)
+                .Select(group => new MarketAcquisitionStopLineCoverage
+                {
+                    LineId = group.Key,
+                    PlannedQuantity = group.Aggregate(0UL, (total, task) => total + task.PlannedQuantity),
+                }).ToArray();
+            var bars = Covered(batch.LineCoverage, lines, lineId => planned.GetValueOrDefault(lineId))
+                .Concat(BuyBelowBars(stock, lines, routeStock, lineId => planned.GetValueOrDefault(lineId))
+                    .Select(bar => bar with
+                    {
+                        SavingsGil = batch.Listings.Where(listing => listing.LineId == bar.LineId)
+                            .Aggregate(0UL, (total, listing) => total +
+                                (ulong)(lines[bar.LineId].MaxUnitPrice - Math.Min(lines[bar.LineId].MaxUnitPrice, listing.UnitPrice)) * listing.Quantity),
+                    })).ToArray();
             foreach (var bar in bars)
                 planned[bar.LineId] = bar.CumulativeQuantity;
             return Rank(bars);
@@ -95,7 +114,9 @@ internal sealed class MarketAcquisitionRouteCoverage
             .ThenByDescending(decision => decision.BuyBelowSavingsGil)
             .ToArray();
         var skippedBars = skipped
-            .Select(decision => Rank(Covered(decision.LineCoverage, lines, lineId => planned.GetValueOrDefault(lineId))))
+            .Select(decision => Rank(Covered(decision.LineCoverage, lines, lineId => planned.GetValueOrDefault(lineId))
+                // No prior segment: the route's whole stock would fill the bar and hide what this stop adds.
+                .Concat(BuyBelowBars(decision.BuyBelowStock, lines, routeStock, _ => 0UL))))
             .ToArray();
 
         // Older persisted plans lack per-stop coverage; without it every line would look short.
@@ -141,6 +162,23 @@ internal sealed class MarketAcquisitionRouteCoverage
                     prior(group.Key));
             })
             .ToArray();
+
+    private static IEnumerable<RouteCoverageBar> BuyBelowBars(
+        IReadOnlyList<MarketAcquisitionStopLineCoverage> stock,
+        IReadOnlyDictionary<string, MarketAcquisitionPlanLine> lines,
+        IReadOnlyDictionary<string, ulong> routeStock,
+        Func<string, ulong> prior) =>
+        stock.Where(entry => entry.PlannedQuantity > 0 &&
+                lines.TryGetValue(entry.LineId, out var line) && line.QuantityMode == BuyBelowMode)
+            .GroupBy(entry => entry.LineId, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var line = lines[group.Key];
+                var quantity = group.Aggregate(0UL, (total, entry) => total + entry.PlannedQuantity);
+                var total = routeStock.GetValueOrDefault(group.Key);
+                return new RouteCoverageBar(group.Key, line.ItemId, ItemName(line.ItemName), total,
+                    quantity, total == 0 ? 0 : Math.Min(1d, (double)quantity / total), prior(group.Key), true);
+            });
 
     private static IReadOnlyList<RouteCoverageBar> Rank(IEnumerable<RouteCoverageBar> bars) =>
         bars.OrderByDescending(bar => bar.Share)

@@ -719,6 +719,14 @@ public static class MarketAcquisitionPlanner
             {
                 EstimatedValueGil = batch.PlannedGil,
                 LineCoverage = shares,
+                BuyBelowStock = plan.Lines.Where(line => line.QuantityMode == "AllBelowThreshold")
+                    .Select(line => new MarketAcquisitionStopLineCoverage
+                    {
+                        LineId = line.LineId,
+                        ItemName = line.ItemName,
+                        PlannedQuantity = batch.ItemSubtasks.Where(task => task.LineId == line.LineId)
+                            .Aggregate(0UL, (total, task) => total + task.PlannedQuantity),
+                    }).ToArray(),
                 CoverageScore = shares.Sum(line => line.Share),
                 BuyBelowSavingsGil = EstimateBuyBelowSavings(plan, batch),
             };
@@ -740,6 +748,7 @@ public static class MarketAcquisitionPlanner
             PlannedGil = batch.PlannedGil,
             PlannedQuantity = batch.PlannedQuantity,
             LineCoverage = batch.LineCoverage,
+            BuyBelowStock = batch.BuyBelowStock,
             CoverageScore = batch.CoverageScore,
             BuyBelowSavingsGil = batch.BuyBelowSavingsGil,
             Skipped = BelowFloor(batch),
