@@ -36,12 +36,14 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
     private readonly CancellationTokenSource lifetime = new();
     private readonly Task retryLoop;
 
-    public MarketIntelligencePassiveReporter(Configuration configuration, HttpClient http, string pluginConfigDirectory, Action<Exception> reportFailure)
+    public MarketIntelligencePassiveReporter(Configuration configuration, HttpClient http, string pluginConfigDirectory, Action<Exception> reportFailure,
+        Action<string>? logInformation = null, Action<Exception, string>? logWarning = null)
     {
         this.configuration = configuration;
         this.http = http;
         this.reportFailure = reportFailure;
-        outbox = new FileMarketAcquisitionReportOutbox(Path.Combine(pluginConfigDirectory, "market-intelligence-outbox.jsonl"));
+        outbox = new FileMarketAcquisitionReportOutbox(Path.Combine(pluginConfigDirectory, "market-intelligence-outbox.jsonl"),
+            logInformation, logWarning);
         retryLoop = Task.Run(() => RetryLoopAsync(lifetime.Token));
         _ = FlushAsync(lifetime.Token);
     }
