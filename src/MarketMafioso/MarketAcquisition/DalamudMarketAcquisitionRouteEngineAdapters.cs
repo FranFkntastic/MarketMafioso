@@ -408,14 +408,10 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
 
 public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisitionRouteEvidenceRecorder
 {
-    private const int MaxRecords = 2_000;
-    private readonly Configuration config;
     private readonly MarketAcquisitionWorldVisitCatalog catalog;
-    private bool dirty;
 
-    public MarketAcquisitionWorldVisitEvidenceRecorder(Configuration config, MarketAcquisitionWorldVisitCatalog catalog)
+    public MarketAcquisitionWorldVisitEvidenceRecorder(MarketAcquisitionWorldVisitCatalog catalog)
     {
-        this.config = config;
         this.catalog = catalog;
     }
 
@@ -457,8 +453,6 @@ public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisi
             RouteRunId = routeRunId,
             RouteStopId = $"{ResolveDataCenter(currentWorld, activeSubtask?.DataCenter)}:{currentWorld}",
         });
-        dirty = true;
-        Save();
     }
 
     public void RecordPurchaseVisit(MarketBoardPurchaseCandidate candidate, MarketAcquisitionWorldItemSubtask activeSubtask, string worldName, string? requestId, string routeRunId)
@@ -484,30 +478,10 @@ public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisi
             RouteRunId = routeRunId,
             RouteStopId = $"{dataCenter}:{worldName}",
         });
-        dirty = true;
     }
 
-    public void Flush() => Save();
-
-    private void Save()
-    {
-        if (!dirty)
-            return;
-
-        var failureStage = "world-visit.prune";
-        try
-        {
-            catalog.Prune(MaxRecords);
-            failureStage = "world-visit.config-save";
-            config.Save();
-            dirty = false;
-        }
-        catch (Exception exception)
-        {
-            MarketAcquisitionRouteFailure.Annotate(exception, failureStage);
-            throw;
-        }
-    }
+    // RecordProbe already queues bounded, coalesced persistence in the catalog.
+    public void Flush() { }
 
     private static string ResolveDataCenter(string worldName, string? plannedDataCenter) =>
         !string.IsNullOrWhiteSpace(plannedDataCenter) ? plannedDataCenter : MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName);

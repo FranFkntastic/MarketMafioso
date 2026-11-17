@@ -280,7 +280,7 @@ public sealed class Plugin : IDalamudPlugin
         tradeQueueRunner = new TradeQueueRunner(
             Configuration.TradeQueueItems,
             Configuration.TradeQueueTiming,
-            Configuration.Save,
+            () => Configuration.SaveRequired("TradeQueueRunner.Checkpoint"),
             tradeQueueIo,
             new Franthropy.Dalamud.Automation.Inventory.DalamudItemQualityLoweringAutomation(
                 GameGui,
@@ -763,6 +763,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnFrameworkUpdate(IFramework framework)
     {
+        Configuration.RetryPendingSave();
         profileDataCenterCoordinator.Tick();
         if (!profileDataCenterCoordinator.OwnsLobby) profileLoginCoordinator.Tick();
         retainerSaleChatObserver.Tick();

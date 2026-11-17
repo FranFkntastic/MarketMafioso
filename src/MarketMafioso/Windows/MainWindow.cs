@@ -44,6 +44,7 @@ namespace MarketMafioso.Windows;
 public class MainWindow : Window, IDisposable
 {
     private readonly Configuration config;
+    private readonly MarketAcquisitionWorldVisitCatalog marketAcquisitionWorldVisitCatalog;
     private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
     private readonly FranthropyRetainerReportSource retainerReports;
@@ -186,7 +187,7 @@ public class MainWindow : Window, IDisposable
             Plugin.PluginInterface.GetPluginConfigDirectory(),
             ex => log.Warning(ex, "[MarketMafioso] Market intelligence reporting requires attention."));
         var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
-        var marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
+        marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
             marketAcquisitionWorldVisitCatalog,
@@ -319,7 +320,7 @@ public class MainWindow : Window, IDisposable
                 marketPurchaseEvidence,
                 playerState),
             new MarketAcquisitionRouteRequestReporter(config, acquisitionClient),
-            new MarketAcquisitionWorldVisitEvidenceRecorder(config, marketAcquisitionWorldVisitCatalog),
+            new MarketAcquisitionWorldVisitEvidenceRecorder(marketAcquisitionWorldVisitCatalog),
             acquisitionWorkspace.CreateClaimLifecycleController(
                 () => marketAcquisitionRouteRunner.StatusMessage),
             new DalamudMarketAcquisitionRouteCallbackDispatcher(),
@@ -997,6 +998,7 @@ public class MainWindow : Window, IDisposable
 
     public void OnFrameworkUpdate(IFramework _framework)
     {
+        marketAcquisitionWorldVisitCatalog.Tick();
 
 
         if (!IsMarketAcquisitionUnlocked())
@@ -2801,6 +2803,7 @@ public class MainWindow : Window, IDisposable
         uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();
         routeEngine.Dispose();
+        marketAcquisitionWorldVisitCatalog.Dispose();
         marketBoardAcquisition.Dispose();
         marketIntelligencePassiveReporter.Dispose();
         remoteSummoningBellProbe.Dispose();

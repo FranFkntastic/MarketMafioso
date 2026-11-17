@@ -8,6 +8,9 @@ using Franthropy.Dalamud.Automation.Vendors.Coordination;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 
 namespace MarketMafioso;
 
@@ -15,6 +18,10 @@ namespace MarketMafioso;
 public class Configuration : IPluginConfiguration
 {
     private readonly object saveSync = new();
+    private bool savePending;
+    private DateTime retrySaveAtUtc;
+    private string pendingSaveOperation = string.Empty;
+    private readonly PersistenceWarning saveWarning = new("plugin configuration");
 
     private TradeQueueTimingOptions? tradeQueueTiming = new();
     private TradeQueuePolicyOptions? tradeQueuePolicy = new();
@@ -65,7 +72,10 @@ public class Configuration : IPluginConfiguration
     public int MarketAcquisitionMinimumStopCoveragePercent { get; set; } = 2;
     public int MarketAcquisitionCoverageColumns { get; set; } = 3;
     public bool MarketAcquisitionIgnoreRecentWorldVisitsForSweep { get; set; } = false;
-    public List<PersistedMarketAcquisitionWorldVisit> MarketAcquisitionWorldVisits { get; set; } = [];
+    [JsonProperty("MarketAcquisitionWorldVisits")]
+    public List<PersistedMarketAcquisitionWorldVisit> LegacyMarketAcquisitionWorldVisits { get; set; } = [];
+    // Retain the only durable copy if migration has not yet committed its separate store.
+    public bool ShouldSerializeLegacyMarketAcquisitionWorldVisits() => LegacyMarketAcquisitionWorldVisits.Count > 0;
     public bool EnableWorkshopHostCraftQuotes { get; set; } = false;
     public bool EnableCraftArchitectManualFallback { get; set; } = false;
     public string CraftArchitectQuoteFilePath { get; set; } = string.Empty;
@@ -151,19 +161,74 @@ public class Configuration : IPluginConfiguration
     [JsonProperty("Squire")]
     public Newtonsoft.Json.Linq.JObject? LegacySquireConfiguration { get; set; }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     public void Save()
     {
-        try
+        var caller = new StackFrame(1).GetMethod();
+        SaveCore($"{caller?.DeclaringType?.Name}.{caller?.Name}", required: false);
+    }
+
+    /// <summary>For checkpoint callers whose existing failure handling must observe a failed write.</summary>
+    public void SaveRequired(string operation) => SaveCore(operation, required: true);
+
+    public void RetryPendingSave()
+    {
+        lock (saveSync)
+            if (savePending && DateTime.UtcNow >= retrySaveAtUtc)
+                SaveCore(pendingSaveOperation, required: false);
+    }
+
+    private void SaveCore(string operation, bool required)
+    {
+        lock (saveSync)
         {
-            lock (saveSync)
+            savePending = true;
+            pendingSaveOperation = operation;
+            if (!required && DateTime.UtcNow < retrySaveAtUtc)
+                return;
+            try
+            {
                 Plugin.PluginInterface.SavePluginConfig(this);
+                savePending = false;
+                retrySaveAtUtc = default;
+                saveWarning.Recovered(operation);
+            }
+            catch (Exception exception) when (PersistenceWarning.IsStorageFailure(exception))
+            {
+                retrySaveAtUtc = DateTime.UtcNow.AddSeconds(5);
+                saveWarning.Failed(operation, exception);
+                if (required) throw;
+            }
         }
-        catch (Exception exception)
-        {
-            MarketAcquisition.MarketAcquisitionRouteFailure.Annotate(exception,
-                "configuration.SavePluginConfig", "Dalamud plugin configuration: MarketMafioso");
-            throw;
-        }
+    }
+}
+
+/// <summary>Storage failures retain dirty state; diagnostics repeat at most once per minute per error.</summary>
+internal sealed class PersistenceWarning(string destination)
+{
+    private readonly Dictionary<string, DateTime> reported = new();
+    private bool failed;
+
+    internal static bool IsStorageFailure(Exception error) =>
+        error is IOException or UnauthorizedAccessException or Win32Exception ||
+        (error.InnerException is { } inner && IsStorageFailure(inner));
+
+    internal void Failed(string operation, Exception error)
+    {
+        failed = true;
+        var key = $"{error.GetType().FullName}:{error.Message}";
+        if (reported.TryGetValue(key, out var last) && DateTime.UtcNow - last < TimeSpan.FromMinutes(1)) return;
+        if (reported.Count >= 32) reported.Clear();
+        reported[key] = DateTime.UtcNow;
+        Plugin.Log.Warning(error, $"[MarketMafioso] {operation}: {destination} persistence failed; in-memory state retained for retry.");
+    }
+
+    internal void Recovered(string operation)
+    {
+        if (!failed) return;
+        Plugin.Log.Information($"[MarketMafioso] {operation}: {destination} persistence recovered.");
+        failed = false;
+        reported.Clear();
     }
 }
 

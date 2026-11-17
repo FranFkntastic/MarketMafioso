@@ -1,19 +1,148 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
+using System.Threading;
+using Newtonsoft.Json;
 
 namespace MarketMafioso.MarketAcquisition;
 
-public sealed class MarketAcquisitionWorldVisitCatalog
+public sealed class MarketAcquisitionWorldVisitCatalog : IDisposable
 {
+    public const int MaxRecords = 2_000;
     private readonly Configuration config;
+    private readonly object sync = new();
+    private readonly object writerSync = new();
+    private long revision;
+    private readonly string path;
+    private readonly Timer writer;
+    private readonly PersistenceWarning warning = new("world-visit store");
+    private List<PersistedMarketAcquisitionWorldVisit> visits = [];
+    private bool loaded;
+    private bool dirty;
+    private bool migrationCommitted;
+    private bool disposed;
 
     public MarketAcquisitionWorldVisitCatalog(Configuration config)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
+        path = Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "market-acquisition-world-visits.json");
+        visits = config.LegacyMarketAcquisitionWorldVisits.ToList();
+        Trim(MaxRecords);
+        // Make TTL lookups truthful immediately on startup. Only reads occur here;
+        // migration commits, serialization and writes run on the serialized worker.
+        try { LoadStore(); }
+        catch (Exception ex) { warning.Failed("MarketAcquisitionWorldVisitCatalog.LoadStore", ex); }
+        writer = new Timer(_ => FlushStore(), null, TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
     }
 
-    public IReadOnlyList<PersistedMarketAcquisitionWorldVisit> Visits => config.MarketAcquisitionWorldVisits;
+    public IReadOnlyList<PersistedMarketAcquisitionWorldVisit> Visits
+    {
+        get { lock (sync) return visits.ToArray(); }
+    }
+
+    // Called on the framework thread: config itself must not be serialized from the worker.
+    public void Tick()
+    {
+        lock (sync)
+        {
+            if (!migrationCommitted || config.LegacyMarketAcquisitionWorldVisits.Count == 0) return;
+            config.LegacyMarketAcquisitionWorldVisits.Clear();
+            config.Save();
+        }
+    }
+
+    private void ScheduleWrite()
+    {
+        revision++;
+        if (dirty) return; // Fixed coalescing window: sustained probes cannot starve persistence.
+        dirty = true;
+        writer.Change(TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+    }
+
+    private void FlushStore()
+    {
+        lock (writerSync)
+        {
+            if (disposed) return;
+            try
+            {
+                if (!loaded)
+                    LoadStore();
+                PersistedMarketAcquisitionWorldVisit[] snapshot;
+                long savedRevision;
+                lock (sync)
+                {
+                    if (!dirty) return;
+                    Trim(MaxRecords);
+                    snapshot = visits.ToArray();
+                    savedRevision = revision;
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                var temporary = path + ".tmp";
+                using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    using var text = new StreamWriter(stream, leaveOpen: true);
+                    using var json = new JsonTextWriter(text);
+                    JsonSerializer.CreateDefault().Serialize(json, snapshot);
+                    json.Flush();
+                    text.Flush();
+                    stream.Flush(flushToDisk: true);
+                }
+                if (File.Exists(path)) File.Replace(temporary, path, null, ignoreMetadataErrors: true);
+                else File.Move(temporary, path);
+                lock (sync)
+                {
+                    dirty = revision != savedRevision;
+                    migrationCommitted = true;
+                    if (dirty && !disposed) writer.Change(TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+                }
+                warning.Recovered("MarketAcquisitionWorldVisitCatalog.FlushStore");
+            }
+            catch (Exception ex)
+            {
+                // Also retain malformed/unreadable stores: never overwrite evidence with an empty list.
+                warning.Failed("MarketAcquisitionWorldVisitCatalog.FlushStore", ex);
+                if (!disposed) writer.Change(TimeSpan.FromSeconds(5), Timeout.InfiniteTimeSpan);
+            }
+        }
+    }
+
+    private void LoadStore()
+    {
+        List<PersistedMarketAcquisitionWorldVisit> stored;
+        try
+        {
+            stored = JsonConvert.DeserializeObject<List<PersistedMarketAcquisitionWorldVisit>>(File.ReadAllText(path))
+                     ?? throw new JsonSerializationException("World-visit store contained null instead of a list.");
+        }
+        catch (FileNotFoundException) { stored = []; }
+        catch (DirectoryNotFoundException) { stored = []; }
+        lock (sync)
+        {
+            // Replay after a crash between store commit and config cleanup is idempotent.
+            visits = stored.Concat(visits)
+                .GroupBy(v => (v.WorldName.ToUpperInvariant(), v.ItemId, v.HqPolicy.ToUpperInvariant(), v.MaxUnitPrice))
+                .Select(g => g.OrderByDescending(v => v.CheckedAtUtc).First()).ToList();
+            Trim(MaxRecords);
+            loaded = true;
+            dirty = true;
+        }
+    }
+
+    public void Dispose()
+    {
+        // Disable callbacks before draining; keep the timer valid until an in-flight writer exits.
+        writer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        // Drain the same worker without doing the final serialization/write on the framework thread.
+        System.Threading.Tasks.Task.Run(FlushStore).GetAwaiter().GetResult();
+        Tick();
+        lock (writerSync)
+        {
+            disposed = true;
+            writer.Dispose();
+        }
+    }
 
     public void RecordProbe(MarketAcquisitionWorldVisitRecord record)
     {
@@ -28,24 +157,25 @@ public sealed class MarketAcquisitionWorldVisitCatalog
         if (record.CheckedAtUtc == default)
             throw new InvalidOperationException("Checked timestamp is required before recording a market acquisition visit.");
 
-        var existing = config.MarketAcquisitionWorldVisits.FirstOrDefault(visit =>
-            SameKey(
-                visit.WorldName,
-                visit.ItemId,
-                visit.HqPolicy,
-                visit.MaxUnitPrice,
-                record.WorldName,
-                record.ItemId,
-                record.HqPolicy,
-                record.MaxUnitPrice));
-        if (existing == null)
+        lock (sync)
         {
-            config.MarketAcquisitionWorldVisits.Add(ToPersisted(record, canonicalWorldName: null));
-            return;
+            var existing = visits.FirstOrDefault(visit =>
+                SameKey(
+                    visit.WorldName,
+                    visit.ItemId,
+                    visit.HqPolicy,
+                    visit.MaxUnitPrice,
+                    record.WorldName,
+                    record.ItemId,
+                    record.HqPolicy,
+                    record.MaxUnitPrice));
+            if (existing == null)
+                visits.Add(ToPersisted(record, canonicalWorldName: null));
+            else
+                visits[visits.IndexOf(existing)] = ToPersisted(record, existing.WorldName);
+            Trim(MaxRecords);
+            ScheduleWrite();
         }
-
-        var index = config.MarketAcquisitionWorldVisits.IndexOf(existing);
-        config.MarketAcquisitionWorldVisits[index] = ToPersisted(record, existing.WorldName);
     }
 
     public bool WasRecentlyChecked(
@@ -59,7 +189,7 @@ public sealed class MarketAcquisitionWorldVisitCatalog
         if (ttl <= TimeSpan.Zero)
             return false;
 
-        return config.MarketAcquisitionWorldVisits.Any(visit =>
+        return Visits.Any(visit =>
             SameKey(visit.WorldName, visit.ItemId, visit.HqPolicy, visit.MaxUnitPrice, worldName, itemId, hqPolicy, maxUnitPrice) &&
             MarketAcquisitionLiveCandidateStatuses.IsConclusiveWorldVisitResult(visit.Result) &&
             IsWithinTtl(visit.CheckedAtUtc, nowUtc, ttl));
@@ -76,7 +206,7 @@ public sealed class MarketAcquisitionWorldVisitCatalog
         if (ttl <= TimeSpan.Zero)
             return null;
 
-        return config.MarketAcquisitionWorldVisits
+        return Visits
             .Where(visit =>
                 SameKey(visit.WorldName, visit.ItemId, visit.HqPolicy, visit.MaxUnitPrice, worldName, itemId, hqPolicy, maxUnitPrice) &&
                 MarketAcquisitionLiveCandidateStatuses.IsConclusiveWorldVisitResult(visit.Result) &&
@@ -95,7 +225,7 @@ public sealed class MarketAcquisitionWorldVisitCatalog
         if (ttl <= TimeSpan.Zero)
             return [];
 
-        return config.MarketAcquisitionWorldVisits
+        return Visits
             .Where(visit =>
                 visit.ItemId == itemId &&
                 visit.MaxUnitPrice == maxUnitPrice &&
@@ -113,14 +243,23 @@ public sealed class MarketAcquisitionWorldVisitCatalog
         if (maxRecords < 1)
             throw new ArgumentOutOfRangeException(nameof(maxRecords), "Max records must be one or greater.");
 
-        if (config.MarketAcquisitionWorldVisits.Count <= maxRecords)
-            return;
+        lock (sync)
+        {
+            if (Trim(Math.Min(maxRecords, MaxRecords))) ScheduleWrite();
+        }
+    }
 
-        config.MarketAcquisitionWorldVisits = config.MarketAcquisitionWorldVisits
+    private bool Trim(int maxRecords)
+    {
+        if (visits.Count <= maxRecords)
+            return false;
+
+        visits = visits
             .OrderByDescending(visit => visit.CheckedAtUtc)
             .Take(maxRecords)
             .OrderBy(visit => visit.CheckedAtUtc)
             .ToList();
+        return true;
     }
 
     private static PersistedMarketAcquisitionWorldVisit ToPersisted(
