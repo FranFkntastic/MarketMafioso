@@ -416,6 +416,10 @@ public sealed class Plugin : IDalamudPlugin
                 GameInventory = GameInventory,
                 PlayerState = PlayerState,
                 AddonLifecycle = AddonLifecycle,
+                Framework = Framework,
+                InteropProvider = GameInteropProvider,
+                SigScanner = SigScanner,
+                PluginLog = Log,
                 Diagnostic = (message, exception) =>
                 {
                     if (exception is null)
