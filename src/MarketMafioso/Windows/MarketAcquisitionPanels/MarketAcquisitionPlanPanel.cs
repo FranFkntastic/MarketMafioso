@@ -257,7 +257,8 @@ internal sealed class MarketAcquisitionPlanPanel
         if (coverageHighlight.IsHighlighted(bar.LineId))
             flags |= DalamudProgressCellFlags.Highlighted;
 
-        var cell = new DalamudProgressCell(bar.ItemName, FormatShare(bar.Share), bar.PriorFraction,
+        var label = bar.IsBuyBelow ? bar.StopQuantity.ToString("N0") : FormatShare(bar.Share);
+        var cell = new DalamudProgressCell(bar.ItemName, label, bar.PriorFraction,
             bar.CumulativeFraction - bar.PriorFraction)
         {
             Flags = flags,
@@ -271,7 +272,21 @@ internal sealed class MarketAcquisitionPlanPanel
         ImGui.TextColored(MarketMafiosoUiTheme.Header, bar.ItemName);
         if (BeginFigures())
         {
-            if (row == CoverageRow.Skipped)
+            if (bar.IsBuyBelow)
+            {
+                if (row == CoverageRow.Skipped)
+                    Figure("Would add", $"{bar.StopQuantity:N0}");
+                else
+                {
+                    Figure("This stop", $"{bar.StopQuantity:N0} ({FormatPercent(bar.Share)} of route stock)");
+                    if (bar.PriorQuantity > 0)
+                        Figure("Earlier stops", $"{bar.PriorQuantity:N0}");
+                }
+                Figure("Route stock", $"{bar.Need:N0}");
+                if (row != CoverageRow.Skipped && bar.SavingsGil > 0)
+                    Figure("Saves", $"{bar.SavingsGil:N0} gil");
+            }
+            else if (row == CoverageRow.Skipped)
             {
                 Figure("Route plans", $"{bar.PriorQuantity:N0} / {bar.Need:N0}  ({FormatPercent(bar.PriorFraction)})");
                 Figure("This stop would add", $"{bar.StopQuantity:N0}  ({FormatPercent(bar.Share)})");

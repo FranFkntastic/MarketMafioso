@@ -77,6 +77,7 @@ public sealed record MarketAcquisitionWorldItemSubtask
 
 public sealed record MarketAcquisitionWorldBatch
 {
+    public IReadOnlyList<MarketAcquisitionStopLineCoverage> BuyBelowStock { get; init; } = [];
     public ulong EstimatedValueGil { get; init; }
     public IReadOnlyList<MarketAcquisitionStopLineCoverage> LineCoverage { get; init; } = [];
     public double CoverageScore { get; init; }
@@ -127,6 +128,7 @@ public sealed record MarketAcquisitionPlanDiagnostics
 
 public sealed record MarketAcquisitionStopDecision
 {
+    public IReadOnlyList<MarketAcquisitionStopLineCoverage> BuyBelowStock { get; init; } = [];
     public string WorldName { get; init; } = string.Empty;
     public ulong EstimatedValueGil { get; init; }
     public uint PlannedGil { get; init; }
