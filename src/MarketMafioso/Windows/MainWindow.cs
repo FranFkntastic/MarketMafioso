@@ -302,7 +302,8 @@ public class MainWindow : Window, IDisposable
                 HotRetentionRunCount = config.MarketAcquisitionRouteDiagnosticsHotRuns,
             },
             (exception, message) => Plugin.Log.Error(exception, "[MarketMafioso] {Message}", message));
-        exactAcquisitionRouteStateStore = new ConfigurationExactAcquisitionRouteExecutionStateStore(config);
+        exactAcquisitionRouteStateStore = new ConfigurationExactAcquisitionRouteExecutionStateStore(
+            config, () => config.SaveRequired("ExactAcquisitionRouteAuthority"));
         routeEngine = new MarketAcquisitionRouteEngine(
             marketAcquisitionRouteRunner,
             new DalamudMarketAcquisitionRouteContext(playerState, lifestream),

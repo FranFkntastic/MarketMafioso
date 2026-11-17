@@ -174,8 +174,19 @@ public class Configuration : IPluginConfiguration
     public void RetryPendingSave()
     {
         lock (saveSync)
-            if (savePending && DateTime.UtcNow >= retrySaveAtUtc)
-                SaveCore(pendingSaveOperation, required: false);
+        {
+            try
+            {
+                if (savePending && DateTime.UtcNow >= retrySaveAtUtc)
+                    SaveCore(pendingSaveOperation, required: false);
+            }
+            catch (Exception exception)
+            {
+                // Keep an unexpected retry failure from starving every framework tick.
+                retrySaveAtUtc = DateTime.UtcNow.AddSeconds(5);
+                saveWarning.Failed(pendingSaveOperation, exception, unexpected: true);
+            }
+        }
     }
 
     private void SaveCore(string operation, bool required)
@@ -199,6 +210,12 @@ public class Configuration : IPluginConfiguration
                 saveWarning.Failed(operation, exception);
                 if (required) throw;
             }
+            catch (Exception exception)
+            {
+                retrySaveAtUtc = DateTime.UtcNow.AddSeconds(5);
+                saveWarning.Failed(operation, exception, unexpected: true);
+                if (required) throw;
+            }
         }
     }
 }
@@ -213,14 +230,16 @@ internal sealed class PersistenceWarning(string destination)
         error is IOException or UnauthorizedAccessException or Win32Exception ||
         (error.InnerException is { } inner && IsStorageFailure(inner));
 
-    internal void Failed(string operation, Exception error)
+    internal void Failed(string operation, Exception error, bool unexpected = false)
     {
         failed = true;
         var key = $"{error.GetType().FullName}:{error.Message}";
         if (reported.TryGetValue(key, out var last) && DateTime.UtcNow - last < TimeSpan.FromMinutes(1)) return;
         if (reported.Count >= 32) reported.Clear();
         reported[key] = DateTime.UtcNow;
-        Plugin.Log.Warning(error, $"[MarketMafioso] {operation}: {destination} persistence failed; in-memory state retained for retry.");
+        var message = $"[MarketMafioso] {operation}: {destination} persistence failed; in-memory state retained for retry.";
+        if (unexpected) Plugin.Log.Error(error, message);
+        else Plugin.Log.Warning(error, message);
     }
 
     internal void Recovered(string operation)

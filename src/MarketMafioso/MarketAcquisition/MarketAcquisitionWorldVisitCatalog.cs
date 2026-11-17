@@ -22,12 +22,13 @@ public sealed class MarketAcquisitionWorldVisitCatalog : IDisposable
     private bool dirty;
     private bool migrationCommitted;
     private bool disposed;
+    private int consecutiveParseFailures;
 
     public MarketAcquisitionWorldVisitCatalog(Configuration config)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         path = Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "market-acquisition-world-visits.json");
-        visits = config.LegacyMarketAcquisitionWorldVisits.ToList();
+        visits = config.LegacyMarketAcquisitionWorldVisits.Where(IsValidVisit).ToList();
         Trim(MaxRecords);
         // Make TTL lookups truthful immediately on startup. Only reads occur here;
         // migration commits, serialization and writes run on the serialized worker.
@@ -101,7 +102,7 @@ public sealed class MarketAcquisitionWorldVisitCatalog : IDisposable
             }
             catch (Exception ex)
             {
-                // Also retain malformed/unreadable stores: never overwrite evidence with an empty list.
+                // Keep unreadable stores intact; LoadStore quarantines repeatedly malformed JSON.
                 warning.Failed("MarketAcquisitionWorldVisitCatalog.FlushStore", ex);
                 if (!disposed) writer.Change(TimeSpan.FromSeconds(5), Timeout.InfiniteTimeSpan);
             }
@@ -111,17 +112,47 @@ public sealed class MarketAcquisitionWorldVisitCatalog : IDisposable
     private void LoadStore()
     {
         List<PersistedMarketAcquisitionWorldVisit> stored;
+        var loadPath = path;
         try
         {
-            stored = JsonConvert.DeserializeObject<List<PersistedMarketAcquisitionWorldVisit>>(File.ReadAllText(path))
+            string contents;
+            try { contents = File.ReadAllText(loadPath); }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // A crash may leave a durable temporary file before its first atomic promotion.
+                loadPath = path + ".tmp";
+                try { contents = File.ReadAllText(loadPath); }
+                catch (Exception missing) when (missing is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    contents = "[]";
+                    loadPath = path;
+                }
+            }
+            stored = JsonConvert.DeserializeObject<List<PersistedMarketAcquisitionWorldVisit>>(contents)
                      ?? throw new JsonSerializationException("World-visit store contained null instead of a list.");
+            consecutiveParseFailures = 0;
+            if (loadPath != path)
+                Plugin.Log.Warning($"[MarketMafioso] Recovered world-visit store from {loadPath}.");
         }
-        catch (FileNotFoundException) { stored = []; }
-        catch (DirectoryNotFoundException) { stored = []; }
+        catch (JsonException)
+        {
+            if (++consecutiveParseFailures < 3) throw;
+            var corruptPath = loadPath + ".corrupt-" + DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffffffZ");
+            // Never discard the only copy: if quarantine fails, the worker retries without writing.
+            File.Move(loadPath, corruptPath);
+            consecutiveParseFailures = 0;
+            Plugin.Log.Warning($"[MarketMafioso] Quarantined malformed world-visit store as {corruptPath}; continuing with an empty stored history.");
+            stored = [];
+        }
+        catch
+        {
+            consecutiveParseFailures = 0;
+            throw;
+        }
         lock (sync)
         {
             // Replay after a crash between store commit and config cleanup is idempotent.
-            visits = stored.Concat(visits)
+            visits = stored.Concat(visits).Where(IsValidVisit)
                 .GroupBy(v => (v.WorldName.ToUpperInvariant(), v.ItemId, v.HqPolicy.ToUpperInvariant(), v.MaxUnitPrice))
                 .Select(g => g.OrderByDescending(v => v.CheckedAtUtc).First()).ToList();
             Trim(MaxRecords);
@@ -129,6 +160,10 @@ public sealed class MarketAcquisitionWorldVisitCatalog : IDisposable
             dirty = true;
         }
     }
+
+    private static bool IsValidVisit(PersistedMarketAcquisitionWorldVisit visit) =>
+        visit is not null && !string.IsNullOrWhiteSpace(visit.WorldName) &&
+        !string.IsNullOrWhiteSpace(visit.HqPolicy);
 
     public void Dispose()
     {
