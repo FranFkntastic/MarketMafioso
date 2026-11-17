@@ -34,6 +34,11 @@ internal sealed record RouteCoverageShortfall(string LineId, uint ItemId, string
     public ulong Gap => Need > Planned ? Need - Planned : 0;
 }
 
+/// <summary>A buy-below line with no stock in the route or skipped stops.</summary>
+internal sealed record RouteCoverageEmptyBuyBelow(
+    string LineId, uint ItemId, string ItemName, uint Ceiling, int RecentlyClearedWorlds,
+    DateTime? LastCheckedAtUtc, DateTime? OldestCheckedAtUtc);
+
 /// <summary>Ranked per-stop coverage for the plan's route-stop table, built once per plan instance.</summary>
 internal sealed class MarketAcquisitionRouteCoverage
 {
@@ -44,15 +49,17 @@ internal sealed class MarketAcquisitionRouteCoverage
         IReadOnlyList<MarketAcquisitionStopDecision> skipped,
         IReadOnlyList<IReadOnlyList<RouteCoverageBar>> skippedBars,
         IReadOnlyList<RouteCoverageShortfall> shortfalls,
+        IReadOnlyList<RouteCoverageEmptyBuyBelow> emptyBuyBelow,
         IReadOnlyDictionary<string, MarketAcquisitionPlanLine> lines)
     {
         Stops = stops;
         Skipped = skipped;
         SkippedBars = skippedBars;
         Shortfalls = shortfalls;
+        EmptyBuyBelow = emptyBuyBelow;
         Lines = lines;
         RequiredSlots = stops.Concat(skippedBars).Select(bars => bars.Count)
-            .Append(shortfalls.Count).Max();
+            .Append(shortfalls.Count).Append(emptyBuyBelow.Count).Max();
     }
 
     /// <summary>Ranked bars per route stop, aligned with <see cref="MarketAcquisitionPlan.WorldBatches"/>.</summary>
@@ -66,6 +73,8 @@ internal sealed class MarketAcquisitionRouteCoverage
 
     /// <summary>Lines still short after the route, least covered first.</summary>
     public IReadOnlyList<RouteCoverageShortfall> Shortfalls { get; }
+
+    public IReadOnlyList<RouteCoverageEmptyBuyBelow> EmptyBuyBelow { get; }
 
     public IReadOnlyDictionary<string, MarketAcquisitionPlanLine> Lines { get; }
 
@@ -137,7 +146,28 @@ internal sealed class MarketAcquisitionRouteCoverage
                 .ThenBy(shortfall => shortfall.ItemName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-        return new MarketAcquisitionRouteCoverage(stops, skipped, skippedBars, shortfalls, lines);
+        var skippedStock = skipped.SelectMany(decision => decision.BuyBelowStock)
+            .Where(stock => stock.PlannedQuantity > 0)
+            .Select(stock => stock.LineId).ToHashSet(StringComparer.Ordinal);
+        var exclusions = (plan.SweepWorldExclusions ?? [])
+            .ToLookup(exclusion => exclusion.LineId, StringComparer.Ordinal);
+        var emptyBuyBelow = lines.Values
+            .Where(line => line.QuantityMode == BuyBelowMode &&
+                routeStock.GetValueOrDefault(line.LineId) == 0 && !skippedStock.Contains(line.LineId))
+            .Select(line =>
+            {
+                var cleared = exclusions[line.LineId].ToArray();
+                return new RouteCoverageEmptyBuyBelow(line.LineId, line.ItemId, ItemName(line.ItemName),
+                    line.MaxUnitPrice,
+                    cleared.Select(exclusion => exclusion.WorldName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    cleared.Select(exclusion => (DateTime?)exclusion.CheckedAtUtc).Max(),
+                    cleared.Select(exclusion => (DateTime?)exclusion.CheckedAtUtc).Min());
+            })
+            .OrderBy(line => line.ItemName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(line => line.LineId, StringComparer.Ordinal)
+            .ToArray();
+
+        return new MarketAcquisitionRouteCoverage(stops, skipped, skippedBars, shortfalls, emptyBuyBelow, lines);
     }
 
     private static RouteCoverageBar[] Covered(
