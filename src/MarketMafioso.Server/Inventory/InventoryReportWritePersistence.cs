@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 
 namespace MarketMafioso.Server.Inventory;
 
-internal sealed class InventoryReportWritePersistence(
+internal sealed partial class InventoryReportWritePersistence(
     SqliteConnectionFactory connectionFactory,
     IConfiguration configuration,
     ILogger log)

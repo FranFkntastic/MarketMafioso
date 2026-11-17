@@ -30,76 +30,81 @@ public sealed class SqliteSchemaMigrator
             }
         }
 
-        using var write = connectionFactory.BeginWrite(connection);
-        var transaction = write.Transaction;
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = MigrationSql;
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        int invalidActorRepair;
+        CharacterRepairResult characterRepair;
+        using (var write = connectionFactory.BeginWrite(connection))
+        {
+            var transaction = write.Transaction;
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = MigrationSql;
+            await command.ExecuteNonQueryAsync(cancellationToken);
 
-        await ExecuteAsync(connection, transaction, Persistence.WorkshopHandoffSchema.Sql, cancellationToken);
+            await ExecuteAsync(connection, transaction, Persistence.WorkshopHandoffSchema.Sql, cancellationToken);
 
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil", "INTEGER NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "requested_sources_json", "TEXT NOT NULL DEFAULT '[]'", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "observed_sources_json", "TEXT NOT NULL DEFAULT '[]'", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil_observed_at_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "listings_observed_at_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "characters", "service_account_key", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "characters", "service_account_number", "INTEGER NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_key", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_number", "INTEGER NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "player_gil", "INTEGER NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "retainer_management_json", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "is_current", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "semantic_revision", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "semantic_hash", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "last_delivery_at_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "location", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "observed_at_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "item_type", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "container_key", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "slot_index", "INTEGER NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "condition_percent", "REAL NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "equipped", "INTEGER NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "retainer_market_listings", "container_key", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "retainer_market_listings", "slot_index", "INTEGER NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "retainer_market_listings", "condition_percent", "REAL NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "purpose", "TEXT NOT NULL DEFAULT 'LegacyClient'", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "key_prefix", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "last_used_at_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "market_owned_listing_versions", "last_publicly_seen_at_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "market_owned_listing_versions", "publicly_missing_since_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "market_owned_listing_versions", "sale_history_checked_at_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "market_observations", "own_listing_visible", "INTEGER NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "earliest_event_at_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "latest_event_at_utc", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "candidate_count", "INTEGER NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "character_name", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "aggregate_json", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "source_build", "TEXT NULL", cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "capture_mode", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "requested_sources_json", "TEXT NOT NULL DEFAULT '[]'", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "observed_sources_json", "TEXT NOT NULL DEFAULT '[]'", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil_observed_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "listings_observed_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "characters", "service_account_key", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "characters", "service_account_number", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_key", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_number", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "snapshots", "player_gil", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "snapshots", "retainer_management_json", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "snapshots", "is_current", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "snapshots", "semantic_revision", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "snapshots", "semantic_hash", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "snapshots", "last_delivery_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "snapshots", "head_started_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "location", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "observed_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "item_type", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "container_key", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "slot_index", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "condition_percent", "REAL NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "equipped", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "retainer_market_listings", "container_key", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "retainer_market_listings", "slot_index", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "retainer_market_listings", "condition_percent", "REAL NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "purpose", "TEXT NOT NULL DEFAULT 'LegacyClient'", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "key_prefix", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "last_used_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "market_owned_listing_versions", "last_publicly_seen_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "market_owned_listing_versions", "publicly_missing_since_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "market_owned_listing_versions", "sale_history_checked_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "market_observations", "own_listing_visible", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "earliest_event_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "latest_event_at_utc", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "candidate_count", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "character_name", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "aggregate_json", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "source_build", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "market_evidence_observations", "capture_mode", "TEXT NULL", cancellationToken);
 
-        var invalidActorRepair = await RepairInvalidLocalSellerOwnerSemanticsAsync(connection, transaction, cancellationToken);
-        var characterRepair = await RepairIncompleteCharacterIdentitiesAsync(connection, transaction, cancellationToken);
-        await CreateNormalizedCharacterIdentityIndexAsync(connection, transaction, cancellationToken);
-        await AddColumnIfMissingAsync(connection, transaction, "characters", "inventory_identity_id", "INTEGER NULL", cancellationToken);
-        await SeedInventoryCurrentHeadsAsync(connection, transaction, cancellationToken);
-        await CreateInventoryCurrentHeadIndexAsync(connection, transaction, cancellationToken);
-        await ExecuteAsync(connection, transaction, """
+            invalidActorRepair = await RepairInvalidLocalSellerOwnerSemanticsAsync(connection, transaction, cancellationToken);
+            characterRepair = await RepairIncompleteCharacterIdentitiesAsync(connection, transaction, cancellationToken);
+            await CreateNormalizedCharacterIdentityIndexAsync(connection, transaction, cancellationToken);
+            await AddColumnIfMissingAsync(connection, transaction, "characters", "inventory_identity_id", "INTEGER NULL", cancellationToken);
+            await SeedInventoryCurrentHeadsAsync(connection, transaction, cancellationToken);
+            await CreateInventoryCurrentHeadIndexAsync(connection, transaction, cancellationToken);
+            await ExecuteAsync(connection, transaction, """
             CREATE INDEX IF NOT EXISTS ix_inventory_owners_retainer_identity
             ON inventory_owners(retainer_id, snapshot_id) WHERE owner_type = 'retainer';
             """, cancellationToken);
-        await InventoryCharacterLineage.RepairAsync(connection, transaction, cancellationToken);
+            await InventoryCharacterLineage.RepairAsync(connection, transaction, cancellationToken);
 
-        // Startup precedes all host workers. A committed staging generation left by
-        // an interrupted process is not published and can be reclaimed in row batches.
-        await ExecuteAsync(connection, transaction, """
+            // Startup precedes all host workers. A committed staging generation left by
+            // an interrupted process is not published and can be reclaimed in row batches.
+            await ExecuteAsync(connection, transaction, """
             UPDATE market_intelligence_projection_generations
             SET status = 'Failed', error = 'Projection staging interrupted by host restart.'
             WHERE status = 'Building';
             """, cancellationToken);
 
-        await transaction.CommitAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
         await BackfillCurrentSemanticHashesAsync(cancellationToken);
 
         if (characterRepair.Repaired > 0)
@@ -333,6 +338,20 @@ public sealed class SqliteSchemaMigrator
         SqliteTransaction transaction,
         CancellationToken cancellationToken)
     {
+        // Most startups have nothing to seed. The partial index makes that check
+        // constant-cost, while still repairing legacy rows introduced by an import.
+        await ExecuteAsync(connection, transaction, """
+            CREATE INDEX IF NOT EXISTS ix_snapshots_unseeded ON snapshots(character_id)
+            WHERE character_id IS NOT NULL AND (semantic_revision = 0 OR last_delivery_at_utc IS NULL);
+            """, cancellationToken);
+        await using var pending = connection.CreateCommand();
+        pending.Transaction = transaction;
+        pending.CommandText = """
+            SELECT 1 FROM snapshots
+            WHERE character_id IS NOT NULL AND (semantic_revision = 0 OR last_delivery_at_utc IS NULL) LIMIT 1;
+            """;
+        if (await pending.ExecuteScalarAsync(cancellationToken) is null)
+            return;
         await ExecuteAsync(
             connection,
             transaction,
