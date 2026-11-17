@@ -1,4 +1,5 @@
 using MarketMafioso.Server;
+using MarketMafioso.Server.Inventory;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.Dashboard;
 using MarketMafioso.Server.Endpoints;
@@ -27,6 +28,7 @@ builder.Services.AddSingleton<ReceiverBootstrapper>();
 builder.Services.AddSingleton<IngestKeyAccountResolver>();
 builder.Services.AddSingleton<WorkshopHostCredentialStore>();
 builder.Services.AddSingleton<InventoryReportStore>();
+builder.Services.AddHostedService<InventoryRetentionWorker>();
 builder.Services.AddSingleton<JsonSnapshotImporter>();
 builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
 builder.Services.AddSingleton<WorkshopHandoffStore>();
@@ -85,7 +87,8 @@ app.Use(async (context, next) =>
     {
         app.Logger.LogWarning(
             exception,
-            "SQLite was busy while handling {Method} {Path}; returning a retryable response.",
+            "SQLite busy in {Operation} while handling {Method} {Path}; returning a retryable response.",
+            SqliteConnectionFactory.WaitingOperation(exception),
             context.Request.Method,
             context.Request.Path);
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;

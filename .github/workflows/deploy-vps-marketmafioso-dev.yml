@@ -148,6 +148,7 @@ jobs:
           MarketMafioso__AcquisitionRecoveryPickupExpirySeconds=3600
           MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
           MarketMafioso__RawJsonRetentionCount=20
+          MarketMafioso__InventoryHistory__Policy=Count
           MarketMafioso__SnapshotRetentionCount=500
           MarketMafioso__RequireDashboardAuth=true
           MarketMafioso__DashboardBootstrapUsername=marketmafioso

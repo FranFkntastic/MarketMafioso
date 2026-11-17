@@ -82,7 +82,8 @@ public sealed class DashboardSessionStore
         var token = CreateToken();
         var tokenHash = HashToken(token);
 
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         await using (var insert = connection.CreateCommand())
         {

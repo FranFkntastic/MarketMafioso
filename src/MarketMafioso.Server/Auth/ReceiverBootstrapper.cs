@@ -26,7 +26,8 @@ public sealed class ReceiverBootstrapper
     public async Task BootstrapAsync(CancellationToken cancellationToken)
     {
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         var accountId = await EnsureDefaultAccountAsync(connection, transaction, cancellationToken);
 

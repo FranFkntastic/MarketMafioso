@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using MarketMafioso.Contracts;
@@ -18,7 +19,8 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         var current = await ReadLatestOwnedListingsAsync(cancellationToken);
         var observedAt = DateTimeOffset.UtcNow;
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
 
         foreach (var listing in current)
         {
@@ -511,7 +513,8 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         var listing = evaluation.OwnedListing;
 
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         await InsertObservationAsync(connection, transaction, evaluation, cancellationToken);
         await UpdatePublicVisibilityAsync(connection, transaction, evaluation, cancellationToken);
 
@@ -686,7 +689,8 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
             return;
 
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         foreach (var condition in conditions)
         {
             await using var command = connection.CreateCommand();
@@ -916,7 +920,8 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         var rawEvidence = JsonSerializer.Serialize(evidence);
 
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         var matchedListing = await FindConfirmedSaleListingAsync(
             connection,
             transaction,
@@ -1043,7 +1048,8 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         CancellationToken cancellationToken)
     {
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -1131,7 +1137,8 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         var rawEvidence = JsonSerializer.Serialize(ordered);
 
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         await using var insert = connection.CreateCommand();
         insert.Transaction = transaction;
         insert.CommandText = """
@@ -1265,31 +1272,45 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         TimeSpan regionRetention,
         CancellationToken cancellationToken)
     {
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        await using (var world = connection.CreateCommand())
-        {
-            world.Transaction = transaction;
-            world.CommandText = """
-                DELETE FROM market_observations
-                WHERE observed_at_utc < $cutoff;
-                """;
-            world.Parameters.AddWithValue("$cutoff", Format(observedAtUtc - worldRetention));
-            await world.ExecuteNonQueryAsync(cancellationToken);
-        }
+        await PruneObservationTableAsync("market_observations", observedAtUtc - worldRetention, cancellationToken);
+        await PruneObservationTableAsync("market_region_observations", observedAtUtc - regionRetention, cancellationToken);
+    }
 
-        await using (var region = connection.CreateCommand())
+    private async Task PruneObservationTableAsync(string table, DateTimeOffset cutoff, CancellationToken token)
+    {
+        // Only the two fixed table names above are used. Do the potentially unindexed
+        // time-window scan before acquiring the writer lock; delete by primary key.
+        var elapsed = Stopwatch.StartNew();
+        do
         {
-            region.Transaction = transaction;
-            region.CommandText = """
-                DELETE FROM market_region_observations
-                WHERE observed_at_utc < $cutoff;
-                """;
-            region.Parameters.AddWithValue("$cutoff", Format(observedAtUtc - regionRetention));
-            await region.ExecuteNonQueryAsync(cancellationToken);
-        }
+            var ids = new List<long>();
+            await using (var connection = await connectionFactory.OpenConnectionAsync(token))
+            {
+                connection.DefaultTimeout = 1;
+                await using (var select = connection.CreateCommand())
+                {
+                    select.CommandText = $"SELECT id FROM {table} WHERE observed_at_utc < $cutoff LIMIT 100";
+                    select.Parameters.AddWithValue("$cutoff", Format(cutoff));
+                    await using var reader = await select.ExecuteReaderAsync(token);
+                    while (await reader.ReadAsync(token)) ids.Add(reader.GetInt64(0));
+                }
+                if (ids.Count == 0) break;
 
-        await transaction.CommitAsync(cancellationToken);
+                using var write = connectionFactory.BeginWrite(connection, "PruneObservationHistoryAsync." + table);
+                await using var delete = connection.CreateCommand();
+                delete.Transaction = write.Transaction;
+                var parameters = ids.Select((_, index) => "$id" + index).ToArray();
+                delete.CommandText = $"DELETE FROM {table} WHERE observed_at_utc < $cutoff AND id IN ({string.Join(",", parameters)})";
+                delete.Parameters.AddWithValue("$cutoff", Format(cutoff));
+                for (var index = 0; index < ids.Count; index++)
+                    delete.Parameters.AddWithValue(parameters[index], ids[index]);
+                var deleted = await delete.ExecuteNonQueryAsync(token);
+                await write.Transaction.CommitAsync(token);
+                if (deleted < 100) break;
+            }
+            // Both the read connection and writer lease are released before yielding.
+            await Task.Delay(25, token);
+        } while (elapsed.Elapsed < TimeSpan.FromSeconds(5));
     }
 
     private static async Task<OwnedMarketListing?> FindConfirmedSaleListingAsync(

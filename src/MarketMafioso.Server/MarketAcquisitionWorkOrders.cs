@@ -113,7 +113,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var created = await CreateBatchAsync(cloneRequest, cancellationToken).ConfigureAwait(false);
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         await EnsureWorkOrderRecordsAsync(connection, (SqliteTransaction)transaction, created.Request, "cloned", cancellationToken).ConfigureAwait(false);
         await using var update = connection.CreateCommand();
         update.Transaction = (SqliteTransaction)transaction;
@@ -160,7 +161,8 @@ public sealed partial class MarketAcquisitionRequestStore
 
         var now = DateTimeOffset.UtcNow;
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         var target = await GetByIdAsync(connection, transaction, targetId, cancellationToken).ConfigureAwait(false);
         var source = await GetByIdAsync(connection, transaction, request.SourceWorkOrderId, cancellationToken).ConfigureAwait(false);
         if (target == null || source == null)
@@ -212,7 +214,8 @@ public sealed partial class MarketAcquisitionRequestStore
         var now = DateTimeOffset.UtcNow;
         var expires = now.AddSeconds(executionLeaseSeconds);
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         await using var read = connection.CreateCommand();
         read.Transaction = (SqliteTransaction)transaction;
         read.CommandText = "SELECT status, claim_token, claimed_by FROM acquisition_requests WHERE id = $id;";
@@ -271,7 +274,8 @@ public sealed partial class MarketAcquisitionRequestStore
     {
         var now = DateTimeOffset.UtcNow;
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (current == null)
             return null;

@@ -140,107 +140,12 @@ internal sealed class InventoryReportWritePersistence(
         return new InventoryWriteResult(id, characterId, semanticRevision, true);
     }
 
-    public async Task PruneSnapshotsAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
-        CancellationToken cancellationToken)
-    {
-        var policy = InventoryHistoryRetentionPolicy.Resolve(configuration);
-        if (policy.Mode == InventoryHistoryRetentionMode.Tiered)
-        {
-            await PruneTieredHistoryAsync(connection, transaction, accountId, policy, DateTimeOffset.UtcNow, cancellationToken);
-            return;
-        }
-
-        var retentionCount = policy.MinimumRecent;
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            WITH ranked_history AS (
-                SELECT
-                    id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY COALESCE(character_id, -1)
-                        ORDER BY received_at_utc DESC, id DESC
-                    ) AS history_position
-                FROM snapshots
-                WHERE account_id = $accountId
-                  AND is_current = 0
-            )
-            DELETE FROM snapshots
-            WHERE account_id = $accountId
-              AND is_current = 0
-              AND id IN (
-                  SELECT id
-                  FROM ranked_history
-                  WHERE history_position > $retentionCount
-              );
-            """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$retentionCount", retentionCount);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    internal static async Task<int> PruneTieredHistoryAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
-        InventoryHistoryRetentionPolicy policy,
-        DateTimeOffset now,
-        CancellationToken cancellationToken)
-    {
-        var candidates = new List<InventoryHistoryCandidate>();
-        await using (var select = connection.CreateCommand())
-        {
-            select.Transaction = transaction;
-            select.CommandText = """
-                SELECT
-                    s.id,
-                    s.character_id,
-                    s.received_at_utc,
-                    EXISTS (
-                        SELECT 1 FROM inventory_owners o
-                        WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer')
-                FROM snapshots s
-                WHERE s.account_id = $accountId
-                  AND s.is_current = 0;
-                """;
-            select.Parameters.AddWithValue("$accountId", accountId);
-            await using var reader = await select.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                candidates.Add(new InventoryHistoryCandidate(
-                    reader.GetString(0),
-                    reader.IsDBNull(1) ? null : reader.GetInt64(1),
-                    DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                    reader.GetInt64(3) != 0));
-            }
-        }
-
-        var prunable = policy.SelectPrunable(candidates, now);
-        if (prunable.Count == 0)
-            return 0;
-
-        await using var delete = connection.CreateCommand();
-        delete.Transaction = transaction;
-        delete.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId AND id = $id AND is_current = 0";
-        delete.Parameters.AddWithValue("$accountId", accountId);
-        var idParameter = delete.Parameters.Add("$id", SqliteType.Text);
-        var deleted = 0;
-        foreach (var id in prunable)
-        {
-            idParameter.Value = id;
-            deleted += await delete.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        return deleted;
-    }
 
     public async Task<bool> DeleteAsync(long accountId, string id, CancellationToken cancellationToken)
     {
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId AND id = $id RETURNING character_id, is_current";
@@ -269,7 +174,8 @@ internal sealed class InventoryReportWritePersistence(
     public async Task<int> DeleteAllAsync(long accountId, CancellationToken cancellationToken)
     {
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId";

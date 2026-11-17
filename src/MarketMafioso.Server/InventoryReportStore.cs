@@ -89,7 +89,8 @@ public sealed class InventoryReportStore
             var metadata = report.Metadata ?? new InventoryReportMetadata();
 
             await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            using var write = connectionFactory.BeginWrite(connection);
+            var transaction = write.Transaction;
             var writeResult = await writePersistence.WriteSnapshotAsync(
                 connection,
                 transaction,
@@ -101,11 +102,6 @@ public sealed class InventoryReportStore
                 apiKeyLabel,
                 rawReportJson,
                 cancellationToken);
-            if (writeResult.SemanticChanged)
-            {
-                await rawJsonRetention.PruneAsync(connection, transaction, accountId, cancellationToken);
-                await writePersistence.PruneSnapshotsAsync(connection, transaction, accountId, cancellationToken);
-            }
             await transaction.CommitAsync(cancellationToken);
 
             return (await GetAsync(accountId, writeResult.SnapshotId, cancellationToken))
