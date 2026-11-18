@@ -384,7 +384,8 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
             armed ? $"Confirm deleting {queue.Name}" : $"Delete {queue.Name}",
             canDelete,
             queue.Id.ToString(),
-            _ => InvokeDelete(queue.Id, fromRow: true));
+            // An agent has no pointer on the row, so a row-armed delete would disarm before it could confirm.
+            _ => InvokeDelete(queue.Id, fromRow: false));
     }
 
     private void DrawUndoStrip()
@@ -418,9 +419,18 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
                    or WorkshopSavedJobHandoffStatus.Withdrawn or WorkshopSavedJobHandoffStatus.Accepted;
     }
 
-    /// <summary>Materials this character still owes the share's assembler; 0 for anything but a sent share.</summary>
-    private int OwedUnits(WorkshopFrozenQueue queue) =>
-        WorkshopSavedJobHandoff.IsHandoff(queue) && IsSender(queue) ? BuildHandoverView(queue).Owed : 0;
+    /// <summary>
+    /// Materials this character still owes the share's assembler. 0 for anything but a sent share that the
+    /// assembler accepted or that already received materials; an unanswered or refused offer owes nothing.
+    /// </summary>
+    private int OwedUnits(WorkshopFrozenQueue queue)
+    {
+        if (!WorkshopSavedJobHandoff.IsHandoff(queue) || !IsSender(queue))
+            return 0;
+        var status = WorkshopSavedJobHandoff.Resolve(queue, actions.Handoff().Outgoing, delivering.Contains(queue.Id));
+        var committed = status == WorkshopSavedJobHandoffStatus.Accepted || queue.HandedOver.Any(entry => entry.Quantity > 0);
+        return committed ? BuildHandoverView(queue).Owed : 0;
+    }
 
     /// <summary>Deletes at once, except that a share still owing materials arms on the first request.</summary>
     private (bool Success, string Message) RequestDelete(WorkshopFrozenQueue queue, bool fromRow)
