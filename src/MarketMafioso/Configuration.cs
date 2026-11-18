@@ -12,7 +12,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using RuntimeJson = System.Text.Json.JsonSerializer;
 
 namespace MarketMafioso;
 
@@ -22,6 +21,12 @@ public class Configuration : IPluginConfiguration
     private readonly object saveSync = new();
     private const string RuntimeStateFile = "runtime-state.json";
     private string? lastWrittenRuntimeJson;
+    // Same Newtonsoft settings Dalamud uses for this file, so the moved state round-trips exactly as before.
+    private static readonly JsonSerializerSettings RuntimeJsonSettings = new()
+    {
+        TypeNameAssemblyFormatHandling = TypeNameAssemblyFormatHandling.Simple,
+        TypeNameHandling = TypeNameHandling.Objects,
+    };
     private bool savePending;
     private DateTime retrySaveAtUtc;
     private string pendingSaveOperation = string.Empty;
@@ -182,14 +187,14 @@ public class Configuration : IPluginConfiguration
         try
         {
             var json = File.ReadAllText(path);
-            var state = RuntimeJson.Deserialize<RuntimeState>(json);
+            var state = JsonConvert.DeserializeObject<RuntimeState>(json, RuntimeJsonSettings);
             if (state?.QuartermasterWorkshopRequests is null)
                 throw new InvalidDataException("Missing workshop request dictionary.");
 
             QuartermasterWorkshopRequests = state.QuartermasterWorkshopRequests;
             ActiveWorkshopVendorBuyRun = state.ActiveWorkshopVendorBuyRun;
             ActiveWorkshopVendorRestockState = state.ActiveWorkshopVendorRestockState;
-            lastWrittenRuntimeJson = json;
+            lastWrittenRuntimeJson = SerializeRuntimeState();
         }
         catch (FileNotFoundException) { } // First save migrates the values loaded from settings.
         catch (DirectoryNotFoundException) { }
@@ -201,18 +206,21 @@ public class Configuration : IPluginConfiguration
 
     private void SaveRuntimeState()
     {
-        var snapshot = RuntimeJson.SerializeToElement(new RuntimeState
+        var json = SerializeRuntimeState();
+        if (json == lastWrittenRuntimeJson) return;
+
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        AtomicJsonFile.Write(Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), RuntimeStateFile), document.RootElement);
+        lastWrittenRuntimeJson = json;
+    }
+
+    private string SerializeRuntimeState() =>
+        JsonConvert.SerializeObject(new RuntimeState
         {
             QuartermasterWorkshopRequests = QuartermasterWorkshopRequests,
             ActiveWorkshopVendorBuyRun = ActiveWorkshopVendorBuyRun,
             ActiveWorkshopVendorRestockState = ActiveWorkshopVendorRestockState,
-        });
-        var json = snapshot.GetRawText();
-        if (json == lastWrittenRuntimeJson) return;
-
-        AtomicJsonFile.Write(Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), RuntimeStateFile), snapshot);
-        lastWrittenRuntimeJson = json;
-    }
+        }, RuntimeJsonSettings);
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     public void Save()
