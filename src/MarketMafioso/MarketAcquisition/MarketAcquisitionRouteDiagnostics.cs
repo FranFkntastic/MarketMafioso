@@ -289,7 +289,15 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         lock (sync)
         {
             if (disposed)
+            {
+                // Terminal streams are sealed; open a file only for a late freshness record.
+                if (PackageDirectoryPath != null && terminalEventName == "complete" &&
+                    eventName is "universalis-freshness" or "universalis-freshness-warning" &&
+                    DateTimeOffset.UtcNow <= finalizedAtUtc?.AddSeconds(60))
+                    File.AppendAllText(Path.Combine(PackageDirectoryPath, "universalis-freshness.jsonl"),
+                        JsonSerializer.Serialize(new { recordedAtUtc = DateTimeOffset.UtcNow, eventName, message, details }) + Environment.NewLine);
                 return;
+            }
 
             RecordUnsafe(eventName, message, details);
             if (IsTerminalEvent(eventName))

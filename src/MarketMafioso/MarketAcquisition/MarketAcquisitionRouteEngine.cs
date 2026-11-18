@@ -64,6 +64,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool ownsLocalApproachNavigation;
     private string? retainedRecoveryBrowseOperationId;
     private string? lastFeedbackState;
+    private bool userPaused;
     private long lastFeedbackRunSequence;
     public event Action<MarketAcquisitionRouteEngineSnapshot>? FeedbackTransition;
 
@@ -360,7 +361,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 plan,
                 enableDiagnostics: state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun,
                 includeOpportunisticChecks: false,
-                state.ExecutionMode);
+                state.ExecutionMode,
+                preservePurchaseTotals: true);
             if (!result.Success)
             {
                 exactAcquisitionAuthority.Pause($"Recovery start stopped safely: {result.Message}");
@@ -470,12 +472,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         CancelActiveOperation("Route paused; active operation cancelled.");
         var result = runner.Pause();
         if (result.Success)
+            userPaused = true;
+        if (result.Success)
             exactAcquisitionAuthority?.Pause("External plan route paused; no purchase authority is active.");
         return UpdateStatus(result);
     }
 
     public MarketAcquisitionRouteActionResult Resume()
     {
+        userPaused = false;
         if (!TryPreflightRouteAction(out var evidenceBlockReason))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (shardCheckpoints?.IsActive == true)
@@ -519,6 +524,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Stop()
     {
+        userPaused = false;
         CaptureManualRecoverySafetyBlock();
         evidence.Flush();
         uiAutomation.TryCloseMarketBoardWindows();
@@ -810,8 +816,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             ? null
             : runner.State == "Failed" ? "Failed"
             : state.ManualRecoveryBlockedReason != null || purchaseEvidenceRouteBlocked ||
-              exactAcquisitionAuthority?.State.Phase is ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded or ExactAcquisitionRouteAuthorityPhase.Paused ||
-              (runner.IsPaused && shardCheckpoints?.IsActive != true)
+              exactAcquisitionAuthority?.State.Phase == ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded ||
+              (!userPaused && (exactAcquisitionAuthority?.State.Phase == ExactAcquisitionRouteAuthorityPhase.Paused ||
+                               (runner.IsPaused && shardCheckpoints?.IsActive != true)))
                 ? "Blocked" : runner.State == "Completed" ? "Completed" : null;
         if (feedbackState == lastFeedbackState)
             return;
@@ -2863,6 +2870,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void ClearExecutionState(bool preserveExecutionMode = false)
     {
+        userPaused = false;
         var purchaseEvidenceState = purchase.PurchaseEvidenceState;
         CleanupOwnedTravel("Replacement");
         travelInterruptedByCleanup = false;

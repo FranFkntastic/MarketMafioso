@@ -135,7 +135,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         bool includeOpportunisticChecks = false,
         MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live,
         MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace,
-        bool evaluateTargetFulfillment = true)
+        bool evaluateTargetFulfillment = true,
+        bool preservePurchaseTotals = false)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
@@ -165,9 +166,12 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
         LastPurchaseRecordsCsvPath = diagnostics.PurchaseRecordsCsvPath;
         LastRunSummary = null;
-        ConfirmedPurchaseQuantity = 0;
-        ConfirmedSpendGil = 0;
-        confirmedPurchaseWorlds.Clear();
+        if (!preservePurchaseTotals)
+        {
+            ConfirmedPurchaseQuantity = 0;
+            ConfirmedSpendGil = 0;
+            confirmedPurchaseWorlds.Clear();
+        }
         CompletionOutcome = null;
         ActivePlan = plan;
         reconciledInventory.Clear();
@@ -240,7 +244,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             includeOpportunisticChecksRequested,
             executionMode,
             diagnosticsLevelRequested,
-            evaluateTargetFulfillmentRequested);
+            evaluateTargetFulfillmentRequested,
+            preservePurchaseTotals: true);
     }
 
     public MarketAcquisitionRouteActionResult ReprepareAndRestart(
@@ -274,7 +279,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             includeOpportunisticChecksRequested,
             executionMode,
             diagnosticsLevelRequested,
-            evaluateTargetFulfillmentRequested);
+            evaluateTargetFulfillmentRequested,
+            preservePurchaseTotals: true);
         if (!startResult.Success)
             return startResult;
 
@@ -1227,69 +1233,63 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         if (string.IsNullOrWhiteSpace(worldName))
             throw new ArgumentException("World name is required.", nameof(worldName));
 
-        var verificationFinished = false;
-        try
+        var sink = diagnostics;
+        var sequence = RunSequence;
+        var observations = freshnessObservations
+            .Where(pair => pair.Key.WorldName.Equals(worldName, StringComparison.OrdinalIgnoreCase))
+            .Where(pair => !verifiedFreshnessObservations.Contains(pair.Key))
+            .Select(pair => pair.Value)
+            .ToList();
+
+        if (observations.Count == 0)
         {
-            var observations = freshnessObservations
-                .Where(pair => pair.Key.WorldName.Equals(worldName, StringComparison.OrdinalIgnoreCase))
-                .Where(pair => !verifiedFreshnessObservations.Contains(pair.Key))
-                .Select(pair => pair.Value)
-                .ToList();
+            return MarketAcquisitionRouteActionResult.Ok($"No purchased listings require Universalis freshness verification for {worldName}.");
+        }
 
-            if (observations.Count == 0)
+        foreach (var observation in observations)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            UniversalisFreshnessResult result;
+            try
             {
-                verificationFinished = true;
-                return MarketAcquisitionRouteActionResult.Ok($"No purchased listings require Universalis freshness verification for {worldName}.");
+                result = await universalisFreshnessVerifier(
+                    observation.WorldName,
+                    observation.ItemId,
+                    observation.ObservedAtUtc,
+                    observation.ListingIds,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            {
+                result = UniversalisFreshnessResult.Unavailable(ex.Message);
             }
 
-            foreach (var observation in observations)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
 
-                UniversalisFreshnessResult result;
-                try
+            sink.Record(
+                "universalis-freshness",
+                $"{result.Status}: {FormatFreshnessItem(observation)} on {observation.WorldName}. {result.Message}",
+                new Dictionary<string, string?>
                 {
-                    result = await universalisFreshnessVerifier(
-                        observation.WorldName,
-                        observation.ItemId,
-                        observation.ObservedAtUtc,
-                        observation.ListingIds,
-                        cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
-                {
-                    result = UniversalisFreshnessResult.Unavailable(ex.Message);
-                }
+                    ["world"] = observation.WorldName,
+                    ["itemId"] = observation.ItemId.ToString(),
+                    ["itemName"] = observation.ItemName,
+                    ["status"] = result.Status,
+                    ["message"] = result.Message,
+                    ["observedAtUtc"] = observation.ObservedAtUtc.ToString("O"),
+                    ["listingIds"] = string.Join(", ", observation.ListingIds),
+                });
+            if (sequence != RunSequence)
+                continue;
+            RecordFreshnessDiagnosticResult(observation, result);
+            verifiedFreshnessObservations.Add(new FreshnessObservationKey(observation.WorldName, observation.ItemId));
+        }
 
-                cancellationToken.ThrowIfCancellationRequested();
-
-                diagnostics.Record(
-                    "universalis-freshness",
-                    $"{result.Status}: {FormatFreshnessItem(observation)} on {observation.WorldName}. {result.Message}",
-                    new Dictionary<string, string?>
-                    {
-                        ["world"] = observation.WorldName,
-                        ["itemId"] = observation.ItemId.ToString(),
-                        ["itemName"] = observation.ItemName,
-                        ["status"] = result.Status,
-                        ["message"] = result.Message,
-                        ["observedAtUtc"] = observation.ObservedAtUtc.ToString("O"),
-                        ["listingIds"] = string.Join(", ", observation.ListingIds),
-                    });
-                RecordFreshnessDiagnosticResult(observation, result);
-                verifiedFreshnessObservations.Add(new FreshnessObservationKey(observation.WorldName, observation.ItemId));
-            }
-
+        if (sequence == RunSequence)
             RefreshLastRunSummary();
-            verificationFinished = true;
-            return MarketAcquisitionRouteActionResult.Ok(
-                $"Recorded Universalis freshness for {observations.Count:N0} item(s) on {worldName}.");
-        }
-        finally
-        {
-            if (verificationFinished && State == "Completed")
-                FinalizeCompletedDiagnostics();
-        }
+        return MarketAcquisitionRouteActionResult.Ok(
+            $"Recorded Universalis freshness for {observations.Count:N0} item(s) on {worldName}.");
     }
 
     public MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
@@ -1440,7 +1440,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private void FinalizeCompletedDiagnostics()
     {
         diagnostics.Complete(StatusMessage);
-        CloseDiagnostics();
     }
 
     private uint ResolveFulfilledQuantity(MarketAcquisitionPlanLine line)
