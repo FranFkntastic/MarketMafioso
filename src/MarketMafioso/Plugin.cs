@@ -101,6 +101,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
     private readonly MarketAcquisitionServices acquisitionServices;
+    private readonly WorkshopHandoverTracker handoverTracker;
     private readonly RemoteSummoningBellProbe remoteSummoningBellProbe;
     private readonly WorkshopRestockService workshopRestock;
     private readonly AgentBridgeProofStore agentBridgeProofStore;
@@ -325,6 +326,18 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             () => tradeQueueRunner.Snapshot.IsActive || workshopAssemblyRunner.IsRunning,
             Log);
+        handoverTracker = new WorkshopHandoverTracker(
+            Configuration,
+            () => WorkshopHandoffService,
+            share => workshopCatalog.BuildRequirements(share.Items).Select(material => material.ItemId).ToHashSet(),
+            acquisitionServices.GetCurrentWorkshopAssembler,
+            () => tradeQueueRunner.IsActive,
+            Log);
+        tradeQueueRunner.RecipientGuard = handoverTracker.CheckRecipient;
+        tradeQueueRunner.BatchStarting += handoverTracker.OnBatchStarting;
+        tradeQueueRunner.BatchLocking += handoverTracker.OnBatchLocking;
+        tradeQueueRunner.BatchAbandoned += handoverTracker.OnBatchAbandoned;
+        tradeQueueRunner.BatchVerified += handoverTracker.OnBatchVerified;
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -338,6 +351,7 @@ public sealed class Plugin : IDalamudPlugin
             workshopMaterialManifestExport,
             workshopCraftRecipeResolver,
             tradeQueueRunner,
+            handoverTracker,
             tradeQueueIo,
             DataManager,
             PlayerState,
@@ -998,6 +1012,12 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.AcquisitionFeedbackTransition -= OnAcquisitionFeedbackTransition;
         mainWindow.Dispose();
+        tradeQueueRunner.BatchVerified -= handoverTracker.OnBatchVerified;
+        tradeQueueRunner.BatchStarting -= handoverTracker.OnBatchStarting;
+        tradeQueueRunner.BatchLocking -= handoverTracker.OnBatchLocking;
+        tradeQueueRunner.BatchAbandoned -= handoverTracker.OnBatchAbandoned;
+        tradeQueueRunner.RecipientGuard = null;
+        handoverTracker.Dispose();
         acquisitionServices.Dispose();
         remoteSummoningBellProbe.Dispose();
         workshopRestock.Dispose();
