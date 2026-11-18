@@ -969,16 +969,16 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             : MarketAcquisitionRouteActionResult.Fail(result.Message);
     }
 
-    public MarketAcquisitionRouteActionResult SkipInventorySatisfiedLine()
+    public MarketAcquisitionRouteActionResult SkipInventorySatisfiedLine(string? inventoryFull = null)
     {
         if (!IsRunning || session is null) return Fail("No running route is available for inventory reconciliation.");
-        var result = session.SkipInventorySatisfiedLine();
+        var result = session.SkipInventorySatisfiedLine(inventoryFull);
         StatusMessage = result.Message;
         SearchSubmitted = false;
-        diagnostics.Record("inventory-target-satisfied", result.Message);
+        diagnostics.Record(inventoryFull == null ? "inventory-target-satisfied" : "inventory-full-skip", result.Message);
         RecordLatestWorldSummary();
         if (!result.Success) return FailRoute(result.Message);
-        return session.ActiveStop is null ? Complete(result.Message) : MarketAcquisitionRouteActionResult.Ok(result.Message);
+        return session.ActiveStop is null ? Complete(result.Message, inventoryFull == null ? null : MarketAcquisitionRouteCompletionKinds.InventoryFull) : MarketAcquisitionRouteActionResult.Ok(result.Message);
     }
 
     private static string SummarizeSkipReasons(MarketAcquisitionLiveCandidatePlan candidatePlan)

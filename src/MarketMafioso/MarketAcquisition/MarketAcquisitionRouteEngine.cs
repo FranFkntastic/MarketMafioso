@@ -66,6 +66,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private string? retainedRecoveryBrowseOperationId;
     private string? lastFeedbackState;
     private bool userPaused;
+    private readonly Dictionary<string, string> inventoryFullLines = new(StringComparer.Ordinal);
     private long lastFeedbackRunSequence;
     public event Action<MarketAcquisitionRouteEngineSnapshot>? FeedbackTransition;
 
@@ -886,7 +887,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             if (activeStop == null)
                 return MarketAcquisitionRouteEngineTickResult.Idle("Route has no active stop.");
 
-            if (string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
+            if (activeStop.ActiveItemSubtask is { } skipped && activeStop.Status is "Pending" or "Arrived" &&
+                inventoryFullLines.TryGetValue(skipped.LineId, out var skipDetail))
+            {
+                ReportAcquisitionLineProgress(skipped, "SkippedInventoryFull", 0, 0, skipDetail);
+                UpdateStatus(runner.SkipInventorySatisfiedLine(skipDetail));
+            }
+            else if (string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
                 HandlePendingStop(activeStop);
             else if (!context.IsCurrentWorldAvailable)
                 UpdateStatus(runner.RecordCurrentWorldUnavailable());
@@ -1877,8 +1884,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 capacityReadWaitStartedUtc = null;
                 if (capacity.Value.Units < nextCandidate.Quantity)
                 {
-                    CompletePurchaseRouteAtBoard(currentWorld, MarketAcquisitionRouteCompletionKinds.InventoryFull,
-                        $"InventoryFull: {activeLine.ItemName}, listing {nextCandidate.Quantity:N0} units, room {capacity.Value.Units:N0}, free slots {capacity.Value.FreeSlots:N0}.");
+                    var lineId = activeStop.ActiveItemSubtask?.LineId ?? activeLine.Id;
+                    var container = nextCandidate.ItemId is >= 2 and <= 19 ? "crystal pouch" : "player bags";
+                    var detail = $"SkippedInventoryFull: {activeLine.ItemName}, {container} can fit {capacity.Value.Units:N0} units; listing has {nextCandidate.Quantity:N0}.";
+                    inventoryFullLines[lineId] = detail;
+                    var hasOtherLine = runner.Stops.SkipWhile(stop => !ReferenceEquals(stop, activeStop))
+                        .SelectMany(stop => stop.ItemSubtasks.Skip(stop.CompletedItemSubtaskCount))
+                        .Any(task => !inventoryFullLines.ContainsKey(task.LineId));
+                    CompleteActiveWorldPurchaseBatch(currentWorld,
+                        hasOtherLine ? null : MarketAcquisitionRouteCompletionKinds.InventoryFull, detail, detail);
                     return;
                 }
             }
@@ -2349,7 +2363,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
     }
 
-    private void CompleteActiveWorldPurchaseBatch(string currentWorld, string? completionKind = null, string? completionDetail = null)
+    private void CompleteActiveWorldPurchaseBatch(string currentWorld, string? completionKind = null, string? completionDetail = null, string? inventorySkip = null)
     {
         var failureStage = "batch.native-browse-completion";
         var failureLine = runner.ActiveStop?.ActiveItemSubtask;
@@ -2381,10 +2395,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             if (activeSubtask != null)
             {
                 var lineStatus = ResolveZeroPurchaseLineStatus(state.LiveCandidatePlan, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
-                ReportAcquisitionLineProgress(activeSubtask, lineStatus, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil,
-                    state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun
+                ReportAcquisitionLineProgress(activeSubtask, inventorySkip == null ? lineStatus : "SkippedInventoryFull", state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil,
+                    inventorySkip ?? (state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun
                         ? $"Dry run for {FormatItem(GetActiveRouteLine(claimedRequest!))} on {currentWorld}: would purchase {state.ActiveLinePurchasedQuantity:N0}, would spend {state.ActiveLineSpentGil:N0} gil."
-                        : $"Completed {FormatItem(GetActiveRouteLine(claimedRequest!))} on {currentWorld}: purchased {state.ActiveLinePurchasedQuantity:N0}, spent {state.ActiveLineSpentGil:N0} gil.");
+                        : $"Completed {FormatItem(GetActiveRouteLine(claimedRequest!))} on {currentWorld}: purchased {state.ActiveLinePurchasedQuantity:N0}, spent {state.ActiveLineSpentGil:N0} gil."));
             }
 
             failureStage = "batch.advance";
@@ -2401,10 +2415,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 currentWorld,
                 activeSubtask == null ? state.ActiveWorldPurchasedQuantity : state.ActiveLinePurchasedQuantity,
                 activeSubtask == null ? state.ActiveWorldSpentGil : state.ActiveLineSpentGil,
-                state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0
+                inventorySkip != null ? "SkippedInventoryFull" : state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0
                     ? ResolveZeroPurchaseLineStatus(state.LiveCandidatePlan, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil)
                     : null,
-                state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0 ? state.LiveCandidatePlan?.Message : null,
+                inventorySkip ?? (state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0 ? state.LiveCandidatePlan?.Message : null),
                 state.LiveCandidatePlan, completionKind, completionDetail);
             state.AcquisitionStatus = result.Message;
             ClearMarketBoardAutomationState();
@@ -2572,7 +2586,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 candidate.Quantity,
                 candidate.TotalGil,
                 "DryRunWouldPurchase",
-                activeSubtask?.Source);
+                activeSubtask?.Source, tax: candidate.TotalTax);
         }
 
         state.AcquisitionStatus = $"Dry run: would purchase {state.ActiveLinePurchasedQuantity:N0} for {state.ActiveLineSpentGil:N0} gil; no purchase UI was invoked.";
@@ -2600,7 +2614,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             // Local receipts belong to the route, not to the optional hosted claim.
             runner.RecordPurchaseAudit(receiptLineId, activeSubtask?.ItemName, receiptWorld,
                 candidate.ListingId, candidate.RetainerId, candidate.Quantity, candidate.TotalGil,
-                "Purchased", activeSubtask?.Source, candidate.UnitPrice, candidate.IsHq, candidate.ItemId);
+                "Purchased", activeSubtask?.Source, candidate.UnitPrice, candidate.IsHq, candidate.ItemId, candidate.TotalTax);
             if (claimed == null || activeSubtask == null || string.IsNullOrWhiteSpace(claimed.ClaimToken))
             {
                 runner.RecordLineProgress(receiptLineId, activeSubtask?.ItemName, "Running", linePurchasedQuantity,
@@ -2954,6 +2968,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         userPaused = false;
         capacityReadWaitStartedUtc = null;
+        if (!preserveExecutionMode)
+            inventoryFullLines.Clear();
         var purchaseEvidenceState = purchase.PurchaseEvidenceState;
         CleanupOwnedTravel("Replacement");
         travelInterruptedByCleanup = false;

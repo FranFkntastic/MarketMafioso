@@ -263,17 +263,17 @@ public sealed class MarketAcquisitionGuidedRouteSession
             $"{FormatZeroPurchaseProbeMessage(candidatePlan.Status)} for {FormatPreviousItem(stop)} on {currentWorld}. Next stop: {ActiveStop?.WorldName}.");
     }
 
-    public MarketAcquisitionGuidedRouteResult SkipInventorySatisfiedLine()
+    public MarketAcquisitionGuidedRouteResult SkipInventorySatisfiedLine(string? inventoryFull = null)
     {
         var stop = ActiveStop;
         if (stop?.ActiveItemSubtask is null)
             return MarketAcquisitionGuidedRouteResult.Fail("No active inventory target to skip.");
-        const string message = "Target already met (not searched)";
+        var message = inventoryFull ?? "Target already met (not searched)";
         var line = stop.LineStates.First(line => line.LineId == stop.ActiveItemSubtask.LineId);
         line.Outcome = message;
-        line.RemainingNeed = 0;
+        if (inventoryFull == null) line.RemainingNeed = 0;
         var pending = stop.Status == "Pending";
-        if (TryAdvanceActiveItemSubtask(stop, zeroPurchaseStatus: "SkippedTargetAlreadyMet", zeroPurchaseMessage: message))
+        if (TryAdvanceActiveItemSubtask(stop, zeroPurchaseStatus: inventoryFull == null ? "SkippedTargetAlreadyMet" : "SkippedInventoryFull", zeroPurchaseMessage: message))
         {
             if (pending) stop.Status = "Pending";
         }
@@ -365,10 +365,10 @@ public sealed class MarketAcquisitionGuidedRouteSession
         stop.SpentGil = checked(stop.SpentGil + spentGil);
         UpdateActiveLine(
             stop,
-            status: didPurchase ? "Complete" : zeroPurchaseStatus ?? "SkippedNoLiveStock",
+            status: didPurchase && zeroPurchaseStatus != "SkippedInventoryFull" ? "Complete" : zeroPurchaseStatus ?? "SkippedNoLiveStock",
             purchasedQuantity,
             spentGil,
-            !didPurchase
+            !didPurchase || zeroPurchaseStatus == "SkippedInventoryFull"
                 ? zeroPurchaseMessage ?? "No safe live candidates remained."
                 : dryRun
                     ? $"Would purchase {purchasedQuantity:N0} item(s), would spend {spentGil:N0} gil."
