@@ -14,7 +14,11 @@ public static class MarketAcquisitionRequestDocumentHasher
     };
 
     public static string ComputeHostedIntentHash(MarketAcquisitionRequestDocument document) =>
-        ComputeIntentHash(document with { RunSpendCap = 0 });
+        ComputeIntentHash(document with
+        {
+            RunSpendCap = 0,
+            Lines = document.Lines.Select(line => line with { TargetBasis = MarketAcquisitionTargetBases.Hosted(line.TargetBasis) }).ToList(),
+        });
 
     public static string ComputeIntentHash(MarketAcquisitionRequestDocument document)
     {

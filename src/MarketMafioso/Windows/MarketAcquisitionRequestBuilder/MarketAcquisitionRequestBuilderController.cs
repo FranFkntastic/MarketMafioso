@@ -350,10 +350,14 @@ public sealed class MarketAcquisitionRequestBuilderController
     {
         if (!SelectLine(index) || IsExactAcquisitionLine(index) || Document.Lines[index].QuantityMode != "TargetQuantity")
             return false;
-        CommitLocalEdit(RequestDocumentMutation.ReplaceLine(Document, index, Document.Lines[index] with
+        var lines = Document.Lines.ToList();
+        lines[index] = lines[index] with
         {
             TargetBasis = include ? MarketAcquisitionTargetBases.OnHandIncludingRetainers : MarketAcquisitionTargetBases.OnHandTotal,
-        }), "Stock-up inventory scope updated.");
+        };
+        Document = Document with { Lines = lines };
+        Status = "Stock-up inventory scope updated.";
+        SaveDocument();
         return true;
     }
 
@@ -755,6 +759,11 @@ public sealed class MarketAcquisitionRequestBuilderController
         var merged = refreshed with
         {
             RunSpendCap = current.RunSpendCap,
+            Lines = refreshed.Lines.Select(line => line.QuantityMode == "TargetQuantity" &&
+                line.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal && current.Lines.Any(local =>
+                    local.ItemId == line.ItemId && local.QuantityMode == line.QuantityMode &&
+                    local.TargetBasis == MarketAcquisitionTargetBases.OnHandIncludingRetainers)
+                    ? line with { TargetBasis = MarketAcquisitionTargetBases.OnHandIncludingRetainers } : line).ToList(),
             LocalRequestId = current.LocalRequestId,
             LocalRevision = current.LocalRevision,
             ExactAcquisitionAuthority = current.ExactAcquisitionAuthority,

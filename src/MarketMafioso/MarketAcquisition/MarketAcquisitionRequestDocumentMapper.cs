@@ -266,7 +266,7 @@ public static class MarketAcquisitionRequestDocumentMapper
             QuantityMode = mode,
             TargetQuantity = mode == "TargetQuantity" ? line.TargetQuantity : 0,
             TargetBasis = mode == "TargetQuantity"
-                ? MarketAcquisitionTargetBases.Normalize(line.TargetBasis)
+                ? MarketAcquisitionTargetBases.Hosted(line.TargetBasis)
                 : string.Empty,
             MaximumOverage = mode == "TargetQuantity" ? line.MaximumOverage : 0,
             MaxQuantity = mode == "AllBelowThreshold" ? line.MaxQuantity : 0,

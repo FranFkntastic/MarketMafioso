@@ -164,9 +164,7 @@ internal static class MarketAcquisitionLinePersistence
             ? string.Empty
             : line.TargetBasis.Equals("RequiredPurchaseQuantity", StringComparison.Ordinal)
                 ? "RequiredPurchaseQuantity"
-                : line.TargetBasis.Equals("OnHandIncludingRetainers", StringComparison.Ordinal)
-                    ? "OnHandIncludingRetainers"
-                    : "OnHandTotal";
+                : "OnHandTotal";
 
     public static async Task UpdateLineIntentAsync(
         SqliteConnection connection,

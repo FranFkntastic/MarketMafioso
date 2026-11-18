@@ -16,6 +16,8 @@ public static class MarketAcquisitionTargetBases
                 : OnHandTotal;
 
     public static bool CountsOnHand(string? value) => Normalize(value) != RequiredPurchaseQuantity;
+
+    public static string Hosted(string? value) => CountsOnHand(value) ? OnHandTotal : RequiredPurchaseQuantity;
 }
 
 public readonly record struct MarketAcquisitionInventoryObservation(

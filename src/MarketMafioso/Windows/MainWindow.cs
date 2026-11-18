@@ -194,7 +194,7 @@ public partial class MainWindow : Window, IDisposable
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
             marketAcquisitionWorldVisitCatalog,
-            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope));
+            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope, scanner.ResolveItemName));
         acquisitionWorkspace = new MarketAcquisitionRequestWorkspace(
             config,
             acquisitionClient,
@@ -331,7 +331,7 @@ public partial class MainWindow : Window, IDisposable
             PluginBuildInfo.DisplayVersion,
             () => config.MarketAcquisitionExhaustiveResearchMode,
             marketIntelligencePassiveReporter,
-            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope),
+            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope, scanner.ResolveItemName),
             new MarketAcquisitionAethernetDeparture(
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
                 lifestream,
@@ -473,7 +473,7 @@ public partial class MainWindow : Window, IDisposable
             RefreshAcquisitionRequestBuilderRemoteAsync,
             acquisitionWorkspace.OnDocumentAdopted,
             AgentReviewRegistry,
-            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope));
+            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope, scanner.ResolveItemName));
         acquisitionCompositionCatalog = new MarketAcquisitionWorkbenchCompositionCatalog(
             new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save));
         var acquisitionWorkbenchCompositions = new MarketAcquisitionWorkbenchCompositionPanel(
