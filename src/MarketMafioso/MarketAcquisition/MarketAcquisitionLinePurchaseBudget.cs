@@ -5,12 +5,19 @@ namespace MarketMafioso.MarketAcquisition;
 public static class MarketAcquisitionTargetBases
 {
     public const string OnHandTotal = "OnHandTotal";
+    public const string OnHandIncludingRetainers = "OnHandIncludingRetainers";
     public const string RequiredPurchaseQuantity = "RequiredPurchaseQuantity";
 
     public static string Normalize(string? value, bool exactAcquisition = false) =>
         exactAcquisition || string.Equals(value, RequiredPurchaseQuantity, StringComparison.Ordinal)
             ? RequiredPurchaseQuantity
-            : OnHandTotal;
+            : string.Equals(value, OnHandIncludingRetainers, StringComparison.Ordinal)
+                ? OnHandIncludingRetainers
+                : OnHandTotal;
+
+    public static bool CountsOnHand(string? value) => Normalize(value) != RequiredPurchaseQuantity;
+
+    public static string Hosted(string? value) => CountsOnHand(value) ? OnHandTotal : RequiredPurchaseQuantity;
 }
 
 public readonly record struct MarketAcquisitionInventoryObservation(
@@ -18,6 +25,7 @@ public readonly record struct MarketAcquisitionInventoryObservation(
     uint Quantity,
     string Message)
 {
+    public DateTimeOffset? RetainerObservedAtUtc { get; init; }
     public static MarketAcquisitionInventoryObservation Unavailable(string message) => new(false, 0, message);
     public static MarketAcquisitionInventoryObservation Available(uint quantity) =>
         new(true, quantity, $"Observed {quantity:N0} matching item(s) in loaded player inventory.");
@@ -27,6 +35,11 @@ public interface IMarketAcquisitionInventoryObserver
 {
     MarketAcquisitionInventoryObservation Observe(uint itemId, string hqPolicy);
     MarketAcquisitionCapacityObservation Capacity(uint itemId, bool isHq) => new(false, 0, 0);
+
+    MarketAcquisitionInventoryObservation Observe(uint itemId, string hqPolicy, string targetBasis) =>
+        MarketAcquisitionTargetBases.Normalize(targetBasis) == MarketAcquisitionTargetBases.OnHandIncludingRetainers
+            ? MarketAcquisitionInventoryObservation.Unavailable("Retainer stock observer unavailable.")
+            : Observe(itemId, hqPolicy);
 }
 
 public readonly record struct MarketAcquisitionCapacityObservation(bool IsAvailable, ulong Units, int FreeSlots);

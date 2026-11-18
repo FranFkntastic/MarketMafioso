@@ -446,6 +446,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                           CanUseHostedClaim(finalizedDocument, hostedClaim)
                 ? await EnsureClaimReadyAsync(hostedClaim, token).ConfigureAwait(false)
                 : BuildLocalExecutionRequest(finalizedDocument);
+            claimed = WithLocalStockPolicy(finalizedDocument, claimed);
             var preparedAt = DateTimeOffset.UtcNow;
             MarketAcquisitionPlanPreparationResult result;
             if (finalizedDocument?.ExactAcquisitionAuthority?.FinalizedContract is { Transfer.DryRunOnly: true } contract)
@@ -536,7 +537,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                     $"Hosted work order status {request.Status} cannot start a route.");
             }
 
-            await action(request, token).ConfigureAwait(false);
+            await action(WithLocalStockPolicy(document, request), token).ConfigureAwait(false);
         });
 
     public async Task RunAsync(
@@ -581,8 +582,22 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
 
     public MarketAcquisitionClaimView ResolveExecutionRequest(MarketAcquisitionRequestDocument document) =>
         ClaimedRequest is { } hostedClaim && CanUseHostedClaim(document, hostedClaim)
-            ? hostedClaim
+            ? WithLocalStockPolicy(document, hostedClaim)
             : BuildLocalExecutionRequest(document);
+
+    private static MarketAcquisitionClaimView WithLocalStockPolicy(MarketAcquisitionRequestDocument? document, MarketAcquisitionClaimView claim)
+    {
+        if (document == null || document.ExactAcquisitionAuthority != null) return claim;
+        var items = document.Lines.Where(line => line.QuantityMode == "TargetQuantity" &&
+            line.TargetBasis == MarketAcquisitionTargetBases.OnHandIncludingRetainers).Select(line => line.ItemId).ToHashSet();
+        if (items.Count == 0) return claim;
+        return claim with
+        {
+            TargetBasis = items.Contains(claim.ItemId) ? MarketAcquisitionTargetBases.OnHandIncludingRetainers : claim.TargetBasis,
+            Lines = claim.Lines.Select(line => items.Contains(line.ItemId)
+                ? line with { TargetBasis = MarketAcquisitionTargetBases.OnHandIncludingRetainers } : line).ToList(),
+        };
+    }
 
     public void ReplacePreparedPlan(MarketAcquisitionPlan plan)
     {

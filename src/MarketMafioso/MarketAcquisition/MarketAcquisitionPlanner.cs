@@ -34,7 +34,7 @@ public static class MarketAcquisitionPlanner
         foreach (var originalLine in requestLines)
         {
             var onHand = originalLine.QuantityMode == "TargetQuantity" &&
-                         originalLine.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal
+                         MarketAcquisitionTargetBases.CountsOnHand(originalLine.TargetBasis)
                 ? inventoryBaselines?.GetValueOrDefault(originalLine.LineId) ?? 0u : 0u;
             var line = originalLine with { Quantity = originalLine.Quantity > onHand ? originalLine.Quantity - onHand : 0u };
             var matchingListings = sourceListings
@@ -782,7 +782,7 @@ public static class MarketAcquisitionPlanner
     }
 
     internal static uint RemainingNeed(MarketAcquisitionPlanLine line) =>
-        line.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal
+        MarketAcquisitionTargetBases.CountsOnHand(line.TargetBasis)
             ? line.RequestedQuantity > line.InitialOnHandQuantity ? line.RequestedQuantity - line.InitialOnHandQuantity : 0u
             : line.RequestedQuantity;
 

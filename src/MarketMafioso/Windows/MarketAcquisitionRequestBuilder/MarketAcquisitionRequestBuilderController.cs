@@ -346,6 +346,21 @@ public sealed class MarketAcquisitionRequestBuilderController
         return true;
     }
 
+    public bool SetIncludeRetainerStock(int index, bool include)
+    {
+        if (!SelectLine(index) || IsExactAcquisitionLine(index) || Document.Lines[index].QuantityMode != "TargetQuantity")
+            return false;
+        var lines = Document.Lines.ToList();
+        lines[index] = lines[index] with
+        {
+            TargetBasis = include ? MarketAcquisitionTargetBases.OnHandIncludingRetainers : MarketAcquisitionTargetBases.OnHandTotal,
+        };
+        Document = Document with { Lines = lines };
+        Status = "Stock-up inventory scope updated.";
+        SaveDocument();
+        return true;
+    }
+
     public bool ApplyLineEdit(
         int index,
         string quantityMode,
@@ -744,6 +759,11 @@ public sealed class MarketAcquisitionRequestBuilderController
         var merged = refreshed with
         {
             RunSpendCap = current.RunSpendCap,
+            Lines = refreshed.Lines.Select(line => line.QuantityMode == "TargetQuantity" &&
+                line.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal && current.Lines.Any(local =>
+                    local.ItemId == line.ItemId && local.QuantityMode == line.QuantityMode &&
+                    local.TargetBasis == MarketAcquisitionTargetBases.OnHandIncludingRetainers)
+                    ? line with { TargetBasis = MarketAcquisitionTargetBases.OnHandIncludingRetainers } : line).ToList(),
             LocalRequestId = current.LocalRequestId,
             LocalRevision = current.LocalRevision,
             ExactAcquisitionAuthority = current.ExactAcquisitionAuthority,
