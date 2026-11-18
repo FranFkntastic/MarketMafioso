@@ -273,8 +273,8 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
 
         var priorDocument = MarketAcquisitionRequestDocumentMapper.FromRequestView(ClaimedRequest);
         var intentChanged = !string.Equals(
-            MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(priorDocument),
-            MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document),
+            MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(priorDocument),
+            MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(document),
             StringComparison.Ordinal);
         ClaimedRequest = MarketAcquisitionRequestDocumentMapper.MergeClaimWithRequest(ClaimedRequest, remoteRequest);
         PersistClaim();
@@ -425,11 +425,20 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
 
     public void ForgetLocalClaim() => DetachLocalHostedState();
 
+    public Task<MarketAcquisitionPlanPreparationResult> PreviewPlanAsync(
+        MarketAcquisitionRequestDocument document, string world, TimeSpan ttl, bool ignoreRecent) =>
+        planPreparationService.PrepareAsync(new()
+        {
+            Claim = ResolveExecutionRequest(document), CurrentWorld = world,
+            RecentWorldTtl = ttl, IgnoreRecentWorldVisitsForSweep = ignoreRecent,
+        }, CancellationToken.None);
+
     public Task PreparePlanAsync(
         string currentWorld,
         TimeSpan recentWorldTtl,
         bool ignoreRecentWorldVisitsForSweep,
-        MarketAcquisitionRequestDocument? finalizedDocument = null) =>
+        MarketAcquisitionRequestDocument? finalizedDocument = null,
+        MarketAcquisitionPlan? confirmedPreview = null) =>
         RunAsync(async token =>
         {
             EnsureConnected();
@@ -454,7 +463,9 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             }
             else
             {
-                result = await planPreparationService.PrepareAsync(
+                result = confirmedPreview is not null
+                    ? new() { Plan = MarketAcquisitionRequestDocumentMapper.BindReviewedPlan(confirmedPreview, claimed), StatusMessage = "Confirmed advisory plan." }
+                    : await planPreparationService.PrepareAsync(
                     new MarketAcquisitionPlanPreparationRequest
                     {
                         Claim = claimed,
@@ -469,7 +480,8 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                     token).ConfigureAwait(false);
             }
 
-            PreparedPlan = result.Plan;
+            PreparedPlan = finalizedDocument is null ? result.Plan
+                : MarketAcquisitionRequestDocumentMapper.ApplyLocalExecutionPolicy(finalizedDocument, result.Plan);
             PreparedPlanHash = getCurrentIntentHash!();
             markPlanPrepared!(PreparedPlanHash);
             resetRoute!("No route has started.");
@@ -478,14 +490,15 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                 : result.StatusMessage;
         }, PlanPreparationTimeout);
 
-    public Task<MarketAcquisitionPlanPreparationResult> PrepareRecoveryPlanAsync(
+    public async Task<MarketAcquisitionPlanPreparationResult> PrepareRecoveryPlanAsync(
         MarketAcquisitionClaimView remainingClaim,
         string currentWorld,
         TimeSpan recentWorldTtl,
         CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(remainingClaim);
-        return planPreparationService.PrepareAsync(
+        var retained = PreparedPlan;
+        var result = await planPreparationService.PrepareAsync(
             new MarketAcquisitionPlanPreparationRequest
             {
                 Claim = remainingClaim,
@@ -497,7 +510,11 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                 MinimumStopCoveragePercent = config.MarketAcquisitionMinimumStopCoveragePercent,
                 ExhaustiveResearchMode = config.MarketAcquisitionExhaustiveResearchMode,
             },
-            token);
+            token).ConfigureAwait(false);
+        return retained is null ? result : result with
+        {
+            Plan = result.Plan with { RunSpendCap = retained.RunSpendCap, RunSpend = retained.RunSpend },
+        };
     }
 
     public Task RunWithExecutionRequestAsync(
@@ -688,7 +705,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                document.RemoteRequestId.Equals(claim.Id, StringComparison.Ordinal) &&
                !string.IsNullOrWhiteSpace(document.LastSyncedHash) &&
                document.LastSyncedHash.Equals(
-                   MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document),
+                   MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(document),
                    StringComparison.Ordinal);
     }
 

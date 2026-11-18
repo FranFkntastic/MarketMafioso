@@ -58,6 +58,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private string? reconciledDepartureWorld;
     private string? reconciledSearch;
     private DateTimeOffset? inventoryReflectionWaitStartedUtc;
+    private DateTimeOffset? capacityReadWaitStartedUtc;
     private static readonly TimeSpan InventoryReflectionWait = TimeSpan.FromSeconds(10);
     private string? activeLinePurchaseWorld;
     private bool activeSearchAllowsPriceCutoff = true;
@@ -65,6 +66,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private string? retainedRecoveryBrowseOperationId;
     private string? lastFeedbackState;
     private bool userPaused;
+    private readonly Dictionary<string, string> inventoryFullLines = new(StringComparer.Ordinal);
     private long lastFeedbackRunSequence;
     public event Action<MarketAcquisitionRouteEngineSnapshot>? FeedbackTransition;
 
@@ -604,6 +606,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (runner.ActivePlan is { } retained)
+            plan = plan with { RunSpendCap = retained.RunSpendCap, RunSpend = retained.RunSpend };
         if (!TryPreflightRouteAction(out var evidenceBlockReason))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
@@ -644,6 +648,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (runner.ActivePlan is { } retained)
+            plan = plan with { RunSpendCap = retained.RunSpendCap, RunSpend = retained.RunSpend };
         if (!TryPreflightRouteAction(out var evidenceBlockReason))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
@@ -754,6 +760,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = nextWorldGil;
             state.ActiveLinePurchasedQuantity = nextLineQuantity;
             state.ActiveLineSpentGil = nextLineGil;
+            runner.ActivePlan?.RunSpend.Record(candidate.WalletCost);
             CompleteTerminalPurchaseReconciliation(
                 $"Purchase outcome reconciled: listing {candidate.ListingId} was purchased. Recovering will refresh live listings before continuing.");
             try
@@ -880,7 +887,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             if (activeStop == null)
                 return MarketAcquisitionRouteEngineTickResult.Idle("Route has no active stop.");
 
-            if (string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
+            if (activeStop.ActiveItemSubtask is { } skipped && activeStop.Status is "Pending" or "Arrived" &&
+                inventoryFullLines.TryGetValue(skipped.LineId, out var skipDetail))
+            {
+                ReportAcquisitionLineProgress(skipped, "SkippedInventoryFull", 0, 0, skipDetail);
+                UpdateStatus(runner.SkipInventorySatisfiedLine(skipDetail));
+            }
+            else if (string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
                 HandlePendingStop(activeStop);
             else if (!context.IsCurrentWorldAvailable)
                 UpdateStatus(runner.RecordCurrentWorldUnavailable());
@@ -1759,6 +1772,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             if (!runner.IsRunning)
                 return;
+            // The single purchase session reserves its entire listing until terminal evidence resolves.
+            if (purchaseAutomation.PurchaseSession?.IsActive == true)
+                return;
             var activeStop = runner.ActiveStop;
             if (activeStop is not { Status: "Purchasing" })
                 return;
@@ -1814,6 +1830,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.LiveCandidatePlan = priceComplete ? prefixPlan : activeStop.ActiveItemSubtask == null
                 ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, currentWorld, freshRead, totals.PurchasedQuantity, totals.SpentGil)
                 : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, activeStop.ActiveItemSubtask, currentWorld, candidateRead, totals.PurchasedQuantity, totals.SpentGil);
+            if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live && plan.RunSpendCap > 0)
+                state.LiveCandidatePlan = MarketAcquisitionLiveCandidatePlanner.BuildBudgetedCandidatePlan(
+                    activeLine, plan, activeStop.ActiveItemSubtask, currentWorld, candidateRead,
+                    totals.PurchasedQuantity, totals.SpentGil, state.LiveCandidatePlan);
             failureStage = "purchase-continuation.visible-listing-continuation";
             if (TryContinueVisibleListingRead(currentWorld, freshRead, state.LiveCandidatePlan))
                 return;
@@ -1834,6 +1854,48 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
 
             failureStage = "purchase-continuation.select-candidate";
+            if (plan.RunSpendCap > 0)
+            {
+                var remaining = plan.RunSpend.ConfirmedGil >= plan.RunSpendCap ? 0UL : plan.RunSpendCap - plan.RunSpend.ConfirmedGil;
+                var cheapestRemaining = new[] { plan.RunSpend.CheapestUnaffordableGil,
+                    CheapestRemainingPlannedListing(plan, activeStop) }.Min();
+                if (state.LiveCandidatePlan.WouldBuyQuantity == 0 &&
+                    cheapestRemaining is { } cheapest && cheapest > remaining)
+                {
+                    CompletePurchaseRouteAtBoard(currentWorld, MarketAcquisitionRouteCompletionKinds.BudgetReached,
+                        $"BudgetReached: budget {plan.RunSpendCap:N0}, spent {plan.RunSpend.ConfirmedGil:N0}, remaining {remaining:N0}, cheapest unaffordable listing {cheapest:N0} gil including tax.");
+                    return;
+                }
+            }
+            var nextCandidate = MarketBoardPurchasePlanner.SelectFirstFreshSafeCandidate(state.LiveCandidatePlan, freshRead);
+            if (nextCandidate is not null)
+            {
+                var capacity = inventoryObserver?.Capacity(nextCandidate.ItemId, nextCandidate.IsHq);
+                if (capacity?.IsAvailable != true)
+                {
+                    capacityReadWaitStartedUtc ??= clock.UtcNow;
+                    var detail = $"player bag/crystal pouch capacity for {activeLine.ItemName} ({(nextCandidate.IsHq ? "HQ" : "NQ")})";
+                    if (clock.UtcNow - capacityReadWaitStartedUtc.Value >= InventoryReflectionWait)
+                        throw new InvalidOperationException($"Inventory capacity read timed out after {InventoryReflectionWait.TotalSeconds:N0}s: could not read {detail}.");
+                    state.AcquisitionStatus = $"Verifying {detail}...";
+                    state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+                    return;
+                }
+                capacityReadWaitStartedUtc = null;
+                if (capacity.Value.Units < nextCandidate.Quantity)
+                {
+                    var lineId = activeStop.ActiveItemSubtask?.LineId ?? activeLine.Id;
+                    var container = nextCandidate.ItemId is >= 2 and <= 19 ? "crystal pouch" : "player bags";
+                    var detail = $"SkippedInventoryFull: {activeLine.ItemName}, {container} can fit {capacity.Value.Units:N0} units; listing has {nextCandidate.Quantity:N0}.";
+                    inventoryFullLines[lineId] = detail;
+                    var hasOtherLine = runner.Stops.SkipWhile(stop => !ReferenceEquals(stop, activeStop))
+                        .SelectMany(stop => stop.ItemSubtasks.Skip(stop.CompletedItemSubtaskCount))
+                        .Any(task => !inventoryFullLines.ContainsKey(task.LineId));
+                    CompleteActiveWorldPurchaseBatch(currentWorld,
+                        hasOtherLine ? null : MarketAcquisitionRouteCompletionKinds.InventoryFull, detail, detail);
+                    return;
+                }
+            }
             var selection = purchase.ExecuteFirstCandidate(state.LiveCandidatePlan, freshRead);
             var now = clock.UtcNow;
             purchaseAutomation.RecordPurchaseSelection(selection, now, MarketBoardPurchaseConfirmationWatchdog);
@@ -1843,6 +1905,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
             if (selection.Status.Equals("NoCandidate", StringComparison.OrdinalIgnoreCase))
             {
+                capacityReadWaitStartedUtc = null;
                 if (ShouldFailWorldPurchaseBatchOnNoCandidate(state.LiveCandidatePlan))
                 {
                     UpdateStatus(FailRoute(state.LiveCandidatePlan.Message));
@@ -1879,6 +1942,25 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             CaptureFailure(exception);
             throw;
         }
+    }
+
+    private void CompletePurchaseRouteAtBoard(string world, string kind, string message)
+    {
+        CompleteActiveWorldPurchaseBatch(world, kind, message);
+    }
+
+    private ulong? CheapestRemainingPlannedListing(MarketAcquisitionPlan plan, MarketAcquisitionGuidedRouteStop activeStop)
+    {
+        // Current live candidates supersede the advisory rows for the active item.
+        // Other items here and all unvisited stops still use their planned whole listings.
+        var pending = runner.Stops.SkipWhile(stop => !ReferenceEquals(stop, activeStop));
+        return pending.SelectMany(stop => stop.ItemSubtasks.Count > 0
+                ? stop.ItemSubtasks.Skip(stop.CompletedItemSubtaskCount + (ReferenceEquals(stop, activeStop) ? 1 : 0)).SelectMany(task => task.Listings)
+                : ReferenceEquals(stop, activeStop) ? Enumerable.Empty<MarketAcquisitionPlannedListing>()
+                : plan.WorldBatches.Where(batch => batch.WorldName.Equals(stop.WorldName, StringComparison.OrdinalIgnoreCase)).SelectMany(batch => batch.Listings))
+            // Advisory plans do not carry tax. Use the conservative 5% ceiling until
+            // a native read replaces these rows with exact tax at the destination.
+            .Select(listing => (ulong?)((ulong)listing.TotalGil + ((ulong)listing.TotalGil + 19) / 20)).Min();
     }
 
     private MarketBoardReadResult ReadPurchaseListings(
@@ -2143,6 +2225,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = nextWorldGil;
             state.ActiveLinePurchasedQuantity = nextLineQuantity;
             state.ActiveLineSpentGil = nextLineGil;
+            runner.ActivePlan?.RunSpend.Record(candidate.WalletCost);
             state.AcquisitionStatus = "Purchase: confirmed by server packet; continuing from the remembered listing snapshot.";
             failureStage = "confirmed-purchase.receipt-reporting-checkpoint";
             var checkpointRequested = ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
@@ -2247,6 +2330,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
             state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
             state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
+            runner.ActivePlan?.RunSpend.Record(candidate.WalletCost);
             exactAcquisitionAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate, runner.ActivePlan);
             var checkpointRequested = ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
             state.UseProjectedMarketBoardSnapshot =
@@ -2279,7 +2363,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
     }
 
-    private void CompleteActiveWorldPurchaseBatch(string currentWorld)
+    private void CompleteActiveWorldPurchaseBatch(string currentWorld, string? completionKind = null, string? completionDetail = null, string? inventorySkip = null)
     {
         var failureStage = "batch.native-browse-completion";
         var failureLine = runner.ActiveStop?.ActiveItemSubtask;
@@ -2311,10 +2395,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             if (activeSubtask != null)
             {
                 var lineStatus = ResolveZeroPurchaseLineStatus(state.LiveCandidatePlan, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
-                ReportAcquisitionLineProgress(activeSubtask, lineStatus, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil,
-                    state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun
+                ReportAcquisitionLineProgress(activeSubtask, inventorySkip == null ? lineStatus : "SkippedInventoryFull", state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil,
+                    inventorySkip ?? (state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun
                         ? $"Dry run for {FormatItem(GetActiveRouteLine(claimedRequest!))} on {currentWorld}: would purchase {state.ActiveLinePurchasedQuantity:N0}, would spend {state.ActiveLineSpentGil:N0} gil."
-                        : $"Completed {FormatItem(GetActiveRouteLine(claimedRequest!))} on {currentWorld}: purchased {state.ActiveLinePurchasedQuantity:N0}, spent {state.ActiveLineSpentGil:N0} gil.");
+                        : $"Completed {FormatItem(GetActiveRouteLine(claimedRequest!))} on {currentWorld}: purchased {state.ActiveLinePurchasedQuantity:N0}, spent {state.ActiveLineSpentGil:N0} gil."));
             }
 
             failureStage = "batch.advance";
@@ -2331,17 +2415,26 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 currentWorld,
                 activeSubtask == null ? state.ActiveWorldPurchasedQuantity : state.ActiveLinePurchasedQuantity,
                 activeSubtask == null ? state.ActiveWorldSpentGil : state.ActiveLineSpentGil,
-                state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0
+                inventorySkip != null ? "SkippedInventoryFull" : state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0
                     ? ResolveZeroPurchaseLineStatus(state.LiveCandidatePlan, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil)
                     : null,
-                state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0 ? state.LiveCandidatePlan?.Message : null,
-                state.LiveCandidatePlan);
+                inventorySkip ?? (state.ActiveLinePurchasedQuantity == 0 && state.ActiveLineSpentGil == 0 ? state.LiveCandidatePlan?.Message : null),
+                state.LiveCandidatePlan, completionKind, completionDetail);
             state.AcquisitionStatus = result.Message;
             ClearMarketBoardAutomationState();
             state.ActiveLinePurchasedQuantity = 0;
             state.ActiveLineSpentGil = 0;
             state.ActivePurchaseLineId = null;
             activeLinePurchaseWorld = null;
+
+            if (completionKind is not null)
+            {
+                ReportRouteProgress();
+                EvaluateExactAcquisitionRouteCompletion(force: true);
+                state.AcquisitionStatus = completionDetail ?? result.Message;
+                shardCheckpoints?.RequestFinalCheckpoint();
+                return;
+            }
 
             failureStage = "batch.close-or-next-item-transition";
             var nextStop = runner.ActiveStop;
@@ -2405,6 +2498,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void ResetMarketBoardStateForNextRouteItem()
     {
+        capacityReadWaitStartedUtc = null;
         state.MarketBoardReadResult = null;
         state.MarketBoardReconciliation = null;
         state.LiveCandidatePlan = null;
@@ -2492,16 +2586,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 candidate.Quantity,
                 candidate.TotalGil,
                 "DryRunWouldPurchase",
-                activeSubtask?.Source);
+                activeSubtask?.Source, tax: candidate.TotalTax);
         }
 
         state.AcquisitionStatus = $"Dry run: would purchase {state.ActiveLinePurchasedQuantity:N0} for {state.ActiveLineSpentGil:N0} gil; no purchase UI was invoked.";
         CompleteActiveWorldPurchaseBatch(currentWorld);
     }
 
-    private void EvaluateExactAcquisitionRouteCompletion()
+    private void EvaluateExactAcquisitionRouteCompletion(bool force = false)
     {
-        if (runner.ActiveStop is not null || exactAcquisitionAuthority is null || runner.ActivePlan is not { } completedPlan)
+        if ((!force && runner.ActiveStop is not null) || exactAcquisitionAuthority is null || runner.ActivePlan is not { } completedPlan)
             return;
         exactAcquisitionAuthority.EvaluateRouteEnd(completedPlan);
         state.AcquisitionStatus = exactAcquisitionAuthority.State.Message;
@@ -2520,7 +2614,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             // Local receipts belong to the route, not to the optional hosted claim.
             runner.RecordPurchaseAudit(receiptLineId, activeSubtask?.ItemName, receiptWorld,
                 candidate.ListingId, candidate.RetainerId, candidate.Quantity, candidate.TotalGil,
-                "Purchased", activeSubtask?.Source, candidate.UnitPrice, candidate.IsHq, candidate.ItemId);
+                "Purchased", activeSubtask?.Source, candidate.UnitPrice, candidate.IsHq, candidate.ItemId, candidate.TotalTax);
             if (claimed == null || activeSubtask == null || string.IsNullOrWhiteSpace(claimed.ClaimToken))
             {
                 runner.RecordLineProgress(receiptLineId, activeSubtask?.ItemName, "Running", linePurchasedQuantity,
@@ -2744,6 +2838,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static string ResolveZeroPurchaseLineStatus(MarketAcquisitionLiveCandidatePlan? candidatePlan, uint purchasedQuantity, uint spentGil) =>
         purchasedQuantity > 0 || spentGil > 0
             ? "Complete"
+            : candidatePlan?.Rows.Any(row => row.Reason == "RunBudgetExceeded") == true
+                ? "SkippedRunBudget"
             : MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidatePlan?.Status)
                 ? "SkippedIncompleteListingCoverage"
                 : candidatePlan?.Status.Equals(MarketAcquisitionLiveCandidateStatuses.OverageLimit, StringComparison.OrdinalIgnoreCase) == true
@@ -2871,6 +2967,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private void ClearExecutionState(bool preserveExecutionMode = false)
     {
         userPaused = false;
+        capacityReadWaitStartedUtc = null;
+        if (!preserveExecutionMode)
+            inventoryFullLines.Clear();
         var purchaseEvidenceState = purchase.PurchaseEvidenceState;
         CleanupOwnedTravel("Replacement");
         travelInterruptedByCleanup = false;
@@ -2904,6 +3003,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         reconciledDepartureWorld = null;
         reconciledSearch = null;
         inventoryReflectionWaitStartedUtc = null;
+        capacityReadWaitStartedUtc = null;
         foreach (var line in plan.Lines)
         {
             var basis = MarketAcquisitionTargetBases.Normalize(line.TargetBasis, exactAcquisition);
@@ -2936,7 +3036,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!exactAcquisition && plan.AdvisoryListings is { } advisory && claimedRequest is { } request &&
             plan.Lines.Any(line => line.InitialOnHandQuantity != initialOnHandByLine.GetValueOrDefault(line.LineId)))
             adjustedPlan = MarketAcquisitionPlanner.BuildPlan(request, advisory, plan.PreparedAtUtc,
-                context.GetCurrentWorldName(), plan.SweepWorldExclusions, initialOnHandByLine);
+                context.GetCurrentWorldName(), plan.SweepWorldExclusions, initialOnHandByLine)
+                with { RunSpendCap = plan.RunSpendCap, RunSpend = plan.RunSpend };
         failure = string.Empty;
         return true;
     }

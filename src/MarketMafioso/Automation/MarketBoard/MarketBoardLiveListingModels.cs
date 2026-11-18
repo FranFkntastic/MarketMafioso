@@ -25,6 +25,9 @@ public sealed record MarketBoardLiveListing
     public ulong? ArtisanContentId { get; init; }
     public uint UnitPrice { get; init; }
     public uint Quantity { get; init; }
+    public uint? TotalTax { get; init; }
+    public ulong WalletCost => (ulong)UnitPrice * Quantity +
+        (TotalTax ?? (((ulong)UnitPrice * Quantity + 19) / 20));
     public bool IsHq { get; init; }
 }
 

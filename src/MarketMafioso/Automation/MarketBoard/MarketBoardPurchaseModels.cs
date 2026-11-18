@@ -14,6 +14,8 @@ public sealed record MarketBoardPurchaseCandidate
     public uint Quantity { get; init; }
     public bool IsHq { get; init; }
     public uint TotalGil => checked(UnitPrice * Quantity);
+    public uint? TotalTax { get; init; }
+    public ulong WalletCost => (ulong)TotalGil + (TotalTax ?? (((ulong)TotalGil + 19) / 20));
 
     public static MarketBoardPurchaseCandidate FromLiveListing(MarketBoardLiveListing listing) =>
         new()
@@ -26,9 +28,12 @@ public sealed record MarketBoardPurchaseCandidate
             RetainerNameSource = listing.RetainerNameSource,
             UnitPrice = listing.UnitPrice,
             Quantity = listing.Quantity,
+            TotalTax = listing.TotalTax,
             IsHq = listing.IsHq,
         };
 
+    // Tax is wallet-cost data, not listing identity: its availability or value
+    // across reads must not turn the same listing into a changed listing.
     public bool Matches(MarketBoardLiveListing listing) =>
         ItemId == listing.ItemId &&
         WorldName.Equals(listing.WorldName, System.StringComparison.OrdinalIgnoreCase) &&

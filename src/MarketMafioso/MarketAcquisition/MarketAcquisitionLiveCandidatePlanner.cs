@@ -208,6 +208,20 @@ public static class MarketAcquisitionLiveCandidatePlanner
             alreadySpentGil);
     }
 
+    public static MarketAcquisitionLiveCandidatePlan BuildBudgetedCandidatePlan(
+        MarketAcquisitionRequestView request, MarketAcquisitionPlan plan, MarketAcquisitionWorldItemSubtask? subtask,
+        string world, MarketBoardReadResult read, uint purchased, uint spent, MarketAcquisitionLiveCandidatePlan original)
+    {
+        var remaining = plan.RunSpend.ConfirmedGil >= plan.RunSpendCap ? 0UL : plan.RunSpendCap - plan.RunSpend.ConfirmedGil;
+        var result = BuildCandidatePlanCore(request, world, read.ItemId,
+            EnrichRetainerNames(read.Listings, subtask?.Listings ?? FindPlannedListings(plan, world, read.ItemId)),
+            purchased, spent, read, remaining);
+        plan.RunSpend.CheapestUnaffordableGil = result.Rows.Where(r => r.Reason == "RunBudgetExceeded")
+            .Select(r => (ulong?)r.LiveListing.WalletCost).Min();
+        return result with { PriceRangeExhausted = original.PriceRangeExhausted,
+            Status = original.PriceRangeExhausted ? "Ready" : result.Status };
+    }
+
     private static MarketAcquisitionLiveCandidatePlan BuildCandidatePlanCore(
         MarketAcquisitionRequestView request,
         string currentWorld,
@@ -215,7 +229,8 @@ public static class MarketAcquisitionLiveCandidatePlanner
         IEnumerable<MarketBoardLiveListing> liveListings,
         uint alreadyPurchasedQuantity,
         uint alreadySpentGil,
-        MarketBoardReadResult? readResult = null)
+        MarketBoardReadResult? readResult = null,
+        ulong? remainingRunGil = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(liveListings);
@@ -246,16 +261,9 @@ public static class MarketAcquisitionLiveCandidatePlanner
             .ThenBy(listing => listing.RetainerName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
             .ToList();
-        var maxMeaningfulObservationUnitPrice = CalculateMeaningfulObservationUnitPriceThreshold(
-            realListings,
-            request.MaxUnitPrice);
         foreach (var listing in realListings)
         {
-            if (!MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice))
-            {
-                rows.Add(Skipped(listing, "OutlierPrice", "Live unit price is outside the meaningful observation range.", selectedQuantity, selectedGil));
-                continue;
-            }
+            // The line's unit ceiling is the only price rule; ceilings are required, so no market-relative guard applies here.
             if (listing.UnitPrice > request.MaxUnitPrice)
             {
                 rows.Add(Skipped(listing, "AboveThreshold", "Live unit price is above the configured max unit price.", selectedQuantity, selectedGil));
@@ -295,6 +303,14 @@ public static class MarketAcquisitionLiveCandidatePlanner
             if (hasGilCap && nextTotalGil > request.MaxTotalGil)
             {
                 rows.Add(Skipped(listing, "GilCapExceeded", "Buying this whole listing would exceed the configured gil cap.", selectedQuantity, selectedGil));
+                continue;
+            }
+
+            // Only record budget as binding after quality, target/overage and line caps pass.
+            // Execution selects one listing then replans against the confirmed wallet ledger.
+            if (remainingRunGil is { } remaining && listing.WalletCost > remaining)
+            {
+                rows.Add(Skipped(listing, "RunBudgetExceeded", $"Whole listing including tax exceeds remaining run budget of {remaining:N0} gil.", selectedQuantity, selectedGil));
                 continue;
             }
 
@@ -506,57 +522,6 @@ public static class MarketAcquisitionLiveCandidatePlanner
             return MarketAcquisitionLiveCandidateStatuses.UnderProcured;
 
         return MarketAcquisitionLiveCandidateStatuses.Ready;
-    }
-
-    private static ulong CalculateMeaningfulObservationUnitPriceThreshold(
-        IReadOnlyList<MarketBoardLiveListing> listings,
-        uint configuredMaxUnitPrice)
-    {
-        if (listings.Count == 0)
-            return ulong.MaxValue;
-
-        var modeSource = configuredMaxUnitPrice == 0
-            ? listings
-            : listings
-                .Where(listing => listing.UnitPrice <= (decimal)configuredMaxUnitPrice * 10m)
-                .ToArray();
-        var modePrice = modeSource.Count == 0 ? 0 : CalculateModePrice(modeSource);
-        var baselinePrice = modePrice > 0
-            ? modePrice
-            : configuredMaxUnitPrice;
-
-        if (baselinePrice <= 0)
-            return ulong.MaxValue;
-
-        return (ulong)Math.Ceiling(baselinePrice * 2.5m);
-    }
-
-    private static decimal CalculateModePrice(IReadOnlyList<MarketBoardLiveListing> listings)
-    {
-        var sortedByPrice = listings.OrderBy(listing => listing.UnitPrice).ToArray();
-        var halfCount = Math.Max(1, sortedByPrice.Length / 2);
-        var cheapestHalf = sortedByPrice.Take(halfCount).ToArray();
-        var baselinePrice = cheapestHalf.Length > 0
-            ? cheapestHalf.Average(listing => (decimal)listing.UnitPrice)
-            : sortedByPrice[0].UnitPrice;
-        var reasonableListings = listings
-            .Where(listing => listing.UnitPrice <= baselinePrice * 10m)
-            .ToArray();
-
-        if (reasonableListings.Length == 0)
-            reasonableListings = sortedByPrice.Take(3).ToArray();
-
-        return reasonableListings
-            .GroupBy(listing => listing.UnitPrice)
-            .Select(group => new
-            {
-                Price = (decimal)group.Key,
-                Quantity = group.Aggregate(0ul, (total, listing) => checked(total + listing.Quantity)),
-            })
-            .OrderByDescending(group => group.Quantity)
-            .ThenBy(group => group.Price)
-            .FirstOrDefault()
-            ?.Price ?? 0m;
     }
 
     private static string ResolveMessage(

@@ -26,7 +26,10 @@ public readonly record struct MarketAcquisitionInventoryObservation(
 public interface IMarketAcquisitionInventoryObserver
 {
     MarketAcquisitionInventoryObservation Observe(uint itemId, string hqPolicy);
+    MarketAcquisitionCapacityObservation Capacity(uint itemId, bool isHq) => new(false, 0, 0);
 }
+
+public readonly record struct MarketAcquisitionCapacityObservation(bool IsAvailable, ulong Units, int FreeSlots);
 
 public sealed record MarketAcquisitionLinePurchaseBudget
 {

@@ -5,6 +5,40 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed class DalamudMarketAcquisitionInventoryObserver : IMarketAcquisitionInventoryObserver
 {
+    private readonly Dalamud.Plugin.Services.IDataManager? dataManager;
+    public DalamudMarketAcquisitionInventoryObserver(Dalamud.Plugin.Services.IDataManager? dataManager = null) =>
+        this.dataManager = dataManager;
+
+    public unsafe MarketAcquisitionCapacityObservation Capacity(uint itemId, bool isHq)
+    {
+        var stack = dataManager?.GetExcelSheet<Lumina.Excel.Sheets.Item>().GetRowOrDefault(itemId)?.StackSize;
+        var manager = InventoryManager.Instance();
+        if (manager == null || stack is null or 0) return new(false, 0, 0);
+        var crystal = itemId is >= 2 and <= 19;
+        ulong room = 0;
+        var free = 0;
+        var crystalSlotSeen = false;
+        foreach (var type in crystal ? new[] { InventoryType.Crystals } : PlayerBags)
+        {
+            var bag = manager->GetInventoryContainer(type);
+            if (bag == null || !bag->IsLoaded) return new(false, 0, 0);
+            for (var i = 0; i < bag->Size; i++)
+            {
+                var slot = bag->GetInventorySlot(i);
+                if (slot == null) return new(false, 0, 0);
+                if (slot->ItemId == 0 && !crystal) { free++; room += stack.Value; }
+                else if (slot->ItemId == itemId && (crystal || slot->Flags.HasFlag(InventoryItem.ItemFlags.HighQuality) == isHq))
+                {
+                    crystalSlotSeen |= crystal;
+                    room += (ulong)Math.Max(0L, (long)stack.Value - slot->Quantity);
+                }
+            }
+        }
+        // Each crystal type owns a fixed pouch slot that reads as empty at zero quantity, so a missing slot means a full stack of room.
+        if (crystal && !crystalSlotSeen) room = stack.Value;
+        return new(true, room, free);
+    }
+
     private static readonly InventoryType[] PlayerBags =
     [
         InventoryType.Inventory1,

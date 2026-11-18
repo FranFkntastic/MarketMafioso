@@ -174,6 +174,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         }
         CompletionOutcome = null;
         ActivePlan = plan;
+        plan.RunSpend.CheapestUnaffordableGil = null;
         reconciledInventory.Clear();
         session = MarketAcquisitionGuidedRouteSession.Start(plan, includeOpportunisticChecks);
         currentRequestId = plan.RequestId;
@@ -968,16 +969,16 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             : MarketAcquisitionRouteActionResult.Fail(result.Message);
     }
 
-    public MarketAcquisitionRouteActionResult SkipInventorySatisfiedLine()
+    public MarketAcquisitionRouteActionResult SkipInventorySatisfiedLine(string? inventoryFull = null)
     {
         if (!IsRunning || session is null) return Fail("No running route is available for inventory reconciliation.");
-        var result = session.SkipInventorySatisfiedLine();
+        var result = session.SkipInventorySatisfiedLine(inventoryFull);
         StatusMessage = result.Message;
         SearchSubmitted = false;
-        diagnostics.Record("inventory-target-satisfied", result.Message);
+        diagnostics.Record(inventoryFull == null ? "inventory-target-satisfied" : "inventory-full-skip", result.Message);
         RecordLatestWorldSummary();
         if (!result.Success) return FailRoute(result.Message);
-        return session.ActiveStop is null ? Complete(result.Message) : MarketAcquisitionRouteActionResult.Ok(result.Message);
+        return session.ActiveStop is null ? Complete(result.Message, inventoryFull == null ? null : MarketAcquisitionRouteCompletionKinds.InventoryFull) : MarketAcquisitionRouteActionResult.Ok(result.Message);
     }
 
     private static string SummarizeSkipReasons(MarketAcquisitionLiveCandidatePlan candidatePlan)
@@ -1155,7 +1156,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         uint spentGil,
         string? zeroPurchaseStatus = null,
         string? zeroPurchaseMessage = null,
-        MarketAcquisitionLiveCandidatePlan? finalPlan = null)
+        MarketAcquisitionLiveCandidatePlan? finalPlan = null,
+        string? completionKind = null,
+        string? completionDetail = null)
     {
         if (!IsRunning)
             return Fail($"Route is {State}; world purchase result was not recorded.");
@@ -1188,6 +1191,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         if (result.Success)
             RecordLatestWorldSummary();
+
+        if (result.Success && completionKind is not null)
+            return Complete(completionDetail ?? result.Message, completionKind);
 
         if (result.Success && session?.ActiveStop == null)
             return Complete(result.Message);
@@ -1356,7 +1362,12 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         RecordWorldSummary(summary);
     }
 
-    private MarketAcquisitionRouteActionResult Complete(string message)
+    public MarketAcquisitionRouteActionResult CompleteWithOutcome(string kind, string message)
+    {
+        return Complete(message, kind);
+    }
+
+    private MarketAcquisitionRouteActionResult Complete(string message, string? kind = null)
     {
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
@@ -1364,6 +1375,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         itemSearchAutomationStartedUtc = null;
         RefreshLastRunSummary();
         CompletionOutcome = BuildCompletionOutcome();
+        // Budget completion is explicit at the board, where the final live candidates
+        // and remaining route are known. An earlier skipped listing is not authority.
+        if (kind is not null) CompletionOutcome = CompletionOutcome with { Kind = kind, Detail = message };
         StatusMessage = message;
         State = "Completed";
         diagnostics.Record(
@@ -1372,6 +1386,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             new Dictionary<string, string?>
             {
                 ["kind"] = CompletionOutcome.Kind,
+                ["detail"] = CompletionOutcome.Detail,
                 ["targetRequestedQuantity"] = CompletionOutcome.TargetRequestedQuantity.ToString(CultureInfo.InvariantCulture),
                 ["targetPurchasedQuantity"] = CompletionOutcome.TargetPurchasedQuantity.ToString(CultureInfo.InvariantCulture),
                 ["targetRemainingQuantity"] = CompletionOutcome.TargetRemainingQuantity.ToString(CultureInfo.InvariantCulture),

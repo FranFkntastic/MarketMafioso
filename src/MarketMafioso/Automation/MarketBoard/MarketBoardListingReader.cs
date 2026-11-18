@@ -177,6 +177,7 @@ public sealed class MarketBoardListingReader
                 ArtisanContentId = listing.ArtisanId,
                 UnitPrice = listing.UnitPrice,
                 Quantity = listing.Quantity,
+                TotalTax = listing.TotalTax,
                 IsHq = listing.IsHqItem,
             });
         }

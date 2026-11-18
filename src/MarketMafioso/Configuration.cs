@@ -390,6 +390,7 @@ public sealed class PersistedMarketAcquisitionLine
 [Serializable]
 public sealed class PersistedMarketAcquisitionRequestDocument
 {
+    public uint RunSpendCap { get; set; }
     public string LocalRequestId { get; set; } = string.Empty;
     public int LocalRevision { get; set; }
     public string TargetCharacterName { get; set; } = string.Empty;

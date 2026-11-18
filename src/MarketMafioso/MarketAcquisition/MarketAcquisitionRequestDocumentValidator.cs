@@ -33,6 +33,8 @@ public static class MarketAcquisitionRequestDocumentValidator
         ArgumentNullException.ThrowIfNull(document);
         var errors = new List<string>();
         ValidateRoute(document, errors);
+        // RunSpendCap is an unsigned, optional local limit: zero is valid unset,
+        // and even a cap below the cheapest listing is valid (a non-failing budget stop).
 
         if (document.Lines.Count == 0)
         {

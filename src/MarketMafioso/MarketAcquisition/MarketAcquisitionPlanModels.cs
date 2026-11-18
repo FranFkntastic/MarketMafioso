@@ -97,6 +97,9 @@ public sealed record MarketAcquisitionPlan
     public int MinimumStopValueGil { get; init; } = 5_000;
     public int MinimumStopCoveragePercent { get; init; } = 2;
     public bool ExhaustiveResearchMode { get; init; }
+    public uint RunSpendCap { get; init; }
+    // Shared by record copies and recovery plans; only a new finalization creates a new ledger.
+    public MarketAcquisitionRunSpendLedger RunSpend { get; init; } = new();
     // Optional so persisted plans predating inventory-aware planning remain readable.
     public IReadOnlyList<MarketAcquisitionListing>? AdvisoryListings { get; init; }
     public IReadOnlyList<MarketAcquisitionSweepWorldExclusion> SweepWorldExclusions { get; init; } = [];
@@ -111,6 +114,13 @@ public sealed record MarketAcquisitionPlan
     public MarketAcquisitionPlanDiagnostics Diagnostics { get; init; } = new();
     public IReadOnlyList<MarketAcquisitionPlanLine> Lines { get; init; } = [];
     public IReadOnlyList<MarketAcquisitionWorldBatch> WorldBatches { get; init; } = [];
+}
+
+public sealed class MarketAcquisitionRunSpendLedger
+{
+    public ulong ConfirmedGil { get; private set; }
+    public ulong? CheapestUnaffordableGil { get; set; }
+    public void Record(ulong gil) => ConfirmedGil = checked(ConfirmedGil + gil);
 }
 
 public sealed record MarketAcquisitionPlanDiagnostics

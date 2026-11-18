@@ -135,7 +135,7 @@ public sealed class MarketAcquisitionRequestSyncService
             SyncStatus = "SyncedClean",
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
-        var hash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(synced);
+        var hash = MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(synced);
         return synced with
         {
             LastSyncedHash = hash,

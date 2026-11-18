@@ -8,7 +8,13 @@ namespace MarketMafioso.MarketAcquisition;
 
 public static class MarketAcquisitionRequestDocumentHasher
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    public static string ComputeHostedIntentHash(MarketAcquisitionRequestDocument document) =>
+        ComputeIntentHash(document with { RunSpendCap = 0 });
 
     public static string ComputeIntentHash(MarketAcquisitionRequestDocument document)
     {
@@ -17,6 +23,7 @@ public static class MarketAcquisitionRequestDocumentHasher
         var normalized = new
         {
             Region = Normalize(document.Region),
+            RunSpendCap = document.RunSpendCap == 0 ? (uint?)null : document.RunSpendCap,
             WorldMode = Normalize(document.WorldMode),
             SweepScope = string.IsNullOrWhiteSpace(document.SweepScope) ? "Region" : document.SweepScope.Trim(),
             SweepDataCenters = document.SweepDataCenters

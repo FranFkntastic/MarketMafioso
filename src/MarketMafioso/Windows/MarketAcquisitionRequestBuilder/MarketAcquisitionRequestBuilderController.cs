@@ -328,6 +328,14 @@ public sealed class MarketAcquisitionRequestBuilderController
         return true;
     }
 
+    public void SetRunSpendCap(uint cap)
+    {
+        // This is client execution policy, not a mutation of the hosted request.
+        Document = Document with { RunSpendCap = cap };
+        Status = "Run budget updated.";
+        SaveDocument();
+    }
+
     public bool SetLineGilCap(int index, uint gilCap, string message)
     {
         if (!SelectLine(index))
@@ -721,10 +729,10 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
 
         var currentHash = string.IsNullOrWhiteSpace(current.RemoteHash)
-            ? MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(current)
+            ? MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(current)
             : current.RemoteHash;
         var refreshedHash = string.IsNullOrWhiteSpace(refreshed.RemoteHash)
-            ? MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(refreshed)
+            ? MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(refreshed)
             : refreshed.RemoteHash;
         return string.Equals(currentHash, refreshedHash, StringComparison.Ordinal);
     }
@@ -735,6 +743,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     {
         var merged = refreshed with
         {
+            RunSpendCap = current.RunSpendCap,
             LocalRequestId = current.LocalRequestId,
             LocalRevision = current.LocalRevision,
             ExactAcquisitionAuthority = current.ExactAcquisitionAuthority,
@@ -747,8 +756,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         MarketAcquisitionRequestView request)
     {
         var remote = MarketAcquisitionRequestDocumentMapper.FromRequestView(request);
-        return string.Equals(current.RemoteRequestId, request.Id, StringComparison.Ordinal) &&
-               current.ExactAcquisitionAuthority is not null
+        return string.Equals(current.RemoteRequestId, request.Id, StringComparison.Ordinal)
             ? PreserveLocalIdentity(current, remote)
             : remote;
     }

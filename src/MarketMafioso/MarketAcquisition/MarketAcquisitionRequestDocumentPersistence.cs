@@ -36,6 +36,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
         new()
         {
             LocalRequestId = stored.LocalRequestId,
+            RunSpendCap = stored.RunSpendCap,
             LocalRevision = Math.Max(1, stored.LocalRevision),
             TargetCharacterName = string.IsNullOrWhiteSpace(stored.TargetCharacterName)
                 ? characterName
@@ -88,6 +89,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
         new()
         {
             LocalRequestId = document.LocalRequestId,
+            RunSpendCap = document.RunSpendCap,
             LocalRevision = document.LocalRevision,
             TargetCharacterName = document.TargetCharacterName,
             TargetWorld = document.TargetWorld,

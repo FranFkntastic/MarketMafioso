@@ -6,6 +6,8 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed record MarketAcquisitionRequestDocument
 {
+    // Local execution policy, not a hosted work-order limit. Zero means unset.
+    public uint RunSpendCap { get; init; }
     public string LocalRequestId { get; init; } = Guid.NewGuid().ToString("N");
     public int LocalRevision { get; init; } = 1;
     public string TargetCharacterName { get; init; } = string.Empty;
