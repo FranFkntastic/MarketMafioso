@@ -49,6 +49,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
     private readonly ICondition condition;
     private readonly ExternalAutomationCoordinator externalAutomationCoordinator;
     private readonly Action<string> onMaterialRequestConfirmed;
+    private readonly Func<uint, string> resolveItemName;
     private readonly WorkshopNativeCallbackCapability callbackCapability;
     private readonly WorkshopNativeFaultMonitor faultMonitor;
     private uint? pendingContributionItemId;
@@ -64,7 +65,8 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         IAgentLifecycle agentLifecycle,
         ExternalAutomationCoordinator externalAutomationCoordinator,
         WorkshopNativeFaultMonitor faultMonitor,
-        Action<string> onMaterialRequestConfirmed)
+        Action<string> onMaterialRequestConfirmed,
+        Func<uint, string> resolveItemName)
     {
         this.faultMonitor = faultMonitor;
         this.gameGui = gameGui;
@@ -75,6 +77,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         this.condition = condition;
         this.externalAutomationCoordinator = externalAutomationCoordinator;
         this.onMaterialRequestConfirmed = onMaterialRequestConfirmed;
+        this.resolveItemName = resolveItemName;
         callbackCapability = new(sigScanner);
     }
 
@@ -311,7 +314,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         };
         WorkshopCallbackProtocol.RequirePayload(WorkshopCallbackOperation.Contribution, new ReadOnlySpan<AtkValue>(values, 4));
         pendingContributionItemId = item.ItemId;
-        requestTurnIn.Begin(item.ItemId);
+        requestTurnIn.Begin(item.ItemId, resolveItemName(item.ItemId));
         try
         {
             externalAutomationCoordinator.SuppressWorkshopRequestAutomation();
@@ -418,7 +421,7 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
             case WorkshopRequestTurnInAction.HandOver:
                 using (faultMonitor.Dispatch("request.hand-over"))
                     request->HandOverButton->ClickAddonButton(&request->AtkUnitBase);
-                onMaterialRequestConfirmed($"handed over request item for material {pendingContributionItemId}");
+                onMaterialRequestConfirmed(decision.Message);
                 break;
         }
 
@@ -484,9 +487,10 @@ internal sealed class WorkshopAssemblyUiDriver : IDisposable
         }
 
         ClearMaterialRequest();
+        var itemName = itemId.HasValue ? resolveItemName(itemId.Value) : "unknown item";
         var message = requestPresent || contextMenuPresent
-            ? $"Closed a stalled workshop material request for material {itemId}."
-            : $"Cleared a stalled workshop material request for material {itemId}; its addons had already closed.";
+            ? $"Closed a stalled workshop material request for material {itemName}."
+            : $"Cleared a stalled workshop material request for material {itemName}; its addons had already closed.";
         Diagnostics.Record(
             "request-turn-in-recovery",
             message,

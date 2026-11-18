@@ -4,6 +4,7 @@ using System.Linq;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.Runtime;
+using MarketMafioso.Automation.Items;
 using Franthropy.Dalamud.Automation.Inventory;
 
 namespace MarketMafioso.WorkshopPrep;
@@ -17,6 +18,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     private readonly WorkshopNativeFaultMonitor faultMonitor;
     private readonly ExternalAutomationCoordinator externalAutomationCoordinator;
     private readonly IPluginLog log;
+    private readonly AutomationItemCatalog itemCatalog;
     private bool cutsceneSkipRequired;
     private bool runActive;
     private readonly WorkshopAssemblyInventoryPreparation preparation;
@@ -45,6 +47,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         IDataManager dataManager)
     {
         this.log = log;
+        itemCatalog = new(dataManager, log);
         this.faultMonitor = faultMonitor;
         this.externalAutomationCoordinator = externalAutomationCoordinator;
         preparation = new(new DalamudInventoryMover(sigScanner, interopProvider, dataManager, log), dataManager);
@@ -58,7 +61,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             agentLifecycle,
             externalAutomationCoordinator,
             faultMonitor,
-            source => SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.MaterialContribution, source));
+            source => SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.MaterialContribution, source),
+            ResolveItemName);
+    }
+
+    private string ResolveItemName(uint itemId)
+    {
+        var name = itemCatalog.ResolveItemName(itemId);
+        return string.IsNullOrWhiteSpace(name) ? $"item #{itemId}" : name;
     }
 
     public WorkshopAssemblyDiagnostics Diagnostics
@@ -359,7 +369,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         {
             return new(
                 false,
-                $"Open workshop project result item {craftState.ResultItem} does not match queued project {entry.ProjectName} ({entry.ResultItemId}).",
+                $"Open workshop project result item {ResolveItemName(craftState.ResultItem)} does not match queued project {entry.ProjectName} ({entry.ResultItemId}).",
                 LiveResultItemId: craftState.ResultItem);
         }
 
@@ -593,7 +603,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             {
                 return new(
                     false,
-                    $"Workshop menu observed; reopening material delivery to verify contribution {materialItemId} progress.",
+                    $"Workshop menu observed; reopening material delivery to verify contribution {ResolveItemName(materialItemId)} progress.",
                     RequiresWorkshopReopen: true,
                     ActiveMaterialItemId: materialItemId,
                     ActiveMaterialStepsComplete: previousStepsComplete);
@@ -601,7 +611,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
             return new(
                 false,
-                $"Workshop UI closed while waiting for material {materialItemId} progress; reopening the fabrication station. {DescribeUiState()}",
+                $"Workshop UI closed while waiting for material {ResolveItemName(materialItemId)} progress; reopening the fabrication station. {DescribeUiState()}",
                 RequiresWorkshopReopen: true,
                 ActiveMaterialItemId: materialItemId,
                 ActiveMaterialStepsComplete: previousStepsComplete);
@@ -613,7 +623,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         {
             return new(
                 false,
-                $"Open workshop project result item {craftState.ResultItem} does not match queued project {entry.ProjectName} ({entry.ResultItemId}).",
+                $"Open workshop project result item {ResolveItemName(craftState.ResultItem)} does not match queued project {entry.ProjectName} ({entry.ResultItemId}).",
                 ActiveMaterialItemId: materialItemId,
                 ActiveMaterialStepsComplete: previousStepsComplete);
         }
@@ -640,7 +650,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
         return new(
             false,
-            $"Waiting for workshop material {materialItemId} to advance beyond {previousStepsComplete} in its submitted phase; native reconciliation: {reconciliation}.",
+            $"Waiting for workshop material {ResolveItemName(materialItemId)} to advance beyond {previousStepsComplete} in its submitted phase; native reconciliation: {reconciliation}.",
             ActiveMaterialItemId: materialItemId,
             ActiveMaterialStepsComplete: material?.StepsComplete,
             ContributionPhase: observedPhase);

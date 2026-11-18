@@ -35,16 +35,19 @@ internal sealed class WorkshopRequestTurnInStateMachine
     public WorkshopRequestTurnInPhase Phase { get; private set; }
 
     public uint? ItemId { get; private set; }
+    private string itemName = string.Empty;
 
-    public void Begin(uint itemId)
+    public void Begin(uint itemId, string? resolvedItemName = null)
     {
         ItemId = itemId;
+        itemName = string.IsNullOrWhiteSpace(resolvedItemName) ? $"item #{itemId}" : resolvedItemName;
         Phase = WorkshopRequestTurnInPhase.WaitingForRequest;
     }
 
     public void Reset()
     {
         ItemId = null;
+        itemName = string.Empty;
         Phase = WorkshopRequestTurnInPhase.Idle;
     }
 
@@ -54,10 +57,10 @@ internal sealed class WorkshopRequestTurnInStateMachine
             return new(WorkshopRequestTurnInAction.None, "No workshop material request is active.");
 
         if (Phase == WorkshopRequestTurnInPhase.Submitted)
-            return new(WorkshopRequestTurnInAction.None, $"Workshop material {ItemId} was handed over.", IsSubmitted: true);
+            return new(WorkshopRequestTurnInAction.None, $"Workshop material {itemName} was handed over.", IsSubmitted: true);
 
         if (!observation.RequestReady)
-            return new(WorkshopRequestTurnInAction.None, $"Waiting for the Request window for workshop material {ItemId}.");
+            return new(WorkshopRequestTurnInAction.None, $"Waiting for the Request window for workshop material {itemName}.");
 
         if (observation.RequestEntryCount != 1)
         {
@@ -70,24 +73,24 @@ internal sealed class WorkshopRequestTurnInStateMachine
         {
             case WorkshopRequestTurnInPhase.WaitingForRequest:
                 Phase = WorkshopRequestTurnInPhase.WaitingForContextMenu;
-                return new(WorkshopRequestTurnInAction.OpenItemSelector, $"Opened the item selector for workshop material {ItemId}.");
+                return new(WorkshopRequestTurnInAction.OpenItemSelector, $"Opened the item selector for workshop material {itemName}.");
 
             case WorkshopRequestTurnInPhase.WaitingForContextMenu when !observation.ContextMenuReady:
-                return new(WorkshopRequestTurnInAction.None, $"Waiting for the eligible-item menu for workshop material {ItemId}.");
+                return new(WorkshopRequestTurnInAction.None, $"Waiting for the eligible-item menu for workshop material {itemName}.");
 
             case WorkshopRequestTurnInPhase.WaitingForContextMenu:
                 Phase = WorkshopRequestTurnInPhase.WaitingForHandOver;
-                return new(WorkshopRequestTurnInAction.SelectEligibleItem, $"Selected the eligible inventory item for workshop material {ItemId}.");
+                return new(WorkshopRequestTurnInAction.SelectEligibleItem, $"Selected the eligible inventory item for workshop material {itemName}.");
 
             case WorkshopRequestTurnInPhase.WaitingForHandOver when !observation.HandOverEnabled:
-                return new(WorkshopRequestTurnInAction.None, $"Waiting for Hand Over to enable for workshop material {ItemId}.");
+                return new(WorkshopRequestTurnInAction.None, $"Waiting for Hand Over to enable for workshop material {itemName}.");
 
             case WorkshopRequestTurnInPhase.WaitingForHandOver:
                 Phase = WorkshopRequestTurnInPhase.Submitted;
-                return new(WorkshopRequestTurnInAction.HandOver, $"Handed over workshop material {ItemId}.", IsSubmitted: true);
+                return new(WorkshopRequestTurnInAction.HandOver, $"Handed over workshop material {itemName}.", IsSubmitted: true);
 
             default:
-                return new(WorkshopRequestTurnInAction.None, $"Waiting for workshop material {ItemId} turn-in.");
+                return new(WorkshopRequestTurnInAction.None, $"Waiting for workshop material {itemName} turn-in.");
         }
     }
 }

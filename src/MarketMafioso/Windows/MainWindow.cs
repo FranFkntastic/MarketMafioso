@@ -1425,7 +1425,6 @@ public class MainWindow : Window, IDisposable
                     availability.Count == 0 ? ColMuted : shortageItems == 0 ? ColSuccess : ColWarning),
                 new("Assembly", workshopAssemblyRunner.HasActiveRun ? progress.Message : "Idle", workshopAssemblyRunner.HasActiveRun ? ColHeader : ColMuted),
             ]);
-        ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
         var splitWorkshopViews = config.SplitWorkshopQueueAndMaterials;
         if (ImGui.Checkbox("Split queue and materials into separate tabs", ref splitWorkshopViews))
             SetSplitWorkshopViews(splitWorkshopViews);
@@ -1475,13 +1474,16 @@ public class MainWindow : Window, IDisposable
             ImGui.EndTabItem();
         }
 
-        if (ImGui.BeginTabItem("Assembly", GetAgentWorkspaceTabFlags("Assembly")))
+        var assemblyActive = ImGui.BeginTabItem("Assembly", GetAgentWorkspaceTabFlags("Assembly"));
+        if (assemblyActive)
         {
             workshopAssembly.Draw(config.WorkshopPrepQueue.Count > 0);
             ImGui.EndTabItem();
         }
 
         ImGui.EndTabBar();
+        if (!assemblyActive)
+            ImGui.TextColored(WorkshopAssemblyPanel.GetWorkshopStatusColor(workshopStatus), workshopStatus);
     }
 
     private void SetSplitWorkshopViews(bool split)
@@ -2567,22 +2569,6 @@ public class MainWindow : Window, IDisposable
             retainers,
             quartermasterSnapshot,
             owner);
-    }
-
-    private Vector4 GetWorkshopStatusColor()
-    {
-        if (workshopStatus.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("not available", StringComparison.OrdinalIgnoreCase))
-            return ColError;
-        if (workshopStatus.Contains("copied", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("sent", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("replaced", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("added", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("cleared", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("removed", StringComparison.OrdinalIgnoreCase))
-            return ColSuccess;
-        return ColMuted;
     }
 
     private void StartWorkshopAssembly(bool enableDiagnostics)
