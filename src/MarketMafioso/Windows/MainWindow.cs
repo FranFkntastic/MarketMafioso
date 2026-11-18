@@ -122,6 +122,7 @@ public partial class MainWindow : Window, IDisposable
         WorkshopMaterialManifestExportService workshopMaterialManifestExport,
         IWorkshopMaterialCraftRecipeResolver workshopCraftRecipeResolver,
         TradeQueueRunner tradeQueueRunner,
+        WorkshopHandoverTracker handoverTracker,
         ITradeQueueIo tradeQueueIo,
         IDataManager dataManager,
         IPlayerState playerState,
@@ -216,19 +217,7 @@ public partial class MainWindow : Window, IDisposable
             tradeQueueRunner,
             tradeQueueIo,
             AgentReviewRegistry,
-            GetCurrentWorkshopAssembler);
-        HandoverTracker = new WorkshopHandoverTracker(
-            config,
-            () => Plugin.Instance.WorkshopHandoffService,
-            share => workshopCatalog.BuildRequirements(share.Items).Select(material => material.ItemId).ToHashSet(),
-            GetCurrentWorkshopAssembler,
-            () => tradeQueueRunner.IsActive,
-            log);
-        tradeQueueRunner.RecipientGuard = HandoverTracker.CheckRecipient;
-        tradeQueueRunner.BatchStarting += HandoverTracker.OnBatchStarting;
-        tradeQueueRunner.BatchLocking += HandoverTracker.OnBatchLocking;
-        tradeQueueRunner.BatchAbandoned += HandoverTracker.OnBatchAbandoned;
-        tradeQueueRunner.BatchVerified += HandoverTracker.OnBatchVerified;
+            acquisitionServices.GetCurrentWorkshopAssembler);
         WorkshopProjectBrowserWindow? projectBrowser = null;
         WorkshopFrozenQueueBrowserWindow? frozenQueueBrowser = null;
         workshopPrepQueue = new WorkshopPrepQueuePanel(
@@ -286,10 +275,10 @@ public partial class MainWindow : Window, IDisposable
                 workshopPrepQueue.DeleteFrozenQueue,
                 workshopPrepQueue.SaveCurrentQueueAsNew,
                 workshopPrepQueue.ImportSavedJob,
-                GetCurrentWorkshopAssembler,
+                acquisitionServices.GetCurrentWorkshopAssembler,
                 () => Plugin.Instance.WorkshopHandoffService,
                 () => tradeQueuePanel.HasItems,
-                HandoverTracker,
+                handoverTracker,
                 ObserveTradeableBags,
                 tradeQueuePanel.TryHandOver,
                 () => tradeQueuePanel.BoundShareId,
@@ -407,7 +396,6 @@ public partial class MainWindow : Window, IDisposable
 
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
-    public WorkshopHandoverTracker HandoverTracker { get; }
     public MarketAcquisitionWorkbenchCompositionWindow AcquisitionCompositionWindow { get; }
 
     private readonly MarketAcquisitionWorkbenchCompositionCatalog acquisitionCompositionCatalog;
@@ -2059,16 +2047,6 @@ public partial class MainWindow : Window, IDisposable
     private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability() =>
         GetWorkshopAvailability(config.WorkshopPrepQueue);
 
-    private WorkshopAssembler? GetCurrentWorkshopAssembler()
-    {
-        var owner = acquisitionServices.GetCurrentQuartermasterOwnerScope();
-        return owner.IsAvailable &&
-               !string.IsNullOrWhiteSpace(owner.CharacterName) &&
-               !string.IsNullOrWhiteSpace(owner.HomeWorldName)
-            ? new WorkshopAssembler(owner.CharacterName, owner.HomeWorldName)
-            : null;
-    }
-
     private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability(IReadOnlyList<WorkshopPrepQueueItem> items) =>
         items.Count == 0 ? [] : GetWorkshopAvailability(workshopCatalog.BuildRequirements(items), null);
 
@@ -2190,11 +2168,5 @@ public partial class MainWindow : Window, IDisposable
         uiStateCapture.Dispose();
         craftQuoteHttpClient.Dispose();
         FrozenQueueBrowser.Dispose();
-        tradeQueueRunner.BatchVerified -= HandoverTracker.OnBatchVerified;
-        tradeQueueRunner.BatchStarting -= HandoverTracker.OnBatchStarting;
-        tradeQueueRunner.BatchLocking -= HandoverTracker.OnBatchLocking;
-        tradeQueueRunner.BatchAbandoned -= HandoverTracker.OnBatchAbandoned;
-        tradeQueueRunner.RecipientGuard = null;
-        HandoverTracker.Dispose();
     }
 }

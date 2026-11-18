@@ -16,6 +16,7 @@ using MarketMafioso.MarketAcquisition.ExactAuthority;
 using MarketMafioso.MarketAcquisition.MarketBoard;
 using MarketMafioso.MarketDiagnostics;
 using MarketMafioso.Quartermaster;
+using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -555,6 +556,16 @@ internal sealed class MarketAcquisitionServices : IDisposable
 
     internal AgentBridgeControlledMarketBrowseTruth GetControlledBrowseTruth() =>
         CreateControlledMarketActorBrowseTruth(ControlledBrowseProbe.Snapshot());
+
+    internal WorkshopAssembler? GetCurrentWorkshopAssembler()
+    {
+        var owner = GetCurrentQuartermasterOwnerScope();
+        return owner.IsAvailable &&
+               !string.IsNullOrWhiteSpace(owner.CharacterName) &&
+               !string.IsNullOrWhiteSpace(owner.HomeWorldName)
+            ? new WorkshopAssembler(owner.CharacterName, owner.HomeWorldName)
+            : null;
+    }
 
     internal QuartermasterOwnerScope GetCurrentQuartermasterOwnerScope() =>
         new(
