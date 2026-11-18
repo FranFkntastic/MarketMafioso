@@ -78,6 +78,9 @@ public static class ReceiverEndpointClassifier
             : $"{apiBaseUrl}/acquisition";
     }
 
+    public static string? BuildWorkshopHostFeaturesUrl(string? serverUrl) =>
+        BuildWorkshopHostApiBaseUrl(serverUrl) is { } api ? $"{api}/settings/features" : null;
+
     public static string? BuildWorkshopHostCapabilitiesUrl(string? serverUrl)
     {
         var apiBaseUrl = BuildWorkshopHostApiBaseUrl(serverUrl);

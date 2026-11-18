@@ -38,7 +38,18 @@ public class Configuration : IPluginConfiguration
 
     public int Version { get; set; } = 1;
 
-    public string ServerUrl { get; set; } = "http://localhost:8080/inventory";
+    private string serverUrl = "http://localhost:8080/inventory";
+    internal event Action? ServerUrlChanged;
+    public string ServerUrl
+    {
+        get => serverUrl;
+        set
+        {
+            if (serverUrl == value) return;
+            serverUrl = value;
+            ServerUrlChanged?.Invoke();
+        }
+    }
     public string ApiKey { get; set; } = string.Empty;
     public string CommandPickupApiKey { get; set; } = string.Empty;
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
@@ -52,6 +63,7 @@ public class Configuration : IPluginConfiguration
     public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public PersistedMarketAcquisitionWorkbenchCompositionSource? MarketAcquisitionWorkbenchCompositionSource { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
+    public bool MarketAcquisitionLockedByUser { get; set; }
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
     public MarketAcquisitionRouteDiagnosticsLevel MarketAcquisitionRouteDiagnostics { get; set; } =
