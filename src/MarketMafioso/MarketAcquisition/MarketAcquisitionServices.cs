@@ -23,6 +23,7 @@ namespace MarketMafioso.MarketAcquisition;
 internal sealed class MarketAcquisitionServices : IDisposable
 {
     private readonly Configuration config;
+    internal TickTimings LastTickTimings { get; } = new(8);
     private readonly IPlayerState playerState;
     private readonly InventoryScanner scanner;
     private readonly IPluginLog log;
@@ -229,25 +230,38 @@ internal sealed class MarketAcquisitionServices : IDisposable
 
     public void Tick()
     {
+        LastTickTimings.Start();
         WorldVisitCatalog.Tick();
+        LastTickTimings.Mark("worldVisitCatalog");
 
         if (!IsMarketAcquisitionUnlocked())
+        {
+            LastTickTimings.Mark("unlockCheck");
             return;
+        }
+        LastTickTimings.Mark("unlockCheck");
 
         ControlledBrowseProbe.Tick();
+        LastTickTimings.Mark("controlledBrowseProbe");
 
         _ = Workspace.RenewLeaseIfDueAsync();
         if (Workspace.ConsumeLeaseLossSignal())
         {
             RouteEngine.Stop();
+            LastTickTimings.Mark("lease");
             return;
         }
+        LastTickTimings.Mark("lease");
 
         RouteEngine.MonitorMarketBoardPurchase();
+        LastTickTimings.Mark("MonitorMarketBoardPurchase");
         RouteEngine.TickRoute(Workspace.IsBusy);
+        LastTickTimings.Mark("TickRoute");
         MaybeAutoResumeExactAcquisitionRoute();
+        LastTickTimings.Mark("autoResume");
         if (RouteEngine.NeedsExactAcquisitionRecovery && (exactAcquisitionRecoveryTask is null || exactAcquisitionRecoveryTask.IsCompleted))
             exactAcquisitionRecoveryTask = RecoverExactAcquisitionRouteAsync();
+        LastTickTimings.Mark("recoveryKick");
     }
 
     private Task RecoverExactAcquisitionRouteAsync()

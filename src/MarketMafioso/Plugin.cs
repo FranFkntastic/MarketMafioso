@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -64,6 +65,10 @@ public sealed class Plugin : IDalamudPlugin
     internal static Plugin Instance { get; private set; } = null!;
 
     private const string CmdMain = "/mmf";
+    private const string AcquisitionStep = "acquisition";
+    private readonly TickTimings frameTimings = new(13);
+    private long nextSlowFrameLog;
+    private int suppressedSlowFrames;
 
     public Configuration Configuration { get; init; }
 
@@ -839,11 +844,17 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnFrameworkUpdate(IFramework framework)
     {
+        var start = frameTimings.Start();
         Configuration.RetryPendingSave();
+        frameTimings.Mark("retryPendingSave");
         profileDataCenterCoordinator.Tick();
+        frameTimings.Mark("profileDataCenter");
         if (!profileDataCenterCoordinator.OwnsLobby) profileLoginCoordinator.Tick();
+        frameTimings.Mark("profileLogin");
         retainerSaleChatObserver.Tick();
+        frameTimings.Mark("retainerSaleChat");
         retainerHistoryObserver.Tick();
+        frameTimings.Mark("retainerHistory");
         var nowUtc = DateTimeOffset.UtcNow;
         var retainerSessionActive = IsRetainerSessionActive();
         var (immediatelyReady, immediateDeferredReason) = GetImmediateRetainerListingRefreshReadiness(retainerSessionActive);
@@ -855,18 +866,44 @@ public sealed class Plugin : IDalamudPlugin
             nowUtc,
             refreshReady,
             refreshDeferredReason);
+        frameTimings.Mark("retainerListingRefresh");
         marketLockoutAttention.Tick(nowUtc);
+        frameTimings.Mark("marketLockoutAttention");
         mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
+        frameTimings.Mark("listingOverlay");
         if (Configuration.AutoAcceptIncomingTrades || tradeQueueRunner.IsActive)
             tradeAutomationCoordinator.SuppressDropboxAutoAccept();
         else
             tradeAutomationCoordinator.RestoreDropboxAutoAccept();
         tradeAutoAcceptController.Tick(
             Configuration.AutoAcceptIncomingTrades && !tradeQueueRunner.IsActive);
+        frameTimings.Mark("tradeAutoAccept");
         tradeQueueRunner.Tick();
+        frameTimings.Mark("tradeQueue");
         workshopRestock.Tick();
+        frameTimings.Mark("workshopRestock");
         acquisitionServices.Tick();
+        frameTimings.Mark(AcquisitionStep);
         agentBridge.Tick();
+        var end = frameTimings.Mark("agentBridge");
+        if (end - start > Stopwatch.Frequency / 20)
+            LogSlowFrame(start, end);
+    }
+
+    private void LogSlowFrame(long start, long end)
+    {
+        if (end < nextSlowFrameLog)
+        {
+            suppressedSlowFrames++;
+            return;
+        }
+
+        var details = frameTimings.Format(AcquisitionStep, acquisitionServices.LastTickTimings);
+        var suffix = suppressedSlowFrames == 0 ? string.Empty : $" (+{suppressedSlowFrames} suppressed)";
+        Log.Warning("[MarketMafioso] Slow frame {TotalMs:F1} ms: {Steps:l}{Suppression:l}",
+            (end - start) * 1000d / Stopwatch.Frequency, details, suffix);
+        nextSlowFrameLog = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
+        suppressedSlowFrames = 0;
     }
 
     private static (bool LoggedIn, string Name, string HomeWorld) ObserveLoggedInCharacter()
