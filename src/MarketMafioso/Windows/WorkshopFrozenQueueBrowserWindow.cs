@@ -10,6 +10,8 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Windowing;
 using Franthropy.Dalamud.AgentBridge;
+using Franthropy.Dalamud.UI.Feedback;
+using Franthropy.Dalamud.UI.Tables;
 using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.TradeQueue;
 using MarketMafioso.Windows.Main;
@@ -20,6 +22,7 @@ namespace MarketMafioso.Windows;
 public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 {
     private const string SurfaceId = "workshop-saved-jobs";
+    private const string ArmedDeleteLabel = "Delete?";
 
     private readonly Configuration config;
     private readonly WorkshopProjectCatalog workshopCatalog;
@@ -32,8 +35,15 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
     private string duplicateNameInput = string.Empty;
     private string newQueueNameInput = string.Empty;
     private Guid? pendingLoadQueueId;
-    private Guid? pendingDeleteQueueId;
     private Guid? pendingTradeReplaceQueueId;
+
+    // A share that still owes materials needs a second click; the first arms it in the row or inspector.
+    private Guid? armedDeleteQueueId;
+    private bool armedDeleteInRow;
+
+    // One level of undo: the last delete or cleanup sweep.
+    private WorkshopSavedJobRemoval? undoRemoval;
+    private string undoLabel = string.Empty;
     private readonly FileDialogManager fileDialogs = new();
     private string shareStatus = string.Empty;
     private bool shareStatusIsError;
@@ -87,6 +97,51 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
     public override void OnOpen()
     {
         actions.Handoff().RequestRefresh();
+        SweepFinishedMarketRunJobs();
+    }
+
+    public override void OnClose()
+    {
+        DropUndo();
+        DisarmDelete();
+        pendingLoadQueueId = null;
+    }
+
+    /// <summary>
+    /// Shows a job that arrived over IPC: opens this window on it and loads it when the active queue is empty
+    /// and editable. Returns the result with a message for the sending plugin's user.
+    /// </summary>
+    public WorkshopQueueOperationResult PresentSentJob(Guid queueId, WorkshopQueueOperationResult imported)
+    {
+        var queue = config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == queueId);
+        if (queue == null)
+            return imported;
+
+        // Opening sweeps finished market-run jobs (OnOpen); an already open window is never swept under the reader.
+        OpenAndFocus();
+
+        search = string.Empty;
+        SelectQueue(queue);
+
+        string message;
+        if (!actions.CanEditQueue)
+        {
+            message = $"Saved {queue.Name}; a workshop assembly run is active.";
+        }
+        else if (config.WorkshopPrepQueue.Count > 0)
+        {
+            message = $"Saved {queue.Name}; the active queue is in use.";
+        }
+        else
+        {
+            actions.Load(queue.Id);
+            message = WorkshopQueueService.GetFrozenQueueState(config, queue.Id) == WorkshopFrozenQueueState.Loaded
+                ? $"Sent and loaded {queue.Name}."
+                : $"Saved {queue.Name}; it could not be loaded.";
+        }
+
+        SetShareStatus(message, isError: false);
+        return imported with { Message = message };
     }
 
     /// <summary>
@@ -117,7 +172,6 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
         var incoming = BuildVisibleIncoming();
         ImGui.Spacing();
         DrawBrowserLayout(queues, incoming);
-        DrawConfirmations();
         fileDialogs.Draw();
     }
 
@@ -197,6 +251,7 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
         DrawQueueTable(queues, incoming);
+        DrawUndoStrip();
         ImGui.TableNextColumn();
         var selectedIncoming = selectedIncomingId is { } incomingId
             ? incoming.FirstOrDefault(view => view.HandoffId == incomingId)
@@ -227,20 +282,25 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
             .Max(label => ImGui.CalcTextSize(label).X) + 28;
         var etaWidth = Math.Max(ImGui.CalcTextSize("~1h 30m").X, ImGui.CalcTextSize("ETA").X) + 24;
         var updatedWidth = Math.Max(ImGui.CalcTextSize("Updated").X, ImGui.CalcTextSize(DateTime.Now.ToString("g")).X) + 24;
+        // The trailing column fits the × and widens only while a row's delete is armed.
+        var removeWidth = armedDeleteInRow && queues.Any(queue => queue.Id == armedDeleteQueueId)
+            ? Math.Max(DalamudRowRemoveButton.Width, ImGui.CalcTextSize(ArmedDeleteLabel).X + (ImGui.GetStyle().FramePadding.X * 2f))
+            : DalamudRowRemoveButton.Width;
         var nameWidth = CalculateNameColumnWidth(
             queues.Select(queue => queue.Name).Concat(incoming.Select(view => view.JobName)),
-            projectWidth + stateWidth + etaWidth + updatedWidth);
+            projectWidth + stateWidth + etaWidth + updatedWidth + removeWidth);
         var flags = ImGuiUi.InteractiveTableFlags |
                     ImGuiTableFlags.ScrollY |
                     ImGuiTableFlags.SizingFixedFit;
 
-        if (ImGui.BeginTable("WorkshopFrozenQueueBrowserTable", 5, flags, new Vector2(0, 320)))
+        if (ImGui.BeginTable("WorkshopFrozenQueueBrowserTable", 6, flags, new Vector2(0, 320)))
         {
             ImGui.TableSetupColumn("Saved Job", ImGuiTableColumnFlags.WidthFixed, nameWidth);
             ImGui.TableSetupColumn("Projects", ImGuiTableColumnFlags.WidthFixed, projectWidth);
             ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, stateWidth);
             ImGui.TableSetupColumn("ETA", ImGuiTableColumnFlags.WidthFixed, etaWidth);
             ImGui.TableSetupColumn("Updated", ImGuiTableColumnFlags.WidthFixed, updatedWidth);
+            ImGui.TableSetupColumn("##remove", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, removeWidth);
             ImGui.TableHeadersRow();
 
             foreach (var view in incoming)
@@ -253,9 +313,14 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
 
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                if (ImGui.Selectable($"{queue.Name}##workshopFrozenQueue{queue.Id}", isSelected, ImGuiSelectableFlags.SpanAllColumns))
+                // AllowItemOverlap lets the row's × take the click instead of the spanning selectable.
+                if (ImGui.Selectable(
+                        $"{queue.Name}##workshopFrozenQueue{queue.Id}",
+                        isSelected,
+                        ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowItemOverlap))
                     SelectQueue(queue);
 
+                var rowHovered = DalamudRowRemoveButton.IsLastItemRowHovered();
                 if (!WorkshopSavedJobHandoff.IsHandoff(queue) &&
                     ImGui.IsItemHovered() &&
                     ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
@@ -278,10 +343,236 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
 
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(queue.UpdatedAt.ToLocalTime().ToString("g"));
+
+                ImGui.TableNextColumn();
+                DrawRowDelete(queue, rowHovered);
             }
 
             ImGui.EndTable();
         }
+    }
+
+    private void DrawRowDelete(WorkshopFrozenQueue queue, bool rowHovered)
+    {
+        var canDelete = CanDelete(queue);
+        var armed = armedDeleteInRow && armedDeleteQueueId == queue.Id;
+        if (armed && !rowHovered)
+        {
+            DisarmDelete();
+            armed = false;
+        }
+
+        bool clicked;
+        if (armed)
+        {
+            ImGui.BeginDisabled(!canDelete);
+            ImGui.PushStyleColor(ImGuiCol.Text, ColWarning);
+            clicked = ImGui.SmallButton($"{ArmedDeleteLabel}##workshopSavedJobDelete{queue.Id}") && canDelete;
+            ImGui.PopStyleColor();
+            ImGui.EndDisabled();
+        }
+        else
+        {
+            clicked = DalamudRowRemoveButton.Draw($"workshopSavedJobDelete{queue.Id}", rowHovered, canDelete);
+        }
+
+        if (clicked)
+            RequestDelete(queue, fromRow: true);
+
+        RegisterLastAction(
+            $"{SurfaceId}.row.{queue.Id}.delete",
+            armed ? $"Confirm deleting {queue.Name}" : $"Delete {queue.Name}",
+            canDelete,
+            queue.Id.ToString(),
+            _ => InvokeDelete(queue.Id, fromRow: true));
+    }
+
+    private void DrawUndoStrip()
+    {
+        if (undoRemoval is not { } removal)
+            return;
+
+        switch (DalamudUndoStrip.Draw("workshopSavedJobsUndo", undoLabel))
+        {
+            case DalamudUndoStripResult.Undo:
+                UndoRemoval(removal);
+                break;
+            case DalamudUndoStripResult.Dismiss:
+                DropUndo();
+                break;
+        }
+    }
+
+    // ---- delete and undo -----------------------------------------------------------------
+
+    /// <summary>Same rule as the inspector's Delete buttons: editable, no host call in flight, and for shares only settled states.</summary>
+    private bool CanDelete(WorkshopFrozenQueue queue)
+    {
+        if (!actions.CanEditQueue)
+            return false;
+        if (!WorkshopSavedJobHandoff.IsHandoff(queue))
+            return true;
+        var status = WorkshopSavedJobHandoff.Resolve(queue, actions.Handoff().Outgoing, delivering.Contains(queue.Id));
+        return !busyHandoffs.Contains(queue.Id) &&
+               status is WorkshopSavedJobHandoffStatus.NotDelivered or WorkshopSavedJobHandoffStatus.Declined
+                   or WorkshopSavedJobHandoffStatus.Withdrawn or WorkshopSavedJobHandoffStatus.Accepted;
+    }
+
+    /// <summary>Materials this character still owes the share's assembler; 0 for anything but a sent share.</summary>
+    private int OwedUnits(WorkshopFrozenQueue queue) =>
+        WorkshopSavedJobHandoff.IsHandoff(queue) && IsSender(queue) ? BuildHandoverView(queue).Owed : 0;
+
+    /// <summary>Deletes at once, except that a share still owing materials arms on the first request.</summary>
+    private (bool Success, string Message) RequestDelete(WorkshopFrozenQueue queue, bool fromRow)
+    {
+        if (!CanDelete(queue))
+            return (false, $"{queue.Name} cannot be deleted right now.");
+
+        if (armedDeleteQueueId != queue.Id && OwedUnits(queue) is var owed and > 0)
+        {
+            armedDeleteQueueId = queue.Id;
+            armedDeleteInRow = fromRow;
+            return (true, $"{queue.Name} still owes {owed:N0} unit(s) to {queue.HandoffTargetName}; delete again to confirm.");
+        }
+
+        return DeleteNow(queue);
+    }
+
+    private AgentBridgeUiActionResult InvokeDelete(Guid queueId, bool fromRow)
+    {
+        var queue = config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == queueId);
+        return queue == null
+            ? AgentBridgeUiActionResult.Fail("That saved job no longer exists.")
+            : ToActionResult(RequestDelete(queue, fromRow));
+    }
+
+    private (bool Success, string Message) DeleteNow(WorkshopFrozenQueue queue)
+    {
+        var removal = actions.Delete([queue.Id]);
+        if (removal == null)
+            return (false, "That saved job no longer exists.");
+
+        ForgetRemoved(removal);
+        OfferUndo(removal, $"Deleted {queue.Name}");
+        return (true, $"Deleted {queue.Name}.");
+    }
+
+    private void ForgetRemoved(WorkshopSavedJobRemoval removal)
+    {
+        foreach (var entry in removal.Jobs)
+        {
+            var id = entry.Job.Id;
+            if (selectedQueueId == id)
+                selectedQueueId = null;
+            if (pendingLoadQueueId == id)
+                pendingLoadQueueId = null;
+            if (pendingTradeReplaceQueueId == id)
+                pendingTradeReplaceQueueId = null;
+            if (armedDeleteQueueId == id)
+                DisarmDelete();
+        }
+    }
+
+    private void OfferUndo(WorkshopSavedJobRemoval removal, string label)
+    {
+        undoRemoval = removal;
+        undoLabel = label;
+    }
+
+    private void DropUndo()
+    {
+        undoRemoval = null;
+        undoLabel = string.Empty;
+    }
+
+    private void DisarmDelete()
+    {
+        armedDeleteQueueId = null;
+        armedDeleteInRow = false;
+    }
+
+    private void UndoRemoval(WorkshopSavedJobRemoval removal)
+    {
+        var result = actions.Restore(removal);
+        if (!result.Success)
+        {
+            SetShareStatus(result.Message, isError: true);
+            if (actions.CanEditQueue)
+                DropUndo();
+            return;
+        }
+
+        DropUndo();
+        if (selectedQueueId == null && result.QueueId is { } restoredId &&
+            config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == restoredId) is { } restored)
+            SelectQueue(restored);
+    }
+
+    /// <summary>
+    /// Removes market-run jobs whose work for this character is proven finished, as one undoable step.
+    /// Runs only as the window opens, so rows never disappear while it is being read.
+    /// </summary>
+    private void SweepFinishedMarketRunJobs()
+    {
+        if (!actions.CanEditQueue)
+            return;
+
+        var outgoing = actions.Handoff().Outgoing;
+        var finished = new List<(WorkshopFrozenQueue Job, string Reason)>();
+        foreach (var queue in config.FrozenWorkshopQueues)
+        {
+            if (queue.Origin != WorkshopSavedJobOrigin.MarketRun)
+                continue;
+            var reason = WorkshopMarketRunCleanup.FinishedReason(new WorkshopMarketRunJobFacts(
+                queue,
+                WorkshopSavedJobHandoff.Resolve(queue, outgoing, delivering.Contains(queue.Id)),
+                IsSender(queue),
+                Requirements(queue),
+                config.WorkshopHandoverCountTheirInventory,
+                config.WorkshopHandoverIncludeTheirRetainers,
+                config.ActiveFrozenWorkshopQueueId,
+                config.WorkshopPrepQueue.Count,
+                config.TradeQueueBinding?.ShareJobId,
+                busyHandoffs.Contains(queue.Id) || delivering.Contains(queue.Id)));
+            if (reason != null)
+                finished.Add((queue, reason));
+        }
+
+        if (finished.Count == 0)
+            return;
+
+        var removal = actions.Delete(finished.Select(entry => entry.Job.Id).ToList());
+        if (removal == null)
+            return;
+
+        foreach (var (job, reason) in finished)
+            actions.LogInformation($"[MarketMafioso] Removed finished market-run saved job {job.Name}: {reason}.");
+        ForgetRemoved(removal);
+        OfferUndo(
+            removal,
+            removal.Jobs.Count == 1
+                ? "Cleared 1 finished market-run job"
+                : $"Cleared {removal.Jobs.Count:N0} finished market-run jobs");
+    }
+
+    /// <summary>The inspector's Delete: same path as the row ×, with an owing share armed right here.</summary>
+    private void DrawInspectorDelete(WorkshopFrozenQueue queue, bool enabled)
+    {
+        if (armedDeleteQueueId == queue.Id && !armedDeleteInRow)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, ColWarning);
+            var confirmed = ImGuiUi.Button($"{ArmedDeleteLabel}##workshopSavedJobInspectorDelete", enabled);
+            ImGui.PopStyleColor();
+            if (confirmed)
+                RequestDelete(queue, fromRow: false);
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel##workshopSavedJobInspectorDelete"))
+                DisarmDelete();
+            return;
+        }
+
+        if (ImGuiUi.Button("Delete##workshopSavedJobInspectorDelete", enabled))
+            RequestDelete(queue, fromRow: false);
     }
 
     private void DrawIncomingRow(WorkshopHandoffView view, string statusLabel)
@@ -294,6 +585,8 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
         {
             selectedIncomingId = view.HandoffId;
             pendingTradeReplaceQueueId = null;
+            pendingLoadQueueId = null;
+            DisarmDelete();
         }
 
         ImGui.PopStyleColor();
@@ -483,12 +776,25 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
             actions.Overwrite(queue.Id);
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Delete", actions.CanEditQueue))
-            pendingDeleteQueueId = queue.Id;
+        DrawInspectorDelete(queue, CanDelete(queue));
 
         ImGui.SameLine();
         if (ImGui.Button("Close"))
             IsOpen = false;
+
+        if (pendingLoadQueueId == queue.Id)
+        {
+            ImGui.TextColored(ColMuted, "Load saved job? Unsaved active queue changes will be discarded.");
+            if (ImGuiUi.PrimaryButton("Confirm Load", actions.CanEditQueue))
+            {
+                pendingLoadQueueId = null;
+                actions.Load(queue.Id);
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel##workshopSavedJobLoad"))
+                pendingLoadQueueId = null;
+        }
     }
 
     private void DrawSplitButton(WorkshopFrozenQueue queue)
@@ -569,8 +875,7 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
         {
             if (isSender)
                 ImGui.SameLine();
-            if (ImGuiUi.Button("Delete", actions.CanEditQueue && !busy))
-                pendingDeleteQueueId = queue.Id;
+            DrawInspectorDelete(queue, actions.CanEditQueue && !busy);
         }
 
         DrawShareButtons(queue);
@@ -627,7 +932,7 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
     private void StartSplit(WorkshopFrozenQueue queue, WorkshopAssembler currentCharacter)
     {
         pendingLoadQueueId = null;
-        pendingDeleteQueueId = null;
+        DisarmDelete();
         pendingTradeReplaceQueueId = null;
         var projectNames = ProjectNames();
         split = new WorkshopJobSplitPanel(
@@ -956,6 +1261,12 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
 
     private void SelectQueue(WorkshopFrozenQueue queue)
     {
+        if (selectedQueueId != queue.Id)
+        {
+            pendingLoadQueueId = null;
+            DisarmDelete();
+        }
+
         selectedQueueId = queue.Id;
         selectedIncomingId = null;
         pendingTradeReplaceQueueId = null;
@@ -1069,40 +1380,6 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
         actions.Load(queueId);
     }
 
-    private void DrawConfirmations()
-    {
-        if (pendingLoadQueueId != null)
-        {
-            ImGui.TextColored(ColMuted, "Load saved job? Unsaved active queue changes will be discarded.");
-            if (ImGuiUi.Button("Confirm Load", actions.CanEditQueue))
-            {
-                actions.Load(pendingLoadQueueId.Value);
-                pendingLoadQueueId = null;
-            }
-
-            ImGui.SameLine();
-            if (ImGui.Button("Cancel Load"))
-                pendingLoadQueueId = null;
-        }
-
-        if (pendingDeleteQueueId != null)
-        {
-            ImGui.TextColored(ColMuted, "Delete selected saved job?");
-            if (ImGuiUi.Button("Confirm Delete", actions.CanEditQueue))
-            {
-                actions.Delete(pendingDeleteQueueId.Value);
-                if (selectedQueueId == pendingDeleteQueueId)
-                    selectedQueueId = null;
-
-                pendingDeleteQueueId = null;
-            }
-
-            ImGui.SameLine();
-            if (ImGui.Button("Cancel Delete"))
-                pendingDeleteQueueId = null;
-        }
-    }
-
     private static float CalculateNameColumnWidth(IEnumerable<string> names, float otherColumnsWidth)
     {
         var width = ImGui.CalcTextSize("Queue").X;
@@ -1189,7 +1466,8 @@ public sealed record WorkshopFrozenQueueBrowserActions(
     Action<Guid> Overwrite,
     Action<Guid, string> Rename,
     Action<Guid, string> Duplicate,
-    Action<Guid> Delete,
+    Func<IReadOnlyCollection<Guid>, WorkshopSavedJobRemoval?> Delete,
+    Func<WorkshopSavedJobRemoval, WorkshopQueueOperationResult> Restore,
     Action<string> NewFromCurrent,
     Func<string?, WorkshopQueueOperationResult> Import,
     Func<WorkshopAssembler?> CurrentCharacter,
@@ -1201,7 +1479,8 @@ public sealed record WorkshopFrozenQueueBrowserActions(
     Func<Guid?> BoundShareId,
     Action ShowTradeQueue,
     Func<IReadOnlyList<WorkshopPrepQueueItem>, IReadOnlyList<WorkshopMaterialAvailability>> Availability,
-    WorkshopShareRestockActions ShareRestock)
+    WorkshopShareRestockActions ShareRestock,
+    Action<string> LogInformation)
 {
     public bool CanEditQueue => CanEditQueueProvider();
 }

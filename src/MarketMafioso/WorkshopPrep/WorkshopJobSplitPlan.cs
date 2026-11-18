@@ -263,6 +263,7 @@ public static class WorkshopJobSplitService
                 CreatedAt = nowUtc,
                 UpdatedAt = nowUtc,
                 Items = WorkshopQueueService.CloneItems(share.Items),
+                Origin = source.Origin,
                 SplitSourceJobId = source.Id,
                 HandoffTargetName = share.Assembler.CharacterName,
                 HandoffTargetWorld = share.Assembler.World,

@@ -7,8 +7,10 @@ using Dalamud.Plugin.Services;
 namespace MarketMafioso.WorkshopPrep;
 
 /// <summary>
-/// Lets another plugin hand MarketMafioso a shared workshop saved job. The job is only stored;
-/// it is never loaded into the active queue or run.
+/// Lets another plugin hand MarketMafioso a shared workshop saved job. The job is stored as a market-run
+/// job, the Saved Jobs window opens with it selected, and it is loaded into the active queue only when that
+/// queue is empty and no assembly run is active; a non-empty queue is never replaced, and nothing is run.
+/// The response message says which happened, for the caller to show verbatim.
 /// </summary>
 public sealed class WorkshopSavedJobIpcProvider : IDisposable
 {

@@ -1,10 +1,27 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using MarketMafioso.TradeQueue;
 
 namespace MarketMafioso.WorkshopPrep;
 
 public sealed record WorkshopQueueOperationResult(bool Success, string Message, Guid? QueueId = null, string? Name = null);
+
+/// <summary>One saved job taken out by a delete, with what the delete cleared alongside it.</summary>
+public sealed record WorkshopRemovedSavedJob(
+    WorkshopFrozenQueue Job,
+    int Index,
+    bool WasActive,
+    TradeQueueRecipientBinding? ReleasedBinding);
+
+/// <summary>
+/// Everything one delete removed, kept for a single undo. The prep queue and Trade Queue contents are
+/// captured so undo only re-links the active job or binding while nothing has moved on since.
+/// </summary>
+public sealed record WorkshopSavedJobRemoval(
+    IReadOnlyList<WorkshopRemovedSavedJob> Jobs,
+    IReadOnlyList<WorkshopPrepQueueItem> PrepQueueAtRemoval,
+    IReadOnlyList<TradeQueueItem> TradeQueueAtRemoval);
 
 public enum WorkshopFrozenQueueState
 {
@@ -113,6 +130,7 @@ public static class WorkshopQueueService
             CreatedAt = nowUtc,
             UpdatedAt = nowUtc,
             Items = CloneItems(source.Items),
+            Origin = source.Origin,
         };
 
         config.FrozenWorkshopQueues.Add(frozen);
@@ -127,7 +145,8 @@ public static class WorkshopQueueService
         Configuration config,
         string name,
         IEnumerable<WorkshopPrepQueueItem> items,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        WorkshopSavedJobOrigin origin = WorkshopSavedJobOrigin.Manual)
     {
         var normalizedName = name.Trim();
         if (normalizedName.Length == 0)
@@ -148,6 +167,7 @@ public static class WorkshopQueueService
             CreatedAt = nowUtc,
             UpdatedAt = nowUtc,
             Items = clonedItems,
+            Origin = origin,
         };
 
         config.FrozenWorkshopQueues.Add(frozen);
@@ -162,26 +182,85 @@ public static class WorkshopQueueService
         Configuration config,
         string? text,
         IReadOnlyList<WorkshopProjectDefinition> projects,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        WorkshopSavedJobOrigin origin = WorkshopSavedJobOrigin.Manual)
     {
         var parsed = WorkshopSavedJobShare.Parse(text, projects);
         return parsed.Success
-            ? ImportFrozenQueue(config, parsed.Name, parsed.Items, nowUtc)
+            ? ImportFrozenQueue(config, parsed.Name, parsed.Items, nowUtc, origin)
             : new(false, parsed.Message);
     }
 
     public static WorkshopQueueOperationResult DeleteFrozenQueue(Configuration config, Guid queueId)
     {
-        var frozen = FindFrozenQueue(config, queueId);
-        if (frozen == null)
-            return new(false, "Frozen workshop queue was not found.");
+        var removal = DeleteFrozenQueues(config, [queueId]);
+        return removal == null
+            ? new(false, "Frozen workshop queue was not found.")
+            : new(true, $"Deleted frozen workshop queue {removal.Jobs[0].Job.Name}.");
+    }
 
-        config.FrozenWorkshopQueues.Remove(frozen);
-        if (config.ActiveFrozenWorkshopQueueId == queueId)
-            config.ActiveFrozenWorkshopQueueId = null;
-        ReleaseTradeQueueBinding(config, queueId);
+    /// <summary>
+    /// Removes saved jobs and returns what <see cref="RestoreFrozenQueues"/> needs to put them back,
+    /// or null when none of them exist.
+    /// </summary>
+    public static WorkshopSavedJobRemoval? DeleteFrozenQueues(Configuration config, IReadOnlyCollection<Guid> queueIds)
+    {
+        var prepQueue = CloneItems(config.WorkshopPrepQueue);
+        var tradeQueue = CloneTradeItems(config.TradeQueueItems);
+        var removed = new List<WorkshopRemovedSavedJob>();
+        foreach (var queueId in queueIds.Distinct())
+        {
+            var index = config.FrozenWorkshopQueues.FindIndex(x => x.Id == queueId);
+            if (index < 0)
+                continue;
 
-        return new(true, $"Deleted frozen workshop queue {frozen.Name}.");
+            var frozen = config.FrozenWorkshopQueues[index];
+            config.FrozenWorkshopQueues.RemoveAt(index);
+            var wasActive = config.ActiveFrozenWorkshopQueueId == queueId;
+            if (wasActive)
+                config.ActiveFrozenWorkshopQueueId = null;
+            var binding = config.TradeQueueBinding?.ShareJobId == queueId ? config.TradeQueueBinding : null;
+            ReleaseTradeQueueBinding(config, queueId);
+            removed.Add(new WorkshopRemovedSavedJob(frozen, index, wasActive, binding));
+        }
+
+        return removed.Count == 0 ? null : new WorkshopSavedJobRemoval(removed, prepQueue, tradeQueue);
+    }
+
+    /// <summary>
+    /// Puts deleted saved jobs back where they were. The active-job link and Trade Queue binding come back
+    /// only when nothing has replaced them and the prep queue or Trade Queue is unchanged since the delete.
+    /// </summary>
+    public static WorkshopQueueOperationResult RestoreFrozenQueues(Configuration config, WorkshopSavedJobRemoval removal)
+    {
+        ArgumentNullException.ThrowIfNull(removal);
+        var restored = new List<WorkshopFrozenQueue>();
+        // Reinsert in reverse removal order so each stored index refers to the list it was taken from.
+        foreach (var entry in removal.Jobs.Reverse())
+        {
+            if (FindFrozenQueue(config, entry.Job.Id) != null)
+                continue;
+            config.FrozenWorkshopQueues.Insert(Math.Clamp(entry.Index, 0, config.FrozenWorkshopQueues.Count), entry.Job);
+            restored.Add(entry.Job);
+        }
+
+        if (restored.Count == 0)
+            return new(false, "Nothing to restore.");
+
+        var active = removal.Jobs.FirstOrDefault(entry => entry.WasActive && restored.Contains(entry.Job));
+        if (active != null && config.ActiveFrozenWorkshopQueueId == null &&
+            ItemsEqual(config.WorkshopPrepQueue, removal.PrepQueueAtRemoval))
+            config.ActiveFrozenWorkshopQueueId = active.Job.Id;
+
+        var bound = removal.Jobs.FirstOrDefault(entry => entry.ReleasedBinding != null && restored.Contains(entry.Job));
+        if (bound != null && config.TradeQueueBinding == null &&
+            TradeItemsEqual(config.TradeQueueItems, removal.TradeQueueAtRemoval))
+            config.TradeQueueBinding = bound.ReleasedBinding;
+
+        var first = restored[^1];
+        return restored.Count == 1
+            ? new(true, $"Restored saved job {first.Name}.", first.Id, first.Name)
+            : new(true, $"Restored {restored.Count} saved jobs.", first.Id, first.Name);
     }
 
     /// <summary>Clears the Trade Queue recipient binding when it belongs to a share that is being deleted.</summary>
@@ -249,6 +328,13 @@ public static class WorkshopQueueService
             })
             .ToList();
     }
+
+    private static List<TradeQueueItem> CloneTradeItems(IEnumerable<TradeQueueItem> items) =>
+        items.Select(item => new TradeQueueItem { ItemId = item.ItemId, ItemName = item.ItemName, Quantity = item.Quantity }).ToList();
+
+    private static bool TradeItemsEqual(IReadOnlyList<TradeQueueItem> left, IReadOnlyList<TradeQueueItem> right) =>
+        left.Count == right.Count &&
+        left.Zip(right).All(pair => pair.First.ItemId == pair.Second.ItemId && pair.First.Quantity == pair.Second.Quantity);
 
     private static WorkshopFrozenQueue? FindFrozenQueue(Configuration config, Guid queueId)
     {

@@ -120,20 +120,45 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         DrawUnverifiedTrade(queue);
         DrawHandoverOptions(queue, view);
         DrawShareRestockStatus(queue, restock);
-        DrawHandoverTable(queue, view, restock);
 
+        var warnings = HandoverWarnings(queue, view);
+        DrawHandoverTable(queue, view, restock, HandoverFooterHeight(queue, warnings.Count));
+        foreach (var warning in warnings)
+            ImGui.TextColored(ColWarning, warning);
+    }
+
+    private List<string> HandoverWarnings(WorkshopFrozenQueue queue, HandoverView view)
+    {
+        var tracker = actions.Handover;
+        var warnings = new List<string>();
         if (queue.HandoverReportRefusal is { } refusal)
         {
-            ImGui.TextColored(ColWarning, refusal);
+            warnings.Add(refusal);
         }
         else if (queue.HandoverReportPending && queue.HandoffId != null &&
                  !tracker.IsReporting(queue.Id) && tracker.ReportError(queue.Id) is { } reportError)
         {
-            ImGui.TextColored(ColWarning, $"Handover not relayed to the Workshop Host: {reportError} Retrying.");
+            warnings.Add($"Handover not relayed to the Workshop Host: {reportError} Retrying.");
         }
 
         if (!view.BagsKnown)
-            ImGui.TextColored(ColWarning, "Bags are not readable right now; In bags shows 0.");
+            warnings.Add("Bags are not readable right now; In bags shows 0.");
+        return warnings;
+    }
+
+    /// <summary>
+    /// Height drawn below the handover table: its warning lines, then DrawHandoffActions' hand-over row and
+    /// share-buttons row, plus the in-place Trade Queue replace confirmation (a line and a button row).
+    /// An armed Delete stays on the hand-over row.
+    /// </summary>
+    private float HandoverFooterHeight(WorkshopFrozenQueue queue, int warningLines)
+    {
+        var confirming = pendingTradeReplaceQueueId == queue.Id;
+        var textLines = warningLines + (confirming ? 1 : 0);
+        var buttonRows = 2 + (confirming ? 1 : 0);
+        return (textLines * ImGui.GetTextLineHeightWithSpacing()) +
+               (buttonRows * ImGui.GetFrameHeightWithSpacing()) +
+               ImGui.GetStyle().CellPadding.Y;
     }
 
     private void DrawHandoverStrip(WorkshopFrozenQueue queue, HandoverView view)
@@ -426,12 +451,12 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         config.Save();
     }
 
-    private void DrawHandoverTable(WorkshopFrozenQueue queue, HandoverView view, ShareRestockPlan restock)
+    private void DrawHandoverTable(WorkshopFrozenQueue queue, HandoverView view, ShareRestockPlan restock, float footerHeight)
     {
         var flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.ScrollY;
         var rowHeight = ImGui.GetFrameHeight() + (ImGui.GetStyle().CellPadding.Y * 2f);
         var desired = rowHeight * (Math.Max(1, view.Rows.Count) + 1) + 4f;
-        var available = ImGui.GetContentRegionAvail().Y - (ImGui.GetFrameHeightWithSpacing() * 3f);
+        var available = ImGui.GetContentRegionAvail().Y - footerHeight;
         var height = Math.Min(desired, Math.Max(rowHeight * 4f, available));
         if (!ImGui.BeginTable("WorkshopHandoverTable", 8, flags, new Vector2(0f, height)))
             return;
@@ -794,10 +819,8 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         }
 
         var theirBags = theyHold;
-        if (theirBags != null && config.WorkshopHandoverIncludeTheirRetainers)
-            theyHold = requirements.ToDictionary(requirement => requirement.ItemId, requirement =>
-                (int)Math.Min(int.MaxValue, (long)theirBags.GetValueOrDefault(requirement.ItemId) +
-                    (theirRetainers?.GetValueOrDefault(requirement.ItemId) ?? 0)));
+        theyHold = WorkshopHandoverCalculator.CombineHoldings(
+            requirements, theirBags, theirRetainers, config.WorkshopHandoverIncludeTheirRetainers);
 
         var rawBags = bags ?? new Dictionary<uint, int>();
         var plan = ActivePlanFor(queue);
