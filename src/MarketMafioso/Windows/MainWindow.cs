@@ -37,14 +37,12 @@ using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
-using FFXIVClientStructs.FFXIV.Client.Game;
 
 namespace MarketMafioso.Windows;
 
 public partial class MainWindow : Window, IDisposable
 {
     private readonly Configuration config;
-    private readonly MarketAcquisitionWorldVisitCatalog marketAcquisitionWorldVisitCatalog;
     private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
     private readonly FranthropyRetainerReportSource retainerReports;
@@ -56,12 +54,7 @@ public partial class MainWindow : Window, IDisposable
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
     private readonly MarketBoardAcquisitionController marketBoardAcquisition;
-    private readonly MarketBoardListingReader marketBoardListingReader;
-    private readonly Dictionary<ulong, string> marketActorResolvedNames = [];
-    private int marketActorNameRequestedCount;
     private readonly RemoteSummoningBellProbe remoteSummoningBellProbe;
-    private readonly ControlledMarketActorListingProbe controlledMarketActorListingProbe;
-    private readonly ControlledMarketActorBrowseProbe controlledMarketActorBrowseProbe;
 
     public MarketListingOverlayWindow MarketListingOverlay { get; }
     private readonly IDataManager dataManager;
@@ -94,9 +87,6 @@ public partial class MainWindow : Window, IDisposable
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private int marketInputCaptureIndex;
-    private Task? exactAcquisitionRecoveryTask;
-    private Task? exactAcquisitionAutoResumeTask;
-    private DateTimeOffset nextExactAcquisitionAutoResumeAtUtc;
     private string workshopStatus = "Workshop prep queue is idle.";
     private string? agentRequestedTab;
     private string? agentRequestedWorkspaceView;
@@ -180,12 +170,8 @@ public partial class MainWindow : Window, IDisposable
             });
         this.acquisitionServices = acquisitionServices;
         marketIntelligencePassiveReporter = acquisitionServices.IntelligenceReporter;
-        marketAcquisitionWorldVisitCatalog = acquisitionServices.WorldVisitCatalog;
         acquisitionWorkspace = acquisitionServices.Workspace;
-        marketBoardListingReader = acquisitionServices.ListingReader;
         marketBoardAcquisition = acquisitionServices.Controller;
-        controlledMarketActorListingProbe = acquisitionServices.ControlledListingProbe;
-        controlledMarketActorBrowseProbe = acquisitionServices.ControlledBrowseProbe;
         exactAcquisitionRouteStateStore = acquisitionServices.ExactStateStore;
         routeEngine = acquisitionServices.RouteEngine;
         marketBoardApproachService = acquisitionServices.ApproachService;
@@ -341,6 +327,7 @@ public partial class MainWindow : Window, IDisposable
         AcquisitionCompositionWindow = new MarketAcquisitionWorkbenchCompositionWindow(
             acquisitionWorkbenchCompositions,
             CreateMarketAcquisitionCompositionContext);
+        acquisitionServices.ConnectCurrentDocument(() => acquisitionRequestBuilder.CurrentDocument);
         acquisitionWorkspace.Connect(
             acquisitionRequestBuilder.AdoptRequest,
             acquisitionRequestBuilder.AdoptRestoredRequestIfSafe,
@@ -364,7 +351,7 @@ public partial class MainWindow : Window, IDisposable
             AcquisitionDiagnostics.Draw,
             AutomationDiagnostics.Draw,
             () => { },
-            IsMarketAcquisitionUnlocked,
+            acquisitionServices.IsMarketAcquisitionUnlocked,
             uiStateCapture,
             AgentReviewRegistry,
             () => acquisitionRequestBuilderCraftAppraisal.State.CreateDiagnosticsSnapshot(),
@@ -596,9 +583,9 @@ public partial class MainWindow : Window, IDisposable
                 MarketContextSource = listingView.MarketContext?.Source,
                 MarketContextSummary = listingView.MarketContextSummary,
             },
-            MarketActors = CreateMarketActorCapabilityTruth(ReadCurrentMarketActorBook()),
-            ControlledMarketActorListing = CreateControlledMarketActorListingTruth(controlledMarketActorListingProbe.Snapshot()),
-            ControlledMarketActorBrowse = CreateControlledMarketActorBrowseTruth(controlledMarketActorBrowseProbe.Snapshot()),
+            MarketActors = acquisitionServices.GetMarketActorCapabilityTruth(),
+            ControlledMarketActorListing = acquisitionServices.GetControlledListingTruth(),
+            ControlledMarketActorBrowse = acquisitionServices.GetControlledBrowseTruth(),
             RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
             {
                 Active = remoteBellProbe.Active,
@@ -695,47 +682,6 @@ public partial class MainWindow : Window, IDisposable
         };
     }
 
-    public unsafe AgentBridgeMarketActorCapabilityTruth ProbeMarketActorNames()
-    {
-        var read = ReadCurrentMarketActorBook();
-        var cache = NameCache.Instance();
-        if (cache != null)
-        {
-            foreach (var contentId in read.Listings
-                         .SelectMany(listing => new[] { listing.ArtisanContentId, listing.SellerOwnerContentId })
-                         .Where(contentId => contentId is > 0)
-                         .Select(contentId => contentId!.Value)
-                         .Distinct()
-                         .Take(24))
-            {
-                marketActorNameRequestedCount++;
-                var name = cache->GetNameByContentId(contentId).ToString();
-                if (!string.IsNullOrWhiteSpace(name))
-                {
-                    marketActorResolvedNames[contentId] = name.Trim();
-                    marketIntelligencePassiveReporter.EnqueueActorName(
-                        contentId,
-                        name,
-                        "GameNameCache.ControlledProbe",
-                        DateTimeOffset.UtcNow);
-                }
-            }
-        }
-        return CreateMarketActorCapabilityTruth(read);
-    }
-
-    public AgentBridgeControlledMarketListingTruth BeginControlledMarketActorListing(string itemName) =>
-        CreateControlledMarketActorListingTruth(controlledMarketActorListingProbe.BeginPost(itemName, IsControlledListingBlockedByAutomation()));
-
-    public AgentBridgeControlledMarketListingTruth RemoveControlledMarketActorListing() =>
-        CreateControlledMarketActorListingTruth(controlledMarketActorListingProbe.BeginRemoval(IsControlledListingBlockedByAutomation()));
-
-    public AgentBridgeControlledMarketBrowseTruth BeginControlledMarketActorBrowse(string itemName) =>
-        CreateControlledMarketActorBrowseTruth(controlledMarketActorBrowseProbe.Begin(
-            itemName,
-            playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : string.Empty,
-            IsControlledListingBlockedByAutomation()));
-
     /// <summary>
     /// Why market automation is doing work right now, or null when idle; a paused route is not running.
     /// </summary>
@@ -758,93 +704,6 @@ public partial class MainWindow : Window, IDisposable
         TrySelectAgentBridgeTab("Settings");
     }
 
-    private bool IsControlledListingBlockedByAutomation() =>
-        acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive || tradeQueueRunner.Snapshot.IsActive || workshopAssemblyRunner.IsRunning;
-
-    private static AgentBridgeControlledMarketListingTruth CreateControlledMarketActorListingTruth(ControlledMarketActorListingProbeView source) => new()
-    {
-        State = source.State,
-        Message = source.Message,
-        Active = source.Active,
-        ItemName = source.ItemName,
-        ItemId = source.ItemId,
-        RetainerName = source.RetainerName,
-        Quantity = source.Quantity,
-        IsHq = source.IsHq,
-        UnitPrice = source.UnitPrice,
-        ListingSlot = source.ListingSlot,
-        UpdatedAtUtc = source.UpdatedAtUtc,
-    };
-
-    private static AgentBridgeControlledMarketBrowseTruth CreateControlledMarketActorBrowseTruth(ControlledMarketActorBrowseProbeView source) => new()
-    {
-        State = source.State,
-        Message = source.Message,
-        Active = source.Active,
-        ItemName = source.ItemName,
-        ItemId = source.ItemId,
-        WorldName = source.WorldName,
-        BrowseOperationId = source.BrowseOperationId,
-        ListingCount = source.ListingCount,
-        ArtisanObservedCount = source.ArtisanObservedCount,
-        UpdatedAtUtc = source.UpdatedAtUtc,
-    };
-
-    private MarketBoardReadResult ReadCurrentMarketActorBook()
-    {
-        if (!playerState.CurrentWorld.IsValid)
-            return new() { Status = "WorldUnavailable", Message = "Current world is unavailable.", ReadState = MarketBoardListingReadState.Unavailable };
-        return marketBoardListingReader.ReadCurrentListings(playerState.CurrentWorld.Value.Name.ToString());
-    }
-
-    private AgentBridgeMarketActorCapabilityTruth CreateMarketActorCapabilityTruth(MarketBoardReadResult read)
-    {
-        var currentContentId = playerState.ContentId;
-        var rows = read.Listings.Select(listing =>
-        {
-            marketActorResolvedNames.TryGetValue(listing.SellerOwnerContentId ?? 0, out var sellerName);
-            marketActorResolvedNames.TryGetValue(listing.ArtisanContentId ?? 0, out var artisanName);
-            return new AgentBridgeMarketActorListingTruth
-            {
-                ListingId = listing.ListingId,
-                RetainerId = listing.RetainerId,
-                RetainerName = string.IsNullOrWhiteSpace(listing.RetainerName) ? null : listing.RetainerName,
-                SellerOwnerContentId = listing.SellerOwnerContentId,
-                ArtisanContentId = listing.ArtisanContentId,
-                SellerOwnerName = sellerName,
-                ArtisanName = artisanName,
-                SellerOwnerMatchesCurrentCharacter = currentContentId != 0 && listing.SellerOwnerContentId == currentContentId,
-                ArtisanMatchesCurrentCharacter = currentContentId != 0 && listing.ArtisanContentId == currentContentId,
-                IsSelfCraftedSale = listing.SellerOwnerContentId is > 0 && listing.SellerOwnerContentId == listing.ArtisanContentId,
-                IsHq = listing.IsHq,
-            };
-        }).ToArray();
-        return new()
-        {
-            ReadState = $"{read.Status}/{read.ReadState}",
-            BrowseOperationId = string.IsNullOrWhiteSpace(read.BrowseOperationId) ? null : read.BrowseOperationId,
-            ItemId = read.ItemId == 0 ? null : read.ItemId,
-            WorldName = string.IsNullOrWhiteSpace(read.WorldName) ? null : read.WorldName,
-            CurrentCharacterContentId = currentContentId,
-            ListingCount = rows.Length,
-            SellerOwnerObservedCount = rows.Count(row => row.SellerOwnerContentId is > 0),
-            ArtisanObservedCount = rows.Count(row => row.ArtisanContentId is > 0),
-            SelfCraftedCount = rows.Count(row => row.IsSelfCraftedSale),
-            NameResolvedCount = rows
-                .SelectMany(row => new[]
-                {
-                    (row.SellerOwnerContentId, row.SellerOwnerName),
-                    (row.ArtisanContentId, row.ArtisanName),
-                })
-                .Where(actor => actor.Item1 is > 0 && !string.IsNullOrWhiteSpace(actor.Item2))
-                .Select(actor => actor.Item1!.Value)
-                .Distinct()
-                .Count(),
-            NameRequestedCount = marketActorNameRequestedCount,
-            Listings = rows,
-        };
-    }
-
     private static AgentBridgeTradePartnerTruth CreateTradePartnerTruth(TradeQueuePartner partner) =>
         new()
         {
@@ -852,30 +711,6 @@ public partial class MainWindow : Window, IDisposable
             HomeWorld = partner.HomeWorldName,
             GameObjectId = partner.GameObjectId.ToString("X"),
         };
-
-    public void OnFrameworkUpdate(IFramework _framework)
-    {
-        marketAcquisitionWorldVisitCatalog.Tick();
-
-
-        if (!IsMarketAcquisitionUnlocked())
-            return;
-
-        controlledMarketActorBrowseProbe.Tick();
-
-        _ = acquisitionWorkspace.RenewLeaseIfDueAsync();
-        if (acquisitionWorkspace.ConsumeLeaseLossSignal())
-        {
-            routeEngine.Stop();
-            return;
-        }
-
-        routeEngine.MonitorMarketBoardPurchase();
-        routeEngine.TickRoute(acquisitionWorkspace.IsBusy);
-        MaybeAutoResumeExactAcquisitionRoute();
-        if (routeEngine.NeedsExactAcquisitionRecovery && (exactAcquisitionRecoveryTask is null || exactAcquisitionRecoveryTask.IsCompleted))
-            exactAcquisitionRecoveryTask = RecoverExactAcquisitionRouteAsync();
-    }
 
     public override void PreDraw()
     {
@@ -954,7 +789,7 @@ public partial class MainWindow : Window, IDisposable
     {
         ClearAgentReviewWindowOverride();
 
-            if (!IsMarketAcquisitionUnlocked())
+            if (!acquisitionServices.IsMarketAcquisitionUnlocked())
                 AcquisitionCompositionWindow.IsOpen = false;
 
             var viewport = ImGui.GetWindowViewport();
@@ -1003,7 +838,7 @@ public partial class MainWindow : Window, IDisposable
                     ImGui.EndTabItem();
                 }
 
-                if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
+                if (acquisitionServices.IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
                 {
                     DrawMarketAcquisitionTab();
                     ImGui.EndTabItem();
@@ -1044,10 +879,6 @@ public partial class MainWindow : Window, IDisposable
         Vector2 WorkSize,
         bool IsDocked);
 
-    public string OpenMarketListings() => marketBoardAcquisition.OpenMarketBoard();
-
-    public string OpenMarketListing(uint itemId) => marketBoardAcquisition.OpenMarketItem(itemId);
-
     public void BeginAgentReviewFrame() => AgentReviewRegistry.BeginFrame();
 
     public void EndAgentReviewFrame()
@@ -1067,7 +898,7 @@ public partial class MainWindow : Window, IDisposable
         {
             "Squire" or "Workshop Logistics" or "Trade Queue" or "Settings" or "Status" => true,
             "Diagnostics" => true,
-            "Market Acquisition" => IsMarketAcquisitionUnlocked(),
+            "Market Acquisition" => acquisitionServices.IsMarketAcquisitionUnlocked(),
             _ => false,
         };
         if (!allowed || !IsAllowedWorkspaceView(mainTab, workspaceView))
@@ -1088,7 +919,7 @@ public partial class MainWindow : Window, IDisposable
     public void StageExternalExactAcquisition(ExactAcquisitionWorkbenchTransfer transfer)
     {
         ArgumentNullException.ThrowIfNull(transfer);
-        if (!IsMarketAcquisitionUnlocked())
+        if (!acquisitionServices.IsMarketAcquisitionUnlocked())
             throw new InvalidOperationException("Market Acquisition must be unlocked before an external plan can be staged.");
 
         acquisitionRequestBuilder.StageExactAcquisitionTransfer(transfer);
@@ -1100,7 +931,7 @@ public partial class MainWindow : Window, IDisposable
         workshopPrepQueue.ImportSavedJob(text);
 
     private bool CanStageMarketAcquisition() =>
-        IsMarketAcquisitionUnlocked() &&
+        acquisitionServices.IsMarketAcquisitionUnlocked() &&
         !acquisitionWorkspace.IsBusy &&
         !routeEngine.IsRouteActive &&
         !acquisitionRequestBuilder.IsSynchronizing &&
@@ -1247,12 +1078,6 @@ public partial class MainWindow : Window, IDisposable
             uiStateCapture.Mark("agent-bridge-capture-input-state");
     }
 
-    public void AgentStopRoute()
-    {
-        routeEngine.Stop();
-        routeEngine.ReportRouteProgress();
-    }
-
     private ImGuiTabItemFlags GetAgentTabFlags(string tabName) =>
         string.Equals(agentRequestedTab, tabName, StringComparison.Ordinal)
             ? ImGuiTabItemFlags.SetSelected
@@ -1264,7 +1089,7 @@ public partial class MainWindow : Window, IDisposable
         ImGui.TextWrapped(ProductSummary);
         ImGui.TextColored(
             ColMuted,
-            IsMarketAcquisitionUnlocked()
+            acquisitionServices.IsMarketAcquisitionUnlocked()
                 ? "Utilities: Squire, Workshop Logistics, Trade Queue, Market Acquisition. Inventory reporting lives under Settings."
                 : "Utilities: Squire, Workshop Logistics, and Trade Queue. Inventory reporting lives under Settings.");
     }
@@ -1749,7 +1574,7 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
         await acquisitionWorkspace.PreparePlanAsync(
-            GetCurrentWorldName(), GetMarketAcquisitionRecentWorldTtl(),
+            acquisitionServices.GetCurrentWorldName(), acquisitionServices.GetMarketAcquisitionRecentWorldTtl(),
             config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
             acquisitionRequestBuilder.CurrentDocument, reviewed).ConfigureAwait(false);
     }
@@ -1894,24 +1719,12 @@ public partial class MainWindow : Window, IDisposable
 
     private Task PrepareMarketAcquisitionPlanAsync()
     {
-        var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
+        var currentWorld = playerState.CurrentWorld.IsValid ? acquisitionServices.GetCurrentWorldName() : string.Empty;
         return acquisitionWorkspace.PreparePlanAsync(
             currentWorld,
-            GetMarketAcquisitionRecentWorldTtl(),
+            acquisitionServices.GetMarketAcquisitionRecentWorldTtl(),
             config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
             acquisitionRequestBuilder.CurrentDocument);
-    }
-
-    private TimeSpan GetMarketAcquisitionRecentWorldTtl()
-    {
-        var ttlHours = Math.Clamp(config.MarketAcquisitionRecentWorldTtlHours, 1, 168);
-        if (ttlHours != config.MarketAcquisitionRecentWorldTtlHours)
-        {
-            config.MarketAcquisitionRecentWorldTtlHours = ttlHours;
-            config.Save();
-        }
-
-        return TimeSpan.FromHours(ttlHours);
     }
 
     private void DrawMarketAcquisitionGuidedRoute()
@@ -2142,147 +1955,9 @@ public partial class MainWindow : Window, IDisposable
     }
 #endif
 
-    private Task RecoverExactAcquisitionRouteAsync()
-    {
-        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, async (request, token) =>
-        {
-            if (routeEngine.ConsumeNoViableExactAcquisitionDryRunScenario())
-            {
-                routeEngine.PauseExactAcquisitionRecovery(
-                    "Diagnostic no-viable recovery: no exact-quality row remains inside the confirmed caps. Retry or return to Advisor.");
-                routeEngine.ReportRouteProgress();
-                return;
-            }
-            var remainingClaim = routeEngine.CreateExactAcquisitionRecoveryClaim(request);
-            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
-            MarketAcquisitionPlanPreparationResult result;
-            try
-            {
-                result = await acquisitionWorkspace.PrepareRecoveryPlanAsync(
-                    remainingClaim,
-                    currentWorld,
-                    GetMarketAcquisitionRecentWorldTtl(),
-                    token).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                routeEngine.PauseExactAcquisitionRecovery(
-                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor.");
-                routeEngine.ReportRouteProgress();
-                return;
-            }
-            if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
-            {
-                routeEngine.PauseExactAcquisitionRecovery(
-                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings or return to Advisor.");
-                return;
-            }
-
-            var start = routeEngine.StartExactAcquisitionRecovery(
-                result.Plan,
-                remainingClaim,
-                acquisitionRequestBuilder.CurrentDocument);
-            if (start.Success)
-                acquisitionWorkspace.ReplacePreparedPlan(result.Plan);
-            else
-                acquisitionWorkspace.SetStatus(start.Message);
-            routeEngine.ReportRouteProgress();
-        });
-    }
-
     private void ReturnToExactAcquisitionAdvisor()
     {
         standaloneSquire.TryOpen(out _);
-    }
-
-    private void MaybeAutoResumeExactAcquisitionRoute()
-    {
-        var routeActive = routeEngine.IsRouteActive;
-        var persisted = exactAcquisitionRouteStateStore.Restore();
-        var contract = acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract;
-        if (ExactAcquisitionRouteRecoveryLifecycle.ClearOrphanedState(
-                routeActive,
-                persisted,
-                contract,
-                exactAcquisitionRouteStateStore))
-            return;
-        if (acquisitionWorkspace.IsBusy || DateTimeOffset.UtcNow < nextExactAcquisitionAutoResumeAtUtc ||
-            exactAcquisitionAutoResumeTask is { IsCompleted: false })
-            return;
-        var live = routeEngine.CreateSnapshot();
-        if (live.ExactAcquisitionExecution?.Phase == ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded &&
-            !live.IsRunning && !live.IsPaused)
-        {
-            nextExactAcquisitionAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
-            exactAcquisitionAutoResumeTask = RecoverExactAcquisitionRouteAsync();
-            return;
-        }
-        if (routeActive)
-            return;
-        if (persisted is null || !ExactAcquisitionRouteRecoveryLifecycle.CanAutoResume(persisted))
-            return;
-        if (contract is null)
-            return;
-        if (contract.Transfer.DryRunOnly)
-            return;
-        nextExactAcquisitionAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
-        exactAcquisitionAutoResumeTask = AutoResumeExactAcquisitionRouteAsync(persisted, contract);
-    }
-
-    private Task AutoResumeExactAcquisitionRouteAsync(
-        ExactAcquisitionRouteExecutionState persisted,
-        ExactAcquisitionExecutionContract contract)
-    {
-        return acquisitionWorkspace.RunWithExecutionRequestAsync(acquisitionRequestBuilder.CurrentDocument, async (request, token) =>
-        {
-            var remainingClaim = ExactAcquisitionRouteAuthoritySession.CreateRecoveryClaim(request, persisted);
-            if (remainingClaim.Lines.Count == 0)
-            {
-                exactAcquisitionRouteStateStore.Save(persisted with
-                {
-                    Phase = ExactAcquisitionRouteAuthorityPhase.Complete,
-                    Message = "Persisted external exact-acquisition purchases already satisfy the finalized solution.",
-                    UpdatedAtUtc = DateTimeOffset.UtcNow,
-                });
-                return;
-            }
-            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
-            MarketAcquisitionPlanPreparationResult result;
-            try
-            {
-                result = await acquisitionWorkspace.PrepareRecoveryPlanAsync(
-                    remainingClaim,
-                    currentWorld,
-                    GetMarketAcquisitionRecentWorldTtl(),
-                    token).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                exactAcquisitionRouteStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
-                    persisted,
-                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor."));
-                return;
-            }
-            if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
-            {
-                exactAcquisitionRouteStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
-                    persisted,
-                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings, retry recovery, or return to Advisor."));
-                return;
-            }
-            var start = routeEngine.Start(
-                result.Plan,
-                remainingClaim,
-                enableDiagnostics: false,
-                includeOpportunisticChecks: false,
-                contract,
-                acquisitionRequestBuilder.CurrentDocument);
-            if (start.Success)
-                acquisitionWorkspace.ReplacePreparedPlan(result.Plan);
-            else
-                acquisitionWorkspace.SetStatus(start.Message);
-            routeEngine.ReportRouteProgress();
-        });
     }
 
     private void CaptureMarketBoardInputState()
@@ -2342,14 +2017,6 @@ public partial class MainWindow : Window, IDisposable
         characterName = playerState.CharacterName ?? string.Empty;
         world = playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : string.Empty;
         return !string.IsNullOrWhiteSpace(characterName) && !string.IsNullOrWhiteSpace(world);
-    }
-
-    private string GetCurrentWorldName()
-    {
-        if (!playerState.CurrentWorld.IsValid)
-            throw new InvalidOperationException("Current world is unavailable.");
-
-        return playerState.CurrentWorld.Value.Name.ToString();
     }
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
@@ -2515,8 +2182,6 @@ public partial class MainWindow : Window, IDisposable
         controller.State.WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes;
         return controller;
     }
-
-    private bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
 
     public void Dispose()
     {

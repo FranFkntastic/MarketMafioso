@@ -25,8 +25,8 @@ public partial class MainWindow
         {
             await acquisitionRequestBuilder.WaitForRefreshAsync();
             var document = acquisitionRequestBuilder.CurrentDocument;
-            var result = await acquisitionWorkspace.PreviewPlanAsync(document, GetCurrentWorldName(),
-                GetMarketAcquisitionRecentWorldTtl(), config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep);
+            var result = await acquisitionWorkspace.PreviewPlanAsync(document, acquisitionServices.GetCurrentWorldName(),
+                acquisitionServices.GetMarketAcquisitionRecentWorldTtl(), config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep);
             acquisitionFinalizationPlan = result.Plan;
             acquisitionFinalizationHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document with { RunSpendCap = 0 });
             acquisitionFinalizationOpen = true;

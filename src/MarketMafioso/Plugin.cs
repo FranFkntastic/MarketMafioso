@@ -323,6 +323,7 @@ public sealed class Plugin : IDalamudPlugin
                 Log),
             marketBoardBrowseObserver,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
+            () => tradeQueueRunner.Snapshot.IsActive || workshopAssemblyRunner.IsRunning,
             Log);
         mainWindow = new MainWindow(
             Configuration,
@@ -380,11 +381,11 @@ public sealed class Plugin : IDalamudPlugin
                 agentBridgeProofWindow.OpenAndFocus,
                 mainWindow.TrySelectAgentBridgeTab,
                 mainWindow.AgentCaptureInputState,
-                mainWindow.AgentStopRoute,
-                mainWindow.ProbeMarketActorNames,
-                mainWindow.BeginControlledMarketActorListing,
-                mainWindow.RemoveControlledMarketActorListing,
-                mainWindow.BeginControlledMarketActorBrowse,
+                acquisitionServices.AgentStopRoute,
+                acquisitionServices.ProbeMarketActorNames,
+                acquisitionServices.BeginControlledMarketActorListing,
+                acquisitionServices.RemoveControlledMarketActorListing,
+                acquisitionServices.BeginControlledMarketActorBrowse,
                 () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
                 mainWindow.AgentReviewRegistry),
             agentBridgeProofStore,
@@ -499,11 +500,11 @@ public sealed class Plugin : IDalamudPlugin
                         break;
                     }
 
-                    ChatGui.Print($"[MMF] Market listings: {mainWindow.OpenMarketListing(matches[0].RowId)}");
+                    ChatGui.Print($"[MMF] Market listings: {acquisitionServices.OpenMarketListing(matches[0].RowId)}");
                     break;
                 }
 #endif
-                ChatGui.Print($"[MMF] Market listings: {mainWindow.OpenMarketListings()}");
+                ChatGui.Print($"[MMF] Market listings: {acquisitionServices.OpenMarketListings()}");
                 break;
 
             case "probe-market":
@@ -849,7 +850,7 @@ public sealed class Plugin : IDalamudPlugin
             Configuration.AutoAcceptIncomingTrades && !tradeQueueRunner.IsActive);
         tradeQueueRunner.Tick();
         workshopRestock.Tick();
-        mainWindow.OnFrameworkUpdate(framework);
+        acquisitionServices.Tick();
         agentBridge.Tick();
     }
 

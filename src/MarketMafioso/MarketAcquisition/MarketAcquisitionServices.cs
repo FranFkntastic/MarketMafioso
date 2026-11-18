@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Threading.Tasks;
+using FFXIVClientStructs.FFXIV.Client.Game;
+using MarketMafioso.AgentBridge;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.Automation.MarketBoard;
 using MarketMafioso.Automation.MarketBoard;
@@ -24,6 +27,15 @@ internal sealed class MarketAcquisitionServices : IDisposable
     private readonly IPluginLog log;
     private readonly HttpClient acquisitionHttpClient = new();
     private readonly DalamudMarketPurchasePacketObserver marketPurchasePacketObserver;
+
+    private Task? exactAcquisitionRecoveryTask;
+    private Task? exactAcquisitionAutoResumeTask;
+    private DateTimeOffset nextExactAcquisitionAutoResumeAtUtc;
+    private readonly Dictionary<ulong, string> marketActorResolvedNames = [];
+    private int marketActorNameRequestedCount;
+    private readonly Func<bool> otherAutomationActive;
+    private Func<MarketAcquisitionRequestDocument> currentDocument =
+        () => throw new InvalidOperationException("Acquisition request document provider is not connected.");
 
     internal MarketIntelligencePassiveReporter IntelligenceReporter { get; }
     internal MarketAcquisitionWorldVisitCatalog WorldVisitCatalog { get; }
@@ -47,8 +59,10 @@ internal sealed class MarketAcquisitionServices : IDisposable
         MarketBoardApproachService approachService,
         IMarketBoardBrowseRuntime marketBoardBrowseRuntime,
         string diagnosticsDirectory,
+        Func<bool> otherAutomationActive,
         IPluginLog log)
     {
+        this.otherAutomationActive = otherAutomationActive;
         this.config = config;
         this.playerState = playerState;
         this.scanner = scanner;
@@ -209,6 +223,338 @@ internal sealed class MarketAcquisitionServices : IDisposable
                 lifestream,
                 () => config.MarketAcquisitionAethernetDeparture));
     }
+
+    internal void ConnectCurrentDocument(Func<MarketAcquisitionRequestDocument> provider) => currentDocument = provider;
+
+    public void Tick()
+    {
+        WorldVisitCatalog.Tick();
+
+        if (!IsMarketAcquisitionUnlocked())
+            return;
+
+        ControlledBrowseProbe.Tick();
+
+        _ = Workspace.RenewLeaseIfDueAsync();
+        if (Workspace.ConsumeLeaseLossSignal())
+        {
+            RouteEngine.Stop();
+            return;
+        }
+
+        RouteEngine.MonitorMarketBoardPurchase();
+        RouteEngine.TickRoute(Workspace.IsBusy);
+        MaybeAutoResumeExactAcquisitionRoute();
+        if (RouteEngine.NeedsExactAcquisitionRecovery && (exactAcquisitionRecoveryTask is null || exactAcquisitionRecoveryTask.IsCompleted))
+            exactAcquisitionRecoveryTask = RecoverExactAcquisitionRouteAsync();
+    }
+
+    private Task RecoverExactAcquisitionRouteAsync()
+    {
+        return Workspace.RunWithExecutionRequestAsync(currentDocument(), async (request, token) =>
+        {
+            if (RouteEngine.ConsumeNoViableExactAcquisitionDryRunScenario())
+            {
+                RouteEngine.PauseExactAcquisitionRecovery(
+                    "Diagnostic no-viable recovery: no exact-quality row remains inside the confirmed caps. Retry or return to Advisor.");
+                RouteEngine.ReportRouteProgress();
+                return;
+            }
+            var remainingClaim = RouteEngine.CreateExactAcquisitionRecoveryClaim(request);
+            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
+            MarketAcquisitionPlanPreparationResult result;
+            try
+            {
+                result = await Workspace.PrepareRecoveryPlanAsync(
+                    remainingClaim,
+                    currentWorld,
+                    GetMarketAcquisitionRecentWorldTtl(),
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                RouteEngine.PauseExactAcquisitionRecovery(
+                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor.");
+                RouteEngine.ReportRouteProgress();
+                return;
+            }
+            if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
+            {
+                RouteEngine.PauseExactAcquisitionRecovery(
+                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings or return to Advisor.");
+                return;
+            }
+
+            var start = RouteEngine.StartExactAcquisitionRecovery(
+                result.Plan,
+                remainingClaim,
+                currentDocument());
+            if (start.Success)
+                Workspace.ReplacePreparedPlan(result.Plan);
+            else
+                Workspace.SetStatus(start.Message);
+            RouteEngine.ReportRouteProgress();
+        });
+    }
+
+    private void MaybeAutoResumeExactAcquisitionRoute()
+    {
+        var routeActive = RouteEngine.IsRouteActive;
+        var persisted = ExactStateStore.Restore();
+        var contract = currentDocument().ExactAcquisitionAuthority?.FinalizedContract;
+        if (ExactAcquisitionRouteRecoveryLifecycle.ClearOrphanedState(
+                routeActive,
+                persisted,
+                contract,
+                ExactStateStore))
+            return;
+        if (Workspace.IsBusy || DateTimeOffset.UtcNow < nextExactAcquisitionAutoResumeAtUtc ||
+            exactAcquisitionAutoResumeTask is { IsCompleted: false })
+            return;
+        var live = RouteEngine.CreateSnapshot();
+        if (live.ExactAcquisitionExecution?.Phase == ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded &&
+            !live.IsRunning && !live.IsPaused)
+        {
+            nextExactAcquisitionAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
+            exactAcquisitionAutoResumeTask = RecoverExactAcquisitionRouteAsync();
+            return;
+        }
+        if (routeActive)
+            return;
+        if (persisted is null || !ExactAcquisitionRouteRecoveryLifecycle.CanAutoResume(persisted))
+            return;
+        if (contract is null)
+            return;
+        if (contract.Transfer.DryRunOnly)
+            return;
+        nextExactAcquisitionAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
+        exactAcquisitionAutoResumeTask = AutoResumeExactAcquisitionRouteAsync(persisted, contract);
+    }
+
+    private Task AutoResumeExactAcquisitionRouteAsync(
+        ExactAcquisitionRouteExecutionState persisted,
+        ExactAcquisitionExecutionContract contract)
+    {
+        return Workspace.RunWithExecutionRequestAsync(currentDocument(), async (request, token) =>
+        {
+            var remainingClaim = ExactAcquisitionRouteAuthoritySession.CreateRecoveryClaim(request, persisted);
+            if (remainingClaim.Lines.Count == 0)
+            {
+                ExactStateStore.Save(persisted with
+                {
+                    Phase = ExactAcquisitionRouteAuthorityPhase.Complete,
+                    Message = "Persisted external exact-acquisition purchases already satisfy the finalized solution.",
+                    UpdatedAtUtc = DateTimeOffset.UtcNow,
+                });
+                return;
+            }
+            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
+            MarketAcquisitionPlanPreparationResult result;
+            try
+            {
+                result = await Workspace.PrepareRecoveryPlanAsync(
+                    remainingClaim,
+                    currentWorld,
+                    GetMarketAcquisitionRecentWorldTtl(),
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                ExactStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
+                    persisted,
+                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor."));
+                return;
+            }
+            if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
+            {
+                ExactStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
+                    persisted,
+                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings, retry recovery, or return to Advisor."));
+                return;
+            }
+            var start = RouteEngine.Start(
+                result.Plan,
+                remainingClaim,
+                enableDiagnostics: false,
+                includeOpportunisticChecks: false,
+                contract,
+                currentDocument());
+            if (start.Success)
+                Workspace.ReplacePreparedPlan(result.Plan);
+            else
+                Workspace.SetStatus(start.Message);
+            RouteEngine.ReportRouteProgress();
+        });
+    }
+
+    public string OpenMarketListings() => Controller.OpenMarketBoard();
+
+    public string OpenMarketListing(uint itemId) => Controller.OpenMarketItem(itemId);
+
+    public void AgentStopRoute()
+    {
+        RouteEngine.Stop();
+        RouteEngine.ReportRouteProgress();
+    }
+
+    public unsafe AgentBridgeMarketActorCapabilityTruth ProbeMarketActorNames()
+    {
+        var read = ReadCurrentMarketActorBook();
+        var cache = NameCache.Instance();
+        if (cache != null)
+        {
+            foreach (var contentId in read.Listings
+                         .SelectMany(listing => new[] { listing.ArtisanContentId, listing.SellerOwnerContentId })
+                         .Where(contentId => contentId is > 0)
+                         .Select(contentId => contentId!.Value)
+                         .Distinct()
+                         .Take(24))
+            {
+                marketActorNameRequestedCount++;
+                var name = cache->GetNameByContentId(contentId).ToString();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    marketActorResolvedNames[contentId] = name.Trim();
+                    IntelligenceReporter.EnqueueActorName(
+                        contentId,
+                        name,
+                        "GameNameCache.ControlledProbe",
+                        DateTimeOffset.UtcNow);
+                }
+            }
+        }
+        return CreateMarketActorCapabilityTruth(read);
+    }
+
+    public AgentBridgeControlledMarketListingTruth BeginControlledMarketActorListing(string itemName) =>
+        CreateControlledMarketActorListingTruth(ControlledListingProbe.BeginPost(itemName, IsControlledListingBlockedByAutomation()));
+
+    public AgentBridgeControlledMarketListingTruth RemoveControlledMarketActorListing() =>
+        CreateControlledMarketActorListingTruth(ControlledListingProbe.BeginRemoval(IsControlledListingBlockedByAutomation()));
+
+    public AgentBridgeControlledMarketBrowseTruth BeginControlledMarketActorBrowse(string itemName) =>
+        CreateControlledMarketActorBrowseTruth(ControlledBrowseProbe.Begin(
+            itemName,
+            playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : string.Empty,
+            IsControlledListingBlockedByAutomation()));
+
+    private bool IsControlledListingBlockedByAutomation() =>
+        Workspace.IsBusy || RouteEngine.IsRouteActive || otherAutomationActive();
+
+    private static AgentBridgeControlledMarketListingTruth CreateControlledMarketActorListingTruth(ControlledMarketActorListingProbeView source) => new()
+    {
+        State = source.State,
+        Message = source.Message,
+        Active = source.Active,
+        ItemName = source.ItemName,
+        ItemId = source.ItemId,
+        RetainerName = source.RetainerName,
+        Quantity = source.Quantity,
+        IsHq = source.IsHq,
+        UnitPrice = source.UnitPrice,
+        ListingSlot = source.ListingSlot,
+        UpdatedAtUtc = source.UpdatedAtUtc,
+    };
+
+    private static AgentBridgeControlledMarketBrowseTruth CreateControlledMarketActorBrowseTruth(ControlledMarketActorBrowseProbeView source) => new()
+    {
+        State = source.State,
+        Message = source.Message,
+        Active = source.Active,
+        ItemName = source.ItemName,
+        ItemId = source.ItemId,
+        WorldName = source.WorldName,
+        BrowseOperationId = source.BrowseOperationId,
+        ListingCount = source.ListingCount,
+        ArtisanObservedCount = source.ArtisanObservedCount,
+        UpdatedAtUtc = source.UpdatedAtUtc,
+    };
+
+    private MarketBoardReadResult ReadCurrentMarketActorBook()
+    {
+        if (!playerState.CurrentWorld.IsValid)
+            return new() { Status = "WorldUnavailable", Message = "Current world is unavailable.", ReadState = MarketBoardListingReadState.Unavailable };
+        return ListingReader.ReadCurrentListings(playerState.CurrentWorld.Value.Name.ToString());
+    }
+
+    private AgentBridgeMarketActorCapabilityTruth CreateMarketActorCapabilityTruth(MarketBoardReadResult read)
+    {
+        var currentContentId = playerState.ContentId;
+        var rows = read.Listings.Select(listing =>
+        {
+            marketActorResolvedNames.TryGetValue(listing.SellerOwnerContentId ?? 0, out var sellerName);
+            marketActorResolvedNames.TryGetValue(listing.ArtisanContentId ?? 0, out var artisanName);
+            return new AgentBridgeMarketActorListingTruth
+            {
+                ListingId = listing.ListingId,
+                RetainerId = listing.RetainerId,
+                RetainerName = string.IsNullOrWhiteSpace(listing.RetainerName) ? null : listing.RetainerName,
+                SellerOwnerContentId = listing.SellerOwnerContentId,
+                ArtisanContentId = listing.ArtisanContentId,
+                SellerOwnerName = sellerName,
+                ArtisanName = artisanName,
+                SellerOwnerMatchesCurrentCharacter = currentContentId != 0 && listing.SellerOwnerContentId == currentContentId,
+                ArtisanMatchesCurrentCharacter = currentContentId != 0 && listing.ArtisanContentId == currentContentId,
+                IsSelfCraftedSale = listing.SellerOwnerContentId is > 0 && listing.SellerOwnerContentId == listing.ArtisanContentId,
+                IsHq = listing.IsHq,
+            };
+        }).ToArray();
+        return new()
+        {
+            ReadState = $"{read.Status}/{read.ReadState}",
+            BrowseOperationId = string.IsNullOrWhiteSpace(read.BrowseOperationId) ? null : read.BrowseOperationId,
+            ItemId = read.ItemId == 0 ? null : read.ItemId,
+            WorldName = string.IsNullOrWhiteSpace(read.WorldName) ? null : read.WorldName,
+            CurrentCharacterContentId = currentContentId,
+            ListingCount = rows.Length,
+            SellerOwnerObservedCount = rows.Count(row => row.SellerOwnerContentId is > 0),
+            ArtisanObservedCount = rows.Count(row => row.ArtisanContentId is > 0),
+            SelfCraftedCount = rows.Count(row => row.IsSelfCraftedSale),
+            NameResolvedCount = rows
+                .SelectMany(row => new[]
+                {
+                    (row.SellerOwnerContentId, row.SellerOwnerName),
+                    (row.ArtisanContentId, row.ArtisanName),
+                })
+                .Where(actor => actor.Item1 is > 0 && !string.IsNullOrWhiteSpace(actor.Item2))
+                .Select(actor => actor.Item1!.Value)
+                .Distinct()
+                .Count(),
+            NameRequestedCount = marketActorNameRequestedCount,
+            Listings = rows,
+        };
+    }
+
+    internal TimeSpan GetMarketAcquisitionRecentWorldTtl()
+    {
+        var ttlHours = Math.Clamp(config.MarketAcquisitionRecentWorldTtlHours, 1, 168);
+        if (ttlHours != config.MarketAcquisitionRecentWorldTtlHours)
+        {
+            config.MarketAcquisitionRecentWorldTtlHours = ttlHours;
+            config.Save();
+        }
+
+        return TimeSpan.FromHours(ttlHours);
+    }
+
+    internal string GetCurrentWorldName()
+    {
+        if (!playerState.CurrentWorld.IsValid)
+            throw new InvalidOperationException("Current world is unavailable.");
+
+        return playerState.CurrentWorld.Value.Name.ToString();
+    }
+
+    internal bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
+
+    internal AgentBridgeMarketActorCapabilityTruth GetMarketActorCapabilityTruth() =>
+        CreateMarketActorCapabilityTruth(ReadCurrentMarketActorBook());
+
+    internal AgentBridgeControlledMarketListingTruth GetControlledListingTruth() =>
+        CreateControlledMarketActorListingTruth(ControlledListingProbe.Snapshot());
+
+    internal AgentBridgeControlledMarketBrowseTruth GetControlledBrowseTruth() =>
+        CreateControlledMarketActorBrowseTruth(ControlledBrowseProbe.Snapshot());
 
     internal QuartermasterOwnerScope GetCurrentQuartermasterOwnerScope() =>
         new(
