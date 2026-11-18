@@ -189,13 +189,32 @@ internal sealed class WorkshopPrepQueuePanel
         ApplyFrozenQueueResult(WorkshopQueueService.LoadFrozenQueue(config, queueId));
     }
 
-    public void DeleteFrozenQueue(Guid queueId)
+    /// <summary>Deletes saved jobs at once and returns what an undo needs, or null when none existed.</summary>
+    public WorkshopSavedJobRemoval? DeleteFrozenQueues(IReadOnlyCollection<Guid> queueIds)
     {
-        var result = WorkshopQueueService.DeleteFrozenQueue(config, queueId);
-        if (result.Success)
-            selectedFrozenQueueId = config.FrozenWorkshopQueues.FirstOrDefault()?.Id;
+        var removal = WorkshopQueueService.DeleteFrozenQueues(config, queueIds);
+        if (removal == null)
+        {
+            ApplyFrozenQueueResult(new WorkshopQueueOperationResult(false, "Frozen workshop queue was not found."));
+            return null;
+        }
 
+        selectedFrozenQueueId = config.FrozenWorkshopQueues.FirstOrDefault()?.Id;
+        ApplyFrozenQueueResult(new WorkshopQueueOperationResult(
+            true,
+            removal.Jobs.Count == 1
+                ? $"Deleted frozen workshop queue {removal.Jobs[0].Job.Name}."
+                : $"Deleted {removal.Jobs.Count} frozen workshop queues."));
+        return removal;
+    }
+
+    public WorkshopQueueOperationResult RestoreFrozenQueues(WorkshopSavedJobRemoval removal)
+    {
+        var result = CanEditQueue
+            ? WorkshopQueueService.RestoreFrozenQueues(config, removal)
+            : new WorkshopQueueOperationResult(false, "Saved jobs cannot change while an assembly run is active.");
         ApplyFrozenQueueResult(result);
+        return result;
     }
 
     public void OverwriteFrozenQueueWithCurrent(Guid queueId)
@@ -221,11 +240,14 @@ internal sealed class WorkshopPrepQueuePanel
         ApplyFrozenQueueResult(WorkshopQueueService.FreezeCurrentQueue(config, name, DateTime.UtcNow), clearName: false);
     }
 
-    public WorkshopQueueOperationResult ImportSavedJob(string? text)
+    public WorkshopQueueOperationResult ImportSavedJob(string? text) =>
+        ImportSavedJob(text, WorkshopSavedJobOrigin.Manual);
+
+    public WorkshopQueueOperationResult ImportSavedJob(string? text, WorkshopSavedJobOrigin origin)
     {
         // Mirrors the disabled import buttons so IPC callers get the same rule as the window.
         var result = CanEditQueue
-            ? WorkshopQueueService.ImportSavedJob(config, text, workshopCatalog.GetProjects(), DateTime.UtcNow)
+            ? WorkshopQueueService.ImportSavedJob(config, text, workshopCatalog.GetProjects(), DateTime.UtcNow, origin)
             : new WorkshopQueueOperationResult(false, "Cannot import saved jobs while workshop assembly is active.");
         ApplyFrozenQueueResult(result);
         return result;

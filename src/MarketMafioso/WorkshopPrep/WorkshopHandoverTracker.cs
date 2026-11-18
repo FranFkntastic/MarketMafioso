@@ -574,6 +574,22 @@ public static class WorkshopHandoverCalculator
             .ToArray();
     }
 
+    /// <summary>What the assembler is counted as holding: its bags, plus observed retainers when included.</summary>
+    public static IReadOnlyDictionary<uint, int>? CombineHoldings(
+        IReadOnlyList<WorkshopMaterialRequirement> requirements,
+        IReadOnlyDictionary<uint, int>? bags,
+        IReadOnlyDictionary<uint, int>? retainers,
+        bool includeRetainers)
+    {
+        if (bags == null || !includeRetainers)
+            return bags;
+        return requirements
+            .Select(requirement => requirement.ItemId)
+            .Distinct()
+            .ToDictionary(itemId => itemId, itemId =>
+                (int)Math.Min(int.MaxValue, (long)bags.GetValueOrDefault(itemId) + (retainers?.GetValueOrDefault(itemId) ?? 0)));
+    }
+
     /// <summary>Units the sender owes in total before any handover: Σ max(0, Needed − TheyHold-if-counted).</summary>
     public static int HandoverTotal(IReadOnlyList<WorkshopHandoverRow> rows, bool countTheirs) =>
         rows.Sum(row => row.Due(countTheirs));

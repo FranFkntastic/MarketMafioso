@@ -272,7 +272,8 @@ public partial class MainWindow : Window, IDisposable
                 workshopPrepQueue.OverwriteFrozenQueueWithCurrent,
                 workshopPrepQueue.RenameFrozenQueue,
                 workshopPrepQueue.DuplicateFrozenQueue,
-                workshopPrepQueue.DeleteFrozenQueue,
+                workshopPrepQueue.DeleteFrozenQueues,
+                workshopPrepQueue.RestoreFrozenQueues,
                 workshopPrepQueue.SaveCurrentQueueAsNew,
                 workshopPrepQueue.ImportSavedJob,
                 acquisitionServices.GetCurrentWorkshopAssembler,
@@ -292,7 +293,8 @@ public partial class MainWindow : Window, IDisposable
                     GetWorkshopAvailability,
                     CanStageWorkshopMarketAcquisition,
                     StageWorkshopMarketAcquisition,
-                    message => log.Warning(message))),
+                    message => log.Warning(message)),
+                message => log.Information(message)),
             AgentReviewRegistry);
         frozenQueueBrowser = FrozenQueueBrowser;
         var acquisitionRequestBuilderCraftAppraisal = CreateAcquisitionRequestBuilderCraftAppraisalController();
@@ -916,8 +918,17 @@ public partial class MainWindow : Window, IDisposable
         IsOpen = true;
     }
 
-    public WorkshopQueueOperationResult ImportWorkshopSavedJob(string? text) =>
-        workshopPrepQueue.ImportSavedJob(text);
+    /// <summary>
+    /// Stores a market-run job sent over IPC, opens Saved Jobs on it and loads it when the active queue is
+    /// free. The returned message is shown to the sender's user verbatim.
+    /// </summary>
+    public WorkshopQueueOperationResult ImportWorkshopSavedJob(string? text)
+    {
+        var result = workshopPrepQueue.ImportSavedJob(text, WorkshopSavedJobOrigin.MarketRun);
+        return result.Success && result.QueueId is { } queueId
+            ? FrozenQueueBrowser.PresentSentJob(queueId, result)
+            : result;
+    }
 
     private bool CanStageMarketAcquisition() =>
         acquisitionServices.IsMarketAcquisitionUnlocked() &&

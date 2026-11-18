@@ -19,6 +19,9 @@ public sealed class WorkshopFrozenQueue
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public List<WorkshopPrepQueueItem> Items { get; set; } = new();
 
+    /// <summary>Where the job came from. Configs written before this field load as <see cref="WorkshopSavedJobOrigin.Manual"/>.</summary>
+    public WorkshopSavedJobOrigin Origin { get; set; }
+
     /// <summary>The saved job this one was split from, when it is a delivered share.</summary>
     public Guid? SplitSourceJobId { get; set; }
 
@@ -77,6 +80,15 @@ public sealed class WorkshopFrozenQueue
     /// verified and credited; otherwise resolved by the user (count it or discard it). Never auto-credited.
     /// </summary>
     public WorkshopHandoverInFlight? HandoverInFlight { get; set; }
+}
+
+public enum WorkshopSavedJobOrigin
+{
+    /// <summary>Saved, imported or accepted by hand.</summary>
+    Manual = 0,
+
+    /// <summary>Sent by another plugin over the saved-job IPC channel; removed automatically once finished.</summary>
+    MarketRun = 1,
 }
 
 /// <summary>A bound Trade Queue batch that was started but not verified: its material lines and start time.</summary>
