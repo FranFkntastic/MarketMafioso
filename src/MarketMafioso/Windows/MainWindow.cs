@@ -65,13 +65,12 @@ public partial class MainWindow : Window, IDisposable
 
     public MarketListingOverlayWindow MarketListingOverlay { get; }
     private readonly IDataManager dataManager;
-    private readonly HttpClient acquisitionHttpClient = new();
+    private readonly MarketAcquisitionServices acquisitionServices;
     private readonly MarketIntelligencePassiveReporter marketIntelligencePassiveReporter;
     private readonly HttpClient craftQuoteHttpClient = new();
     private readonly MarketAcquisitionRequestWorkspace acquisitionWorkspace;
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteEngine routeEngine;
-    private readonly DalamudMarketPurchasePacketObserver marketPurchasePacketObserver;
     private readonly ConfigurationExactAcquisitionRouteExecutionStateStore exactAcquisitionRouteStateStore;
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly StandaloneSquirePanel squirePanel;
@@ -136,10 +135,8 @@ public partial class MainWindow : Window, IDisposable
         ITradeQueueIo tradeQueueIo,
         IDataManager dataManager,
         IPlayerState playerState,
-        MarketBoardApproachService marketBoardApproachService,
-        IMarketBoardBrowseRuntime marketBoardBrowseRuntime,
+        MarketAcquisitionServices acquisitionServices,
         IRetainerListingRefreshControls retainerListingRefreshControls,
-        string marketAcquisitionRouteDiagnosticsDirectory,
         IPluginLog log,
         WorkshopRestockService restock,
         RemoteSummoningBellProbe remoteSummoningBellProbe)
@@ -181,161 +178,20 @@ public partial class MainWindow : Window, IDisposable
                 capturePresentationRestoreSize = capturePresentationPreviousSize;
                 capturePresentationPreviousSize = null;
             });
-        var acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
-        marketIntelligencePassiveReporter = new MarketIntelligencePassiveReporter(
-            config,
-            acquisitionHttpClient,
-            Plugin.PluginInterface.GetPluginConfigDirectory(),
-            ex => log.Warning(ex, "[MarketMafioso] Market intelligence reporting requires attention."),
-            message => log.Information("[MarketMafioso] {Message}", message),
-            (exception, message) => log.Warning(exception, "[MarketMafioso] {Message}", message));
-        var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
-        marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
-        var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
-            acquisitionPlanSource,
-            marketAcquisitionWorldVisitCatalog,
-            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope, scanner.ResolveItemName));
-        acquisitionWorkspace = new MarketAcquisitionRequestWorkspace(
-            config,
-            acquisitionClient,
-            marketAcquisitionPlanPreparationService,
-            config.Save,
-            ex => log.Warning(ex, "[MarketMafioso] Market acquisition request action failed."));
-        var universalisFreshnessVerifier = new UniversalisMarketFreshnessVerifier(acquisitionHttpClient);
-        marketBoardListingReader = new MarketBoardListingReader(marketBoardBrowseRuntime);
-        var marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(
-            Plugin.GameGui,
-            marketBoardBrowseRuntime);
-        var marketBoardInputCaptureReader = new MarketBoardInputCaptureReader(Plugin.GameGui);
-        var marketBoardPurchaseAdapter = new DalamudMarketBoardPurchaseAdapter(Plugin.GameGui, log);
-        var marketBoardPurchaseExecutor = new MarketBoardPurchaseExecutor(marketBoardPurchaseAdapter);
-        marketPurchasePacketObserver = new(Plugin.GameInteropProvider, log);
-        var marketPurchaseEvidence = new MarketPurchaseEvidenceCoordinator(
-            new MarketPurchaseEvidenceFileStore(Path.Combine(
-                Plugin.PluginInterface.GetPluginConfigDirectory(),
-                "market-purchase-evidence.json")),
-            marketPurchasePacketObserver.Queue,
-            () => Plugin.Framework.IsInFrameworkUpdateThread);
-        marketBoardAcquisition = new MarketBoardAcquisitionController(
-            config,
-            Plugin.MarketBoard,
-            Plugin.ClientState,
-            Plugin.ObjectTable,
-            Plugin.Framework,
-            Plugin.GameGui,
-            Plugin.Condition,
-            Plugin.ChatGui,
-            Plugin.NotificationManager,
-            Plugin.GameInteropProvider,
-            Plugin.AddonLifecycle,
-            log,
-            scanner.ResolveItemName,
-            (itemId, itemName, intent, previousOperationId) =>
-                marketBoardItemSearchDriver.Search(
-                    itemId,
-                    itemName,
-                    MarketBoardBrowseOwner.MarketListingAcquisition,
-                    intent,
-                    previousOperationId),
-            marketBoardBrowseRuntime,
-            Plugin.PluginInterface,
-            Plugin.PluginInterface.GetPluginConfigDirectory(),
-            ReportPassiveMarketObservation);
+        this.acquisitionServices = acquisitionServices;
+        marketIntelligencePassiveReporter = acquisitionServices.IntelligenceReporter;
+        marketAcquisitionWorldVisitCatalog = acquisitionServices.WorldVisitCatalog;
+        acquisitionWorkspace = acquisitionServices.Workspace;
+        marketBoardListingReader = acquisitionServices.ListingReader;
+        marketBoardAcquisition = acquisitionServices.Controller;
+        controlledMarketActorListingProbe = acquisitionServices.ControlledListingProbe;
+        controlledMarketActorBrowseProbe = acquisitionServices.ControlledBrowseProbe;
+        exactAcquisitionRouteStateStore = acquisitionServices.ExactStateStore;
+        routeEngine = acquisitionServices.RouteEngine;
+        marketBoardApproachService = acquisitionServices.ApproachService;
+        marketAcquisitionRouteDiagnosticsDirectory = acquisitionServices.DiagnosticsDirectory;
         this.remoteSummoningBellProbe = remoteSummoningBellProbe;
-        controlledMarketActorListingProbe = new ControlledMarketActorListingProbe(
-            config,
-            Plugin.DataManager,
-            Plugin.Condition,
-            Plugin.Framework,
-            Plugin.GameGui,
-            log,
-            Plugin.ObjectTable,
-            Plugin.TargetManager,
-            Plugin.SigScanner,
-            Plugin.PluginInterface,
-            Plugin.GameInventory);
-        controlledMarketActorBrowseProbe = new ControlledMarketActorBrowseProbe(
-            config,
-            Plugin.DataManager,
-            Plugin.CommandManager.ProcessCommand,
-            marketBoardApproachService.IsMarketBoardReady,
-            (itemId, itemName) => marketBoardAcquisition.SearchItem(
-                itemId,
-                itemName,
-                MarketBoardItemSearchIntent.RequireFreshBrowse),
-            marketBoardListingReader.ReadCurrentListings);
         MarketListingOverlay = new MarketListingOverlayWindow(marketBoardAcquisition, AgentReviewRegistry);
-        this.marketBoardApproachService = marketBoardApproachService;
-        this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
-        var routeUiAutomation = new DalamudMarketAcquisitionRouteUiAutomation(
-            marketBoardAcquisition.TryCloseMarketBoardForTravel);
-        var lifestream = new LifestreamIpc(Plugin.PluginInterface, log);
-        var shardCheckpointRuntime = new DalamudShardAcquisitionCheckpointRuntime(
-            playerState,
-            scanner,
-            routeUiAutomation,
-            new Franthropy.Dalamud.Travel.DalamudLifestreamPropertyTravel(Plugin.PluginInterface),
-            lifestream);
-        var shardCheckpoints = new ShardAcquisitionCheckpointCoordinator(
-            quartermaster,
-            shardCheckpointRuntime,
-            new ConfigurationShardAcquisitionCheckpointStateStore(config, config.Save));
-        var marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
-            marketAcquisitionRouteDiagnosticsDirectory,
-            universalisFreshnessVerifier.VerifyAsync,
-            () => new MarketAcquisitionRouteDiagnosticRetentionPolicy
-            {
-                EnableColdArchive = config.ArchiveCompletedMarketAcquisitionRouteDiagnostics,
-                HotRetentionDays = config.MarketAcquisitionRouteDiagnosticsHotDays,
-                HotRetentionRunCount = config.MarketAcquisitionRouteDiagnosticsHotRuns,
-            },
-            (exception, message) => Plugin.Log.Error(exception, "[MarketMafioso] {Message}", message));
-        exactAcquisitionRouteStateStore = new ConfigurationExactAcquisitionRouteExecutionStateStore(
-            config, () => config.SaveRequired("ExactAcquisitionRouteAuthority"));
-        routeEngine = new MarketAcquisitionRouteEngine(
-            marketAcquisitionRouteRunner,
-            new DalamudMarketAcquisitionRouteContext(playerState, lifestream),
-            routeUiAutomation,
-            new UnsupportedMarketAcquisitionRouteTravelCleanup(),
-            new DalamudMarketAcquisitionMarketBoardIo(
-                marketBoardApproachService,
-                marketBoardItemSearchDriver,
-                marketBoardListingReader,
-                marketBoardInputCaptureReader,
-                marketBoardBrowseRuntime),
-            new DalamudMarketAcquisitionPurchaseIo(
-                marketBoardPurchaseExecutor,
-                marketBoardPurchaseAdapter,
-                marketPurchaseEvidence,
-                playerState),
-            new MarketAcquisitionRouteRequestReporter(config, acquisitionClient),
-            new MarketAcquisitionWorldVisitEvidenceRecorder(marketAcquisitionWorldVisitCatalog),
-            acquisitionWorkspace.CreateClaimLifecycleController(
-                () => marketAcquisitionRouteRunner.StatusMessage),
-            new DalamudMarketAcquisitionRouteCallbackDispatcher(),
-            new SystemMarketAcquisitionRouteClock(),
-            exactAcquisitionRouteStateStore,
-            new FileMarketAcquisitionReportOutbox(Path.Combine(
-                Plugin.PluginInterface.GetPluginConfigDirectory(),
-                "market-acquisition-report-outbox.json"),
-                message => log.Information("[MarketMafioso] {Message}", message),
-                (exception, message) => log.Warning(exception, "[MarketMafioso] {Message}", message)),
-            shardCheckpoints,
-            new FileMarketAcquisitionReportOutbox(Path.Combine(
-                Plugin.PluginInterface.GetPluginConfigDirectory(),
-                "market-acquisition-report-dead-letter.json"),
-                message => log.Information("[MarketMafioso] {Message}", message),
-                (exception, message) => log.Warning(exception, "[MarketMafioso] {Message}", message),
-                deadLetterOnly: true),
-            config.PluginInstanceId,
-            PluginBuildInfo.DisplayVersion,
-            () => config.MarketAcquisitionExhaustiveResearchMode,
-            marketIntelligencePassiveReporter,
-            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope, scanner.ResolveItemName),
-            new MarketAcquisitionAethernetDeparture(
-                new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
-                lifestream,
-                () => config.MarketAcquisitionAethernetDeparture));
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -409,7 +265,7 @@ public partial class MainWindow : Window, IDisposable
             vendorPlanner,
             workshopVendorRestockRunner,
             GetWorkshopAvailability,
-            GetCurrentQuartermasterOwnerScope,
+            acquisitionServices.GetCurrentQuartermasterOwnerScope,
             CanStageWorkshopMarketAcquisition,
             StageWorkshopMarketAcquisition,
             AgentReviewRegistry);
@@ -456,7 +312,7 @@ public partial class MainWindow : Window, IDisposable
                 new WorkshopShareRestockActions(
                     workshopVendorRestockRunner,
                     vendorPlanner,
-                    GetCurrentQuartermasterOwnerScope,
+                    acquisitionServices.GetCurrentQuartermasterOwnerScope,
                     scanner.CountWorkshopUsableInventory,
                     GetWorkshopAvailability,
                     CanStageWorkshopMarketAcquisition,
@@ -473,7 +329,7 @@ public partial class MainWindow : Window, IDisposable
             RefreshAcquisitionRequestBuilderRemoteAsync,
             acquisitionWorkspace.OnDocumentAdopted,
             AgentReviewRegistry,
-            new RetainerAwareMarketAcquisitionInventoryObserver(new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope, scanner.ResolveItemName));
+            acquisitionServices.InventoryObserver);
         acquisitionCompositionCatalog = new MarketAcquisitionWorkbenchCompositionCatalog(
             new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save));
         var acquisitionWorkbenchCompositions = new MarketAcquisitionWorkbenchCompositionPanel(
@@ -2488,13 +2344,6 @@ public partial class MainWindow : Window, IDisposable
         return !string.IsNullOrWhiteSpace(characterName) && !string.IsNullOrWhiteSpace(world);
     }
 
-    private QuartermasterOwnerScope GetCurrentQuartermasterOwnerScope() =>
-        new(
-            playerState.ContentId == 0 ? null : playerState.ContentId,
-            playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.RowId : null,
-            playerState.CharacterName,
-            playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
-
     private string GetCurrentWorldName()
     {
         if (!playerState.CurrentWorld.IsValid)
@@ -2545,7 +2394,7 @@ public partial class MainWindow : Window, IDisposable
 
     private WorkshopAssembler? GetCurrentWorkshopAssembler()
     {
-        var owner = GetCurrentQuartermasterOwnerScope();
+        var owner = acquisitionServices.GetCurrentQuartermasterOwnerScope();
         return owner.IsAvailable &&
                !string.IsNullOrWhiteSpace(owner.CharacterName) &&
                !string.IsNullOrWhiteSpace(owner.HomeWorldName)
@@ -2568,7 +2417,7 @@ public partial class MainWindow : Window, IDisposable
             return [];
 
         playerInventory ??= scanner.CountWorkshopUsableInventory();
-        var owner = GetCurrentQuartermasterOwnerScope();
+        var owner = acquisitionServices.GetCurrentQuartermasterOwnerScope();
         var retainers = new List<MarketMafioso.Contracts.Inventory.RetainerReport>();
         var hasDirectRetainerEvidence = false;
         if (owner.LocalContentId is > 0 && owner.HomeWorldId is > 0)
@@ -2669,78 +2518,11 @@ public partial class MainWindow : Window, IDisposable
 
     private bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
 
-    private void ReportPassiveMarketObservation(MarketBoardListingRevision revision)
-    {
-        if (string.IsNullOrWhiteSpace(revision.VerifiedBrowseOperationId) ||
-            !playerState.CurrentWorld.IsValid)
-            return;
-
-        try
-        {
-            var worldName = playerState.CurrentWorld.Value.Name.ToString();
-            var nativeRead = marketBoardListingReader.ReadCurrentListings(worldName);
-            var nativeByListingId = nativeRead.IsFresh &&
-                                    string.Equals(nativeRead.BrowseOperationId, revision.VerifiedBrowseOperationId, StringComparison.Ordinal)
-                ? nativeRead.Listings.ToDictionary(listing => listing.ListingId, StringComparer.Ordinal)
-                : new Dictionary<string, MarketBoardLiveListing>(StringComparer.Ordinal);
-            marketIntelligencePassiveReporter.Enqueue(new MarketEvidenceUploadRequest
-            {
-                SchemaVersion = 2,
-                IdempotencyKey = $"{config.PluginInstanceId}:passive:{revision.VerifiedBrowseOperationId}",
-                OccurrenceId = revision.VerifiedBrowseOperationId,
-                SourceKind = MarketEvidenceSources.PassiveMarketBoard,
-                SourceVersion = "3",
-                SourceInstanceId = config.PluginInstanceId,
-                SourceBuild = typeof(MainWindow).Assembly.GetName().Version?.ToString(),
-                CaptureMode = "PassiveBrowse",
-                ItemId = revision.Source.ItemId,
-                ItemName = scanner.ResolveItemName(revision.Source.ItemId),
-                DataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName),
-                WorldName = worldName,
-                ObservedAtUtc = DateTimeOffset.UtcNow,
-                Coverage = revision.Listings.Count == 0
-                    ? MarketEvidenceCoverage.Empty
-                    : revision.IsComplete ? MarketEvidenceCoverage.Complete : MarketEvidenceCoverage.Partial,
-                ReportedListingCount = revision.Source.ListingCount,
-                ListingCapacity = 100,
-                IsTruncated = !revision.IsComplete,
-                Listings = revision.Listings.Select(listing =>
-                {
-                    nativeByListingId.TryGetValue(listing.ListingId.ToString(), out var native);
-                    return new MarketEvidenceUploadListing
-                    {
-                        ListingId = listing.ListingId.ToString(),
-                        RetainerId = listing.RetainerId.ToString(),
-                        RetainerName = listing.RetainerName,
-                        RetainerNameSource = string.IsNullOrWhiteSpace(listing.RetainerName) ? null : "DalamudMarketBoardPacket",
-                        SellerOwnerContentId = null,
-                        ArtisanContentId = native?.ArtisanContentId,
-                        Quantity = listing.Quantity,
-                        UnitPrice = listing.UnitPrice,
-                        IsHq = listing.IsHighQuality,
-                    };
-                }).ToArray(),
-            });
-        }
-        catch (Exception exception)
-        {
-            log.Warning(exception, "[MarketMafioso] Passive market evidence could not be queued.");
-        }
-    }
-
     public void Dispose()
     {
         AgentCaptureTransactions.CancelActive();
 
         uiStateCapture.Dispose();
-        acquisitionWorkspace.Dispose();
-        routeEngine.Dispose();
-        marketAcquisitionWorldVisitCatalog.Dispose();
-        marketBoardAcquisition.Dispose();
-        marketIntelligencePassiveReporter.Dispose();
-        controlledMarketActorListingProbe.Dispose();
-        marketPurchasePacketObserver.Dispose();
-        acquisitionHttpClient.Dispose();
         craftQuoteHttpClient.Dispose();
         FrozenQueueBrowser.Dispose();
         tradeQueueRunner.BatchVerified -= HandoverTracker.OnBatchVerified;

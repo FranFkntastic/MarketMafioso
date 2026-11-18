@@ -100,6 +100,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TradeQueueRunner tradeQueueRunner;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
+    private readonly MarketAcquisitionServices acquisitionServices;
     private readonly RemoteSummoningBellProbe remoteSummoningBellProbe;
     private readonly WorkshopRestockService workshopRestock;
     private readonly AgentBridgeProofStore agentBridgeProofStore;
@@ -308,6 +309,21 @@ public sealed class Plugin : IDalamudPlugin
             Log,
             PluginInterface,
             PluginInterface.GetPluginConfigDirectory());
+        acquisitionServices = new MarketAcquisitionServices(
+            Configuration,
+            DataManager,
+            PlayerState,
+            scanner,
+            quartermaster,
+            new MarketBoardApproachService(
+                GameGui,
+                ObjectTable,
+                TargetManager,
+                new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
+                Log),
+            marketBoardBrowseObserver,
+            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
+            Log);
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -324,15 +340,8 @@ public sealed class Plugin : IDalamudPlugin
             tradeQueueIo,
             DataManager,
             PlayerState,
-            new MarketBoardApproachService(
-                GameGui,
-                ObjectTable,
-                TargetManager,
-                new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
-                Log),
-            marketBoardBrowseObserver,
+            acquisitionServices,
             marketLockoutAttention,
-            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log,
             workshopRestock,
             remoteSummoningBellProbe);
@@ -988,6 +997,7 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.AcquisitionFeedbackTransition -= OnAcquisitionFeedbackTransition;
         mainWindow.Dispose();
+        acquisitionServices.Dispose();
         remoteSummoningBellProbe.Dispose();
         workshopRestock.Dispose();
         reporter.Dispose();
