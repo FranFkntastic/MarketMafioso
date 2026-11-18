@@ -26,7 +26,7 @@ public static class MarketAcquisitionRouteTablePresenter
         {
             WorldName = stop.WorldName,
             DataCenter = stop.DataCenter,
-            RouteLines = FormatRouteLines(stop.LineStates),
+            RouteLines = FormatContribution(stop),
             LineMix = FormatLineMix(stop.LineStates),
             State = aggregate.State,
             Intent = FormatPlannedIntent(stop.LineStates),
@@ -103,19 +103,34 @@ public static class MarketAcquisitionRouteTablePresenter
             : FormatState(stop.Status);
     }
 
-    private static string FormatRouteLines(IReadOnlyList<MarketAcquisitionRouteLineState> lines)
+    private static string FormatContribution(MarketAcquisitionGuidedRouteStop stop)
     {
-        var names = lines
-            .Select(line => FormatItem(line.ItemName, line.ItemId))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        var bought = stop.LineStates
+            .Where(line => line.PurchasedQuantity > 0)
+            .GroupBy(line => line.ItemId)
+            .Select(group => new { Name = FormatItem(group.First().ItemName, group.Key), Gil = group.Sum(line => (long)line.SpentGil) })
+            .OrderByDescending(item => item.Gil)
+            .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        if (names.Length == 0)
-            return "-";
-
-        var shown = string.Join(", ", names.Take(2));
-        return names.Length <= 2
-            ? shown
-            : $"{shown} +{names.Length - 2:N0}";
+        if (bought.Length > 0)
+        {
+            var shown = string.Join(" · ", bought.Take(3).Select(item => $"{item.Name} {item.Gil:N0}"));
+            return bought.Length <= 3 ? shown : $"{shown} +{bought.Length - 3:N0}";
+        }
+        return stop.LineStates
+            .Where(line => line.Status != "Pending")
+            .GroupBy(line => line.Status)
+            .OrderByDescending(group => group.Count())
+            .Select(group => group.Key switch
+            {
+                "SkippedNoLiveStock" => "No safe stock",
+                "SkippedOverageLimit" => "Overage limit",
+                "SkippedTargetAlreadyMet" => "Target already met",
+                "SkippedIncompleteListingCoverage" => "Incomplete listing coverage",
+                "Failed" => "Blocked",
+                _ => group.First().LiveCandidateStatus ?? FormatState(group.Key),
+            })
+            .FirstOrDefault() ?? FormatState(stop.Status);
     }
 
     private static string FormatLineMix(IReadOnlyList<MarketAcquisitionRouteLineState> lines)

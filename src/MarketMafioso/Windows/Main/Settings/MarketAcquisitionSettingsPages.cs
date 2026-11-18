@@ -124,6 +124,9 @@ internal sealed class MarketAcquisitionSettingsPages
 
     private void DrawOperation(SettingsPageContext context)
     {
+        DrawCheckbox(context, "Notify when acquisition routes finish or need attention",
+            "Show one notification and chat summary when a route finishes, fails, or blocks. User Stop does not send an alert.",
+            () => config.MarketAcquisitionRouteAlerts, value => config.MarketAcquisitionRouteAlerts = value);
         DrawCheckbox(context, "Leave Ul'dah market via aethernet before world travel",
             "Walk to Sapphire Avenue Exchange and transfer to Aetheryte Plaza before asking Lifestream to visit the next world. If unavailable, use normal Lifestream travel. Lifestream still handles world travel and the destination market board.",
             () => config.MarketAcquisitionAethernetDeparture, value => config.MarketAcquisitionAethernetDeparture = value);

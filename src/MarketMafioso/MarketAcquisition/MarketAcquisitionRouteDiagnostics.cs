@@ -153,7 +153,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         IMarketAcquisitionDiagnosticCompressor? compressor = null)
     {
         var createCompanionCsvs =
-            level == MarketAcquisitionRouteDiagnosticsLevel.FullTrace &&
+            level != MarketAcquisitionRouteDiagnosticsLevel.Off &&
             (filePrefix.Equals("route", StringComparison.OrdinalIgnoreCase) ||
              filePrefix.Equals("dry-run", StringComparison.OrdinalIgnoreCase));
         var packageDirectory = CreatePackageDirectory(directory, startedAt, filePrefix);
@@ -165,11 +165,11 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
 
         try
         {
-            observedListingsCsv = createCompanionCsvs
+            observedListingsCsv = createCompanionCsvs && level == MarketAcquisitionRouteDiagnosticsLevel.FullTrace
                 ? AutomationCsvLog.CreateAtPath(Path.Combine(packageDirectory, "observed-listings.csv"), ObservedListingsHeader, autoFlush: false)
                 : null;
             purchaseRecordsCsv = createCompanionCsvs
-                ? AutomationCsvLog.CreateAtPath(Path.Combine(packageDirectory, "purchase-records.csv"), PurchaseRecordsHeader, autoFlush: false)
+                ? AutomationCsvLog.CreateAtPath(Path.Combine(packageDirectory, "purchase-records.csv"), PurchaseRecordsHeader, autoFlush: true)
                 : null;
             var routeEventsJsonlPath = Path.Combine(packageDirectory, "route-events.jsonl");
             routeEventsWriter = new StreamWriter(
@@ -289,7 +289,15 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         lock (sync)
         {
             if (disposed)
+            {
+                // Terminal streams are sealed; open a file only for a late freshness record.
+                if (PackageDirectoryPath != null && terminalEventName == "complete" &&
+                    eventName is "universalis-freshness" or "universalis-freshness-warning" &&
+                    DateTimeOffset.UtcNow <= finalizedAtUtc?.AddSeconds(60))
+                    File.AppendAllText(Path.Combine(PackageDirectoryPath, "universalis-freshness.jsonl"),
+                        JsonSerializer.Serialize(new { recordedAtUtc = DateTimeOffset.UtcNow, eventName, message, details }) + Environment.NewLine);
                 return;
+            }
 
             RecordUnsafe(eventName, message, details);
             if (IsTerminalEvent(eventName))
@@ -399,7 +407,10 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         string result,
         string? source,
         uint? itemId = null,
-        string? sourceCandidateStatus = null)
+        string? sourceCandidateStatus = null,
+        uint? unitPrice = null,
+        bool? isHq = null,
+        uint? tax = null)
     {
         var eventDetails = new Dictionary<string, string?>
         {
@@ -447,11 +458,14 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 retainerId,
                 quantity.ToString(CultureInfo.InvariantCulture),
                 totalGil.ToString(CultureInfo.InvariantCulture),
-                quantity == 0
+                unitPrice?.ToString(CultureInfo.InvariantCulture) ?? (quantity == 0
                     ? null
-                    : (totalGil / quantity).ToString(CultureInfo.InvariantCulture),
+                    : (totalGil / quantity).ToString(CultureInfo.InvariantCulture)),
                 null,
                 null,
+                DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                isHq?.ToString(),
+                tax?.ToString(CultureInfo.InvariantCulture),
             ]);
         }
     }
@@ -678,6 +692,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         "unitPrice",
         "message",
         "notes",
+        "timestampUtc",
+        "isHq",
+        "tax",
     ];
 
     private void WriteObservedListingRow(
@@ -907,7 +924,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
     }
 
     private static bool IsTerminalEvent(string eventName) =>
-        eventName is "complete" or "failed" or "stopped" or "input-capture-finalized";
+        eventName is "complete" or "completion-outcome" or "failed" or "stopped" or "input-capture-finalized";
 
     private bool ShouldIncludeInSummary(
         string eventName,
