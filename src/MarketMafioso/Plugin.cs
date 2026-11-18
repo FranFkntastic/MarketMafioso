@@ -120,6 +120,7 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        Configuration.LoadRuntimeState(PluginInterface.GetPluginConfigDirectory());
         WorkshopHandoffService = new HostWorkshopHandoffService(Configuration, PlayerState, ClientState, Framework, Log);
         profileDataCenterCoordinator = new ProfileDataCenterCoordinator(
             PluginInterface.GetPluginConfigDirectory(), new DalamudDataCenterConnection(DataManager, ClientState, ObjectTable, GameGui));

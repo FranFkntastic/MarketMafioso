@@ -5,12 +5,14 @@ using MarketMafioso.RetainerRestock;
 using MarketMafioso.TradeQueue;
 using MarketMafioso.WorkshopPrep;
 using Franthropy.Dalamud.Automation.Vendors.Coordination;
+using Franthropy.Dalamud.Persistence;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using RuntimeJson = System.Text.Json.JsonSerializer;
 
 namespace MarketMafioso;
 
@@ -18,6 +20,8 @@ namespace MarketMafioso;
 public class Configuration : IPluginConfiguration
 {
     private readonly object saveSync = new();
+    private const string RuntimeStateFile = "runtime-state.json";
+    private string? lastWrittenRuntimeJson;
     private bool savePending;
     private DateTime retrySaveAtUtc;
     private string pendingSaveOperation = string.Empty;
@@ -147,12 +151,15 @@ public class Configuration : IPluginConfiguration
     public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();
 
     public Dictionary<string, QuartermasterWorkshopRequestState> QuartermasterWorkshopRequests { get; set; } = new();
+    public bool ShouldSerializeQuartermasterWorkshopRequests() => false;
     public bool AutomaticallyBuyWorkshopVendorMaterials { get; set; }
     public Dictionary<uint, int> WorkshopVendorApprovedQuantities { get; set; } = new();
     public List<uint> WorkshopVendorIncludedItems { get; set; } = new();
     public List<uint> WorkshopVendorExcludedItems { get; set; } = new();
     public GilVendorBuyRunSnapshot? ActiveWorkshopVendorBuyRun { get; set; }
     public WorkshopVendorRestockState? ActiveWorkshopVendorRestockState { get; set; }
+    public bool ShouldSerializeActiveWorkshopVendorBuyRun() => false;
+    public bool ShouldSerializeActiveWorkshopVendorRestockState() => false;
     public int WorkshopVendorRestockLegacyConversions { get; set; }
     [JsonProperty("ActiveWorkshopVendorRestock")]
     public PersistedWorkshopVendorRestockRun? LegacyActiveWorkshopVendorRestock { get; set; }
@@ -161,6 +168,51 @@ public class Configuration : IPluginConfiguration
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
     [JsonProperty("Squire")]
     public Newtonsoft.Json.Linq.JObject? LegacySquireConfiguration { get; set; }
+
+    private sealed class RuntimeState
+    {
+        public required Dictionary<string, QuartermasterWorkshopRequestState> QuartermasterWorkshopRequests { get; init; }
+        public required GilVendorBuyRunSnapshot? ActiveWorkshopVendorBuyRun { get; init; }
+        public required WorkshopVendorRestockState? ActiveWorkshopVendorRestockState { get; init; }
+    }
+
+    internal void LoadRuntimeState(string directory)
+    {
+        var path = Path.Combine(directory, RuntimeStateFile);
+        try
+        {
+            var json = File.ReadAllText(path);
+            var state = RuntimeJson.Deserialize<RuntimeState>(json);
+            if (state?.QuartermasterWorkshopRequests is null)
+                throw new InvalidDataException("Missing workshop request dictionary.");
+
+            QuartermasterWorkshopRequests = state.QuartermasterWorkshopRequests;
+            ActiveWorkshopVendorBuyRun = state.ActiveWorkshopVendorBuyRun;
+            ActiveWorkshopVendorRestockState = state.ActiveWorkshopVendorRestockState;
+            lastWrittenRuntimeJson = json;
+        }
+        catch (FileNotFoundException) { } // First save migrates the values loaded from settings.
+        catch (DirectoryNotFoundException) { }
+        catch (Exception exception)
+        {
+            Plugin.Log.Warning(exception, "Could not load {Path}; retaining workshop state from settings.", path);
+        }
+    }
+
+    private void SaveRuntimeState()
+    {
+        var snapshot = RuntimeJson.SerializeToElement(new RuntimeState
+        {
+            QuartermasterWorkshopRequests = QuartermasterWorkshopRequests,
+            ActiveWorkshopVendorBuyRun = ActiveWorkshopVendorBuyRun,
+            ActiveWorkshopVendorRestockState = ActiveWorkshopVendorRestockState,
+        });
+        var json = snapshot.GetRawText();
+        if (json == lastWrittenRuntimeJson) return;
+
+        AtomicJsonFile.Write(Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), RuntimeStateFile), snapshot);
+        lastWrittenRuntimeJson = json;
+    }
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     public void Save()
@@ -200,6 +252,7 @@ public class Configuration : IPluginConfiguration
                 return;
             try
             {
+                SaveRuntimeState(); // Commit the run state before dropping its legacy settings copy.
                 Plugin.PluginInterface.SavePluginConfig(this);
                 savePending = false;
                 retrySaveAtUtc = default;
