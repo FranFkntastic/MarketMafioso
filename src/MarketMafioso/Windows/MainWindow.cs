@@ -384,6 +384,7 @@ public partial class MainWindow : Window, IDisposable
             log,
             () => _ = routeEngine.Stop(),
             retainerListingRefreshControls,
+            Plugin.Instance.AcquisitionHostCheck,
             Plugin.Instance.RestartTimer,
             AgentReviewRegistry,
             marketIntelligencePassiveReporter.CreateStatus);

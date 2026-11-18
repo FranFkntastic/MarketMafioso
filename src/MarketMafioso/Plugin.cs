@@ -94,6 +94,7 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>Workshop Host delivery for split saved-job shares.</summary>
     public IWorkshopHandoffService WorkshopHandoffService { get; }
+    internal MarketAcquisitionHostCheck AcquisitionHostCheck { get; }
     private readonly MarketAcquisitionItemContextMenu marketAcquisitionItemContextMenu;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
@@ -126,6 +127,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Configuration.LoadRuntimeState(PluginInterface.GetPluginConfigDirectory());
+        AcquisitionHostCheck = new(Configuration, Framework, Log);
         WorkshopHandoffService = new HostWorkshopHandoffService(Configuration, PlayerState, ClientState, Framework, Log);
         profileDataCenterCoordinator = new ProfileDataCenterCoordinator(
             PluginInterface.GetPluginConfigDirectory(), new DalamudDataCenterConnection(DataManager, ClientState, ObjectTable, GameGui));
@@ -453,6 +455,7 @@ public sealed class Plugin : IDalamudPlugin
 
         StartTimer();
         sharedObservationClient.Start();
+        AcquisitionHostCheck.Start();
         Log.Information("[MarketMafioso] Plugin loaded. Use /mmf to open settings.");
 
         try
@@ -1023,6 +1026,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        AcquisitionHostCheck.Dispose();
         StopTimer();
         marketAcquisitionItemContextMenu.Dispose();
         exactAcquisitionIpc.Dispose();

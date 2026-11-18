@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Settings;
@@ -13,15 +12,15 @@ internal sealed class AdvancedSettingsPages
     private readonly Configuration config;
     private readonly Action stopMarketAcquisitionRoute;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
-    private string unlockKeyBuffer = string.Empty;
-    private string unlockStatus = "Private module is hidden until unlocked.";
-    private bool showUnlockKey;
+    private readonly MarketAcquisitionHostCheck hostCheck;
 
     public AdvancedSettingsPages(
         Configuration config,
         Action stopMarketAcquisitionRoute,
+        MarketAcquisitionHostCheck hostCheck,
         AgentBridgeUiReviewRegistry? reviewRegistry = null)
     {
+        this.hostCheck = hostCheck;
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.stopMarketAcquisitionRoute = stopMarketAcquisitionRoute ?? throw new ArgumentNullException(nameof(stopMarketAcquisitionRoute));
         this.reviewRegistry = reviewRegistry ?? new AgentBridgeUiReviewRegistry();
@@ -34,7 +33,7 @@ internal sealed class AdvancedSettingsPages
             new("advanced.testing", "Advanced / Testing", DrawTesting, 82,
                 searchTerms: ["dry run", "market acquisition", "diagnostic package", "no purchase"]),
             new("advanced.private-features", "Advanced / Private Features", DrawPrivateFeatures, 83,
-                searchTerms: ["unlock private module", "feature key", "lock feature"]),
+                searchTerms: ["unlock private module", "unlock from server", "lock feature"]),
         ];
     }
 
@@ -99,31 +98,15 @@ internal sealed class AdvancedSettingsPages
                 stopMarketAcquisitionRoute();
                 MarketAcquisitionUnlock.Lock(config);
                 config.Save();
-                unlockKeyBuffer = string.Empty;
-                unlockStatus = "Private module locked.";
+                hostCheck.Reset();
             }
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Locking hides the module and its settings. Existing drafts, inbox work, and execution history remain untouched.");
             return;
         }
 
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Private/internal modules are hidden by default.");
-        ImGui.Text("Unlock key:");
-        ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X - 82));
-        var flags = showUnlockKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
-        ImGui.InputText("##marketAcquisitionUnlockKey", ref unlockKeyBuffer, 256, flags);
-        ImGui.SameLine();
-        if (ImGui.Button(showUnlockKey ? "Hide##marketAcquisitionUnlock" : "Show##marketAcquisitionUnlock", new Vector2(72, 0))) showUnlockKey = !showUnlockKey;
-        if (ImGuiUi.Button("Unlock private module", !string.IsNullOrWhiteSpace(unlockKeyBuffer)))
-        {
-            if (MarketAcquisitionUnlock.TryUnlock(config, unlockKeyBuffer))
-            {
-                config.Save();
-                unlockKeyBuffer = string.Empty;
-                unlockStatus = "Private module unlocked.";
-            }
-            else unlockStatus = "Unlock key was not accepted.";
-        }
-        ImGui.TextColored(unlockStatus.Contains("not accepted", StringComparison.OrdinalIgnoreCase) ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted, unlockStatus);
+        if (ImGuiUi.Button("Unlock from server", !string.IsNullOrWhiteSpace(config.ServerUrl)))
+            hostCheck.CheckOnDemand();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, hostCheck.Status);
     }
 
     private void DrawCheckbox(SettingsPageContext context, string label, string description, Func<bool> getter, Action<bool> setter) =>
