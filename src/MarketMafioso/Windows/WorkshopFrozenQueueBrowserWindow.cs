@@ -280,8 +280,8 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
             .Concat(incomingLabels.Values)
             .Append("Not loaded")
             .Max(label => ImGui.CalcTextSize(label).X) + 28;
-        var etaWidth = Math.Max(ImGui.CalcTextSize("~1h 30m").X, ImGui.CalcTextSize("ETA").X) + 24;
-        var updatedWidth = Math.Max(ImGui.CalcTextSize("Updated").X, ImGui.CalcTextSize(DateTime.Now.ToString("g")).X) + 24;
+        var etaWidth = Math.Max(ImGui.CalcTextSize("~99h 59m").X, ImGui.CalcTextSize("ETA").X) + 24;
+        var updatedWidth = Math.Max(ImGui.CalcTextSize("Updated").X, ImGui.CalcTextSize(new DateTime(2028, 12, 28, 12, 58, 0).ToString("g")).X) + 24;
         // The trailing column fits the × and widens only while a row's delete is armed.
         var removeWidth = armedDeleteInRow && queues.Any(queue => queue.Id == armedDeleteQueueId)
             ? Math.Max(DalamudRowRemoveButton.Width, ImGui.CalcTextSize(ArmedDeleteLabel).X + (ImGui.GetStyle().FramePadding.X * 2f))
@@ -295,12 +295,15 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow : Window, IDisposab
 
         if (ImGui.BeginTable("WorkshopFrozenQueueBrowserTable", 6, flags, new Vector2(0, 320)))
         {
-            ImGui.TableSetupColumn("Saved Job", ImGuiTableColumnFlags.WidthFixed, nameWidth);
-            ImGui.TableSetupColumn("Projects", ImGuiTableColumnFlags.WidthFixed, projectWidth);
-            ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, stateWidth);
-            ImGui.TableSetupColumn("ETA", ImGuiTableColumnFlags.WidthFixed, etaWidth);
-            ImGui.TableSetupColumn("Updated", ImGuiTableColumnFlags.WidthFixed, updatedWidth);
-            ImGui.TableSetupColumn("##remove", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, removeWidth);
+            // Widths follow the content every frame; a resizable fixed column would freeze at its first-frame width,
+            // which is measured before share statuses have loaded.
+            const ImGuiTableColumnFlags fitted = ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize;
+            ImGui.TableSetupColumn("Saved Job", fitted, nameWidth);
+            ImGui.TableSetupColumn("Projects", fitted, projectWidth);
+            ImGui.TableSetupColumn("Status", fitted, stateWidth);
+            ImGui.TableSetupColumn("ETA", fitted, etaWidth);
+            ImGui.TableSetupColumn("Updated", fitted, updatedWidth);
+            ImGui.TableSetupColumn("##remove", fitted | ImGuiTableColumnFlags.NoHide | ImGuiTableColumnFlags.NoReorder, removeWidth);
             ImGui.TableHeadersRow();
 
             foreach (var view in incoming)
