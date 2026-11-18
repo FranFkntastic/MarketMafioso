@@ -199,7 +199,7 @@ internal sealed class WorkshopAssemblyPanel
             invoke);
     }
 
-    private static Vector4 GetWorkshopStatusColor(string workshopStatus)
+    internal static Vector4 GetWorkshopStatusColor(string workshopStatus)
     {
         if (workshopStatus.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||

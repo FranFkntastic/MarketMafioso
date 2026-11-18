@@ -1474,13 +1474,16 @@ public class MainWindow : Window, IDisposable
             ImGui.EndTabItem();
         }
 
-        if (ImGui.BeginTabItem("Assembly", GetAgentWorkspaceTabFlags("Assembly")))
+        var assemblyActive = ImGui.BeginTabItem("Assembly", GetAgentWorkspaceTabFlags("Assembly"));
+        if (assemblyActive)
         {
             workshopAssembly.Draw(config.WorkshopPrepQueue.Count > 0);
             ImGui.EndTabItem();
         }
 
         ImGui.EndTabBar();
+        if (!assemblyActive)
+            ImGui.TextColored(WorkshopAssemblyPanel.GetWorkshopStatusColor(workshopStatus), workshopStatus);
     }
 
     private void SetSplitWorkshopViews(bool split)
