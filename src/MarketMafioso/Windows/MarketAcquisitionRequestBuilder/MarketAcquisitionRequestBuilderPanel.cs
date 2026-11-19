@@ -531,7 +531,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         long quantity = line.TargetQuantity;
         ImGui.SetNextItemWidth(-1);
-        if (!DalamudGroupedIntegerInput.InputGroupedInt("##Quantity", ref quantity, 1, 100))
+        if (!DalamudGroupedIntegerInput.InputGroupedInt("##Quantity", ref quantity, 0, 0))
             return;
 
         ApplyLineEdit(
@@ -546,7 +546,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         long maxUnit = line.MaxUnitPrice;
         ImGui.SetNextItemWidth(-1);
-        if (DalamudGroupedIntegerInput.InputGroupedInt("##Unit", ref maxUnit, 1, 100))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("##Unit", ref maxUnit, 0, 0))
             ApplyLineEdit(index, line, maxUnitPrice: ClampToUInt(maxUnit), message: "Unit ceiling updated.");
     }
 
@@ -561,7 +561,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         long maximumOverage = line.MaximumOverage;
         ImGui.SetNextItemWidth(-1);
-        if (DalamudGroupedIntegerInput.InputGroupedInt("##MaximumOverage", ref maximumOverage, 1, 100))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("##MaximumOverage", ref maximumOverage, 0, 0))
             ApplyLineEdit(index, line, maximumOverage: ClampToUInt(maximumOverage), message: "Maximum target overage updated.");
     }
 
@@ -605,7 +605,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         long gilCap = line.GilCap;
         ImGui.SetNextItemWidth(-1);
-        if (DalamudGroupedIntegerInput.InputGroupedInt("##Spend", ref gilCap, 1, 100))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("##Spend", ref gilCap, 0, 0))
             ApplyLineEdit(index, line, gilCap: ClampToUInt(gilCap), message: "Spend ceiling updated.");
     }
 
