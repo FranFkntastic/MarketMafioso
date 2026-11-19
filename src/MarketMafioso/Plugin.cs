@@ -103,6 +103,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ExternalAutomationCoordinator tradeAutomationCoordinator;
     private readonly DalamudTradeQueueIo tradeQueueIo;
     private readonly TradeAutoAcceptController tradeAutoAcceptController;
+    private readonly TradeHoldProvider tradeHoldProvider;
     private readonly TradeQueueRunner tradeQueueRunner;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
@@ -301,6 +302,15 @@ public sealed class Plugin : IDalamudPlugin
             Log,
             Configuration.TradeQueuePolicy,
             Configuration.TradeQueueRecovery ??= new());
+        var tradeHold = new ExternalTradeHold(
+            () => !Framework.IsInFrameworkUpdateThread ? "Acquire on the framework thread." :
+                tradeQueueRunner.IsActive ? "MarketMafioso Trade Queue is running." :
+                Configuration.TradeQueueRecovery.CancellationPending ? "MarketMafioso trade cancellation is pending." :
+                tradeQueueIo.IsTradeOpen ? "A trade window is already open." : null,
+            message => Log.Information("{Message}", message), () => Environment.TickCount64);
+        tradeQueueRunner.ExternalHold = tradeHold;
+        tradeAutoAcceptController.ExternalHold = tradeHold;
+        tradeHoldProvider = new(PluginInterface, tradeHold);
         workshopRestock = new WorkshopRestockService(Configuration, quartermaster, workshopCatalog, DataManager, PlayerState, Log);
         remoteSummoningBellProbe = new RemoteSummoningBellProbe(
             Configuration,
@@ -1046,6 +1056,7 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.RemoveHandler(CmdMain);
 
         workshopAssemblyRunner.Dispose();
+        tradeHoldProvider.Dispose();
         tradeQueueRunner.Dispose();
         tradeAutomationCoordinator.Dispose();
 
