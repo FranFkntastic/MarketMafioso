@@ -520,7 +520,7 @@ public partial class MainWindow : Window, IDisposable
                 ExecutionCapabilityAvailable = tradeCapability.Available,
                 ExecutionCapabilityMessage = tradeCapability.Message,
                 State = tradeExecution.State.ToString(),
-                Message = tradeExecution.Message,
+                Message = tradeQueueRunner.HoldReason ?? tradeExecution.Message,
                 RunId = tradeExecution.RunId,
                 IsActive = tradeExecution.IsActive,
                 CanResume = tradeQueueRunner.HasResumeCheckpoint,

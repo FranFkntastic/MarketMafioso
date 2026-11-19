@@ -49,9 +49,11 @@ public sealed class TradeAutoAcceptController
         this.clock = clock;
     }
 
+    internal ExternalTradeHold? ExternalHold { get; set; }
+
     public void Tick(bool enabled)
     {
-        if (!enabled || !io.IsTradeOpen)
+        if (ExternalHold?.Reason != null || !enabled || !io.IsTradeOpen)
         {
             pendingAction = TradeAutoAcceptAction.None;
             return;

@@ -93,6 +93,8 @@ public sealed class TradeQueueRunner : IDisposable
     public TradeQueueExecutionSnapshot Snapshot { get; private set; } =
         new(TradeQueueExecutionState.Idle, "Trade queue is idle.", null, null, 0, 0, 0, 0, 0, 0, 0, false);
 
+    internal ExternalTradeHold? ExternalHold { get; set; }
+    internal string? HoldReason => ExternalHold?.Reason;
     public bool IsActive => Snapshot.IsActive;
 
     /// <summary>
@@ -123,6 +125,7 @@ public sealed class TradeQueueRunner : IDisposable
     /// <summary>Resolves capability evidence without selecting a recipient or starting any operation.</summary>
     public (bool Available, string Message) InspectExecutionCapability()
     {
+        if (HoldReason is {} reason) return (false, reason);
         var available = io.TryGetExecutionReadiness(out var error);
         return (available, available ? "Trade UI capabilities are available; item offering is checked when needed." : error);
     }
@@ -146,6 +149,7 @@ public sealed class TradeQueueRunner : IDisposable
 
     public TradeQueueStartResult Start()
     {
+        if (HoldReason is {} reason) return new(false, reason);
         if (IsActive)
             return new(false, "Trade queue is already running.");
         var hasSelectedPartner = io.TryGetSelectedPartner(out var selectedPartner);
@@ -159,6 +163,7 @@ public sealed class TradeQueueRunner : IDisposable
 
     public TradeQueueStartResult Start(TradeQueuePartner selectedPartner)
     {
+        if (HoldReason is {} reason) return new(false, reason);
         if (IsActive)
             return new(false, "Trade queue is already running.");
         if (!io.TryGetExecutionReadiness(out var readinessError))

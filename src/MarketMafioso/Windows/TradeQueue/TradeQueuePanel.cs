@@ -243,7 +243,7 @@ internal sealed class TradeQueuePanel
             ]);
         if (config.TradeQueueBinding is { } binding)
             DrawBindingRow(binding, hasPartner ? partner : null);
-        ImGui.TextColored(StatusColor(snapshot.State), snapshot.Message);
+        ImGui.TextColored(StatusColor(snapshot.State), runner.HoldReason ?? snapshot.Message);
         ImGui.Spacing();
 
         DrawInventoryHeader();
@@ -829,6 +829,14 @@ internal sealed class TradeQueuePanel
                         : "Trade Queue will preserve and trade HQ items.");
             });
 
+        if (runner.HoldReason is {} holdReason)
+        {
+            ImGuiUi.Button("Start Trading", false);
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip(holdReason);
+            RegisterLastAction("trade-queue.start-exact","Start Trade Queue for an exact nearby recipient",
+                true,holdReason,ExactRecipientSchema,args=>StartExactRecipient(args));
+            return;
+        }
         ImGui.TextColored(
             MainWindow.ColMuted,
             config.AutoAcceptIncomingTrades
@@ -943,6 +951,7 @@ internal sealed class TradeQueuePanel
 
     private AgentBridgeUiActionResult StartExactRecipient(System.Text.Json.JsonElement? arguments)
     {
+        if (runner.HoldReason is {} reason) return AgentBridgeUiActionResult.Fail(reason);
         var recipientName = arguments!.Value.GetProperty("recipientName").GetString()!;
         var homeWorld = arguments.Value.GetProperty("homeWorld").GetString()!;
         if (!io.TryGetPartner(recipientName, homeWorld, out var partner))
@@ -959,6 +968,7 @@ internal sealed class TradeQueuePanel
 
     private AgentBridgeUiActionResult InvokeReceiverReady()
     {
+        if (runner.HoldReason is {} reason) return AgentBridgeUiActionResult.Fail(reason);
         if (!io.TryClickReady(out var error))
         {
             return AgentBridgeUiActionResult.Fail(
@@ -972,6 +982,7 @@ internal sealed class TradeQueuePanel
 
     private AgentBridgeUiActionResult InvokeReceiverConfirm()
     {
+        if (runner.HoldReason is {} reason) return AgentBridgeUiActionResult.Fail(reason);
         if (!io.TryConfirmTrade(out var error))
         {
             return AgentBridgeUiActionResult.Fail(
@@ -985,6 +996,7 @@ internal sealed class TradeQueuePanel
 
     private AgentBridgeUiActionResult InvokeReceiverCancel()
     {
+        if (runner.HoldReason is {} reason) return AgentBridgeUiActionResult.Fail(reason);
         if (!io.TryCancelTrade(out var error))
         {
             return AgentBridgeUiActionResult.Fail(
