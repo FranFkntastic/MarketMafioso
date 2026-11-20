@@ -60,3 +60,22 @@ public sealed record ClientCredentialCreateRequest
     public string Label { get; init; } = string.Empty;
     public string Purpose { get; init; } = string.Empty;
 }
+
+public sealed record ClientPairingCodeResponse
+{
+    public string Token { get; init; } = string.Empty;
+    public DateTimeOffset ExpiresAtUtc { get; init; }
+}
+
+public sealed record ClientPairingRedeemRequest
+{
+    public string? Token { get; init; }
+    public string? ClientName { get; init; }
+}
+
+public sealed record ClientPairingRedeemResponse
+{
+    public string ApiKey { get; init; } = string.Empty;
+    public long CredentialId { get; init; }
+    public string Label { get; init; } = string.Empty;
+}

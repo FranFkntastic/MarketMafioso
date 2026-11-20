@@ -35,7 +35,7 @@ Open MarketMafioso in game:
 /mmf
 ```
 
-To use inventory history, install Workshop Host first, then paste the printed Server URL and Client API Key into MarketMafioso settings.
+To use inventory history, install Workshop Host first. Then sign in to its dashboard, open **Settings > Authentication**, click **Connect game client**, and paste the code into MarketMafioso **Settings > Server Connection > Connect with code**. Entering the Server URL and Client API Key by hand under **Manual setup** still works.
 
 ## Notes
 

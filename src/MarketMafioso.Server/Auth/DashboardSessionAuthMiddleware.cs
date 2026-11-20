@@ -45,6 +45,10 @@ public sealed class DashboardSessionAuthMiddleware
         if (request.Path.Equals("/api/settings/features", StringComparison.OrdinalIgnoreCase))
             return false;
 
+        // Game clients redeem a pairing code before they hold any credential; the code is the proof.
+        if (request.Path.Equals(Endpoints.ClientPairingEndpoints.RedeemPath, StringComparison.OrdinalIgnoreCase))
+            return false;
+
         if (IsPluginInventoryIngestRoute(request))
             return false;
 

@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.UI.Settings;
@@ -23,6 +25,11 @@ internal sealed class ServerConnectionSettingsPage
     private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
     private bool showApiKey;
     private bool showAcquisitionApiKey;
+    private string pairingCodeBuffer = string.Empty;
+    private string pairingStatus = string.Empty;
+    private bool pairingStatusIsError;
+    private Task<WorkshopHostPairing.RedeemResult>? pendingPairing;
+    private WorkshopHostPairing.ParsedCode pendingPairingCode;
 
     public ServerConnectionSettingsPage(Configuration config, HttpReporter reporter, IPluginLog log,
         Func<MarketIntelligenceReportingStatus>? intelligenceStatus = null)
@@ -39,14 +46,121 @@ internal sealed class ServerConnectionSettingsPage
             "General / Server Connection",
             Draw,
             0,
-            searchTerms: ["receiver URL", "API key", "MMF client key", "Craft Architect key", "dashboard", "local receiver", "development server", "market intelligence", "quarantine", "conflict", "pending reports"]);
+            searchTerms: ["connect with code", "connection code", "pairing code", "receiver URL", "API key", "MMF client key", "Craft Architect key", "dashboard", "local receiver", "development server", "market intelligence", "quarantine", "conflict", "pending reports"]);
     }
 
     public SettingsPageDescriptor Descriptor { get; }
 
     private void Draw(SettingsPageContext context)
     {
+        CompletePairingIfFinished();
         var marketAcquisitionUnlocked = MarketAcquisitionUnlock.IsUnlocked(config);
+        if (context.Matches("Connect with code", "connection code", "pairing code", "dashboard code"))
+            DrawConnectWithCode();
+
+        if (context.Matches("Server URL", "receiver endpoint", "local receiver", "development server",
+                "Client API key", "MMF client key", "Craft Architect key", "acquisition key", "X-Api-Key", "authentication", "manual setup"))
+        {
+            if (context.IsFiltering)
+                ImGui.SetNextItemOpen(true, ImGuiCond.Always);
+            if (ImGui.CollapsingHeader("Manual setup##serverManualSetup"))
+                DrawManualSetup(context, marketAcquisitionUnlocked);
+        }
+
+        if (context.Matches("Dashboard URL", "open dashboard", "receiver dashboard"))
+            DrawDashboard();
+        DrawIntelligenceStatus(context);
+    }
+
+    private void DrawConnectWithCode()
+    {
+        ImGui.Text("Connect with code:");
+        const float buttonWidth = 90f;
+        ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X - buttonWidth - ImGui.GetStyle().ItemSpacing.X));
+        var submitted = ImGui.InputTextWithHint(
+            "##pairingCode",
+            "Paste the code from the dashboard",
+            ref pairingCodeBuffer,
+            1024,
+            ImGuiInputTextFlags.Password | ImGuiInputTextFlags.EnterReturnsTrue);
+        ImGui.SameLine();
+        var canConnect = pendingPairing is null && !string.IsNullOrWhiteSpace(pairingCodeBuffer);
+        if ((ImGuiUi.PrimaryButton(pendingPairing is null ? "Connect##pairing" : "Connecting...##pairing", canConnect) || submitted) && canConnect)
+            StartPairing();
+
+        if (pairingStatus.Length > 0)
+            ImGui.TextColored(pairingStatusIsError ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted, pairingStatus);
+        ImGui.Spacing();
+    }
+
+    private void StartPairing()
+    {
+        if (!WorkshopHostPairing.TryParse(pairingCodeBuffer, out var code, out var error))
+        {
+            pairingStatus = error;
+            pairingStatusIsError = true;
+            return;
+        }
+
+        string? clientName = null;
+        try
+        {
+            clientName = Plugin.ObjectTable.LocalPlayer?.Name.TextValue;
+        }
+        catch (Exception ex)
+        {
+            log.Debug($"[MarketMafioso] Character name unavailable for the pairing label: {ex.Message}");
+        }
+
+        pendingPairingCode = code;
+        pairingStatus = $"Connecting to {WorkshopHostPairing.DescribeHost(code.HostBaseUrl)}...";
+        pairingStatusIsError = false;
+        pendingPairing = Task.Run(() => WorkshopHostPairing.RedeemAsync(code, clientName, CancellationToken.None));
+    }
+
+    private void CompletePairingIfFinished()
+    {
+        if (pendingPairing is not { IsCompleted: true } task)
+            return;
+
+        pendingPairing = null;
+        var host = WorkshopHostPairing.DescribeHost(pendingPairingCode.HostBaseUrl);
+        WorkshopHostPairing.RedeemResult result;
+        try
+        {
+            result = task.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            result = new WorkshopHostPairing.RedeemResult(false, null, $"Connecting to {host} failed: {ex.Message}", "exception");
+        }
+
+        if (!result.Succeeded || string.IsNullOrWhiteSpace(result.ApiKey))
+        {
+            pairingStatus = result.Message;
+            pairingStatusIsError = true;
+            log.Warning($"[MarketMafioso] Connect with code to {host} failed ({result.ErrorCode ?? "unknown"}): {result.Message}");
+            return;
+        }
+
+        // The issued client key covers every plugin route, Market Acquisition included, so an
+        // acquisition-only key left over from earlier manual setup must not shadow it.
+        config.ApiKey = result.ApiKey;
+        config.CommandPickupApiKey = string.Empty;
+        // Setting ServerUrl raises ServerUrlChanged, which runs the host feature check.
+        config.ServerUrl = WorkshopHostPairing.BuildServerUrl(pendingPairingCode.HostBaseUrl);
+        config.Save();
+        urlBuffer = config.ServerUrl;
+        apiKeyBuffer = config.ApiKey;
+        acquisitionApiKeyBuffer = config.CommandPickupApiKey;
+        pairingCodeBuffer = string.Empty;
+        pairingStatus = result.Message;
+        pairingStatusIsError = false;
+        log.Information($"[MarketMafioso] Connected to Workshop Host {host} with a connection code.");
+    }
+
+    private void DrawManualSetup(SettingsPageContext context, bool marketAcquisitionUnlocked)
+    {
         if (context.Matches("Server URL", "receiver endpoint", "local receiver", "development server"))
         {
             ImGui.Text("Server URL:");
@@ -149,9 +263,10 @@ internal sealed class ServerConnectionSettingsPage
             }
             ImGui.Spacing();
         }
+    }
 
-        if (context.Matches("Dashboard URL", "open dashboard", "receiver dashboard"))
-            DrawDashboard();
+    private void DrawIntelligenceStatus(SettingsPageContext context)
+    {
         if (intelligenceStatus is not null && context.Matches("Market intelligence", "quarantine", "conflict", "pending reports"))
         {
             var status = intelligenceStatus();

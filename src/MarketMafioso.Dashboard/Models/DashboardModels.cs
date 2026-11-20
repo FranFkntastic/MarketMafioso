@@ -137,3 +137,9 @@ public sealed record DiagnosticEventView
     public string? AcquisitionRequestId { get; init; }
     public string? PayloadSummaryJson { get; init; }
 }
+
+public sealed record ClientPairingCodeResponse
+{
+    public string Token { get; init; } = string.Empty;
+    public DateTimeOffset ExpiresAtUtc { get; init; }
+}
