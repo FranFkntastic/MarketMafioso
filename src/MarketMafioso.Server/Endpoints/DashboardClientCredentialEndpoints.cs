@@ -54,7 +54,7 @@ internal static class DashboardClientCredentialEndpoints
             : Results.NotFound();
     }
 
-    private static async Task<IReadOnlyList<long>> GetAccountIdsAsync(
+    internal static async Task<IReadOnlyList<long>> GetAccountIdsAsync(
         HttpContext context,
         SqliteConnectionFactory connectionFactory,
         CancellationToken token)

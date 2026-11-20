@@ -3,6 +3,7 @@
 @inject DashboardStatusService Status
 @inject IJSRuntime JS
 @inject IDialogService Dialog
+@inject NavigationManager Navigation
 
 <PageTitle>MarketMafioso Settings</PageTitle>
 
@@ -171,6 +172,37 @@ else
             <MudStack Spacing="2">
                 <MudPaper Class="compact-card" Elevation="0">
                     <MudStack Spacing="2" Class="settings-section">
+                        <MudStack Row="true" AlignItems="AlignItems.Center">
+                            <MudText Typo="Typo.h6">Game client</MudText>
+                            <MudSpacer />
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       Disabled="_creatingPairingCode"
+                                       OnClick="CreatePairingCodeAsync">
+                                Connect game client
+                            </MudButton>
+                        </MudStack>
+                        @if (_pairingCode is not null)
+                        {
+                            <MudTextField Value="_pairingCode"
+                                          ReadOnly="true"
+                                          Label="Connection code"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Adornment="Adornment.End"
+                                          AdornmentIcon="@Icons.Material.Filled.ContentCopy"
+                                          OnAdornmentClick="CopyPairingCodeAsync" />
+                            <MudStack Row="true" AlignItems="AlignItems.Center">
+                                <MudText Typo="Typo.caption">Paste this in MarketMafioso → Settings → Server. Expires at @(_pairingCodeExpiresAtUtc.ToLocalTime().ToString("HH:mm")).</MudText>
+                                <MudSpacer />
+                                <MudText Typo="Typo.caption">@_pairingCopyStatus</MudText>
+                            </MudStack>
+                        }
+                    </MudStack>
+                </MudPaper>
+
+                <MudPaper Class="compact-card" Elevation="0">
+                    <MudStack Spacing="2" Class="settings-section">
                         <div>
                             <MudText Typo="Typo.h6">Client keys</MudText>
                             <MudText Class="muted">Issue a separate key for each client, then revoke it here without changing receiver configuration or restarting the server.</MudText>
@@ -298,6 +330,10 @@ else
     private ClientCredentialCreatedView? _createdClientKey;
     private string _newClientKeyLabel = "Craft Architect";
     private string _newClientKeyPurpose = "CraftArchitect";
+    private string? _pairingCode;
+    private DateTimeOffset _pairingCodeExpiresAtUtc;
+    private string _pairingCopyStatus = string.Empty;
+    private bool _creatingPairingCode;
     private string _clientKeyCopyStatus = string.Empty;
     private bool _creatingClientKey;
     private long? _revokingClientKeyId;
@@ -524,6 +560,52 @@ else
         catch (JSException)
         {
             _clientKeyCopyStatus = "Clipboard access was blocked. Select and copy the key manually.";
+        }
+    }
+
+    private async Task CreatePairingCodeAsync()
+    {
+        try
+        {
+            _creatingPairingCode = true;
+            var created = await Api.CreateClientPairingCodeAsync();
+            // The code carries this host's public base so the plugin needs nothing else.
+            var hostBaseUrl = Navigation.BaseUri.TrimEnd('/');
+            var encodedHost = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(hostBaseUrl))
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+            _pairingCode = $"mmf1_{encodedHost}.{created.Token}";
+            _pairingCodeExpiresAtUtc = created.ExpiresAtUtc;
+            _pairingCopyStatus = "Not copied yet.";
+        }
+        catch (DashboardUnauthorizedException)
+        {
+            ExpireSession();
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Connection code failed: {ex.Message}");
+        }
+        finally
+        {
+            _creatingPairingCode = false;
+        }
+    }
+
+    private async Task CopyPairingCodeAsync()
+    {
+        if (_pairingCode is null)
+            return;
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _pairingCode);
+            _pairingCopyStatus = "Copied to clipboard.";
+        }
+        catch (JSException)
+        {
+            _pairingCopyStatus = "Clipboard access was blocked. Select and copy the code manually.";
         }
     }
 

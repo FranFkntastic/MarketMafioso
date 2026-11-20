@@ -127,7 +127,7 @@ Set-Content -LiteralPath "$env:USERPROFILE\.ssh\marketmafioso_dashboard_password
 gh secret set MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD --repo FranFkntastic/MarketMafioso --body $dashboardPassword
 ```
 
-Sign in to the dashboard and generate a MarketMafioso plugin key under **Settings > Authentication**, then paste that one-time secret into the plugin-wide `Settings` tab's `Client API Key` field. Keep the environment key as a recovery credential instead of copying it into every client.
+Sign in to the dashboard, open **Settings > Authentication**, and click **Connect game client**. Paste the code into the plugin's **Settings > Server Connection > Connect with code** field. The code carries the host address, is valid for 10 minutes and works once; redeeming it issues a managed plugin key that appears in the key list and can be revoked like any other. To set a client up by hand instead, generate a MarketMafioso plugin key on the same page and paste it into the plugin's **Manual setup** `Client API Key` field. Keep the environment key as a recovery credential instead of copying it into every client.
 
 ## Caddy Shape
 

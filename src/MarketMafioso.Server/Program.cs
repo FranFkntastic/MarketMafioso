@@ -27,6 +27,7 @@ builder.Services.AddSingleton<DashboardSessionStore>();
 builder.Services.AddSingleton<ReceiverBootstrapper>();
 builder.Services.AddSingleton<IngestKeyAccountResolver>();
 builder.Services.AddSingleton<WorkshopHostCredentialStore>();
+builder.Services.AddSingleton<ClientPairingCodeStore>();
 builder.Services.AddSingleton<InventoryReportStore>();
 builder.Services.AddHostedService<InventoryRetentionWorker>();
 builder.Services.AddSingleton<JsonSnapshotImporter>();
@@ -136,6 +137,7 @@ app.MapMarketIntelligenceEndpoints();
 
 app.MapDashboardDataEndpoints(enableMarketAcquisition);
 app.MapDashboardClientCredentialEndpoints();
+app.MapClientPairingEndpoints();
 
 app.MapInventoryReportEndpoints(requireApiKey, publicOrigin);
 app.MapXivDataProxyEndpoints(xivDataBaseUrl);

@@ -575,6 +575,20 @@ public sealed class SqliteSchemaMigrator
         CREATE UNIQUE INDEX IF NOT EXISTS ix_ingest_keys_key_hash
             ON ingest_keys (key_hash);
 
+        CREATE TABLE IF NOT EXISTS client_pairing_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at_utc TEXT NOT NULL,
+            expires_at_utc TEXT NOT NULL,
+            redeemed_at_utc TEXT NULL,
+            credential_id INTEGER NULL REFERENCES ingest_keys(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_client_pairing_codes_account_outstanding
+            ON client_pairing_codes (account_id, expires_at_utc)
+            WHERE redeemed_at_utc IS NULL;
+
         CREATE TABLE IF NOT EXISTS characters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

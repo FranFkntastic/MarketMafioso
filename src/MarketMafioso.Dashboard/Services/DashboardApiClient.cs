@@ -336,6 +336,31 @@ public sealed class DashboardApiClient
             ?? throw new InvalidOperationException("Client key response was empty.");
     }
 
+    public async Task<ClientPairingCodeResponse> CreateClientPairingCodeAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsync("api/settings/client-pairing", content: null, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+            throw new DashboardUnauthorizedException();
+        if (!response.IsSuccessStatusCode)
+        {
+            string? message = null;
+            try
+            {
+                using var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+                message = ReadString(error.RootElement, "message");
+            }
+            catch (JsonException)
+            {
+            }
+
+            throw new InvalidOperationException(message ?? $"HTTP {(int)response.StatusCode} ({response.StatusCode})");
+        }
+
+        return await response.Content.ReadFromJsonAsync<ClientPairingCodeResponse>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Pairing code response was empty.");
+    }
+
     public async Task RevokeClientCredentialAsync(
         long id,
         CancellationToken cancellationToken = default)
