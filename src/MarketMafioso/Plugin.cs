@@ -343,7 +343,8 @@ public sealed class Plugin : IDalamudPlugin
             marketBoardBrowseObserver,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             () => tradeQueueRunner.Snapshot.IsActive || workshopAssemblyRunner.IsRunning,
-            Log);
+            Log,
+            characterLoginDriver);
         handoverTracker = new WorkshopHandoverTracker(
             Configuration,
             () => WorkshopHandoffService,
