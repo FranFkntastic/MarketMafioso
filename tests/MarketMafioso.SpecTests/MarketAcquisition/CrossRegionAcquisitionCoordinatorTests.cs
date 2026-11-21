@@ -197,7 +197,7 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
                 "qm",
                 new QuartermasterCourierLoggedIn(Primary.LocalContentId, Primary.HomeWorldId, Primary.CharacterName, Primary.HomeWorldName,
                     "na", "North America", 2_000_000, 100, true, "Bell"),
-                new QuartermasterCourierCarrier(true, true, 0x3333, 21, "Carrier Char", "Ravana", "oc", "Oceania", 0, 100),
+                new QuartermasterCourierCarrier(true, true, 0x3333, 21, "Carrier Char", "Ravana", "oc", "Oceania", 10_000, 100),
                 new QuartermasterCourierBridge(21, "Ravana", 130, "Ul'dah"),
                 [
                     new(Shopper.LocalContentId, Shopper.HomeWorldId, Shopper.CharacterName, Shopper.HomeWorldName, "jp", "Japan", true, "Bell", false),

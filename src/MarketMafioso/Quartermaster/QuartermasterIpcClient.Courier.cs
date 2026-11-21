@@ -206,6 +206,11 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
             error = $"Unsupported Quartermaster courier status schema '{wire.Schema ?? "(missing)"}'.";
             return false;
         }
+        if (!string.IsNullOrWhiteSpace(wire.Error))
+        {
+            error = $"Quartermaster courier status error: {wire.Error}";
+            return false;
+        }
 
         var loggedIn = wire.LoggedIn is { LocalContentId: > 0 } li
             ? new QuartermasterCourierLoggedIn(li.LocalContentId, li.HomeWorldId, li.CharacterName ?? string.Empty,

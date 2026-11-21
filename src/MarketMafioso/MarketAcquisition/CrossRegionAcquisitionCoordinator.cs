@@ -14,7 +14,7 @@ public interface ICrossRegionGameState
     /// <summary>Live carried gil, or null when unreadable. Retainer gil is never considered.</summary>
     ulong? CarriedGil { get; }
     bool OtherAutomationActive { get; }
-    /// <summary>Live Inventory1..4 plus crystal pouch, or null when the bags are not loaded.</summary>
+    /// <summary>Live Inventory1..4 carried bags (matching Quartermaster courier scope), or null when not loaded.</summary>
     IReadOnlyList<CrossRegionBagStack>? ReadCarriedBags();
     bool TrySwitchCharacter(CrossRegionCharacter target, out string message);
 }
@@ -71,12 +71,14 @@ public sealed record CrossRegionActionResult(bool Success, string Message)
 public sealed class CrossRegionAcquisitionCoordinator
 {
     public const long MaxCarriedGil = 999_999_999L;
+    public const int TravelFeeReserveGil = 5_000;
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan StatusCacheTtl = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SwitchRetryInterval = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan HomeWorldArrivalGrace = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan CloseBoardTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan BagReadTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan AcceptedRunAppearanceTimeout = TimeSpan.FromSeconds(15);
     private const int MaxCharacterSwitchAttempts = 3;
     private const int MaxSubmitAttempts = 5;
     private const int MaxRecordedPurchaseKeys = 4096;
@@ -92,6 +94,7 @@ public sealed class CrossRegionAcquisitionCoordinator
     private DateTimeOffset? lastSwitchRequestUtc;
     private DateTimeOffset? fundArrivalWaitStartedUtc;
     private DateTimeOffset? closeStartedUtc;
+    private DateTimeOffset? awaitingRunAppearanceSinceUtc;
     private bool prepareIssued;
     private int submitAttempts;
     private QuartermasterCourierStatus? cachedStatus;
@@ -223,8 +226,10 @@ public sealed class CrossRegionAcquisitionCoordinator
         if (fundGil > 0)
         {
             var carried = game.CarriedGil ?? primary.CarriedGil;
-            if (carried < (ulong)fundGil)
-                return new(false, $"{primary.CharacterName} carries {carried:N0} gil; {fundGil:N0} needed (retainer gil is never used).", status) { ShopperEntry = entry };
+            if (carried < (ulong)fundGil + TravelFeeReserveGil)
+                return new(false, $"{primary.CharacterName} carries {carried:N0} gil; {fundGil:N0} + {TravelFeeReserveGil:N0} travel reserve needed (retainer gil is never used).", status) { ShopperEntry = entry };
+            if (carrier.CarriedGil < TravelFeeReserveGil)
+                return new(false, $"Carrier {carrier.CharacterName} needs at least {TravelFeeReserveGil:N0} gil of its own for teleport fees.", status) { ShopperEntry = entry };
             if ((long)carrier.CarriedGil + fundGil > MaxCarriedGil)
                 return new(false, $"Carrier would exceed the {MaxCarriedGil:N0} gil cap.", status) { ShopperEntry = entry };
         }
@@ -242,6 +247,8 @@ public sealed class CrossRegionAcquisitionCoordinator
             return CrossRegionActionResult.Fail("A cross-regional session is still unresolved; finish or clear it first.");
         if (request.Document.ExactAcquisitionAuthority is not null)
             return CrossRegionActionResult.Fail("External exact-acquisition plans cannot run cross-regionally.");
+        if (request.Document.Lines.Any(line => line.ItemId is >= 2 and <= 19))
+            return CrossRegionActionResult.Fail("Cross-regional shopping does not support shards/crystals (item IDs 2–19) because the courier trades Inventory1–4 only.");
         var readiness = EvaluateReadiness(request.Shopper, request.TargetRegion, request.FundGil, force: true);
         if (!readiness.Ready)
             return CrossRegionActionResult.Fail(readiness.Blocker ?? "Cross-regional shopping is not ready.");
@@ -451,11 +458,26 @@ public sealed class CrossRegionAcquisitionCoordinator
         {
             var runId = fund ? session.FundRunId : session.HaulRunId;
             if (runId is null)
+            {
+                awaitingRunAppearanceSinceUtc = null;
                 SubmitCourier(fund);
+            }
             else
-                session.LastMessage = $"Waiting for Quartermaster to report courier run {runId}.";
+            {
+                awaitingRunAppearanceSinceUtc ??= now;
+                if (now - awaitingRunAppearanceSinceUtc.Value >= AcceptedRunAppearanceTimeout)
+                {
+                    awaitingRunAppearanceSinceUtc = null;
+                    Fail(session.Phase, "CourierStartNotObserved",
+                        $"Quartermaster accepted courier run {runId} but did not report it within {AcceptedRunAppearanceTimeout.TotalSeconds:N0}s; check Quartermaster.",
+                        canResumeCourier: false);
+                }
+                else
+                    session.LastMessage = $"Waiting for Quartermaster to report courier run {runId}.";
+            }
             return;
         }
+        awaitingRunAppearanceSinceUtc = null;
         if (run.RunId is { } id && (fund ? session.FundRunId : session.HaulRunId) != id)
         {
             if (fund) session.FundRunId = id; else session.HaulRunId = id;
@@ -951,6 +973,7 @@ public sealed class CrossRegionAcquisitionCoordinator
         lastSwitchRequestUtc = null;
         fundArrivalWaitStartedUtc = null;
         closeStartedUtc = null;
+        awaitingRunAppearanceSinceUtc = null;
         prepareIssued = false;
         submitAttempts = 0;
     }

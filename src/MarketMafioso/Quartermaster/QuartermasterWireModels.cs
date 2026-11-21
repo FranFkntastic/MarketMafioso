@@ -553,6 +553,7 @@ internal sealed class QuartermasterCourierStatusWire
 {
     public string? Schema { get; init; }
     public string? ProviderInstanceId { get; init; }
+    public string? Error { get; init; }
     public QuartermasterCourierLoggedInWire? LoggedIn { get; init; }
     public QuartermasterCourierCarrierWire? Carrier { get; init; }
     public QuartermasterCourierBridgeWire? Bridge { get; init; }
