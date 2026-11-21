@@ -79,7 +79,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
-    public void Draw(MarketAcquisitionPlan? plan, bool isPlanStale, bool canRefreshEvidence)
+    /// <param name="drawPipelineActions">When set, replaces the ordinary action row (the cross-regional pipeline owns Start/Stop).</param>
+    public void Draw(MarketAcquisitionPlan? plan, bool isPlanStale, bool canRefreshEvidence, Action? drawPipelineActions = null)
     {
         var snapshot = getRouteSnapshot();
         ImGuiUi.SectionHeader("Route", MarketMafiosoUiTheme.Header);
@@ -103,7 +104,12 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         DrawExactAcquisitionExecution(snapshot);
         DrawShardStorageCheckpoint(snapshot);
         if (!DrawTerminalPurchaseRecovery(snapshot))
-            DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence, plan);
+        {
+            if (drawPipelineActions is not null)
+                drawPipelineActions();
+            else
+                DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence, plan);
+        }
 
         DrawEvidenceRefreshConfirmation(canRefreshEvidence);
 

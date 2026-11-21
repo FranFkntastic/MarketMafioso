@@ -15,6 +15,7 @@ using MarketMafioso.Contracts.MarketIntelligence;
 using MarketMafioso.MarketAcquisition.ExactAuthority;
 using MarketMafioso.MarketAcquisition.MarketBoard;
 using MarketMafioso.MarketDiagnostics;
+using MarketMafioso.ProfileLogin;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.WorkshopPrep;
 
@@ -51,6 +52,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
     internal MarketBoardApproachService ApproachService { get; }
     internal string DiagnosticsDirectory { get; }
     internal RetainerAwareMarketAcquisitionInventoryObserver InventoryObserver { get; }
+    internal CrossRegionAcquisitionCoordinator CrossRegion { get; }
+    private readonly MarketAcquisitionCrossRegionShoppingRoute crossRegionShopping;
 
     internal MarketAcquisitionServices(
         Configuration config,
@@ -62,7 +65,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
         IMarketBoardBrowseRuntime marketBoardBrowseRuntime,
         string diagnosticsDirectory,
         Func<bool> otherAutomationActive,
-        IPluginLog log)
+        IPluginLog log,
+        ICharacterLoginDriver? characterLoginDriver = null)
     {
         this.otherAutomationActive = otherAutomationActive;
         this.config = config;
@@ -224,6 +228,21 @@ internal sealed class MarketAcquisitionServices : IDisposable
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
                 lifestream,
                 () => config.MarketAcquisitionAethernetDeparture));
+        crossRegionShopping = new MarketAcquisitionCrossRegionShoppingRoute(
+            RouteEngine,
+            Workspace,
+            InventoryObserver,
+            routeUiAutomation,
+            () => playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : null,
+            GetMarketAcquisitionRecentWorldTtl,
+            () => MarketAcquisitionRouteDiagnosticsPolicy.Resolve(config.MarketAcquisitionRouteDiagnostics),
+            () => config.EnableOpportunisticWorldChecks);
+        CrossRegion = new CrossRegionAcquisitionCoordinator(
+            quartermaster,
+            new DalamudCrossRegionGameState(playerState, characterLoginDriver, () => otherAutomationActive() || RouteEngine.IsRouteActive),
+            crossRegionShopping,
+            new FileCrossRegionAcquisitionStore(Plugin.PluginInterface.GetPluginConfigDirectory()),
+            log: (message, exception) => log.Warning(exception, "[MarketMafioso] {Message}", message));
     }
 
     internal void ConnectCurrentDocument(Func<MarketAcquisitionRequestDocument> provider) => currentDocument = provider;
@@ -257,6 +276,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
         LastTickTimings.Mark("MonitorMarketBoardPurchase");
         RouteEngine.TickRoute(Workspace.IsBusy);
         LastTickTimings.Mark("TickRoute");
+        CrossRegion.Tick();
+        LastTickTimings.Mark("crossRegion");
         MaybeAutoResumeExactAcquisitionRoute();
         LastTickTimings.Mark("autoResume");
         if (RouteEngine.NeedsExactAcquisitionRecovery && (exactAcquisitionRecoveryTask is null || exactAcquisitionRecoveryTask.IsCompleted))
@@ -649,6 +670,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
 
     public void Dispose()
     {
+        crossRegionShopping.Dispose();
         Workspace.Dispose();
         RouteEngine.Dispose();
         WorldVisitCatalog.Dispose();

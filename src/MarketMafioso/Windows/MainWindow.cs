@@ -306,7 +306,10 @@ public partial class MainWindow : Window, IDisposable
             RefreshAcquisitionRequestBuilderRemoteAsync,
             acquisitionWorkspace.OnDocumentAdopted,
             AgentReviewRegistry,
-            acquisitionServices.InventoryObserver);
+            acquisitionServices.InventoryObserver)
+        {
+            DrawRouteScopeExtras = DrawCrossRegionWorkbenchSection,
+        };
         acquisitionCompositionCatalog = new MarketAcquisitionWorkbenchCompositionCatalog(
             new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save));
         var acquisitionWorkbenchCompositions = new MarketAcquisitionWorkbenchCompositionPanel(
@@ -1574,7 +1577,7 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
         await acquisitionWorkspace.PreparePlanAsync(
-            acquisitionServices.GetCurrentWorldName(), acquisitionServices.GetMarketAcquisitionRecentWorldTtl(),
+            ResolvePlanningWorld(acquisitionServices.GetCurrentWorldName()), acquisitionServices.GetMarketAcquisitionRecentWorldTtl(),
             config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
             acquisitionRequestBuilder.CurrentDocument, reviewed).ConfigureAwait(false);
     }
@@ -1721,7 +1724,7 @@ public partial class MainWindow : Window, IDisposable
     {
         var currentWorld = playerState.CurrentWorld.IsValid ? acquisitionServices.GetCurrentWorldName() : string.Empty;
         return acquisitionWorkspace.PreparePlanAsync(
-            currentWorld,
+            ResolvePlanningWorld(currentWorld),
             acquisitionServices.GetMarketAcquisitionRecentWorldTtl(),
             config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
             acquisitionRequestBuilder.CurrentDocument);
@@ -1732,7 +1735,8 @@ public partial class MainWindow : Window, IDisposable
         marketAcquisitionGuidedRoutePanel.Draw(
             acquisitionWorkspace.PreparedPlan,
             acquisitionWorkspace.IsPreparedPlanStale(),
-            CanStartEvidenceRefresh());
+            CanStartEvidenceRefresh(),
+            ShowCrossRegion ? DrawCrossRegionPipeline : null);
     }
 
     private bool CanStartEvidenceRefresh()
@@ -1997,7 +2001,7 @@ public partial class MainWindow : Window, IDisposable
     }
 
     private bool IsMarketAcquisitionRouteActive() =>
-        routeEngine.IsRouteActive;
+        routeEngine.IsRouteActive || CrossRegion.IsActive;
 
     private bool IsExpectedCharacterScopeGap() =>
         routeEngine.IsRouteActive &&

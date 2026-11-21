@@ -157,11 +157,15 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.BeginDisabled(context.IsBusy || context.IsRouteActive || IsSynchronizing);
         DrawRunBudgetInput();
         ImGui.EndDisabled();
+        DrawRouteScopeExtras?.Invoke();
         ImGui.Spacing();
         DrawExceptionalStatus(context);
         ImGuiUi.SectionHeader("Buy list", MainWindow.ColHeader);
         DrawSelectedLineWorkspace(context, reservedFooterHeight);
     }
+
+    /// <summary>Optional host-drawn group under Route Scope / Run Budget (cross-regional shopping).</summary>
+    public Action? DrawRouteScopeExtras { get; set; }
 
     public bool IsSynchronizing => controller.IsSyncing;
 

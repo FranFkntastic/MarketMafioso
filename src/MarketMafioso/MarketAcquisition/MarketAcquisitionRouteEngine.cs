@@ -68,7 +68,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool userPaused;
     private readonly Dictionary<string, string> inventoryFullLines = new(StringComparer.Ordinal);
     private long lastFeedbackRunSequence;
+    private MarketAcquisitionCrossRegionBaseline? crossRegionBaseline;
     public event Action<MarketAcquisitionRouteEngineSnapshot>? FeedbackTransition;
+    /// <summary>Raised once per server-confirmed live purchase, before receipts are reported.</summary>
+    public event Action<MarketAcquisitionConfirmedPurchase>? ConfirmedPurchaseRecorded;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -217,10 +220,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ExactAcquisitionExecutionContract? exactAcquisitionContract = null,
         MarketAcquisitionRequestDocument? workbenchDocument = null,
         MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live,
-        MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace)
+        MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace,
+        MarketAcquisitionCrossRegionBaseline? crossRegionBaseline = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        if (crossRegionBaseline is not null && exactAcquisitionContract is not null)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("External exact-acquisition plans cannot run cross-regionally."));
         if (!TryPreflightRouteAction(out var evidenceBlockReason))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(evidenceBlockReason));
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
@@ -228,6 +234,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         claimedRequest = claimed;
         ClearExecutionState();
+        // Every Start decides afresh; an ordinary route never inherits another run's baselines.
+        this.crossRegionBaseline = crossRegionBaseline;
         state.ExecutionMode = executionMode;
         exactAcquisitionDryRunFaultEligible = executionMode == MarketAcquisitionExecutionMode.DryRun &&
                                        exactAcquisitionContract?.Transfer.DryRunOnly == true;
@@ -1754,6 +1762,38 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             initialOnHandByLine.GetValueOrDefault(activeSubtask.LineId), covered);
     }
 
+    /// <summary>
+    /// Once one line no longer fits, check the lines still ahead: any whose item cannot gain a single
+    /// unit (no free slot, no partial stack room) is full too, so the route completes as InventoryFull
+    /// here instead of travelling the remaining worlds only to skip each of them.
+    /// </summary>
+    private void MarkUnfittableRemainingLines(MarketAcquisitionGuidedRouteStop activeStop)
+    {
+        if (inventoryObserver is null)
+            return;
+        foreach (var task in runner.Stops.SkipWhile(stop => !ReferenceEquals(stop, activeStop))
+                     .SelectMany(stop => stop.ItemSubtasks.Skip(stop.CompletedItemSubtaskCount))
+                     .Where(task => !inventoryFullLines.ContainsKey(task.LineId))
+                     .GroupBy(task => task.LineId)
+                     .Select(group => group.First())
+                     .ToArray())
+        {
+            var policy = MarketAcquisitionPolicy.NormalizeHqPolicy(task.HqPolicy);
+            var room = 0UL;
+            var known = true;
+            foreach (var isHq in new[] { false, true })
+            {
+                if (!MarketAcquisitionPolicy.HqMatches(policy, isHq))
+                    continue;
+                var capacity = inventoryObserver.Capacity(task.ItemId, isHq);
+                known &= capacity.IsAvailable;
+                room += capacity.Units;
+            }
+            if (known && room == 0)
+                inventoryFullLines[task.LineId] = $"SkippedInventoryFull: {task.ItemName}, player bags/crystal pouch have no room left.";
+        }
+    }
+
     internal static bool ShouldResetLinePurchaseAccumulator(
         string? activeLineId,
         string? activeWorld,
@@ -1888,6 +1928,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     var container = nextCandidate.ItemId is >= 2 and <= 19 ? "crystal pouch" : "player bags";
                     var detail = $"SkippedInventoryFull: {activeLine.ItemName}, {container} can fit {capacity.Value.Units:N0} units; listing has {nextCandidate.Quantity:N0}.";
                     inventoryFullLines[lineId] = detail;
+                    MarkUnfittableRemainingLines(activeStop);
                     var hasOtherLine = runner.Stops.SkipWhile(stop => !ReferenceEquals(stop, activeStop))
                         .SelectMany(stop => stop.ItemSubtasks.Skip(stop.CompletedItemSubtaskCount))
                         .Any(task => !inventoryFullLines.ContainsKey(task.LineId));
@@ -2611,6 +2652,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                                 runner.RetainedActiveStop?.ActiveItemSubtask;
             var receiptLineId = activeSubtask?.LineId ?? state.ActivePurchaseLineId ?? string.Empty;
             var receiptWorld = string.IsNullOrWhiteSpace(candidate.WorldName) ? context.GetCurrentWorldName() : candidate.WorldName;
+            RaiseConfirmedPurchase(candidate, activeSubtask?.ItemName, receiptWorld);
             // Local receipts belong to the route, not to the optional hosted claim.
             runner.RecordPurchaseAudit(receiptLineId, activeSubtask?.ItemName, receiptWorld,
                 candidate.ListingId, candidate.RetainerId, candidate.Quantity, candidate.TotalGil,
@@ -2639,6 +2681,23 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             MarketAcquisitionRouteFailure.Annotate(exception, failureStage);
             throw;
+        }
+    }
+
+    private void RaiseConfirmedPurchase(MarketBoardPurchaseCandidate candidate, string? itemName, string worldName)
+    {
+        if (state.ExecutionMode != MarketAcquisitionExecutionMode.Live || ConfirmedPurchaseRecorded is not { } handler)
+            return;
+        var purchase = new MarketAcquisitionConfirmedPurchase(candidate.ItemId, itemName, candidate.IsHq, candidate.Quantity,
+            candidate.WalletCost, worldName, candidate.ListingId);
+        foreach (var subscriber in handler.GetInvocationList().Cast<Action<MarketAcquisitionConfirmedPurchase>>())
+        {
+            try { subscriber(purchase); }
+            catch (Exception exception)
+            {
+                // A recorder fault must never turn a confirmed purchase into a failed route.
+                state.AcquisitionStatus = $"Purchase recorded by the route, but an observer failed: {exception.Message}";
+            }
         }
     }
 
@@ -3018,7 +3077,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     return false;
                 }
 
-                var observation = inventoryObserver.Observe(line.ItemId, line.HqPolicy, basis);
+                var observation = ObserveLineStock(line.LineId, line.ItemId, line.HqPolicy, basis)!.Value;
                 if (!observation.IsAvailable)
                 {
                     adjustedPlan = plan;
@@ -3042,6 +3101,25 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// The on-hand count a target line is measured against. A cross-regional shopper buys for the
+    /// primary: the primary's captured baseline stays authoritative and only the shopper's own bag
+    /// growth since shopping began counts on top of it, so the shopper's empty retainers never reset it.
+    /// </summary>
+    private MarketAcquisitionInventoryObservation? ObserveLineStock(string lineId, uint itemId, string hqPolicy, string targetBasis)
+    {
+        if (inventoryObserver is null)
+            return null;
+        if (crossRegionBaseline is not { } crossRegion)
+            return inventoryObserver.Observe(itemId, hqPolicy, targetBasis);
+        var carried = inventoryObserver.Observe(itemId, hqPolicy);
+        if (!carried.IsAvailable)
+            return carried;
+        var start = crossRegion.ShopperStartingStock.GetValueOrDefault(lineId);
+        var delta = carried.Quantity > start ? carried.Quantity - start : 0u;
+        return MarketAcquisitionInventoryObservation.Available(checked(crossRegion.PrimaryStockBaselines.GetValueOrDefault(lineId) + delta));
+    }
+
     private bool IsInventorySatisfied(MarketAcquisitionWorldItemSubtask task) =>
         exactAcquisitionAuthority is null && task.QuantityMode == "TargetQuantity" &&
         MarketAcquisitionTargetBases.CountsOnHand(task.TargetBasis) &&
@@ -3054,7 +3132,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         foreach (var task in stop.ItemSubtasks.Where(task => task.QuantityMode == "TargetQuantity" &&
                      MarketAcquisitionTargetBases.CountsOnHand(task.TargetBasis)))
         {
-            var observed = inventoryObserver?.Observe(task.ItemId, task.HqPolicy, task.TargetBasis);
+            var observed = ObserveLineStock(task.LineId, task.ItemId, task.HqPolicy, task.TargetBasis);
             if (observed?.IsAvailable != true || purchase.PurchaseEvidenceState is PendingMarketPurchase)
             {
                 var now = clock.UtcNow;

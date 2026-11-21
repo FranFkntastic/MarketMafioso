@@ -491,6 +491,36 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                 : result.StatusMessage;
         }, PlanPreparationTimeout);
 
+    /// <summary>
+    /// Prepares a plan from a saved document without touching the Workbench's prepared plan
+    /// (a cross-regional shopper re-planning the primary's request on its own world).
+    /// </summary>
+    public async Task<(MarketAcquisitionClaimView Request, MarketAcquisitionPlan Plan, string Message)> PrepareDetachedPlanAsync(
+        MarketAcquisitionRequestDocument document,
+        string currentWorld,
+        TimeSpan recentWorldTtl,
+        IReadOnlyDictionary<string, uint>? inventoryBaselineOverrides,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var request = ResolveLocalExecutionRequest(document);
+        var result = await planPreparationService.PrepareAsync(
+            new MarketAcquisitionPlanPreparationRequest
+            {
+                Claim = request,
+                CurrentWorld = currentWorld,
+                PreparedAtUtc = DateTimeOffset.UtcNow,
+                RecentWorldTtl = recentWorldTtl,
+                IgnoreRecentWorldVisitsForSweep = false,
+                MinimumStopValueGil = config.MarketAcquisitionMinimumStopValueGil,
+                MinimumStopCoveragePercent = config.MarketAcquisitionMinimumStopCoveragePercent,
+                ExhaustiveResearchMode = config.MarketAcquisitionExhaustiveResearchMode,
+                InventoryBaselineOverrides = inventoryBaselineOverrides,
+            },
+            token).ConfigureAwait(false);
+        return (request, MarketAcquisitionRequestDocumentMapper.ApplyLocalExecutionPolicy(document, result.Plan), result.StatusMessage);
+    }
+
     public async Task<MarketAcquisitionPlanPreparationResult> PrepareRecoveryPlanAsync(
         MarketAcquisitionClaimView remainingClaim,
         string currentWorld,
@@ -579,6 +609,10 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
 
     public MarketAcquisitionClaimView RequireClaimedRequest(string message) =>
         ClaimedRequest ?? throw new InvalidOperationException(message);
+
+    /// <summary>The Workbench-only execution request: stable local line ids, never a hosted claim.</summary>
+    public MarketAcquisitionClaimView ResolveLocalExecutionRequest(MarketAcquisitionRequestDocument document) =>
+        WithLocalStockPolicy(document, BuildLocalExecutionRequest(document));
 
     public MarketAcquisitionClaimView ResolveExecutionRequest(MarketAcquisitionRequestDocument document) =>
         ClaimedRequest is { } hostedClaim && CanUseHostedClaim(document, hostedClaim)

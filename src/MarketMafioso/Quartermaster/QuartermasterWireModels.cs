@@ -426,3 +426,244 @@ internal sealed class QuartermasterChangedWire
     public string? Kind { get; init; }
     public string? OperationId { get; init; }
 }
+
+public sealed record QuartermasterCourierCharacter(
+    ulong LocalContentId,
+    uint HomeWorldId,
+    string CharacterName,
+    string HomeWorldName)
+{
+    public bool IsSameCharacter(ulong localContentId, uint homeWorldId) =>
+        LocalContentId != 0 && LocalContentId == localContentId && HomeWorldId == homeWorldId;
+}
+
+public sealed record QuartermasterCourierLoggedIn(
+    ulong LocalContentId,
+    uint HomeWorldId,
+    string CharacterName,
+    string HomeWorldName,
+    string? RegionId,
+    string? RegionName,
+    ulong CarriedGil,
+    int FreeBagSlots,
+    bool HasMeetingBell,
+    string? MeetingBellLabel);
+
+public sealed record QuartermasterCourierCarrier(
+    bool Configured,
+    bool Online,
+    ulong LocalContentId,
+    uint HomeWorldId,
+    string? CharacterName,
+    string? HomeWorldName,
+    string? RegionId,
+    string? RegionName,
+    ulong CarriedGil,
+    int FreeBagSlots);
+
+public sealed record QuartermasterCourierBridge(
+    uint WorldId,
+    string? WorldName,
+    uint TerritoryId,
+    string? Label);
+
+public sealed record QuartermasterCourierRosterEntry(
+    ulong LocalContentId,
+    uint HomeWorldId,
+    string CharacterName,
+    string HomeWorldName,
+    string? RegionId,
+    string? RegionName,
+    bool HasMeetingBell,
+    string? MeetingBellLabel,
+    bool IsCarrier);
+
+public sealed record QuartermasterCourierRun(
+    Guid? RunId,
+    string? RequestId,
+    string State,
+    string? OwnerPhase,
+    string? CarrierPhase,
+    int Trip,
+    int Trips,
+    string? Code,
+    string? Detail,
+    bool Active,
+    bool CanResume,
+    bool CanClear,
+    long CustodyUnits,
+    long CustodyGil)
+{
+    public bool IsRunning => State.Equals("Running", StringComparison.OrdinalIgnoreCase);
+    public bool IsCompleted => State.Equals("Completed", StringComparison.OrdinalIgnoreCase);
+    public bool IsFailure => State.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
+                             State.Equals("Interrupted", StringComparison.OrdinalIgnoreCase) ||
+                             State.Equals("Indeterminate", StringComparison.OrdinalIgnoreCase) ||
+                             State.Equals("Refused", StringComparison.OrdinalIgnoreCase);
+}
+
+public sealed record QuartermasterCourierStatus(
+    string ProviderInstanceId,
+    QuartermasterCourierLoggedIn? LoggedIn,
+    QuartermasterCourierCarrier? Carrier,
+    QuartermasterCourierBridge? Bridge,
+    ImmutableArray<QuartermasterCourierRosterEntry> Roster,
+    QuartermasterCourierRun? Run);
+
+public sealed record QuartermasterCourierItem(
+    uint ItemId,
+    string ItemName,
+    bool IsHq,
+    int Quantity);
+
+public sealed record QuartermasterCourierTransferRequest(
+    string RequestId,
+    QuartermasterCourierCharacter Source,
+    QuartermasterCourierCharacter Destination,
+    int GilAmount,
+    ImmutableArray<QuartermasterCourierItem> Items,
+    bool ReturnOwner,
+    bool ReturnDestinationHome,
+    bool ReturnCarrier);
+
+public static class QuartermasterCourierAckStatuses
+{
+    public const string Accepted = "accepted";
+    public const string AlreadyRunning = "already_running";
+    public const string AlreadyCompleted = "already_completed";
+    public const string Rejected = "rejected";
+    public const string Stopping = "stopping";
+    public const string Idle = "idle";
+}
+
+public sealed record QuartermasterCourierAcknowledgement(
+    string? ProviderInstanceId,
+    string? RequestId,
+    Guid? RunId,
+    string Status,
+    string? ErrorCode,
+    string? Message)
+{
+    /// <summary>The run named by the request exists: newly accepted, deduplicated, or already finished.</summary>
+    public bool IsAccepted => Status is QuartermasterCourierAckStatuses.Accepted or
+        QuartermasterCourierAckStatuses.AlreadyRunning or QuartermasterCourierAckStatuses.AlreadyCompleted;
+}
+
+internal sealed class QuartermasterCourierStatusWire
+{
+    public string? Schema { get; init; }
+    public string? ProviderInstanceId { get; init; }
+    public QuartermasterCourierLoggedInWire? LoggedIn { get; init; }
+    public QuartermasterCourierCarrierWire? Carrier { get; init; }
+    public QuartermasterCourierBridgeWire? Bridge { get; init; }
+    public List<QuartermasterCourierRosterEntryWire>? Roster { get; init; }
+    public QuartermasterCourierRunWire? Run { get; init; }
+}
+
+internal sealed class QuartermasterCourierLoggedInWire
+{
+    public ulong LocalContentId { get; init; }
+    public uint HomeWorldId { get; init; }
+    public string? CharacterName { get; init; }
+    public string? HomeWorldName { get; init; }
+    public JsonElement? RegionId { get; init; }
+    public string? RegionName { get; init; }
+    public ulong CarriedGil { get; init; }
+    public int FreeBagSlots { get; init; }
+    public bool HasMeetingBell { get; init; }
+    public string? MeetingBellLabel { get; init; }
+}
+
+internal sealed class QuartermasterCourierCarrierWire
+{
+    public bool Configured { get; init; }
+    public bool Online { get; init; }
+    public ulong? LocalContentId { get; init; }
+    public uint? HomeWorldId { get; init; }
+    public string? CharacterName { get; init; }
+    public string? HomeWorldName { get; init; }
+    public JsonElement? RegionId { get; init; }
+    public string? RegionName { get; init; }
+    public ulong? CarriedGil { get; init; }
+    public int? FreeBagSlots { get; init; }
+}
+
+internal sealed class QuartermasterCourierBridgeWire
+{
+    public uint WorldId { get; init; }
+    public string? WorldName { get; init; }
+    public uint TerritoryId { get; init; }
+    public string? Label { get; init; }
+}
+
+internal sealed class QuartermasterCourierRosterEntryWire
+{
+    public ulong LocalContentId { get; init; }
+    public uint HomeWorldId { get; init; }
+    public string? CharacterName { get; init; }
+    public string? HomeWorldName { get; init; }
+    public JsonElement? RegionId { get; init; }
+    public string? RegionName { get; init; }
+    public bool HasMeetingBell { get; init; }
+    public string? MeetingBellLabel { get; init; }
+    public bool IsCarrier { get; init; }
+}
+
+internal sealed class QuartermasterCourierRunWire
+{
+    public Guid? RunId { get; init; }
+    public string? RequestId { get; init; }
+    public string? State { get; init; }
+    public string? OwnerPhase { get; init; }
+    public string? CarrierPhase { get; init; }
+    public int Trip { get; init; }
+    public int Trips { get; init; }
+    public string? Code { get; init; }
+    public string? Detail { get; init; }
+    public bool Active { get; init; }
+    public bool CanResume { get; init; }
+    public bool CanClear { get; init; }
+    public long CustodyUnits { get; init; }
+    public long CustodyGil { get; init; }
+}
+
+internal sealed class QuartermasterCourierCharacterWire
+{
+    public ulong LocalContentId { get; init; }
+    public uint HomeWorldId { get; init; }
+    public string CharacterName { get; init; } = string.Empty;
+    public string HomeWorldName { get; init; } = string.Empty;
+}
+
+internal sealed class QuartermasterCourierItemWire
+{
+    public uint ItemId { get; init; }
+    public string ItemName { get; init; } = string.Empty;
+    public bool IsHq { get; init; }
+    public int Quantity { get; init; }
+}
+
+internal sealed class QuartermasterCourierTransferRequestWire
+{
+    public string Schema { get; init; } = string.Empty;
+    public string ProviderInstanceId { get; init; } = string.Empty;
+    public string RequestId { get; init; } = string.Empty;
+    public QuartermasterCourierCharacterWire Source { get; init; } = new();
+    public QuartermasterCourierCharacterWire Destination { get; init; } = new();
+    public int GilAmount { get; init; }
+    public List<QuartermasterCourierItemWire> Items { get; init; } = [];
+    public bool ReturnOwner { get; init; }
+    public bool ReturnDestinationHome { get; init; }
+    public bool ReturnCarrier { get; init; }
+}
+
+internal sealed class QuartermasterCourierAcknowledgementWire
+{
+    public string? Schema { get; init; }
+    public string? ProviderInstanceId { get; init; }
+    public string? RequestId { get; init; }
+    public Guid? RunId { get; init; }
+    public string? Status { get; init; }
+    public string? ErrorCode { get; init; }
+    public string? Message { get; init; }
+}

@@ -1,0 +1,990 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+using MarketMafioso.Quartermaster;
+
+namespace MarketMafioso.MarketAcquisition;
+
+/// <summary>The logged-in game state the cross-regional pipeline needs.</summary>
+public interface ICrossRegionGameState
+{
+    CrossRegionCharacter? LoggedInCharacter { get; }
+    string? CurrentWorldName { get; }
+    /// <summary>Live carried gil, or null when unreadable. Retainer gil is never considered.</summary>
+    ulong? CarriedGil { get; }
+    bool OtherAutomationActive { get; }
+    /// <summary>Live Inventory1..4 plus crystal pouch, or null when the bags are not loaded.</summary>
+    IReadOnlyList<CrossRegionBagStack>? ReadCarriedBags();
+    bool TrySwitchCharacter(CrossRegionCharacter target, out string message);
+}
+
+public enum CrossRegionShoppingState
+{
+    NotStarted,
+    Preparing,
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Stopped,
+}
+
+/// <summary>The Market Acquisition route as driven by the cross-regional pipeline on the shopper.</summary>
+public interface ICrossRegionShoppingRoute
+{
+    CrossRegionShoppingState State { get; }
+    string StatusMessage { get; }
+    bool CanResumeInPlace { get; }
+    event Action<MarketAcquisitionConfirmedPurchase>? ConfirmedPurchase;
+    IReadOnlyDictionary<string, uint> CaptureShopperStartingStock(CrossRegionAcquisitionSession session);
+    void BeginPrepareAndStart(CrossRegionAcquisitionSession session);
+    void Tick();
+    bool Pause(out string message);
+    bool ResumeInPlace(out string message);
+    void Stop();
+    bool TryCloseMarketBoard();
+}
+
+public sealed record CrossRegionStartRequest(
+    CrossRegionCharacter Shopper,
+    string TargetRegion,
+    int FundGil,
+    MarketAcquisitionRequestDocument Document,
+    IReadOnlyDictionary<string, uint> PrimaryStockBaselines);
+
+public sealed record CrossRegionReadiness(bool Ready, string? Blocker, QuartermasterCourierStatus? Status)
+{
+    public QuartermasterCourierRosterEntry? ShopperEntry { get; init; }
+}
+
+public sealed record CrossRegionActionResult(bool Success, string Message)
+{
+    public static CrossRegionActionResult Ok(string message) => new(true, message);
+    public static CrossRegionActionResult Fail(string message) => new(false, message);
+}
+
+/// <summary>
+/// Single-cycle cross-regional shopping: fund the shopper through Quartermaster's courier, shop the
+/// foreign region on the shopper, then haul exactly what was bought back to the primary.
+/// </summary>
+public sealed class CrossRegionAcquisitionCoordinator
+{
+    public const long MaxCarriedGil = 999_999_999L;
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan StatusCacheTtl = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan SwitchRetryInterval = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan HomeWorldArrivalGrace = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan CloseBoardTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan BagReadTimeout = TimeSpan.FromSeconds(30);
+    private const int MaxCharacterSwitchAttempts = 3;
+    private const int MaxSubmitAttempts = 5;
+    private const int MaxRecordedPurchaseKeys = 4096;
+
+    private readonly IQuartermasterCourierClient courier;
+    private readonly ICrossRegionGameState game;
+    private readonly ICrossRegionShoppingRoute shopping;
+    private readonly ICrossRegionAcquisitionStore store;
+    private readonly Func<DateTimeOffset> utcNow;
+    private readonly Action<string, Exception?> log;
+    private CrossRegionAcquisitionSession session;
+    private DateTimeOffset nextPollUtc;
+    private DateTimeOffset? lastSwitchRequestUtc;
+    private DateTimeOffset? fundArrivalWaitStartedUtc;
+    private DateTimeOffset? closeStartedUtc;
+    private bool prepareIssued;
+    private int submitAttempts;
+    private QuartermasterCourierStatus? cachedStatus;
+    private string? cachedStatusError;
+    private DateTimeOffset cachedStatusAtUtc = DateTimeOffset.MinValue;
+    private bool cachedHasCourier;
+    private DateTimeOffset cachedHasCourierAtUtc = DateTimeOffset.MinValue;
+
+    public CrossRegionAcquisitionCoordinator(
+        IQuartermasterCourierClient courier,
+        ICrossRegionGameState game,
+        ICrossRegionShoppingRoute shopping,
+        ICrossRegionAcquisitionStore store,
+        Func<DateTimeOffset>? utcNow = null,
+        Action<string, Exception?>? log = null)
+    {
+        this.courier = courier ?? throw new ArgumentNullException(nameof(courier));
+        this.game = game ?? throw new ArgumentNullException(nameof(game));
+        this.shopping = shopping ?? throw new ArgumentNullException(nameof(shopping));
+        this.store = store ?? throw new ArgumentNullException(nameof(store));
+        this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        this.log = log ?? ((_, _) => { });
+        session = LoadOrIdle();
+        shopping.ConfirmedPurchase += OnConfirmedPurchase;
+    }
+
+    public CrossRegionAcquisitionSession Session => session;
+
+    public CrossRegionAcquisitionPhase Phase => session.Phase;
+
+    /// <summary>A session that still owns automation (not idle and not terminal).</summary>
+    public bool IsActive => session.IsActive;
+
+    public bool HasSession => session.Phase != CrossRegionAcquisitionPhase.Idle;
+
+    public bool IsLoggedInAsShopper => session.Shopper?.Matches(game.LoggedInCharacter) == true;
+
+    public bool CanHaulNow =>
+        session.PurchasedUnits > 0 && IsLoggedInAsShopper &&
+        (session.Phase == CrossRegionAcquisitionPhase.Paused ||
+         session.Phase == CrossRegionAcquisitionPhase.Stopped && session.InterruptedPhase is CrossRegionAcquisitionPhase.Paused or
+             CrossRegionAcquisitionPhase.Shopping or CrossRegionAcquisitionPhase.PreparingShopRoute or CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul);
+
+    public bool CanResume => session.Phase switch
+    {
+        CrossRegionAcquisitionPhase.Paused => true,
+        CrossRegionAcquisitionPhase.Failed or CrossRegionAcquisitionPhase.Stopped => session.InterruptedPhase is not null &&
+            (session.InterruptedPhase is not (CrossRegionAcquisitionPhase.FundingShopper or CrossRegionAcquisitionPhase.HaulingToPrimary) ||
+             session.CanResumeCourier || session.Phase == CrossRegionAcquisitionPhase.Stopped ||
+             (session.InterruptedPhase == CrossRegionAcquisitionPhase.FundingShopper ? session.FundRunId : session.HaulRunId) is null),
+        CrossRegionAcquisitionPhase.FundingShopper or CrossRegionAcquisitionPhase.HaulingToPrimary => true,
+        _ => false,
+    };
+
+    public bool CanStop => session.IsActive;
+
+    public bool CanPause => session.Phase == CrossRegionAcquisitionPhase.Shopping;
+
+    public bool CanClear => session.IsTerminal;
+
+    // ---- Status cache (UI and readiness) ---------------------------------------------------
+
+    public QuartermasterCourierStatus? GetCourierStatus(out string? error, bool force = false)
+    {
+        var now = utcNow();
+        if (force || now - cachedStatusAtUtc >= StatusCacheTtl)
+        {
+            cachedStatusAtUtc = now;
+            if (courier.TryGetCourierStatus(out var status, out var statusError))
+            {
+                cachedStatus = status;
+                cachedStatusError = null;
+            }
+            else
+            {
+                cachedStatus = null;
+                cachedStatusError = statusError;
+            }
+        }
+        error = cachedStatusError;
+        return cachedStatus;
+    }
+
+    /// <summary>Capability probe, cached like the status so per-frame UI never spams IPC.</summary>
+    public bool HasCrossRegionCourier(bool force = false)
+    {
+        var now = utcNow();
+        if (force || now - cachedHasCourierAtUtc >= StatusCacheTtl)
+        {
+            cachedHasCourierAtUtc = now;
+            try { cachedHasCourier = courier.HasCrossRegionCourier; }
+            catch { cachedHasCourier = false; }
+        }
+        return cachedHasCourier;
+    }
+
+    public CrossRegionReadiness EvaluateReadiness(CrossRegionCharacter? shopper, string targetRegion, int fundGil, bool force = false)
+    {
+        if (!HasCrossRegionCourier(force))
+            return new(false, "Quartermaster is not loaded or does not support the cross-region courier.", null);
+        var status = GetCourierStatus(out var error, force);
+        if (status is null)
+            return new(false, $"Quartermaster courier status is unavailable: {error}", null);
+        if (status.LoggedIn is not { } primary)
+            return new(false, "Log in to the primary character first.", status);
+        if (status.Carrier is not { Configured: true } carrier)
+            return new(false, "No courier carrier is configured in Quartermaster.", status);
+        if (!carrier.Online)
+            return new(false, $"Carrier {carrier.CharacterName} is offline.", status);
+        if (!primary.HasMeetingBell)
+            return new(false, $"{primary.CharacterName} has no saved meeting bell in Quartermaster.", status);
+        if (status.Bridge is not { WorldId: > 0 })
+            return new(false, "Quartermaster has not resolved a cross-region bridge.", status);
+        if (shopper is null)
+            return new(false, $"Select a shopper in {targetRegion}.", status);
+        if (shopper.LocalContentId == primary.LocalContentId)
+            return new(false, "The shopper must be a different character than the one logged in.", status);
+        var entry = status.Roster.FirstOrDefault(row => row.LocalContentId == shopper.LocalContentId && row.HomeWorldId == shopper.HomeWorldId);
+        if (entry is null)
+            return new(false, $"{shopper.Label} is not in Quartermaster's courier roster.", status);
+        if (entry.IsCarrier)
+            return new(false, $"{shopper.Label} is the courier carrier and cannot shop.", status) { ShopperEntry = entry };
+        if (!RegionMatches(entry.RegionName, targetRegion))
+            return new(false, $"{shopper.Label} is not in {targetRegion}.", status) { ShopperEntry = entry };
+        if (status.Run is { } run && (run.Active || run.IsRunning || run.IsFailure))
+            return new(false, $"Quartermaster has an unresolved courier run ({run.State}); finish or clear it first.", status) { ShopperEntry = entry };
+        if (fundGil < 0)
+            return new(false, "Transfer gil cannot be negative.", status) { ShopperEntry = entry };
+        if (fundGil > 0)
+        {
+            var carried = game.CarriedGil ?? primary.CarriedGil;
+            if (carried < (ulong)fundGil)
+                return new(false, $"{primary.CharacterName} carries {carried:N0} gil; {fundGil:N0} needed (retainer gil is never used).", status) { ShopperEntry = entry };
+            if ((long)carrier.CarriedGil + fundGil > MaxCarriedGil)
+                return new(false, $"Carrier would exceed the {MaxCarriedGil:N0} gil cap.", status) { ShopperEntry = entry };
+        }
+        if (game.OtherAutomationActive)
+            return new(false, "Another MarketMafioso automation is running.", status) { ShopperEntry = entry };
+        return new(true, null, status) { ShopperEntry = entry };
+    }
+
+    // ---- Commands ---------------------------------------------------------------------------
+
+    public CrossRegionActionResult Start(CrossRegionStartRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (session.Phase != CrossRegionAcquisitionPhase.Idle)
+            return CrossRegionActionResult.Fail("A cross-regional session is still unresolved; finish or clear it first.");
+        if (request.Document.ExactAcquisitionAuthority is not null)
+            return CrossRegionActionResult.Fail("External exact-acquisition plans cannot run cross-regionally.");
+        var readiness = EvaluateReadiness(request.Shopper, request.TargetRegion, request.FundGil, force: true);
+        if (!readiness.Ready)
+            return CrossRegionActionResult.Fail(readiness.Blocker ?? "Cross-regional shopping is not ready.");
+        var primary = game.LoggedInCharacter;
+        if (primary is null)
+            return CrossRegionActionResult.Fail("Log in to the primary character first.");
+
+        var now = utcNow();
+        var id = Guid.NewGuid();
+        session = new CrossRegionAcquisitionSession
+        {
+            SessionId = id,
+            Primary = primary,
+            Shopper = request.Shopper,
+            TargetRegion = request.TargetRegion,
+            FundGil = request.FundGil,
+            PrimaryStockBaselines = new Dictionary<string, uint>(request.PrimaryStockBaselines, StringComparer.Ordinal),
+            // Detached copy: the Workbench keeps editing (and rescoping) its own document.
+            RequestDocumentSnapshot = request.Document with
+            {
+                Lines = request.Document.Lines.ToList(),
+                SweepDataCenters = request.Document.SweepDataCenters.ToList(),
+            },
+            StartedAtUtc = now,
+        };
+        ResetTransientState();
+        if (request.FundGil > 0)
+        {
+            // I1: the deterministic request id is durable before anything is submitted.
+            session.FundRequestId = CrossRegionAcquisitionSession.FundRequestIdFor(id);
+            SetPhase(CrossRegionAcquisitionPhase.FundingShopper, $"Funding {request.Shopper.Label} with {request.FundGil:N0} gil via courier.");
+            SubmitCourier(fund: true);
+        }
+        else if (request.Shopper.Matches(primary))
+            SetPhase(CrossRegionAcquisitionPhase.PreparingShopRoute, "Preparing the shop route.");
+        else
+            SetPhase(CrossRegionAcquisitionPhase.SwitchingToShopper, $"No gil transfer; switching to {request.Shopper.Label}.");
+        return CrossRegionActionResult.Ok(session.LastMessage);
+    }
+
+    public CrossRegionActionResult Pause()
+    {
+        if (session.Phase != CrossRegionAcquisitionPhase.Shopping)
+            return CrossRegionActionResult.Fail("Only an active shopping stage can be paused.");
+        shopping.Pause(out var message);
+        session.ShoppingPausedByUser = true;
+        SetPhase(CrossRegionAcquisitionPhase.Paused, PausedMessage("Shopping paused."));
+        return CrossRegionActionResult.Ok(message);
+    }
+
+    public CrossRegionActionResult Stop()
+    {
+        var phase = session.Phase;
+        switch (phase)
+        {
+            case CrossRegionAcquisitionPhase.FundingShopper:
+            case CrossRegionAcquisitionPhase.HaulingToPrimary:
+            {
+                var fund = phase == CrossRegionAcquisitionPhase.FundingShopper;
+                var runId = fund ? session.FundRunId : session.HaulRunId;
+                if (runId is null && TryFindOwnRun(fund, out var run) && run!.RunId is { } discovered)
+                    runId = discovered;
+                var detail = "Courier stop requested.";
+                if (runId is { } id)
+                {
+                    if (!courier.TryStopCourierRun(id.ToString("D"), out var ack, out var error))
+                        detail = $"Courier stop could not be confirmed: {error}";
+                    else if (ack?.Message is { Length: > 0 } ackMessage)
+                        detail = ackMessage;
+                }
+                else
+                    detail = "No courier run was confirmed yet; nothing to stop in Quartermaster.";
+                session.InterruptedPhase = phase;
+                session.CanResumeCourier = runId is not null;
+                SetPhase(CrossRegionAcquisitionPhase.Stopped, $"Stopped during {Describe(phase)}. {detail}");
+                return CrossRegionActionResult.Ok(session.LastMessage);
+            }
+            case CrossRegionAcquisitionPhase.Shopping:
+            case CrossRegionAcquisitionPhase.PreparingShopRoute:
+                shopping.Stop();
+                prepareIssued = false;
+                session.ShoppingPausedByUser = true;
+                SetPhase(CrossRegionAcquisitionPhase.Paused, PausedMessage("Shopping stopped."));
+                return CrossRegionActionResult.Ok(session.LastMessage);
+            case CrossRegionAcquisitionPhase.Paused:
+            case CrossRegionAcquisitionPhase.SwitchingToShopper:
+            case CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul:
+                if (phase == CrossRegionAcquisitionPhase.Paused)
+                    shopping.Stop();
+                session.InterruptedPhase = phase;
+                SetPhase(CrossRegionAcquisitionPhase.Stopped, $"Stopped during {Describe(phase)}.");
+                return CrossRegionActionResult.Ok(session.LastMessage);
+            default:
+                return CrossRegionActionResult.Fail("Nothing to stop.");
+        }
+    }
+
+    public CrossRegionActionResult Resume()
+    {
+        var target = session.Phase is CrossRegionAcquisitionPhase.Failed or CrossRegionAcquisitionPhase.Stopped
+            ? session.InterruptedPhase
+            : session.Phase;
+        switch (target)
+        {
+            case CrossRegionAcquisitionPhase.FundingShopper:
+            case CrossRegionAcquisitionPhase.HaulingToPrimary:
+                return ResumeCourier(target.Value);
+            case CrossRegionAcquisitionPhase.Paused:
+            case CrossRegionAcquisitionPhase.Shopping:
+            case CrossRegionAcquisitionPhase.PreparingShopRoute:
+                return ResumeShopping();
+            case CrossRegionAcquisitionPhase.SwitchingToShopper:
+                session.CharacterSwitchAttempts = 0;
+                lastSwitchRequestUtc = null;
+                SetPhase(CrossRegionAcquisitionPhase.SwitchingToShopper, $"Switching to {session.Shopper?.Label}.");
+                return CrossRegionActionResult.Ok(session.LastMessage);
+            case CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul:
+                closeStartedUtc = null;
+                SetPhase(CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul, "Preparing the return haul.");
+                return CrossRegionActionResult.Ok(session.LastMessage);
+            default:
+                return CrossRegionActionResult.Fail("Nothing to resume.");
+        }
+    }
+
+    public CrossRegionActionResult HaulNow()
+    {
+        if (!CanHaulNow)
+            return CrossRegionActionResult.Fail(session.PurchasedUnits == 0
+                ? "Nothing has been purchased yet."
+                : !IsLoggedInAsShopper ? $"Log in as {session.Shopper?.Label} to haul." : "Haul is available only while shopping is paused or stopped.");
+        BeginHaul("Hauling purchased items now.");
+        return CrossRegionActionResult.Ok(session.LastMessage);
+    }
+
+    public CrossRegionActionResult Clear()
+    {
+        if (!session.IsTerminal)
+            return CrossRegionActionResult.Fail("Only a completed, failed, or stopped session can be cleared.");
+        try { store.Clear(); }
+        catch (Exception ex) { log("Cross-regional session file could not be removed.", ex); }
+        session = new CrossRegionAcquisitionSession { Phase = CrossRegionAcquisitionPhase.Idle };
+        ResetTransientState();
+        return CrossRegionActionResult.Ok("Cross-regional session cleared.");
+    }
+
+    // ---- Tick -------------------------------------------------------------------------------
+
+    public void Tick()
+    {
+        if (!session.IsActive)
+            return;
+        try { shopping.Tick(); }
+        catch (Exception ex) { log("Cross-regional shop route tick failed.", ex); }
+        var now = utcNow();
+        if (now < nextPollUtc)
+            return;
+        nextPollUtc = now + PollInterval;
+        try
+        {
+            switch (session.Phase)
+            {
+                case CrossRegionAcquisitionPhase.FundingShopper:
+                    TickCourier(fund: true, now);
+                    break;
+                case CrossRegionAcquisitionPhase.SwitchingToShopper:
+                    TickSwitch(now);
+                    break;
+                case CrossRegionAcquisitionPhase.PreparingShopRoute:
+                    TickPreparing();
+                    break;
+                case CrossRegionAcquisitionPhase.Shopping:
+                    TickShopping();
+                    break;
+                case CrossRegionAcquisitionPhase.Paused:
+                    TickPaused();
+                    break;
+                case CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul:
+                    TickClosing(now);
+                    break;
+                case CrossRegionAcquisitionPhase.HaulingToPrimary:
+                    TickCourier(fund: false, now);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            log($"Cross-regional {Describe(session.Phase)} tick failed.", ex);
+            session.LastMessage = $"{Describe(session.Phase)}: {ex.Message}";
+        }
+    }
+
+    private void TickCourier(bool fund, DateTimeOffset now)
+    {
+        if (fund && session.FundCompleted)
+        {
+            AdvanceAfterFund(now);
+            return;
+        }
+        if (!courier.TryGetCourierStatus(out var status, out var error))
+        {
+            session.LastMessage = $"Waiting for Quartermaster courier status: {error}";
+            return;
+        }
+        var run = MatchOwnRun(status!, fund);
+        if (run is null)
+        {
+            var runId = fund ? session.FundRunId : session.HaulRunId;
+            if (runId is null)
+                SubmitCourier(fund);
+            else
+                session.LastMessage = $"Waiting for Quartermaster to report courier run {runId}.";
+            return;
+        }
+        if (run.RunId is { } id && (fund ? session.FundRunId : session.HaulRunId) != id)
+        {
+            if (fund) session.FundRunId = id; else session.HaulRunId = id;
+            Save();
+        }
+
+        if (run.IsRunning)
+        {
+            var summary = FormatCourierPhase(run);
+            if (!string.Equals(summary, session.CourierPhaseSummary, StringComparison.Ordinal))
+            {
+                session.CourierPhaseSummary = summary;
+                session.LastMessage = fund ? $"Funding shopper: {summary}" : $"Hauling to primary: {summary}";
+                Save();
+            }
+            return;
+        }
+        if (run.IsCompleted)
+        {
+            session.CourierPhaseSummary = null;
+            if (fund)
+            {
+                session.FundCompleted = true;
+                session.LastMessage = $"{session.FundGil:N0} gil delivered to {session.Shopper?.Label}.";
+                Save();
+                AdvanceAfterFund(now);
+            }
+            else
+            {
+                Complete(HaulSummary());
+            }
+            return;
+        }
+        if (run.IsFailure)
+        {
+            Fail(session.Phase, run.Code ?? run.State,
+                $"Courier {(fund ? "funding" : "return haul")} {run.State.ToLowerInvariant()}: {run.Detail ?? run.Code ?? "no detail"}",
+                run.CanResume);
+        }
+    }
+
+    private void AdvanceAfterFund(DateTimeOffset now)
+    {
+        var me = game.LoggedInCharacter;
+        if (me is null)
+        {
+            session.LastMessage = "Gil delivered; waiting for a logged-in character.";
+            return;
+        }
+        if (!session.Shopper!.Matches(me))
+        {
+            fundArrivalWaitStartedUtc = null;
+            SetPhase(CrossRegionAcquisitionPhase.SwitchingToShopper, $"Gil delivered; switching to {session.Shopper.Label}.");
+            return;
+        }
+        var onHome = string.Equals(game.CurrentWorldName, session.Shopper.HomeWorldName, StringComparison.OrdinalIgnoreCase);
+        fundArrivalWaitStartedUtc ??= now;
+        if (!onHome && now - fundArrivalWaitStartedUtc.Value < HomeWorldArrivalGrace)
+        {
+            session.LastMessage = $"Gil delivered; waiting for {session.Shopper.CharacterName} to reach {session.Shopper.HomeWorldName}.";
+            return;
+        }
+        fundArrivalWaitStartedUtc = null;
+        SetPhase(CrossRegionAcquisitionPhase.PreparingShopRoute, $"Preparing the {session.TargetRegion} shop route on {session.Shopper.Label}.");
+    }
+
+    private void TickSwitch(DateTimeOffset now)
+    {
+        var shopper = session.Shopper!;
+        var me = game.LoggedInCharacter;
+        if (shopper.Matches(me))
+        {
+            lastSwitchRequestUtc = null;
+            session.CharacterSwitchAttempts = 0;
+            SetPhase(CrossRegionAcquisitionPhase.PreparingShopRoute, $"Preparing the {session.TargetRegion} shop route on {shopper.Label}.");
+            return;
+        }
+        if (lastSwitchRequestUtc is { } last && now - last < SwitchRetryInterval)
+            return;
+        if (me is null && lastSwitchRequestUtc is not null)
+            return;
+        if (session.CharacterSwitchAttempts >= MaxCharacterSwitchAttempts)
+        {
+            Fail(CrossRegionAcquisitionPhase.SwitchingToShopper, "ShopperSwitchFailed",
+                $"Could not switch to {shopper.Label} after {MaxCharacterSwitchAttempts} attempts.", canResumeCourier: false);
+            return;
+        }
+        session.CharacterSwitchAttempts++;
+        lastSwitchRequestUtc = now;
+        session.LastMessage = game.TrySwitchCharacter(shopper, out var message)
+            ? $"Switching to {shopper.Label}…"
+            : $"Character switch to {shopper.Label} was not accepted: {message}";
+        Save();
+    }
+
+    private void TickPreparing()
+    {
+        var shopper = session.Shopper!;
+        if (!shopper.Matches(game.LoggedInCharacter))
+        {
+            SetPhase(CrossRegionAcquisitionPhase.SwitchingToShopper, $"Switching to {shopper.Label} to shop.");
+            return;
+        }
+        if (!prepareIssued)
+        {
+            if (session.ShopperStartingStock is null)
+            {
+                session.ShopperStartingStock = new Dictionary<string, uint>(shopping.CaptureShopperStartingStock(session), StringComparer.Ordinal);
+                Save();
+            }
+            prepareIssued = true;
+            shopping.BeginPrepareAndStart(session);
+            session.LastMessage = $"Preparing the {session.TargetRegion} shop route on {shopper.Label}.";
+            return;
+        }
+        switch (shopping.State)
+        {
+            case CrossRegionShoppingState.Running:
+                session.ShoppingPausedByUser = false;
+                SetPhase(CrossRegionAcquisitionPhase.Shopping, $"Shopping {session.TargetRegion} on {shopper.Label}.");
+                break;
+            case CrossRegionShoppingState.Completed:
+                FinishShopping();
+                break;
+            case CrossRegionShoppingState.Failed:
+            case CrossRegionShoppingState.Stopped:
+                prepareIssued = false;
+                SetPhase(CrossRegionAcquisitionPhase.Paused, PausedMessage($"Shop route could not start: {shopping.StatusMessage}"));
+                break;
+            default:
+                session.LastMessage = shopping.StatusMessage;
+                break;
+        }
+    }
+
+    private void TickShopping()
+    {
+        if (!session.Shopper!.Matches(game.LoggedInCharacter))
+        {
+            SetPhase(CrossRegionAcquisitionPhase.Paused, PausedMessage("Shopper is no longer logged in; shopping paused."));
+            return;
+        }
+        switch (shopping.State)
+        {
+            case CrossRegionShoppingState.Running:
+            case CrossRegionShoppingState.Preparing:
+                session.LastMessage = shopping.StatusMessage;
+                break;
+            case CrossRegionShoppingState.Completed:
+                FinishShopping();
+                break;
+            case CrossRegionShoppingState.Paused:
+                SetPhase(CrossRegionAcquisitionPhase.Paused, PausedMessage($"Route paused: {shopping.StatusMessage}"));
+                break;
+            default:
+                prepareIssued = false;
+                SetPhase(CrossRegionAcquisitionPhase.Paused, PausedMessage($"Route ended without completing: {shopping.StatusMessage}"));
+                break;
+        }
+    }
+
+    private void TickPaused()
+    {
+        // The ordinary route controls can resume the engine directly; follow it back into Shopping.
+        if (session.Shopper!.Matches(game.LoggedInCharacter) && shopping.State == CrossRegionShoppingState.Running)
+        {
+            session.ShoppingPausedByUser = false;
+            SetPhase(CrossRegionAcquisitionPhase.Shopping, $"Shopping {session.TargetRegion} on {session.Shopper.Label}.");
+        }
+        else if (shopping.State == CrossRegionShoppingState.Completed && prepareIssued)
+            FinishShopping();
+    }
+
+    private void FinishShopping()
+    {
+        prepareIssued = false;
+        if (session.PurchasedUnits == 0)
+        {
+            Complete("Shopping finished with no purchases; return haul skipped.");
+            return;
+        }
+        BeginHaul($"Shopping finished: {session.PurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil. Preparing the return haul.");
+    }
+
+    private void BeginHaul(string message)
+    {
+        closeStartedUtc = null;
+        SetPhase(CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul, message);
+    }
+
+    private void TickClosing(DateTimeOffset now)
+    {
+        var shopper = session.Shopper!;
+        if (!shopper.Matches(game.LoggedInCharacter))
+        {
+            session.LastMessage = $"Log in as {shopper.Label} to haul the purchases.";
+            return;
+        }
+        closeStartedUtc ??= now;
+        if (shopping.State is CrossRegionShoppingState.Running or CrossRegionShoppingState.Paused or CrossRegionShoppingState.Preparing)
+            shopping.Stop();
+        if (!shopping.TryCloseMarketBoard() && now - closeStartedUtc.Value < CloseBoardTimeout)
+        {
+            session.LastMessage = "Closing the market board before the return haul.";
+            return;
+        }
+        var bags = game.ReadCarriedBags();
+        if (bags is null)
+        {
+            if (now - closeStartedUtc.Value >= BagReadTimeout)
+                Fail(CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul, "BagsUnavailable",
+                    $"Could not read {shopper.CharacterName}'s bags to reconcile the haul.", canResumeCourier: false);
+            else
+                session.LastMessage = "Waiting for bags to load before reconciling the haul.";
+            return;
+        }
+
+        var manifest = ReconcileManifest(session.PurchasedManifest, bags);
+        if (manifest.Count == 0)
+        {
+            Complete($"None of the purchased items remain in {shopper.CharacterName}'s bags; return haul skipped.");
+            return;
+        }
+        // I1: persist the haul request before it is submitted.
+        session.HaulAttempt++;
+        session.HaulRequestId = CrossRegionAcquisitionSession.HaulRequestIdFor(session.SessionId, session.HaulAttempt);
+        session.HaulRunId = null;
+        session.HaulManifest = manifest.ToList();
+        submitAttempts = 0;
+        SetPhase(CrossRegionAcquisitionPhase.HaulingToPrimary,
+            $"Hauling {manifest.Sum(line => (long)line.Quantity):N0} item(s) back to {session.Primary?.Label}.");
+        SubmitCourier(fund: false);
+    }
+
+    private CrossRegionActionResult ResumeCourier(CrossRegionAcquisitionPhase target)
+    {
+        var fund = target == CrossRegionAcquisitionPhase.FundingShopper;
+        if (fund && session.FundCompleted)
+        {
+            SetPhase(CrossRegionAcquisitionPhase.FundingShopper, "Gil already delivered; continuing.");
+            return CrossRegionActionResult.Ok(session.LastMessage);
+        }
+        if (!courier.TryGetCourierStatus(out var status, out var error))
+            return CrossRegionActionResult.Fail($"Quartermaster courier status is unavailable: {error}");
+        var run = MatchOwnRun(status!, fund);
+        var runId = fund ? session.FundRunId : session.HaulRunId;
+        if (run is null)
+        {
+            if (runId is not null)
+                return CrossRegionActionResult.Fail("Quartermaster no longer reports this courier run; resolve it in Quartermaster.");
+            // Never acknowledged: the next tick resubmits under the same deterministic request id.
+            SetPhase(target, $"Resuming {Describe(target)}.");
+            return CrossRegionActionResult.Ok(session.LastMessage);
+        }
+        if (run.IsRunning || run.IsCompleted)
+        {
+            session.CanResumeCourier = false;
+            SetPhase(target, $"Resuming {Describe(target)}.");
+            return CrossRegionActionResult.Ok(session.LastMessage);
+        }
+        if (!run.CanResume)
+            return CrossRegionActionResult.Fail($"Quartermaster cannot resume this courier run ({run.Code ?? run.State}): {run.Detail}");
+        var resumeId = (run.RunId ?? runId)?.ToString("D");
+        if (resumeId is null)
+            return CrossRegionActionResult.Fail("Quartermaster did not report a run id to resume.");
+        if (!courier.TryResumeCourierRun(resumeId, out var ack, out error))
+            return CrossRegionActionResult.Fail($"Courier resume failed: {error}");
+        if (ack is { IsAccepted: false } && ack.Status == QuartermasterCourierAckStatuses.Rejected)
+            return CrossRegionActionResult.Fail($"Quartermaster refused to resume: {ack.Message ?? ack.ErrorCode}");
+        if (run.RunId is { } id)
+        {
+            if (fund) session.FundRunId = id; else session.HaulRunId = id;
+        }
+        session.CanResumeCourier = false;
+        session.LastErrorCode = null;
+        SetPhase(target, $"Resumed courier {(fund ? "funding" : "return haul")}.");
+        return CrossRegionActionResult.Ok(session.LastMessage);
+    }
+
+    private CrossRegionActionResult ResumeShopping()
+    {
+        if (!IsLoggedInAsShopper)
+            return CrossRegionActionResult.Fail($"Log in as {session.Shopper?.Label} to resume shopping.");
+        session.ShoppingPausedByUser = false;
+        if (shopping.CanResumeInPlace && shopping.ResumeInPlace(out var message))
+        {
+            SetPhase(CrossRegionAcquisitionPhase.Shopping, message);
+            return CrossRegionActionResult.Ok(message);
+        }
+        prepareIssued = false;
+        SetPhase(CrossRegionAcquisitionPhase.PreparingShopRoute, "Re-preparing the remaining shop route.");
+        return CrossRegionActionResult.Ok(session.LastMessage);
+    }
+
+    // ---- Courier submission -----------------------------------------------------------------
+
+    private void SubmitCourier(bool fund)
+    {
+        var requestId = fund ? session.FundRequestId : session.HaulRequestId;
+        if (string.IsNullOrWhiteSpace(requestId) || session.Primary is null || session.Shopper is null)
+        {
+            Fail(session.Phase, "MissingRequest", "Courier request identity was not persisted.", canResumeCourier: false);
+            return;
+        }
+        var request = fund
+            ? new QuartermasterCourierTransferRequest(requestId, session.Primary.ToCourier(), session.Shopper.ToCourier(),
+                session.FundGil, [], ReturnOwner: false, ReturnDestinationHome: true, ReturnCarrier: true)
+            : new QuartermasterCourierTransferRequest(requestId, session.Shopper.ToCourier(), session.Primary.ToCourier(), 0,
+                session.HaulManifest.Select(line => new QuartermasterCourierItem(line.ItemId, line.ItemName, line.IsHq,
+                    (int)Math.Min(line.Quantity, int.MaxValue))).ToImmutableArray(),
+                ReturnOwner: false, ReturnDestinationHome: false, ReturnCarrier: true);
+        if (!courier.TrySubmitCourierTransfer(request, out var ack, out var error))
+        {
+            submitAttempts++;
+            if (submitAttempts >= MaxSubmitAttempts)
+            {
+                Fail(session.Phase, "CourierSubmitFailed", $"Courier submission did not succeed: {error}", canResumeCourier: false);
+                return;
+            }
+            session.LastMessage = $"Courier submission pending ({submitAttempts}/{MaxSubmitAttempts}): {error}";
+            Save();
+            return;
+        }
+        submitAttempts = 0;
+        if (!ack!.IsAccepted)
+        {
+            if (ack.Status == QuartermasterCourierAckStatuses.Stopping)
+            {
+                session.LastMessage = "Quartermaster is stopping a previous run; retrying shortly.";
+                return;
+            }
+            Fail(session.Phase, ack.ErrorCode ?? ack.Status, $"Quartermaster rejected the courier request: {ack.Message ?? ack.ErrorCode ?? ack.Status}",
+                canResumeCourier: false);
+            return;
+        }
+        if (ack.RunId is { } runId)
+        {
+            if (fund) session.FundRunId = runId; else session.HaulRunId = runId;
+        }
+        session.LastMessage = fund
+            ? $"Courier accepted the {session.FundGil:N0} gil transfer to {session.Shopper.Label}."
+            : $"Courier accepted the return haul to {session.Primary.Label}.";
+        Save();
+    }
+
+    private QuartermasterCourierRun? MatchOwnRun(QuartermasterCourierStatus status, bool fund)
+    {
+        var run = status.Run;
+        if (run is null)
+            return null;
+        var runId = fund ? session.FundRunId : session.HaulRunId;
+        var requestId = fund ? session.FundRequestId : session.HaulRequestId;
+        return runId is { } id && run.RunId == id ||
+               !string.IsNullOrWhiteSpace(requestId) && string.Equals(run.RequestId, requestId, StringComparison.Ordinal)
+            ? run
+            : null;
+    }
+
+    private bool TryFindOwnRun(bool fund, out QuartermasterCourierRun? run)
+    {
+        run = courier.TryGetCourierStatus(out var status, out _) ? MatchOwnRun(status!, fund) : null;
+        return run is not null;
+    }
+
+    // ---- Purchases --------------------------------------------------------------------------
+
+    private void OnConfirmedPurchase(MarketAcquisitionConfirmedPurchase purchase)
+    {
+        if (session.Phase is not (CrossRegionAcquisitionPhase.Shopping or CrossRegionAcquisitionPhase.PreparingShopRoute or
+            CrossRegionAcquisitionPhase.Paused or CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul))
+            return;
+        if (purchase.ItemId == 0 || purchase.Quantity == 0)
+            return;
+        var key = $"{purchase.WorldName}:{purchase.ListingId}";
+        if (!string.IsNullOrWhiteSpace(purchase.ListingId))
+        {
+            if (session.RecordedPurchaseKeys.Contains(key, StringComparer.Ordinal))
+                return;
+            session.RecordedPurchaseKeys.Add(key);
+            if (session.RecordedPurchaseKeys.Count > MaxRecordedPurchaseKeys)
+                session.RecordedPurchaseKeys.RemoveRange(0, session.RecordedPurchaseKeys.Count - MaxRecordedPurchaseKeys);
+        }
+        var index = session.PurchasedManifest.FindIndex(line => line.ItemId == purchase.ItemId && line.IsHq == purchase.IsHq);
+        if (index < 0)
+            session.PurchasedManifest.Add(new CrossRegionManifestLine(purchase.ItemId, purchase.ItemName ?? purchase.ItemId.ToString(), purchase.IsHq, purchase.Quantity));
+        else
+        {
+            var line = session.PurchasedManifest[index];
+            session.PurchasedManifest[index] = line with
+            {
+                Quantity = checked(line.Quantity + purchase.Quantity),
+                ItemName = string.IsNullOrWhiteSpace(line.ItemName) ? purchase.ItemName ?? line.ItemName : line.ItemName,
+            };
+        }
+        session.TotalSpentGil = checked(session.TotalSpentGil + purchase.WalletGil);
+        Save();
+    }
+
+    /// <summary>
+    /// I7: the haul ships only what was bought and is still carried. Each (item, quality) is capped
+    /// to the live bag quantity; anything else in the shopper's bags is never included.
+    /// </summary>
+    public static IReadOnlyList<CrossRegionManifestLine> ReconcileManifest(
+        IEnumerable<CrossRegionManifestLine> purchased,
+        IEnumerable<CrossRegionBagStack> liveBags)
+    {
+        var carried = liveBags
+            .GroupBy(stack => (stack.ItemId, stack.IsHq))
+            .ToDictionary(group => group.Key, group => group.Aggregate(0UL, (total, stack) => total + stack.Quantity));
+        return purchased
+            .GroupBy(line => (line.ItemId, line.IsHq))
+            .Select(group =>
+            {
+                var bought = group.Aggregate(0UL, (total, line) => total + line.Quantity);
+                var live = carried.GetValueOrDefault(group.Key);
+                return new CrossRegionManifestLine(group.Key.ItemId, group.First().ItemName, group.Key.IsHq,
+                    (uint)Math.Min(Math.Min(bought, live), uint.MaxValue));
+            })
+            .Where(line => line.Quantity > 0)
+            .OrderBy(line => line.ItemId)
+            .ThenBy(line => line.IsHq)
+            .ToArray();
+    }
+
+    // ---- Helpers ----------------------------------------------------------------------------
+
+    private void SetPhase(CrossRegionAcquisitionPhase phase, string message)
+    {
+        session.Phase = phase;
+        session.LastMessage = message;
+        if (phase is not (CrossRegionAcquisitionPhase.FundingShopper or CrossRegionAcquisitionPhase.HaulingToPrimary))
+            session.CourierPhaseSummary = null;
+        Save();
+    }
+
+    private void Fail(CrossRegionAcquisitionPhase phase, string code, string message, bool canResumeCourier)
+    {
+        session.InterruptedPhase = phase is CrossRegionAcquisitionPhase.Failed or CrossRegionAcquisitionPhase.Stopped
+            ? session.InterruptedPhase
+            : phase;
+        session.LastErrorCode = code;
+        session.CanResumeCourier = canResumeCourier;
+        SetPhase(CrossRegionAcquisitionPhase.Failed, message);
+    }
+
+    private void Complete(string message)
+    {
+        session.CompletedAtUtc = utcNow();
+        session.LastErrorCode = null;
+        SetPhase(CrossRegionAcquisitionPhase.Completed, message);
+    }
+
+    private string HaulSummary()
+    {
+        var returned = session.HaulManifest.Aggregate(0UL, (total, line) => total + line.Quantity);
+        return $"Done: funded {session.FundGil:N0} gil, bought {session.PurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil, " +
+               $"returned {returned:N0} item(s) to {session.Primary?.Label}.";
+    }
+
+    private string PausedMessage(string reason) =>
+        session.PurchasedUnits > 0
+            ? $"{reason} {session.PurchasedUnits:N0} item(s) bought so far; resume shopping or haul them now."
+            : reason;
+
+    private void Save()
+    {
+        session.UpdatedAtUtc = utcNow();
+        try { store.Save(session); }
+        catch (Exception ex)
+        {
+            log("Cross-regional session could not be saved.", ex);
+            session.LastMessage = $"{session.LastMessage} (session save failed: {ex.Message})";
+        }
+    }
+
+    private CrossRegionAcquisitionSession LoadOrIdle()
+    {
+        try
+        {
+            if (store.Load() is { } loaded)
+                return loaded;
+        }
+        catch (Exception ex)
+        {
+            log("Cross-regional session could not be loaded; starting idle.", ex);
+        }
+        return new CrossRegionAcquisitionSession { Phase = CrossRegionAcquisitionPhase.Idle };
+    }
+
+    private void ResetTransientState()
+    {
+        nextPollUtc = DateTimeOffset.MinValue;
+        lastSwitchRequestUtc = null;
+        fundArrivalWaitStartedUtc = null;
+        closeStartedUtc = null;
+        prepareIssued = false;
+        submitAttempts = 0;
+    }
+
+    public static string FormatCourierPhase(QuartermasterCourierRun run)
+    {
+        var owner = string.IsNullOrWhiteSpace(run.OwnerPhase) ? run.State : run.OwnerPhase;
+        var text = string.IsNullOrWhiteSpace(run.CarrierPhase) ? owner! : $"{owner} · Carrier: {run.CarrierPhase}";
+        return run.Trips > 1 ? $"{text} (trip {run.Trip}/{run.Trips})" : text;
+    }
+
+    public static string Describe(CrossRegionAcquisitionPhase? phase) => phase switch
+    {
+        CrossRegionAcquisitionPhase.FundingShopper => "funding the shopper",
+        CrossRegionAcquisitionPhase.SwitchingToShopper => "switching to the shopper",
+        CrossRegionAcquisitionPhase.PreparingShopRoute => "preparing the shop route",
+        CrossRegionAcquisitionPhase.Shopping => "shopping",
+        CrossRegionAcquisitionPhase.Paused => "paused shopping",
+        CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul => "preparing the return haul",
+        CrossRegionAcquisitionPhase.HaulingToPrimary => "the return haul",
+        _ => phase?.ToString() ?? "the session",
+    };
+
+    public static bool RegionMatches(string? a, string? b)
+    {
+        static string Normalize(string? value) => (value ?? string.Empty).Trim().ToLowerInvariant() switch
+        {
+            "na" or "north america" or "north-america" or "northamerica" => "north america",
+            "eu" or "europe" => "europe",
+            "jp" or "ja" or "japan" => "japan",
+            "oc" or "oce" or "oceania" => "oceania",
+            var other => other,
+        };
+        var left = Normalize(a);
+        return left.Length > 0 && left == Normalize(b);
+    }
+}
