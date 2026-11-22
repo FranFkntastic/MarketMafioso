@@ -13,6 +13,8 @@ public sealed record MarketAcquisitionWorkbenchComposition
     public string SweepScope { get; init; } = "Region";
     public List<string> SweepDataCenters { get; init; } = [];
     public List<MarketAcquisitionRequestLineDocument> Lines { get; init; } = [];
+    /// <summary>The plan's stock scope and stow choice; null in a composition saved before they were kept.</summary>
+    public MarketAcquisitionCompositionStockScope? StockScope { get; init; }
     public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
 
@@ -28,6 +30,7 @@ public sealed record MarketAcquisitionWorkbenchComposition
             SweepScope = document.SweepScope,
             SweepDataCenters = document.SweepDataCenters.ToList(),
             Lines = CloneLines(document.Lines),
+            StockScope = MarketAcquisitionCompositionStockScope.Of(document),
             CreatedAtUtc = nowUtc,
             UpdatedAtUtc = nowUtc,
         };
@@ -42,6 +45,7 @@ public sealed record MarketAcquisitionWorkbenchComposition
             SweepScope = document.SweepScope,
             SweepDataCenters = document.SweepDataCenters.ToList(),
             Lines = CloneLines(document.Lines),
+            StockScope = MarketAcquisitionCompositionStockScope.Of(document),
             UpdatedAtUtc = nowUtc,
         };
 
@@ -53,10 +57,22 @@ public sealed record MarketAcquisitionWorkbenchComposition
             SweepScope = SweepScope,
             SweepDataCenters = SweepDataCenters.ToList(),
             Lines = CloneLines(Lines),
+            CountRetainerStock = StockScope?.CountRetainerStock ?? false,
+            AdditionalStockSources = StockScope?.AdditionalStockSources.ToList() ?? [],
+            StowAfterDelivery = StockScope?.StowAfterDelivery ?? false,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
 
     internal static List<MarketAcquisitionRequestLineDocument> CloneLines(
         IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
         lines.Select(line => line with { }).ToList();
+}
+
+public sealed record MarketAcquisitionCompositionStockScope(
+    bool CountRetainerStock,
+    IReadOnlyList<MarketAcquisitionStockSourceKey> AdditionalStockSources,
+    bool StowAfterDelivery)
+{
+    public static MarketAcquisitionCompositionStockScope Of(MarketAcquisitionRequestDocument document) =>
+        new(document.CountRetainerStock, document.AdditionalStockSources.ToList(), document.StowAfterDelivery);
 }

@@ -525,7 +525,9 @@ public sealed class MarketAcquisitionRequestBuilderController
         ArgumentNullException.ThrowIfNull(composition);
         PreserveCurrentWorkbenchForRecovery();
         PauseHostedSync();
-        Document = WithStockPolicyOf(composition.CreateDocument(characterName, world), Document);
+        var loaded = composition.CreateDocument(characterName, world);
+        // A composition saved before stock scope was kept leaves the Workbench's scope as it is.
+        Document = composition.StockScope is null ? WithStockPolicyOf(loaded, Document) : loaded;
         ResetSelection();
         Status = $"Loaded {composition.Name} as a new Workbench draft.";
         SaveDocument();

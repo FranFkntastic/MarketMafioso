@@ -55,6 +55,15 @@ public static class MarketAcquisitionWorkbenchCompositionInsights
         var workbenchRoute = FormatRoute(workbench.WorldMode, workbench.SweepScope, workbench.SweepDataCenters);
         if (!savedRoute.Equals(workbenchRoute, StringComparison.Ordinal))
             settings.Add(new("Worlds", savedRoute, workbenchRoute));
+        if (saved.StockScope is { } scope)
+        {
+            var savedStock = FormatStock(scope.CountRetainerStock, scope.AdditionalStockSources);
+            var workbenchStock = FormatStock(workbench.CountRetainerStock, workbench.AdditionalStockSources);
+            if (!savedStock.Equals(workbenchStock, StringComparison.Ordinal))
+                settings.Add(new("Count stock from", savedStock, workbenchStock));
+            if (scope.StowAfterDelivery != workbench.StowAfterDelivery)
+                settings.Add(new("Stow after delivery", scope.StowAfterDelivery ? "On" : "Off", workbench.StowAfterDelivery ? "On" : "Off"));
+        }
 
         var savedById = FirstByItem(saved.Lines);
         var workbenchById = FirstByItem(workbench.Lines);
@@ -165,6 +174,11 @@ public static class MarketAcquisitionWorkbenchCompositionInsights
 
         return null;
     }
+
+    private static string FormatStock(bool countRetainers, IEnumerable<MarketAcquisitionStockSourceKey> additional) =>
+        string.Join(", ", new[] { countRetainers ? "Own bags, own retainers" : "Own bags" }.Concat(additional
+            .Select(source => $"{source.CharacterName} · {source.Container}")
+            .OrderBy(label => label, StringComparer.OrdinalIgnoreCase)));
 
     public static string FormatRoute(string worldMode, string sweepScope, IReadOnlyCollection<string> sweepDataCenters)
     {
