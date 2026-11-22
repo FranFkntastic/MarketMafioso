@@ -485,6 +485,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.EndDisabled();
         if (!snapshot.IsAvailable)
             ImGui.TextColored(MainWindow.ColMuted, "Unavailable");
+        else if (snapshot.RetainerObservedAtUtc is { } observedAt &&
+                 DateTimeOffset.UtcNow - observedAt is var age &&
+                 age > RetainerAwareMarketAcquisitionInventoryObserver.RetainerStockStaleThreshold)
+            ImGui.TextColored(MainWindow.ColMuted, $"Stale ({age.TotalHours:N1}h)");
     }
 
     private void DrawCompactModeCell(MarketAcquisitionRequestLineDocument line, int index)
