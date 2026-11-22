@@ -24,7 +24,7 @@ namespace MarketMafioso.MarketAcquisition;
 internal sealed class MarketAcquisitionServices : IDisposable
 {
     private readonly Configuration config;
-    internal TickTimings LastTickTimings { get; } = new(8);
+    internal TickTimings LastTickTimings { get; } = new(9);
     private readonly IPlayerState playerState;
     private readonly InventoryScanner scanner;
     private readonly IPluginLog log;
