@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.MarketAcquisition;
@@ -56,6 +58,8 @@ public sealed record CrossRegionStartRequest(
 public sealed record CrossRegionReadiness(bool Ready, string? Blocker, QuartermasterCourierStatus? Status)
 {
     public QuartermasterCourierRosterEntry? ShopperEntry { get; init; }
+    /// <summary>Machine-readable blocker so the UI can offer an inline fix; null for blockers without one.</summary>
+    public string? BlockerCode { get; init; }
 }
 
 public sealed record CrossRegionActionResult(bool Success, string Message)
@@ -72,6 +76,9 @@ public sealed class CrossRegionAcquisitionCoordinator
 {
     public const long MaxCarriedGil = 999_999_999L;
     public const int TravelFeeReserveGil = 5_000;
+    public const string BlockerShopperNotPaired = "ShopperNotPaired";
+    /// <summary>How long an accepted pairing may take to show up in the carrier's presence before it is reported.</summary>
+    private static readonly TimeSpan PairConfirmationWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan StatusCacheTtl = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SwitchRetryInterval = TimeSpan.FromSeconds(90);
@@ -102,6 +109,12 @@ public sealed class CrossRegionAcquisitionCoordinator
     private DateTimeOffset cachedStatusAtUtc = DateTimeOffset.MinValue;
     private bool cachedHasCourier;
     private DateTimeOffset cachedHasCourierAtUtc = DateTimeOffset.MinValue;
+    // Pairing runs on a worker thread while Draw reads these on the framework thread.
+    private volatile bool pairingInFlight;
+    private volatile bool statusInvalidated;
+    private volatile string? pairingShopperError;
+    private volatile string? pairingShopperKey;
+    private long awaitingPairConfirmationUntilTicks;
 
     public CrossRegionAcquisitionCoordinator(
         IQuartermasterCourierClient courier,
@@ -160,6 +173,11 @@ public sealed class CrossRegionAcquisitionCoordinator
     public QuartermasterCourierStatus? GetCourierStatus(out string? error, bool force = false)
     {
         var now = utcNow();
+        if (statusInvalidated)
+        {
+            statusInvalidated = false;
+            force = true;
+        }
         if (force || now - cachedStatusAtUtc >= StatusCacheTtl)
         {
             cachedStatusAtUtc = now;
@@ -191,12 +209,88 @@ public sealed class CrossRegionAcquisitionCoordinator
         return cachedHasCourier;
     }
 
+    // ---- Inline shopper pairing -------------------------------------------------------------
+
+    /// <summary>True while a pairing request is in flight or its acceptance is still propagating to the carrier.</summary>
+    public bool IsPairingShopper => pairingInFlight || utcNow().UtcTicks < Interlocked.Read(ref awaitingPairConfirmationUntilTicks);
+
+    public string? PairingShopperError => pairingShopperError;
+
+    /// <summary>Pairs <paramref name="shopper"/> on the carrier off the framework thread; readiness picks up the result on its next poll.</summary>
+    public void BeginPairShopper(CrossRegionCharacter shopper)
+    {
+        ArgumentNullException.ThrowIfNull(shopper);
+        if (IsPairingShopper)
+            return;
+        pairingInFlight = true;
+        pairingShopperError = null;
+        pairingShopperKey = PairingKey(shopper);
+        var owner = shopper.ToCourier();
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (!courier.TryPairCourierOwner(owner, out var ack, out var error))
+                    pairingShopperError = $"Pairing {shopper.CharacterName} failed: {error}";
+                else if (ack!.Status != QuartermasterCourierAckStatuses.Accepted)
+                    pairingShopperError = $"Quartermaster refused to pair {shopper.CharacterName}: {ack.Message ?? ack.ErrorCode ?? ack.Status}";
+                else
+                    Interlocked.Exchange(ref awaitingPairConfirmationUntilTicks, (utcNow() + PairConfirmationWindow).UtcTicks);
+            }
+            catch (Exception ex)
+            {
+                log($"Pairing {shopper.Label} on the courier carrier failed.", ex);
+                pairingShopperError = $"Pairing {shopper.CharacterName} failed: {ex.Message}";
+            }
+            finally
+            {
+                statusInvalidated = true;
+                pairingInFlight = false;
+            }
+        });
+    }
+
+    private static string PairingKey(CrossRegionCharacter shopper) => $"{shopper.LocalContentId}:{shopper.HomeWorldId}";
+
     public CrossRegionReadiness EvaluateReadiness(
         CrossRegionCharacter? shopper,
         string targetRegion,
         int fundGil,
         MarketAcquisitionRequestDocument? document = null,
         bool force = false)
+    {
+        if (pairingShopperKey is { } pairingKey && (shopper is null || PairingKey(shopper) != pairingKey))
+            ResetPairingState();
+        var readiness = EvaluateReadinessCore(shopper, targetRegion, fundGil, document, force);
+        if (readiness.BlockerCode != BlockerShopperNotPaired)
+        {
+            if (readiness.ShopperEntry is not null || readiness.Ready)
+                ResetPairingState();
+        }
+        else if (!pairingInFlight && pairingShopperError is null &&
+                 Interlocked.Read(ref awaitingPairConfirmationUntilTicks) is var until and > 0 && utcNow().UtcTicks >= until)
+        {
+            Interlocked.Exchange(ref awaitingPairConfirmationUntilTicks, 0);
+            pairingShopperError = $"Quartermaster accepted the pairing, but {readiness.Status?.Carrier?.CharacterName ?? "the carrier"} has not confirmed it yet.";
+        }
+        return readiness;
+    }
+
+    private void ResetPairingState()
+    {
+        if (pairingInFlight)
+            return;
+        pairingShopperKey = null;
+        pairingShopperError = null;
+        Interlocked.Exchange(ref awaitingPairConfirmationUntilTicks, 0);
+    }
+
+    private CrossRegionReadiness EvaluateReadinessCore(
+        CrossRegionCharacter? shopper,
+        string targetRegion,
+        int fundGil,
+        MarketAcquisitionRequestDocument? document,
+        bool force)
     {
         if (document?.ExactAcquisitionAuthority is not null)
             return new(false, "External exact-acquisition plans cannot run cross-regionally.", null);
@@ -233,7 +327,11 @@ public sealed class CrossRegionAcquisitionCoordinator
         if (!RegionMatches(entry.RegionName, targetRegion))
             return new(false, $"{shopper.Label} is not in {targetRegion}.", status) { ShopperEntry = entry };
         if (entry.IsPairedWithCarrier == false)
-            return new(false, $"Pair {entry.CharacterName} as an owner on {carrier.CharacterName}'s Quartermaster Courier settings (needed for the return haul).", status) { ShopperEntry = entry };
+            return new(false, $"{entry.CharacterName} isn't paired on {carrier.CharacterName} yet (needed for the return haul).", status)
+            {
+                ShopperEntry = entry,
+                BlockerCode = BlockerShopperNotPaired,
+            };
         if (status.Run is { } run && (run.Active || run.IsRunning || run.IsFailure))
             return new(false, $"Quartermaster has an unresolved courier run ({run.State}); finish or clear it first.", status) { ShopperEntry = entry };
         if (fundGil < 0)

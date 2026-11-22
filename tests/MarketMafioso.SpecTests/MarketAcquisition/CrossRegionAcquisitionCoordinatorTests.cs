@@ -237,6 +237,13 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
             error = string.Empty;
             return true;
         }
+
+        public bool TryPairCourierOwner(QuartermasterCourierCharacter owner, out QuartermasterCourierAcknowledgement? acknowledgement, out string error)
+        {
+            acknowledgement = new("qm", null, null, QuartermasterCourierAckStatuses.Accepted, null, null);
+            error = string.Empty;
+            return true;
+        }
     }
 
     private sealed class FakeGame : ICrossRegionGameState

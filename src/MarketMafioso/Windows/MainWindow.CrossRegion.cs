@@ -150,8 +150,50 @@ public partial class MainWindow
                 : $"No gil transfer → {shopper!.Label}";
             ImGui.TextColored(ColSuccess, $"Ready · {primary}{transfer} · Carrier {carrier.CharacterName} ({carrier.FreeBagSlots} free slots) · {bridge}");
         }
+        else if (readiness.BlockerCode == CrossRegionAcquisitionCoordinator.BlockerShopperNotPaired && shopper is not null &&
+                 readiness.Status?.Carrier is { CharacterName.Length: > 0 } carrier)
+            DrawCrossRegionBlockerWithPairAction(readiness.Blocker ?? "Shopper is not paired on the carrier.", shopper, carrier.CharacterName!);
         else
             ImGui.TextColored(readiness.Status is null ? ColError : ColWarning, readiness.Blocker ?? "Not ready.");
+    }
+
+    /// <summary>Amber blocker line, then SameLine for its inline fix button unless the row is too narrow (the button wraps below).</summary>
+    private static void DrawCrossRegionBlockerLine(string blocker, string buttonLabel)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(ColWarning, blocker);
+        var hashIndex = buttonLabel.IndexOf("##", StringComparison.Ordinal);
+        var visible = hashIndex >= 0 ? buttonLabel[..hashIndex] : buttonLabel;
+        var style = ImGui.GetStyle();
+        var lineEnd = ImGui.GetItemRectMax().X + style.ItemSpacing.X + ImGui.CalcTextSize(visible).X + style.FramePadding.X * 2;
+        if (lineEnd <= ImGui.GetWindowPos().X + ImGui.GetWindowContentRegionMax().X)
+            ImGui.SameLine();
+    }
+
+    private void DrawCrossRegionBlockerWithPairAction(string blocker, CrossRegionCharacter shopper, string carrierName)
+    {
+        var pairing = CrossRegion.IsPairingShopper;
+        var label = pairing ? "Pairing...##CrossRegionPairShopper" : $"Pair {shopper.CharacterName} on {carrierName}##CrossRegionPairShopper";
+        DrawCrossRegionBlockerLine(blocker, label);
+        void Pair() => CrossRegion.BeginPairShopper(shopper);
+        if (ImGuiUi.Button(label, !pairing))
+            Pair();
+        AgentReviewRegistry.RegisterLastButton("acquisition.cross-region.pair-shopper",
+            $"Pair {shopper.Label} as a courier owner on {carrierName}", !pairing, Pair);
+        if (CrossRegion.PairingShopperError is { Length: > 0 } pairError)
+            ImGui.TextColored(ColError, pairError);
+    }
+
+    private void DrawCrossRegionBlockerWithPreparePlanAction(string blocker)
+    {
+        const string label = "Prepare Plan##CrossRegionPreparePlan";
+        DrawCrossRegionBlockerLine(blocker, label);
+        var canPrepare = !acquisitionWorkspace.IsBusy && !routeEngine.IsRouteActive;
+        void Prepare() => _ = PrepareMarketAcquisitionPlanAsync();
+        if (ImGuiUi.Button(label, canPrepare))
+            Prepare();
+        AgentReviewRegistry.RegisterLastButton("acquisition.cross-region.prepare-plan",
+            "Prepare the Market Acquisition plan for the cross-regional run", canPrepare, Prepare);
     }
 
     // ---- Guided Route pipeline --------------------------------------------------------------
@@ -275,10 +317,14 @@ public partial class MainWindow
             if (ImGuiUi.PrimaryButton("Start Cross-Regional Run##CrossRegionStart", canStart))
                 StartCrossRegionRun();
             if (blocker is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip(blocker);
+                ImGui.SetTooltip(blocker.Message);
             AgentReviewRegistry.RegisterLastButton("acquisition.cross-region.start", "Start the cross-regional shopping run", canStart, StartCrossRegionRun);
-            if (blocker is not null)
-                ImGui.TextColored(ColWarning, blocker);
+            if (blocker is { Code: CrossRegionAcquisitionCoordinator.BlockerShopperNotPaired, Shopper: { } shopper, CarrierName: { Length: > 0 } carrierName })
+                DrawCrossRegionBlockerWithPairAction(blocker.Message, shopper, carrierName);
+            else if (blocker is { Code: CrossRegionStartBlocker.PlanMissing or CrossRegionStartBlocker.PlanStale })
+                DrawCrossRegionBlockerWithPreparePlanAction(blocker.Message);
+            else if (blocker is not null)
+                ImGui.TextColored(ColWarning, blocker.Message);
             return;
         }
 
@@ -311,24 +357,38 @@ public partial class MainWindow
         AgentReviewRegistry.RegisterLastButton(id, description, enabled, Invoke);
     }
 
+    private sealed record CrossRegionStartBlocker(string Message, string? Code = null)
+    {
+        public const string PlanMissing = "PlanMissing";
+        public const string PlanStale = "PlanStale";
+        public CrossRegionCharacter? Shopper { get; init; }
+        public string? CarrierName { get; init; }
+    }
+
     /// <summary>The single reason the cross-regional run cannot start, or null when it can.</summary>
-    private string? GetCrossRegionStartBlocker()
+    private CrossRegionStartBlocker? GetCrossRegionStartBlocker()
     {
         if (CrossRegion.HasSession)
-            return "A cross-regional session is still unresolved; finish or clear it first.";
+            return new("A cross-regional session is still unresolved; finish or clear it first.");
         if (!IsCrossRegionDocument || DocumentRegion is not { } region)
-            return "Set the request region to a region other than your home region.";
+            return new("Set the request region to a region other than your home region.");
         if (routeEngine.IsRouteActive)
-            return "Another Market Acquisition route is active.";
+            return new("Another Market Acquisition route is active.");
         if (acquisitionWorkspace.IsBusy)
-            return "Market Acquisition is busy.";
+            return new("Market Acquisition is busy.");
         if (acquisitionWorkspace.PreparedPlan is not { Status: "Ready", WorldBatches.Count: > 0 })
-            return "Prepare a plan in Workbench before starting.";
+            return new("No plan is prepared for this request yet.", CrossRegionStartBlocker.PlanMissing);
         if (acquisitionWorkspace.IsPreparedPlanStale())
-            return "Request changed after this plan was prepared. Prepare a fresh plan first.";
+            return new("Request changed after this plan was prepared.", CrossRegionStartBlocker.PlanStale);
         var shopper = ResolveCrossRegionShopper(CrossRegion.GetCourierStatus(out _), region, out _);
         var readiness = CrossRegion.EvaluateReadiness(shopper, region, config.CrossRegionFundGil, acquisitionRequestBuilder.CurrentDocument);
-        return readiness.Ready ? null : readiness.Blocker ?? "Cross-regional shopping is not ready.";
+        if (readiness.Ready)
+            return null;
+        return new(readiness.Blocker ?? "Cross-regional shopping is not ready.", readiness.BlockerCode)
+        {
+            Shopper = shopper,
+            CarrierName = readiness.Status?.Carrier?.CharacterName,
+        };
     }
 
     private bool CanStartCrossRegionRun() => GetCrossRegionStartBlocker() is null;
@@ -338,7 +398,7 @@ public partial class MainWindow
         crossRegionActionMessage = null;
         if (GetCrossRegionStartBlocker() is { } blocker)
         {
-            crossRegionActionMessage = blocker;
+            crossRegionActionMessage = blocker.Message;
             return;
         }
         var region = DocumentRegion!;
