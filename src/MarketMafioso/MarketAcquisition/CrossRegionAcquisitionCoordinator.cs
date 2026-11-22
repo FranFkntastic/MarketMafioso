@@ -335,8 +335,15 @@ public sealed class CrossRegionAcquisitionCoordinator
                 ShopperEntry = entry,
                 BlockerCode = BlockerShopperNotPaired,
             };
-        if (status.Run is { } run && (run.Active || run.IsRunning || run.IsFailure))
-            return new(false, $"Quartermaster has an unresolved courier run ({run.State}); finish or clear it first.", status) { ShopperEntry = entry };
+        if (status.Run is { } run)
+        {
+            if (run.Active || run.IsRunning)
+                return new(false, "Another courier run is active in Quartermaster.", status) { ShopperEntry = entry };
+            // Only genuinely unsettled custody or an unverified pending trade blocks starting a new run;
+            // zero-custody failed/interrupted runs are auto-archived by Quartermaster on submit.
+            if (run.IsFailure && (run.CustodyUnits > 0 || run.CustodyGil > 0 || !run.CanClear))
+                return new(false, $"Quartermaster has unsettled courier custody ({run.State}); resolve it in Quartermaster first.", status) { ShopperEntry = entry };
+        }
         if (fundGil < 0)
             return new(false, "Transfer gil cannot be negative.", status) { ShopperEntry = entry };
         // The carrier teleports to the bridge and the primary's bell on the return haul even without a gil transfer.
@@ -929,6 +936,8 @@ public sealed class CrossRegionAcquisitionCoordinator
             return CrossRegionActionResult.Fail("Quartermaster did not report a run id to resume.");
         if (!courier.TryResumeCourierRun(resumeId, out var ack, out error))
             return CrossRegionActionResult.Fail($"Courier resume failed: {error}");
+        if (ack?.Status == QuartermasterCourierAckStatuses.Stopping)
+            return CrossRegionActionResult.Fail(ack.Message ?? "Quartermaster is still finishing cleanup; retry in a moment.");
         if (ack is { IsAccepted: false } && ack.Status == QuartermasterCourierAckStatuses.Rejected)
             return CrossRegionActionResult.Fail($"Quartermaster refused to resume: {ack.Message ?? ack.ErrorCode}");
         if (run.RunId is { } id)
