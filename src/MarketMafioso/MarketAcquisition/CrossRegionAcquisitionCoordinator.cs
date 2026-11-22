@@ -934,6 +934,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         if (session.ShopperCounted is { } shopperCounted && !shopperCounted.RetrievalSettled)
         {
             TickRetrieval(shopperCounted, -1, now);
+            // The bag-read window starts once the retrieval settles, not when the board closed.
+            if (shopperCounted.RetrievalSettled)
+                closeStartedUtc = now;
             return;
         }
         var bags = game.ReadCarriedBags();
