@@ -32,6 +32,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public const string CodeCollectReturnSwitchFailed = "CollectReturnSwitchFailed";
     public const string CodeCollectBagsUnavailable = "CollectBagsUnavailable";
     public const string CodeCollectRunFailed = "CollectRunFailed";
+    // Quartermaster's own refusals of a transfer whose source is the carrier; kept verbatim as the collection's code.
+    public const string CodeCarrierGilShort = "CarrierGilShort";
+    public const string CodeCarrierStockShort = "CarrierStockShort";
+    public const string CodeCarrierSourceUnsupported = "CarrierSourceUnsupported";
     public const string CodeCountedStockNotFound = "CountedStockNotFound";
     public const string CodeCountedShort = "CountedShort";
     public const string CodeCountedRetrievalUnavailable = "CountedRetrievalUnavailable";
@@ -143,10 +147,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     /// <summary>
     /// Splits the plan's counted stock by source. The primary's own stock is ignored; the shopper's rides home with
-    /// the haul; stock on the courier carrier cannot be a courier source and is reported, not attempted.
+    /// the haul. Bag stock on the courier carrier is sent by the carrier itself when its Quartermaster can and the
+    /// HQ split is known; otherwise (and for its retainers) it is reported, not attempted.
     /// </summary>
     private void PlanCountedStock(QuartermasterCourierCarrier? carrier)
     {
+        bool IsCarrier(CrossRegionCharacter source) =>
+            carrier is { Configured: true } && carrier.LocalContentId == source.LocalContentId && carrier.HomeWorldId == source.HomeWorldId;
         if (session.RequestDocumentSnapshot is not { } document)
             return;
         session.CountedStockPlanned = true;
@@ -166,12 +173,21 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                     log($"Counted stock for {line.ItemName} on {source.Label} names unknown container '{counted.Container}'; it is not collected.", null);
                     continue;
                 }
-                if (carrier is { Configured: true } && carrier.LocalContentId == source.LocalContentId && carrier.HomeWorldId == source.HomeWorldId)
+                uint carrierHq = 0;
+                if (IsCarrier(source))
                 {
-                    session.NotCollected.Add(new(line.ItemId, line.ItemName, source.Label, counted.Quantity, CodeCountedStockOnCarrier));
-                    log($"{CodeCountedStockOnCarrier}: {counted.Quantity} {line.ItemName} counted on {source.Label} ({counted.Container}) stays put; " +
-                        "the courier carrier cannot also be a transfer source.", null);
-                    continue;
+                    var hq = CountedHq(line.HqPolicy, counted);
+                    var why = carrier!.CanSendOwnStock != true ? "the courier carrier cannot also be a transfer source"
+                        : inRetainers ? "the carrier's retainers are not retrieved"
+                        : hq is null ? "its HQ/NQ split was not observed"
+                        : null;
+                    if (why is not null)
+                    {
+                        session.NotCollected.Add(new(line.ItemId, line.ItemName, source.Label, counted.Quantity, CodeCountedStockOnCarrier));
+                        log($"{CodeCountedStockOnCarrier}: {counted.Quantity} {line.ItemName} counted on {source.Label} ({counted.Container}) stays put; {why}.", null);
+                        continue;
+                    }
+                    carrierHq = hq!.Value;
                 }
                 var entry = bySource.FindIndex(candidate => candidate.Source.Matches(source));
                 if (entry < 0)
@@ -184,18 +200,31 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 var current = lines.GetValueOrDefault(key) ?? new CrossRegionCountedLine(line.ItemId, line.ItemName, line.HqPolicy, 0, 0);
                 lines[key] = inRetainers
                     ? current with { RetainerQuantity = checked(current.RetainerQuantity + counted.Quantity) }
-                    : current with { BagQuantity = checked(current.BagQuantity + counted.Quantity) };
+                    : current with
+                    {
+                        BagQuantity = checked(current.BagQuantity + counted.Quantity),
+                        BagHqQuantity = checked(current.BagHqQuantity + carrierHq),
+                    };
             }
         }
         foreach (var (source, lines) in bySource)
         {
-            var collection = new CrossRegionCollection { Source = source, Lines = lines.Values.ToList() };
+            var collection = new CrossRegionCollection { Source = source, FromCarrier = IsCarrier(source), Lines = lines.Values.ToList() };
             if (source.Matches(session.Shopper))
                 session.ShopperCounted = collection;
             else
                 session.Collections.Add(collection);
         }
     }
+
+    /// <summary>How many of a counted source's units are HQ: implied by an HQ-only/NQ-only line, else as observed.</summary>
+    private static uint? CountedHq(string hqPolicy, MarketAcquisitionCountedStockSource counted) =>
+        MarketAcquisitionPolicy.NormalizeHqPolicy(hqPolicy) switch
+        {
+            "HqOnly" => counted.Quantity,
+            "NqOnly" => 0,
+            _ => counted.HqQuantity is { } hq && hq <= counted.Quantity ? hq : null,
+        };
 
     private bool HasShopperCountedStock => session.ShopperCounted is { Lines.Count: > 0 };
 
@@ -245,6 +274,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         stowBagWaitStartedUtc = null;
         awaitingRunAppearanceSinceUtc = null;
         submitAttempts = 0;
+        historyIndexingRetries = 0;
+        nextSubmitRetryUtc = DateTimeOffset.MinValue;
         custodySubmitAttempts = 0;
         nextCustodyPollUtc = DateTimeOffset.MinValue;
     }
@@ -272,10 +303,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             TickCourier(CourierLeg.Collect, now);
             return;
         }
-        if (!collection.Source.Matches(game.LoggedInCharacter))
+        // The carrier sends its own stock while the primary (the destination and paired owner) stays logged in.
+        var loginAs = collection.FromCarrier ? session.Primary! : collection.Source;
+        if (!loginAs.Matches(game.LoggedInCharacter))
         {
             // A source that cannot be reached is not collected; the run moves on to the rest and the stow.
-            DriveCharacterSwitch(collection.Source, CrossRegionAcquisitionPhase.CollectingCountedStock, CodeCollectSourceSwitchFailed, now,
+            DriveCharacterSwitch(loginAs, CrossRegionAcquisitionPhase.CollectingCountedStock, CodeCollectSourceSwitchFailed, now,
                 onExhausted: detail =>
                 {
                     SettleNotCollected(collection, CodeCollectSourceSwitchFailed, detail);
@@ -299,10 +332,16 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             TickRetrieval(collection, index, now);
             return;
         }
-        if (ReadSourceBags(collection, now) is not { } bags)
-            return;
-        var (manifest, outcomes) = Allocate(collection, CarriedByVariant(bags));
-        collection.Outcomes = outcomes;
+        List<CrossRegionManifestLine> manifest;
+        if (collection.FromCarrier)
+            manifest = CarrierManifest(collection);
+        else
+        {
+            if (ReadSourceBags(collection, now) is not { } bags)
+                return;
+            (manifest, var outcomes) = Allocate(collection, CarriedByVariant(bags));
+            collection.Outcomes = outcomes;
+        }
         if (manifest.Count == 0)
         {
             SettleNotCollected(collection, CodeCountedStockNotFound,
@@ -377,7 +416,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         if (CurrentCollection() is not { } collection)
             return;
         session.CourierPhaseSummary = null;
-        SettleNotCollected(collection, CodeCollectRunFailed,
+        SettleNotCollected(collection, IsCarrierRefusal(run.Code) ? run.Code! : CodeCollectRunFailed,
             $"Courier collection {run.State.ToLowerInvariant()} with nothing in custody ({run.Code ?? run.State}): {run.Detail ?? "no detail"}");
         ResetCustodyTransients();
     }
@@ -386,9 +425,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     {
         if (CurrentCollection() is not { } collection)
             return;
-        SettleNotCollected(collection, CodeCollectRejected, $"Quartermaster rejected the transfer ({code}): {message}");
+        SettleNotCollected(collection, IsCarrierRefusal(code) ? code : CodeCollectRejected, $"Quartermaster rejected the transfer ({code}): {message}");
         ResetCustodyTransients();
     }
+
+    private static bool IsCarrierRefusal(string? code) => code is CodeCarrierGilShort or CodeCarrierStockShort or CodeCarrierSourceUnsupported;
 
     /// <summary>
     /// Caps each counted line by what is observed in the source's bags now: the counted bag quantity, plus the
@@ -441,6 +482,25 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             .ToList();
         return (manifest, outcomes);
     }
+
+    /// <summary>
+    /// The carrier's counted bag stock by variant. Quartermaster checks the carrier's live bags and refuses a short
+    /// transfer before anything moves. Lines for the same item count the same bags, so each variant takes the
+    /// largest line's count rather than their sum.
+    /// </summary>
+    private static List<CrossRegionManifestLine> CarrierManifest(CrossRegionCollection collection) =>
+        collection.Lines
+            .SelectMany(line =>
+            {
+                var hq = Math.Min(line.BagHqQuantity, line.BagQuantity);
+                return new[] { (line.ItemId, line.ItemName, IsHq: false, Quantity: line.BagQuantity - hq), (line.ItemId, line.ItemName, IsHq: true, Quantity: hq) };
+            })
+            .Where(entry => entry.Quantity > 0)
+            .GroupBy(entry => (entry.ItemId, entry.IsHq))
+            .Select(group => new CrossRegionManifestLine(group.Key.ItemId, group.First().ItemName, group.Key.IsHq, group.Max(entry => entry.Quantity)))
+            .OrderBy(line => line.ItemId)
+            .ThenBy(line => line.IsHq)
+            .ToList();
 
     private static Dictionary<(uint ItemId, bool IsHq), ulong> CarriedByVariant(IEnumerable<CrossRegionBagStack> bags) =>
         bags.GroupBy(stack => (stack.ItemId, stack.IsHq))

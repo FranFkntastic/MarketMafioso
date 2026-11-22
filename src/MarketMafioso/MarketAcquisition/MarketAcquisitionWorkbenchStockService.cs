@@ -527,7 +527,7 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
                     continue;
                 if (contribution.Quantity > 0)
                     counted.Add(new(key.LocalContentId, key.HomeWorldId, name, character!.HomeWorldName,
-                        key.Container, contribution.Quantity, contribution.ObservedAtUtc));
+                        key.Container, contribution.Quantity, contribution.ObservedAtUtc, contribution.HqQuantity));
                 if (key.Container == MarketAcquisitionStockSourceKey.Retainers && contribution.Quantity > 0)
                 {
                     foreach (var retainer in character!.Retainers!.Value)
@@ -562,7 +562,7 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
         }
     }
 
-    private static (uint Quantity, DateTimeOffset ObservedAtUtc)? Contribution(
+    private static (uint Quantity, uint HqQuantity, DateTimeOffset ObservedAtUtc)? Contribution(
         QuartermasterStockCharacter? character,
         string container,
         uint itemId,
@@ -571,18 +571,24 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
         if (character is null)
             return null;
         if (container == MarketAcquisitionStockSourceKey.Bags)
-            return character.Bags is { } bags ? (Sum(bags.Items, itemId, hqPolicy), bags.ObservedAtUtc) : null;
+            return character.Bags is { } bags
+                ? (Sum(bags.Items, itemId, hqPolicy), Sum(bags.Items, itemId, hqPolicy, hqOnly: true), bags.ObservedAtUtc)
+                : null;
         if (character.Retainers is not { IsDefaultOrEmpty: false } retainers)
             return null;
         var quantity = 0u;
+        var hq = 0u;
         foreach (var retainer in retainers)
+        {
             quantity = checked(quantity + Sum(retainer.Items, itemId, hqPolicy));
-        return (quantity, retainers.Min(retainer => retainer.ObservedAtUtc));
+            hq = checked(hq + Sum(retainer.Items, itemId, hqPolicy, hqOnly: true));
+        }
+        return (quantity, hq, retainers.Min(retainer => retainer.ObservedAtUtc));
     }
 
-    private static uint Sum(ImmutableArray<QuartermasterStockItem> items, uint itemId, string hqPolicy) =>
+    private static uint Sum(ImmutableArray<QuartermasterStockItem> items, uint itemId, string hqPolicy, bool hqOnly = false) =>
         (uint)Math.Min(uint.MaxValue, items
-            .Where(item => item.ItemId == itemId && MarketAcquisitionPolicy.HqMatches(hqPolicy, item.Hq))
+            .Where(item => item.ItemId == itemId && MarketAcquisitionPolicy.HqMatches(hqPolicy, item.Hq) && (!hqOnly || item.Hq))
             .Sum(item => item.Quantity));
 
     /// <summary>
