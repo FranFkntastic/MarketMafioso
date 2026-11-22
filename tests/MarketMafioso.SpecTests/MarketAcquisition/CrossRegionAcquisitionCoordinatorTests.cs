@@ -102,15 +102,19 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
             [(4u, false, 100), (5057u, false, 12)],
             haul.Items.Select(item => (item.ItemId, item.IsHq, item.Quantity)).ToArray());
 
-        // Nothing bought: shopping completes and the haul is skipped without a courier request.
+        // Nothing bought: the haul is skipped without a courier request, and the session returns to the primary.
         using var empty = new Fixture();
         empty.Game.LoggedIn = Shopper;
         empty.Store.Save(ShoppingSession());
         var nothingBought = empty.CreateCoordinator();
         empty.Shopping.State = CrossRegionShoppingState.Completed;
         empty.TickAfter(nothingBought);
+        Assert.Equal(CrossRegionAcquisitionPhase.ReturningToPrimary, nothingBought.Phase);
+        empty.TickAfter(nothingBought);
+        empty.TickAfter(nothingBought);
+        Assert.Equal([Primary], empty.Game.SwitchRequests);
         Assert.Equal(CrossRegionAcquisitionPhase.Completed, nothingBought.Phase);
-        Assert.Equal("Shopping finished with no purchases; return haul skipped.", nothingBought.Session.LastMessage);
+        Assert.Equal("Shopping finished with no purchases; returned to primary.", nothingBought.Session.LastMessage);
 
         // Bought, but none of it is carried any more: the haul is skipped too.
         using var gone = new Fixture();
@@ -122,6 +126,10 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         gone.Shopping.State = CrossRegionShoppingState.Completed;
         gone.TickAfter(soldOff);
         gone.TickAfter(soldOff);
+        Assert.Equal(CrossRegionAcquisitionPhase.ReturningToPrimary, soldOff.Phase);
+        gone.TickAfter(soldOff);
+        gone.TickAfter(soldOff);
+        Assert.Equal([Primary], gone.Game.SwitchRequests);
         Assert.Equal(CrossRegionAcquisitionPhase.Completed, soldOff.Phase);
         Assert.Empty(empty.Courier.Submitted);
         Assert.Empty(gone.Courier.Submitted);
@@ -240,9 +248,13 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         public ulong? CarriedGil => 2_000_000;
         public bool OtherAutomationActive => false;
         public IReadOnlyList<CrossRegionBagStack>? ReadCarriedBags() => Bags;
+        public List<CrossRegionCharacter> SwitchRequests { get; } = [];
 
+        /// <summary>Records the request and lands on the target, like a completed relog.</summary>
         public bool TrySwitchCharacter(CrossRegionCharacter target, out string message)
         {
+            SwitchRequests.Add(target);
+            LoggedIn = target;
             message = "switch requested";
             return true;
         }

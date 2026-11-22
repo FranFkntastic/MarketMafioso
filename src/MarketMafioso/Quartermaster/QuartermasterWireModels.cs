@@ -447,7 +447,8 @@ public sealed record QuartermasterCourierLoggedIn(
     ulong CarriedGil,
     int FreeBagSlots,
     bool HasMeetingBell,
-    string? MeetingBellLabel);
+    string? MeetingBellLabel,
+    bool? IsPairedWithCarrier = null);
 
 public sealed record QuartermasterCourierCarrier(
     bool Configured,
@@ -459,7 +460,8 @@ public sealed record QuartermasterCourierCarrier(
     string? RegionId,
     string? RegionName,
     ulong CarriedGil,
-    int FreeBagSlots);
+    int FreeBagSlots,
+    bool? CarrierOptIn = null);
 
 public sealed record QuartermasterCourierBridge(
     uint WorldId,
@@ -476,7 +478,8 @@ public sealed record QuartermasterCourierRosterEntry(
     string? RegionName,
     bool HasMeetingBell,
     string? MeetingBellLabel,
-    bool IsCarrier);
+    bool IsCarrier,
+    bool? IsPairedWithCarrier = null);
 
 public sealed record QuartermasterCourierRun(
     Guid? RunId,
@@ -573,6 +576,7 @@ internal sealed class QuartermasterCourierLoggedInWire
     public int FreeBagSlots { get; init; }
     public bool HasMeetingBell { get; init; }
     public string? MeetingBellLabel { get; init; }
+    public bool? IsPairedWithCarrier { get; init; }
 }
 
 internal sealed class QuartermasterCourierCarrierWire
@@ -587,6 +591,7 @@ internal sealed class QuartermasterCourierCarrierWire
     public string? RegionName { get; init; }
     public ulong? CarriedGil { get; init; }
     public int? FreeBagSlots { get; init; }
+    public bool? CarrierOptIn { get; init; }
 }
 
 internal sealed class QuartermasterCourierBridgeWire
@@ -608,6 +613,7 @@ internal sealed class QuartermasterCourierRosterEntryWire
     public bool HasMeetingBell { get; init; }
     public string? MeetingBellLabel { get; init; }
     public bool IsCarrier { get; init; }
+    public bool? IsPairedWithCarrier { get; init; }
 }
 
 internal sealed class QuartermasterCourierRunWire

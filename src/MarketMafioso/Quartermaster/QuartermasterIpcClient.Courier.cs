@@ -215,18 +215,18 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
         var loggedIn = wire.LoggedIn is { LocalContentId: > 0 } li
             ? new QuartermasterCourierLoggedIn(li.LocalContentId, li.HomeWorldId, li.CharacterName ?? string.Empty,
                 li.HomeWorldName ?? string.Empty, RegionText(li.RegionId), li.RegionName, li.CarriedGil, li.FreeBagSlots,
-                li.HasMeetingBell, li.MeetingBellLabel)
+                li.HasMeetingBell, li.MeetingBellLabel, li.IsPairedWithCarrier)
             : null;
         var carrier = wire.Carrier is { } c
             ? new QuartermasterCourierCarrier(c.Configured, c.Online, c.LocalContentId ?? 0, c.HomeWorldId ?? 0, c.CharacterName,
-                c.HomeWorldName, RegionText(c.RegionId), c.RegionName, c.CarriedGil ?? 0, c.FreeBagSlots ?? 0)
+                c.HomeWorldName, RegionText(c.RegionId), c.RegionName, c.CarriedGil ?? 0, c.FreeBagSlots ?? 0, c.CarrierOptIn)
             : null;
         var bridge = wire.Bridge is { } b ? new QuartermasterCourierBridge(b.WorldId, b.WorldName, b.TerritoryId, b.Label) : null;
         var roster = (wire.Roster ?? [])
             .Where(entry => entry.LocalContentId > 0)
             .Select(entry => new QuartermasterCourierRosterEntry(entry.LocalContentId, entry.HomeWorldId,
                 entry.CharacterName ?? string.Empty, entry.HomeWorldName ?? string.Empty, RegionText(entry.RegionId),
-                entry.RegionName, entry.HasMeetingBell, entry.MeetingBellLabel, entry.IsCarrier))
+                entry.RegionName, entry.HasMeetingBell, entry.MeetingBellLabel, entry.IsCarrier, entry.IsPairedWithCarrier))
             .ToImmutableArray();
         var run = wire.Run is { } r && !string.IsNullOrWhiteSpace(r.State)
             ? new QuartermasterCourierRun(r.RunId, r.RequestId, r.State!, r.OwnerPhase, r.CarrierPhase, r.Trip, r.Trips,
