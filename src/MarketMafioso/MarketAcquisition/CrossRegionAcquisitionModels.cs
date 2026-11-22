@@ -156,11 +156,12 @@ public sealed class CrossRegionAcquisitionSession
 }
 
 /// <summary>
-/// One plan line's counted stock on one source, split by container. BagHqQuantity (how many bag units are HQ) is
-/// tracked only for the courier carrier, whose bags this client cannot read.
+/// One plan line's counted stock on one source, split by container. BagHqQuantity and RetainerHqQuantity say how many
+/// of those units are HQ; for an any-quality line they are meaningful only when HqSplitKnown (sessions persisted
+/// before the split was recorded have it false).
 /// </summary>
 public sealed record CrossRegionCountedLine(uint ItemId, string ItemName, string HqPolicy, uint BagQuantity, uint RetainerQuantity,
-    uint BagHqQuantity = 0)
+    uint BagHqQuantity = 0, uint RetainerHqQuantity = 0, bool HqSplitKnown = false)
 {
     [JsonIgnore]
     public uint Total => BagQuantity + RetainerQuantity;
@@ -263,10 +264,39 @@ public interface ICrossRegionAcquisitionStore
     void Clear();
 }
 
+/// <summary>
+/// A delivered stow's courier forward that was still open when its run finished. Kept apart from the session so
+/// neither Clear nor the next run drops it; it is followed until Quartermaster settles it or the watch gives up.
+/// </summary>
+public sealed class CrossRegionForwardWatch
+{
+    public string RequestId { get; set; } = string.Empty;
+    public Guid SessionId { get; set; }
+    /// <summary>The run's primary, whose bags hold what the forward has not delivered.</summary>
+    public string Owner { get; set; } = string.Empty;
+    public DateTimeOffset OpenedAtUtc { get; set; }
+    public List<QuartermasterDeliveredStowLine> Lines { get; set; } = [];
+    public int FailedReads { get; set; }
+    public string? LastError { get; set; }
+    public bool Settled { get; set; }
+    public string? Code { get; set; }
+    /// <summary>The final outcome, shown with the cross-regional run status.</summary>
+    public string? Summary { get; set; }
+    public DateTimeOffset? SettledAtUtc { get; set; }
+}
+
+/// <summary>Optional persistence for open forwards; a store without it follows forwards only for the current session.</summary>
+public interface ICrossRegionForwardStore
+{
+    List<CrossRegionForwardWatch> LoadForwards();
+    void SaveForwards(IReadOnlyList<CrossRegionForwardWatch> forwards);
+}
+
 /// <summary>Plugin-config file store; writes go to a temp file that atomically replaces the previous copy.</summary>
-public sealed class FileCrossRegionAcquisitionStore : ICrossRegionAcquisitionStore
+public sealed class FileCrossRegionAcquisitionStore : ICrossRegionAcquisitionStore, ICrossRegionForwardStore
 {
     public const string FileName = "cross-region-acquisition.json";
+    public const string ForwardsFileName = "cross-region-forwards.json";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -275,11 +305,13 @@ public sealed class FileCrossRegionAcquisitionStore : ICrossRegionAcquisitionSto
     };
 
     private readonly string path;
+    private readonly string forwardsPath;
 
     public FileCrossRegionAcquisitionStore(string pluginConfigDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(pluginConfigDirectory);
         path = Path.Combine(pluginConfigDirectory, FileName);
+        forwardsPath = Path.Combine(pluginConfigDirectory, ForwardsFileName);
     }
 
     public string FilePath => path;
@@ -295,14 +327,33 @@ public sealed class FileCrossRegionAcquisitionStore : ICrossRegionAcquisitionSto
     public void Save(CrossRegionAcquisitionSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temp = path + ".tmp";
+        Write(path, session);
+    }
+
+    public List<CrossRegionForwardWatch> LoadForwards()
+    {
+        if (!File.Exists(forwardsPath))
+            return [];
+        var json = File.ReadAllText(forwardsPath);
+        return string.IsNullOrWhiteSpace(json) ? [] : JsonSerializer.Deserialize<List<CrossRegionForwardWatch>>(json, JsonOptions) ?? [];
+    }
+
+    public void SaveForwards(IReadOnlyList<CrossRegionForwardWatch> forwards)
+    {
+        ArgumentNullException.ThrowIfNull(forwards);
+        Write(forwardsPath, forwards);
+    }
+
+    private static void Write<T>(string target, T value)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        var temp = target + ".tmp";
         using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
         {
-            JsonSerializer.Serialize(stream, session, JsonOptions);
+            JsonSerializer.Serialize(stream, value, JsonOptions);
             stream.Flush(flushToDisk: true);
         }
-        File.Move(temp, path, overwrite: true);
+        File.Move(temp, target, overwrite: true);
     }
 
     public void Clear()

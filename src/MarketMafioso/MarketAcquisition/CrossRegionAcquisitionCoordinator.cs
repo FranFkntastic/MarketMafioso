@@ -146,6 +146,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         this.log = log ?? ((_, _) => { });
         session = LoadOrIdle();
+        LoadForwardWatches();
         shopping.ConfirmedPurchase += OnConfirmedPurchase;
     }
 
@@ -559,6 +560,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         if (!session.IsTerminal)
             return CrossRegionActionResult.Fail("Only a completed, failed, or stopped session can be cleared.");
         CancelOpenCustodyOperations("Cleared from MarketMafioso.");
+        // An open forward is not the session's: it stays watched and its outcome shows with the next status.
+        DropSettledForwards();
         try { store.Clear(); }
         catch (Exception ex) { log("Cross-regional session file could not be removed.", ex); }
         session = new CrossRegionAcquisitionSession { Phase = CrossRegionAcquisitionPhase.Idle };
@@ -570,11 +573,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     public void Tick()
     {
+        try { TickForwardWatches(); }
+        catch (Exception ex) { log("Following open stow forwards failed.", ex); }
         if (!session.IsActive)
-        {
-            TickForwardWatch();
             return;
-        }
         try { shopping.Tick(); }
         catch (Exception ex) { log("Cross-regional shop route tick failed.", ex); }
         var now = utcNow();
@@ -713,9 +715,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             }
             awaitingResumeTransitionUntilUtc = null;
             preResumeFailure = null;
-            // A refused run moved nothing: a direct delivery falls back to the primary once.
+            // A run refused for its destination moved nothing: a direct delivery falls back to the primary once.
             if (string.Equals(run.State, "Refused", StringComparison.OrdinalIgnoreCase) && DirectRouteOf(leg) is not null &&
-                run.CustodyUnits == 0 && run.CustodyGil == 0)
+                IsDestinationRefusal(run.Code) && run.CustodyUnits == 0 && run.CustodyGil == 0)
             {
                 FallBackToPrimary(leg, run.Code ?? run.State, run.Detail ?? "no detail");
                 return;
@@ -1114,22 +1116,29 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 session.LastMessage = $"Quartermaster is loading its courier history; retrying ({historyIndexingRetries}/{MaxHistoryIndexingRetries}).";
                 return;
             }
-            if (DirectRouteOf(leg) is not null)
+            if (ack.ErrorCode == CodeCourierAlreadyRunning && WaitForOpenForward(requestId))
+                return;
+            forwardBusySinceUtc = null;
+            if (DirectRouteOf(leg) is not null && IsDestinationRefusal(ack.ErrorCode))
             {
-                // Refused before anything moved: the same goods go to the primary once, under a new request id.
-                FallBackToPrimary(leg, ack.ErrorCode ?? ack.Status, ack.Message ?? ack.ErrorCode ?? ack.Status);
+                // The planner refused the destination before anything moved: the same goods go to the primary once.
+                FallBackToPrimary(leg, ack.ErrorCode!, ack.Message ?? ack.ErrorCode!);
                 return;
             }
+            // Any other refusal keeps its own handling. A direct leg's earlier run under this request id may have
+            // delivered part of it to the destination, so it is reported there and never resent.
+            var note = RejectionNote(leg, ack.ErrorCode);
             if (leg == CourierLeg.Collect)
             {
                 // Rejected before any custody: this source is not collected and the run moves on.
-                OnCollectRejected(ack.ErrorCode ?? ack.Status, ack.Message ?? ack.ErrorCode ?? ack.Status);
+                OnCollectRejected(ack.ErrorCode ?? ack.Status, (ack.Message ?? ack.ErrorCode ?? ack.Status) + note);
                 return;
             }
-            Fail(session.Phase, ack.ErrorCode ?? ack.Status, $"Quartermaster rejected the courier request: {ack.Message ?? ack.ErrorCode ?? ack.Status}",
+            Fail(session.Phase, ack.ErrorCode ?? ack.Status, $"Quartermaster rejected the courier request: {ack.Message ?? ack.ErrorCode ?? ack.Status}{note}",
                 canResumeCourier: false);
             return;
         }
+        forwardBusySinceUtc = null;
         if (ack.RunId is { } runId)
             SetRunId(leg, runId);
         session.LastMessage = leg switch
@@ -1306,6 +1315,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         nextSubmitRetryUtc = DateTimeOffset.MinValue;
         collectBagWaitStartedUtc = null;
         nextCustodyPollUtc = DateTimeOffset.MinValue;
+        forwardBusySinceUtc = null;
     }
 
     public static string FormatCourierPhase(QuartermasterCourierRun run)

@@ -159,8 +159,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return;
         session.CountedStockPlanned = true;
         var bySource = new List<(CrossRegionCharacter Source, Dictionary<(uint ItemId, string HqPolicy), CrossRegionCountedLine> Lines)>();
+        var seen = new HashSet<(ulong LocalContentId, uint HomeWorldId, bool InRetainers, uint ItemId, string Policy)>();
         foreach (var line in document.Lines)
         {
+            var policy = MarketAcquisitionPolicy.NormalizeHqPolicy(line.HqPolicy);
             foreach (var counted in line.CountedStock ?? [])
             {
                 if (counted.LocalContentId == 0 || counted.HomeWorldId == 0 || counted.Quantity == 0)
@@ -174,10 +176,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                     log($"Counted stock for {line.ItemName} on {source.Label} names unknown container '{counted.Container}'; it is not collected.", null);
                     continue;
                 }
-                uint carrierHq = 0;
+                // Plan lines for the same item and quality policy count the same containers: each is counted once.
+                if (!seen.Add((source.LocalContentId, source.HomeWorldId, inRetainers, line.ItemId, policy)))
+                    continue;
+                var hq = CountedHq(line.HqPolicy, counted);
                 if (IsCarrier(source))
                 {
-                    var hq = CountedHq(line.HqPolicy, counted);
                     var why = carrier!.CanSendOwnStock != true ? "the courier carrier cannot also be a transfer source"
                         : inRetainers ? "the carrier's retainers are not retrieved"
                         : hq is null ? "its HQ/NQ split was not observed"
@@ -188,7 +192,6 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                         log($"{CodeCountedStockOnCarrier}: {counted.Quantity} {line.ItemName} counted on {source.Label} ({counted.Container}) stays put; {why}.", null);
                         continue;
                     }
-                    carrierHq = hq!.Value;
                 }
                 var entry = bySource.FindIndex(candidate => candidate.Source.Matches(source));
                 if (entry < 0)
@@ -197,14 +200,20 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                     entry = bySource.Count - 1;
                 }
                 var lines = bySource[entry].Lines;
-                var key = (line.ItemId, line.HqPolicy);
-                var current = lines.GetValueOrDefault(key) ?? new CrossRegionCountedLine(line.ItemId, line.ItemName, line.HqPolicy, 0, 0);
+                var key = (line.ItemId, policy);
+                var current = lines.GetValueOrDefault(key) ?? new CrossRegionCountedLine(line.ItemId, line.ItemName, line.HqPolicy, 0, 0, HqSplitKnown: true);
                 lines[key] = inRetainers
-                    ? current with { RetainerQuantity = checked(current.RetainerQuantity + counted.Quantity) }
+                    ? current with
+                    {
+                        RetainerQuantity = checked(current.RetainerQuantity + counted.Quantity),
+                        RetainerHqQuantity = checked(current.RetainerHqQuantity + (hq ?? 0)),
+                        HqSplitKnown = current.HqSplitKnown && hq is not null,
+                    }
                     : current with
                     {
                         BagQuantity = checked(current.BagQuantity + counted.Quantity),
-                        BagHqQuantity = checked(current.BagHqQuantity + carrierHq),
+                        BagHqQuantity = checked(current.BagHqQuantity + (hq ?? 0)),
+                        HqSplitKnown = current.HqSplitKnown && hq is not null,
                     };
             }
         }
@@ -746,7 +755,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             }
             // Identity, items, forwarding and submit time are durable before Quartermaster sees the request.
             stow.Items = items;
-            stow.AllowForward = ForwardEnabled;
+            stow.AllowForward = StowNeedsForward(items);
             stow.RequestId = CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId);
             stow.SubmittedAtUtc = now;
             custodySubmitAttempts = 0;
@@ -846,7 +855,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         stow.ForwardCode = status.Forward?.Code;
         stow.Lines = stow.Lines.Select(ClassifyStowLine).ToList();
         if (status.Forward is { IsSettled: true })
-            LogForwardOutcomes(stow);
+            LogForwardOutcomes(stow.Lines, primary.Label);
+        else if (stow.ForwardOpen)
+            TrackForward(stow, now);
         var code = stow.Status.ToLowerInvariant() switch
         {
             "succeeded" or "partially_succeeded" or QuartermasterIpcClient.DeliveredStowNothingToStow => StowShortfallCode(stow),
@@ -1162,6 +1173,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         var who = forward.Character?.CharacterName ?? "another character";
         var delivered = forward.Delivered ?? 0;
         return forward.Code == "Delivered" ? $"{delivered:N0} forwarded to {who}"
+            : forward.Code == CodeForwardNotObserved ? $"{forward.Wanted:N0} for {who}, outcome not observed"
             : open ? forward.IsOpen ? $"{forward.Wanted:N0} on the way to {who}" : $"{forward.Wanted:N0} held for {who} ({forward.Code})"
             : delivered > 0 ? $"{delivered:N0} of {forward.Wanted:N0} forwarded to {who} ({forward.Code})"
             : $"not forwarded to {who} ({forward.Code})";

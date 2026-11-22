@@ -36,7 +36,8 @@ public sealed record WorkbenchStockView(
     ImmutableArray<WorkbenchStockSourceOption> SourceOptions,
     ImmutableDictionary<uint, WorkbenchLineStock> Lines,
     QuartermasterReserveItems? Reserves,
-    long Version)
+    long Version,
+    bool HasRemoteDelivery = false)
 {
     public static WorkbenchStockView Empty { get; } = new(false, false, false, [], ImmutableDictionary<uint, WorkbenchLineStock>.Empty, null, 0);
 }
@@ -66,7 +67,7 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
     private readonly Dictionary<(uint ItemId, string Quality), (int Level, DateTimeOffset Until)> pendingLevels = new();
     private QuartermasterStockSources? sources;
     private QuartermasterReserveItems? reserves;
-    private bool hasStockSources, hasReserveLevels, hasItemHomes;
+    private bool hasStockSources, hasReserveLevels, hasItemHomes, hasRemoteDelivery;
     private DateTimeOffset fetchedAtUtc = DateTimeOffset.MinValue;
     private DateTimeOffset lastVisibleUtc = DateTimeOffset.MinValue;
     private bool dirty = true, refreshing, disposed;
@@ -286,9 +287,14 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
         return local is null && remote is null ? "Stays in bags" : string.Join("; ", new[] { local, remote }.Where(part => part is not null));
     }
 
+    /// <summary>
+    /// Lines a delivered stow puts into retainers. A line homed only on another character counts only while stow is on
+    /// and Quartermaster can forward it there; its Goes-to cell names the home either way.
+    /// </summary>
     public int StowToRetainersCount(MarketAcquisitionRequestDocument document) =>
-        !View.HasItemHomes ? 0 : document.Lines.Count(line =>
-            HomesFor(line) is var home && (home.Homes.Length > 0 || home.AnySpace) || RemoteHomesFor(line) is not null);
+        !View.HasItemHomes || !document.StowAfterDelivery ? 0 : document.Lines.Count(line =>
+            HomesFor(line) is var home && (home.Homes.Length > 0 || home.AnySpace) ||
+            View.HasRemoteDelivery && RemoteHomesFor(line) is not null);
 
     /// <summary>Reserve items below their reserve level that the buy list does not already hold.</summary>
     public ImmutableArray<QuartermasterReserveItem> ReserveShortfalls(MarketAcquisitionRequestDocument document) =>
@@ -363,6 +369,9 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             var reserveItems = capabilities.Contains(QuartermasterWorkbenchClient.ReserveItemsCapability);
             var levels = reserveItems && capabilities.Contains(QuartermasterWorkbenchClient.ReserveLevelsCapability);
             var homes = reserveItems && capabilities.Contains(QuartermasterWorkbenchClient.PlacementEditorCapability);
+            // Homes on another character are reached only by a delivered stow's forward (which direct delivery also needs).
+            var remoteDelivery = capabilities.Contains(QuartermasterIpcClient.DeliveredStowCapability) &&
+                                 capabilities.Contains(QuartermasterIpcClient.DeliveredStowForwardCapability);
 
             QuartermasterStockSources? fetchedSources = null;
             if (stock && !workbench.TryGetStockSources(itemIds, out fetchedSources, out var stockError))
@@ -385,6 +394,7 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
                 hasStockSources = stock && fetchedSources is not null;
                 hasReserveLevels = levels && fetchedReserves is not null;
                 hasItemHomes = homes && fetchedReserves is not null;
+                hasRemoteDelivery = remoteDelivery;
                 fetchedAtUtc = now;
                 ExpirePending(fetchedReserves, now);
             }
@@ -432,15 +442,16 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             if (CountsOnHand(document!, line) && !lines.ContainsKey(line.ItemId))
                 lines[line.ItemId] = BuildLineStock(document!, line, owner, snapshotRetainers);
         QuartermasterReserveItems? currentReserves;
-        bool stock, levels, homes;
+        bool stock, levels, homes, remote;
         lock (gate)
         {
             currentReserves = reserves;
             stock = hasStockSources;
             levels = hasReserveLevels;
             homes = hasItemHomes;
+            remote = hasRemoteDelivery;
         }
-        return new WorkbenchStockView(stock, levels, homes, options, lines.ToImmutable(), currentReserves, ++version);
+        return new WorkbenchStockView(stock, levels, homes, options, lines.ToImmutable(), currentReserves, ++version, remote);
     }
 
     private ImmutableArray<WorkbenchStockSourceOption> BuildSourceOptions(
