@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 
@@ -53,12 +54,68 @@ public sealed record QuartermasterCancelAcknowledgement
     public bool IsRejected => string.Equals(Status, "rejected", StringComparison.OrdinalIgnoreCase);
 }
 
-public sealed record QuartermasterDeliveredStowItem(uint ItemId, string ItemName, bool IsHq, int Quantity);
+/// <summary>
+/// Quantity: units this delivery put into the owner's bags. SentDirect (deliveredStowForward.v1): units already delivered
+/// straight to the item's homes on another character, never forwarded again; Quantity may then be 0.
+/// </summary>
+public sealed record QuartermasterDeliveredStowItem(uint ItemId, string ItemName, bool IsHq, int Quantity, int SentDirect = 0);
 
+/// <summary>AllowForward (deliveredStowForward.v1): Quartermaster carries what the owner's homes leave to the item's homes on another character.</summary>
 public sealed record QuartermasterDeliveredStowRequest(
     string RequestId,
     QuartermasterOwner Owner,
-    IReadOnlyList<QuartermasterDeliveredStowItem> Items);
+    IReadOnlyList<QuartermasterDeliveredStowItem> Items,
+    bool AllowForward = false);
+
+/// <summary>A character of this account as delivered-stow status names it.</summary>
+public sealed record QuartermasterStowCharacter
+{
+    public ulong LocalContentId { get; init; }
+    public uint HomeWorldId { get; init; }
+    public string CharacterName { get; init; } = string.Empty;
+    public string HomeWorldName { get; init; } = string.Empty;
+}
+
+public sealed record QuartermasterStowHome
+{
+    public ulong RetainerId { get; init; }
+    /// <summary>Null while that retainer has not been observed under its character.</summary>
+    public string? RetainerName { get; init; }
+}
+
+/// <summary>
+/// The part of a stow line bound for another character's homes, carried there by Quartermaster's courier after the
+/// owner's own stow. Code: Pending, Running, Delivered, PartlyDelivered, NotDelivered, NoRoom, NothingLeft, SentDirect,
+/// or a refusal/outcome code (Message says why). Unknown codes read as not delivered.
+/// </summary>
+public sealed record QuartermasterStowForwardLine
+{
+    public QuartermasterStowCharacter? Character { get; init; }
+    public IReadOnlyList<QuartermasterStowHome> Homes { get; init; } = [];
+    public int Wanted { get; init; }
+    public int Planned { get; init; }
+    public int? Delivered { get; init; }
+    public string Code { get; init; } = string.Empty;
+    public string Message { get; init; } = string.Empty;
+
+    [JsonIgnore]
+    public bool IsOpen => Code is "Pending" or "Running";
+    /// <summary>Nothing was meant to move (homes full, nothing left over, or already sent directly).</summary>
+    [JsonIgnore]
+    public bool IsNeutral => Code is "NoRoom" or "NothingLeft" or "SentDirect";
+}
+
+/// <summary>The request's courier forward as a whole. State: pending, running or settled.</summary>
+public sealed record QuartermasterStowForward
+{
+    public string State { get; init; } = string.Empty;
+    public string? RunId { get; init; }
+    public string? Code { get; init; }
+    public string Message { get; init; } = string.Empty;
+
+    [JsonIgnore]
+    public bool IsSettled => string.Equals(State, "settled", StringComparison.OrdinalIgnoreCase);
+}
 
 /// <summary>Code: Planned, NoHome, NoRoom, NotCarried, Stowed, PartlyStowed, NotStowed.</summary>
 public sealed record QuartermasterDeliveredStowLine
@@ -73,6 +130,8 @@ public sealed record QuartermasterDeliveredStowLine
     public int Stowed { get; init; }
     public string Code { get; init; } = string.Empty;
     public IReadOnlyList<string> Destinations { get; init; } = [];
+    /// <summary>Present only for an item with homes on another character (deliveredStowForward.v1).</summary>
+    public QuartermasterStowForwardLine? Forward { get; init; }
 }
 
 public sealed record QuartermasterDeliveredStowStatus
@@ -85,12 +144,31 @@ public sealed record QuartermasterDeliveredStowStatus
     public string? ErrorCode { get; init; }
     public string? Message { get; init; }
     public IReadOnlyList<QuartermasterDeliveredStowLine> Lines { get; init; } = [];
+    /// <summary>With a forward: the owner's own stow operation alone (null when there is none).</summary>
+    public string? DepositStatus { get; init; }
+    public QuartermasterStowForward? Forward { get; init; }
 
     public bool IsRejected => Is("rejected");
     public bool IsNothingToStow => Is(QuartermasterIpcClient.DeliveredStowNothingToStow);
     public bool IsNotFound => Is("not_found");
     public bool IsTerminal => IsRejected || IsNothingToStow || IsNotFound ||
                               Is("succeeded") || Is("partially_succeeded") || Is("indeterminate") || Is("failed") || Is("cancelled");
+
+    /// <summary>
+    /// The owner's own stow is over: the whole request is terminal, or a forward follows and the local operation is
+    /// terminal or was never needed. The forward may then wait a long time for the courier; it never holds the run.
+    /// </summary>
+    public bool IsLocalSettled => IsTerminal || Forward is not null &&
+        (OperationId is null || DepositStatus is { } deposit && IsTerminalStatus(deposit));
+
+    /// <summary>The local outcome: the deposit operation's status when a forward follows, else the request's.</summary>
+    public string LocalStatus => Forward is null ? Status
+        : DepositStatus is { Length: > 0 } deposit ? deposit
+        : OperationId is null ? QuartermasterIpcClient.DeliveredStowNothingToStow
+        : Status;
+
+    private static bool IsTerminalStatus(string status) => status.ToLowerInvariant() is
+        "succeeded" or "partially_succeeded" or "indeterminate" or "failed" or "cancelled" or "rejected";
 
     private bool Is(string status) => string.Equals(Status, status, StringComparison.OrdinalIgnoreCase);
 }
@@ -120,6 +198,7 @@ public sealed partial class DalamudQuartermasterIpcAdapter : IQuartermasterDeliv
 public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyClient
 {
     public const string DeliveredStowCapability = "deliveredStow.v1";
+    public const string DeliveredStowForwardCapability = "deliveredStowForward.v1";
     public const string SubmitDeliveredStowChannel = "Quartermaster.v1.SubmitDeliveredStow";
     public const string GetDeliveredStowChannel = "Quartermaster.v1.GetDeliveredStow";
     public const string DeliveredStowRequestSchema = "gooseworks-quartermaster-delivered-stow/v1";
@@ -219,7 +298,7 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
         acknowledgement = null;
         if (request is null || string.IsNullOrWhiteSpace(request.RequestId) || request.Owner.LocalContentId == 0 ||
             request.Owner.HomeWorldId == 0 || request.Items is not { Count: > 0 } ||
-            request.Items.Any(item => item.ItemId == 0 || item.Quantity <= 0))
+            request.Items.Any(item => item.ItemId == 0 || item.Quantity < 0 || item.SentDirect < 0 || item.Quantity == 0 && item.SentDirect == 0))
         {
             error = "Delivered-stow request needs a request ID, the owner, and positive item quantities.";
             SetStatus(error);
@@ -234,6 +313,14 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
             SetStatus(error);
             return false;
         }
+        if ((request.AllowForward || request.Items.Any(item => item.SentDirect > 0)) &&
+            !capabilities.Capabilities.Contains(DeliveredStowForwardCapability, StringComparer.Ordinal))
+        {
+            // An older Quartermaster would ignore sentDirect and read the item as a bag delivery.
+            error = $"Quartermaster does not advertise {DeliveredStowForwardCapability}; nothing was submitted.";
+            SetStatus(error);
+            return false;
+        }
 
         var requestJson = JsonSerializer.Serialize(new
         {
@@ -241,7 +328,16 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
             providerInstanceId = capabilities.ProviderInstanceId,
             requestId = request.RequestId,
             owner = new { localContentId = request.Owner.LocalContentId, homeWorldId = request.Owner.HomeWorldId, characterName = request.Owner.CharacterName },
-            items = request.Items.Select(item => new { itemId = item.ItemId, itemName = item.ItemName, isHq = item.IsHq, quantity = item.Quantity }),
+            // sentDirect and allowForward are omitted unless used, so such a request is the payload it always was.
+            items = request.Items.Select(item => new
+            {
+                itemId = item.ItemId,
+                itemName = item.ItemName,
+                isHq = item.IsHq,
+                quantity = item.Quantity,
+                sentDirect = item.SentDirect > 0 ? item.SentDirect : (int?)null,
+            }),
+            allowForward = request.AllowForward ? true : (bool?)null,
         }, JsonOptions);
         string json;
         try { json = stow.SubmitDeliveredStow(requestJson); }

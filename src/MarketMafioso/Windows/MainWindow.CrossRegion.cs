@@ -350,7 +350,7 @@ public partial class MainWindow
             else
                 ImGui.TextUnformatted(row.Stowed.ToString("N0"));
             ImGui.TableNextColumn();
-            ImGui.TextColored(ColMuted, string.Join(", ", row.Codes.Select(DescribeCrossRegionCode)));
+            ImGui.TextColored(ColMuted, string.Join(", ", row.Codes.Select(DescribeCrossRegionCode).Concat(row.Notes ?? [])));
         }
         ImGui.EndTable();
     }

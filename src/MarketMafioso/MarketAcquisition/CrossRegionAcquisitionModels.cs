@@ -123,6 +123,15 @@ public sealed class CrossRegionAcquisitionSession
     /// asks only for what the bags gained since. Null for older sessions or when the bags were unreadable at Start.
     /// </summary>
     public List<CrossRegionManifestLine>? PrimaryBagBaseline { get; set; }
+    /// <summary>
+    /// Set before the haul is submitted when every hauled unit is bound for homes on one other character: the haul
+    /// goes straight there instead of to the primary. Cleared (with a new request id) when that delivery is refused.
+    /// </summary>
+    public CrossRegionDirectRoute? HaulDirect { get; set; }
+    /// <summary>Direct deliveries Quartermaster refused before anything moved; those units went to the primary instead.</summary>
+    public List<CrossRegionLineOutcome> DirectFallbacks { get; set; } = [];
+    /// <summary>Counted stock left where it is because its source is the item's home character.</summary>
+    public List<CrossRegionLineOutcome> KeptAtHome { get; set; } = [];
 
     [JsonIgnore]
     public uint PurchasedUnits => PurchasedManifest.Aggregate(0u, (total, line) => total + line.Quantity);
@@ -199,9 +208,23 @@ public sealed class CrossRegionCollection
     public List<CrossRegionLineOutcome> Outcomes { get; set; } = [];
     public string? OutcomeCode { get; set; }
     public string? Detail { get; set; }
+    /// <summary>True once the run asked where this source's counted stock lives; the answer is never asked again.</summary>
+    public bool HomeChecked { get; set; }
+    /// <summary>Set before the collection is submitted when it goes straight to homes on another character.</summary>
+    public CrossRegionDirectRoute? Direct { get; set; }
 
     [JsonIgnore]
     public bool IsSettled => State is CrossRegionCollectionState.Completed or CrossRegionCollectionState.NotCollected;
+}
+
+/// <summary>Units of one item variant bound for one home retainer of the direct destination.</summary>
+public sealed record CrossRegionDirectItem(uint ItemId, string ItemName, bool IsHq, uint Quantity, ulong RetainerId, string? RetainerName);
+
+/// <summary>A courier delivery straight to an item's homes on another character (courierTransferToRetainer.v1).</summary>
+public sealed class CrossRegionDirectRoute
+{
+    public CrossRegionCharacter Destination { get; set; } = new(0, 0, string.Empty, string.Empty);
+    public List<CrossRegionDirectItem> Items { get; set; } = [];
 }
 
 public sealed record CrossRegionRetrievalItem(uint ItemId, string ItemName, int TargetQuantity, int ShortageQuantity);
@@ -214,6 +237,13 @@ public sealed class CrossRegionStow
     public List<CrossRegionManifestLine> Claimed { get; set; } = [];
     /// <summary>What was asked of Quartermaster: per item, the claim capped by what the bags gained since Start.</summary>
     public List<CrossRegionManifestLine> Items { get; set; } = [];
+    /// <summary>Units the courier confirmed delivered straight to their homes on another character; reported, never forwarded.</summary>
+    public List<CrossRegionManifestLine> SentDirect { get; set; } = [];
+    /// <summary>Persisted with the request so a replay sends the same payload.</summary>
+    public bool AllowForward { get; set; }
+    /// <summary>The local stow settled but Quartermaster's courier forward has not; it is watched without holding the run.</summary>
+    public bool ForwardOpen { get; set; }
+    public string? ForwardCode { get; set; }
     /// <summary>When the request was first persisted for submission; the stow deadline runs from here.</summary>
     public DateTimeOffset? SubmittedAtUtc { get; set; }
     public bool Submitted { get; set; }

@@ -258,7 +258,17 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
         return reserve is null ? ([], false) : (reserve.Homes, reserve.AnySpace);
     }
 
-    /// <summary>Quartermaster's wording for a placement: "Eris → Skrrt → Any space", or "Stays in bags".</summary>
+    /// <summary>The line's ranked homes on another character, or null (reserveRemoteHomes.v1).</summary>
+    public QuartermasterRemoteHomes? RemoteHomesFor(MarketAcquisitionRequestLineDocument line)
+    {
+        var quality = QualityFor(line.ItemId, line.HqPolicy);
+        return View.Reserves?.Items.FirstOrDefault(item => item.ItemId == line.ItemId && item.Quality == quality)?.RemoteHomes;
+    }
+
+    /// <summary>
+    /// Quartermaster's wording for a placement: "Eris → Skrrt → Any space; Dredgen Hope · Gringle → Scrongle", or
+    /// "Stays in bags".
+    /// </summary>
     public string PlacementSummary(MarketAcquisitionRequestLineDocument line)
     {
         var (homes, anySpace) = HomesFor(line);
@@ -269,11 +279,16 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             .ToList();
         if (anySpace)
             names.Add("Any space");
-        return names.Count == 0 ? "Stays in bags" : string.Join(" → ", names);
+        var local = names.Count == 0 ? null : string.Join(" → ", names);
+        var remote = RemoteHomesFor(line) is { } other
+            ? $"{other.CharacterName} · {string.Join(" → ", other.Retainers.Select(home => home.RetainerName ?? $"Retainer {home.RetainerId}"))}"
+            : null;
+        return local is null && remote is null ? "Stays in bags" : string.Join("; ", new[] { local, remote }.Where(part => part is not null));
     }
 
     public int StowToRetainersCount(MarketAcquisitionRequestDocument document) =>
-        !View.HasItemHomes ? 0 : document.Lines.Count(line => HomesFor(line) is var home && (home.Homes.Length > 0 || home.AnySpace));
+        !View.HasItemHomes ? 0 : document.Lines.Count(line =>
+            HomesFor(line) is var home && (home.Homes.Length > 0 || home.AnySpace) || RemoteHomesFor(line) is not null);
 
     /// <summary>Reserve items below their reserve level that the buy list does not already hold.</summary>
     public ImmutableArray<QuartermasterReserveItem> ReserveShortfalls(MarketAcquisitionRequestDocument document) =>

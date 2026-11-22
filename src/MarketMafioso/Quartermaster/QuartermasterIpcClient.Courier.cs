@@ -215,6 +215,7 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
             ItemName = item.ItemName,
             IsHq = item.IsHq,
             Quantity = item.Quantity,
+            RetainerId = item.RetainerId,
         }).ToList(),
         ReturnOwner = request.ReturnOwner,
         ReturnDestinationHome = request.ReturnDestinationHome,

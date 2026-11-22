@@ -15,7 +15,8 @@ public sealed record CrossRegionLineResult(
     uint Collected,
     uint StowPlanned,
     uint Stowed,
-    IReadOnlyList<string> Codes);
+    IReadOnlyList<string> Codes,
+    IReadOnlyList<string>? Notes = null);
 
 /// <summary>
 /// Counted-stock collection and delivered stow. Sequencing: counted stock on the shopper rides home with the
@@ -303,6 +304,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             TickCourier(CourierLeg.Collect, now);
             return;
         }
+        if (!collection.HomeChecked)
+        {
+            // Before any switch onto the source: stock already on its home character is not collected.
+            KeepCountedStockAtHome(collection);
+            if (collection.IsSettled)
+                return;
+        }
         // The carrier sends its own stock while the primary (the destination and paired owner) stays logged in.
         var loginAs = collection.FromCarrier ? session.Primary! : collection.Source;
         if (!loginAs.Matches(game.LoggedInCharacter))
@@ -353,11 +361,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         collection.RequestId = CrossRegionAcquisitionSession.CollectRequestIdFor(session.SessionId, index, collection.Attempt);
         collection.RunId = null;
         collection.Manifest = manifest;
+        collection.Direct = DirectRouteFor(manifest, DeliveredItems(), collection.Source, $"The collection from {collection.Source.Label}");
         collection.State = CrossRegionCollectionState.Shipping;
         submitAttempts = 0;
         awaitingRunAppearanceSinceUtc = null;
         SetPhase(CrossRegionAcquisitionPhase.CollectingCountedStock,
-            $"Collecting {manifest.Sum(line => (long)line.Quantity):N0} item(s) from {collection.Source.Label}.");
+            $"Collecting {manifest.Sum(line => (long)line.Quantity):N0} item(s) from {collection.Source.Label}" +
+            (collection.Direct is { } direct ? $" straight to {direct.Destination.Label}." : "."));
         SubmitCourier(CourierLeg.Collect);
     }
 
@@ -403,7 +413,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         collection.State = CrossRegionCollectionState.Completed;
         session.CourierPhaseSummary = null;
         ResetCustodyTransients();
-        session.LastMessage = $"Collected {collection.Manifest.Sum(line => (long)line.Quantity):N0} item(s) from {collection.Source.Label}.";
+        session.LastMessage = $"Collected {collection.Manifest.Sum(line => (long)line.Quantity):N0} item(s) from {collection.Source.Label}" +
+                              (collection.Direct is { } direct ? $" straight to {direct.Destination.Label}." : ".");
         Save();
     }
 
@@ -417,7 +428,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return;
         session.CourierPhaseSummary = null;
         SettleNotCollected(collection, IsCarrierRefusal(run.Code) ? run.Code! : CodeCollectRunFailed,
-            $"Courier collection {run.State.ToLowerInvariant()} with nothing in custody ({run.Code ?? run.State}): {run.Detail ?? "no detail"}");
+            $"Courier collection {run.State.ToLowerInvariant()} with nothing in custody ({run.Code ?? run.State}): {run.Detail ?? "no detail"}" +
+            DirectFailureNote(CourierLeg.Collect));
         ResetCustodyTransients();
     }
 
@@ -694,20 +706,22 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         if (stow.RequestId is null)
         {
             var claimed = DeliveredItems();
-            if (claimed.Count == 0)
+            var sentDirect = SentDirectItems();
+            if (claimed.Count == 0 && sentDirect.Count == 0)
             {
                 stow.Settled = true;
                 Complete(FinalSummary());
                 return;
             }
             stow.Claimed = claimed;
+            stow.SentDirect = sentDirect;
             if (custody is null || !custody.HasDeliveredStow)
             {
                 stow.Items = claimed;
                 SettleStow(stow, CodeStowUnavailable, $"Quartermaster does not advertise {QuartermasterIpcClient.DeliveredStowCapability}; delivered items stay in the bags.");
                 return;
             }
-            if (session.PrimaryBagBaseline is not { } baseline)
+            if (claimed.Count > 0 && session.PrimaryBagBaseline is null)
             {
                 SettleStow(stow, CodeStowBaselineUnavailable,
                     "The primary's bags were not recorded before delivery, so delivered units cannot be told from earlier stock; nothing is stowed.");
@@ -718,16 +732,21 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 DriveCharacterSwitch(primary, CrossRegionAcquisitionPhase.StowingDelivered, CodeStowPrimarySwitchFailed, now);
                 return;
             }
-            if (ReadPrimaryBags(stow, now) is not { } bags)
-                return;
-            var items = CapToDelivered(claimed, baseline, bags);
-            if (items.Count == 0)
+            var items = new List<CrossRegionManifestLine>();
+            if (claimed.Count > 0)
+            {
+                if (ReadPrimaryBags(stow, now) is not { } bags)
+                    return;
+                items = CapToDelivered(claimed, session.PrimaryBagBaseline!, bags);
+            }
+            if (items.Count == 0 && sentDirect.Count == 0)
             {
                 SettleStow(stow, CodeStowNotCarried, "None of the delivered units are still in the primary's bags beyond what they held at Start.");
                 return;
             }
-            // Identity, items and submit time are durable before Quartermaster sees the request.
+            // Identity, items, forwarding and submit time are durable before Quartermaster sees the request.
             stow.Items = items;
+            stow.AllowForward = ForwardEnabled;
             stow.RequestId = CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId);
             stow.SubmittedAtUtc = now;
             custodySubmitAttempts = 0;
@@ -766,7 +785,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             var request = new QuartermasterDeliveredStowRequest(
                 stow.RequestId!,
                 new QuartermasterOwner(primary.LocalContentId, primary.HomeWorldId, primary.CharacterName, primary.HomeWorldName),
-                stow.Items.Select(line => new QuartermasterDeliveredStowItem(line.ItemId, line.ItemName, line.IsHq, (int)Math.Min(line.Quantity, int.MaxValue))).ToArray());
+                StowRequestItems(stow),
+                stow.AllowForward);
             if (!custody.TrySubmitDeliveredStow(request, out var ack, out var error))
             {
                 custodySubmitAttempts++;
@@ -792,7 +812,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             }
             stow.Submitted = true;
             stow.OperationId = ack.OperationId;
-            session.LastMessage = $"Stowing {stow.Lines.Sum(line => (long)line.Planned):N0} item(s) into home retainers.";
+            session.LastMessage = stow.Lines.Sum(line => (long)line.Planned) is var planned and > 0
+                ? $"Stowing {planned:N0} item(s) into home retainers."
+                : "Waiting for Quartermaster to settle the stow.";
             Save();
             return;
         }
@@ -810,7 +832,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return;
         }
         MergeStowLines(stow, status);
-        if (!status.IsTerminal)
+        // A forward to another character may wait a long time for the courier; the owner's own stow settles the run.
+        if (!status.IsLocalSettled)
         {
             if (overdue)
                 TimeOutStow(stow, $"last status {status.Status}");
@@ -818,11 +841,15 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 session.LastMessage = $"Stowing delivered items: {status.Status}.";
             return;
         }
-        stow.Status = status.Status;
+        stow.Status = status.LocalStatus;
+        stow.ForwardOpen = status.Forward is { IsSettled: false };
+        stow.ForwardCode = status.Forward?.Code;
         stow.Lines = stow.Lines.Select(ClassifyStowLine).ToList();
-        var code = status.Status.ToLowerInvariant() switch
+        if (status.Forward is { IsSettled: true })
+            LogForwardOutcomes(stow);
+        var code = stow.Status.ToLowerInvariant() switch
         {
-            "succeeded" or "partially_succeeded" => StowShortfallCode(stow),
+            "succeeded" or "partially_succeeded" or QuartermasterIpcClient.DeliveredStowNothingToStow => StowShortfallCode(stow),
             "cancelled" => CodeStowCancelled,
             "indeterminate" => CodeStowIndeterminate,
             "rejected" => CodeStowRejected,
@@ -844,6 +871,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                     Stowed = current.Stowed,
                     Code = current.Code,
                     Destinations = current.Destinations.Count > 0 ? current.Destinations : line.Destinations,
+                    Forward = current.Forward ?? line.Forward,
                 }
                 : line)
             .ToList();
@@ -852,17 +880,22 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     /// <summary>
     /// A settled line's reason from its counts, so a partly routed line is never reported as plain Stowed: NoHome
     /// stays; otherwise everything stowed = Stowed, short of the plan = PartlyStowed/NotStowed, plan short of what
-    /// was carried = NoRoom, and carried short of the request = NotCarried.
+    /// was carried = NoRoom, and carried short of the request = NotCarried. Units Quartermaster forwards to another
+    /// character are not the owner's to stow; a line left with none keeps Quartermaster's code.
     /// </summary>
     private static QuartermasterDeliveredStowLine ClassifyStowLine(QuartermasterDeliveredStowLine line)
     {
         if (line.Code == "NoHome")
             return line;
-        var carried = Math.Min(line.Carried ?? line.Requested, line.Requested);
-        var code = line.Stowed >= line.Requested ? "Stowed"
+        var requested = LocalRequested(line);
+        if (requested == 0)
+            return line;
+        var forwarded = line.Requested - requested;
+        var carried = Math.Max(0, Math.Min(line.Carried ?? line.Requested, line.Requested) - forwarded);
+        var code = line.Stowed >= requested ? "Stowed"
             : line.Stowed < line.Planned ? line.Stowed > 0 ? "PartlyStowed" : "NotStowed"
             : line.Planned < carried ? "NoRoom"
-            : carried < line.Requested ? LineCodeNotCarried
+            : carried < requested ? LineCodeNotCarried
             : line.Code;
         return line with { Code = code };
     }
@@ -870,7 +903,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     /// <summary>StowNoRoom when every shortfall is lack of room, StowPartial for any other shortfall, null when none.</summary>
     private static string? StowShortfallCode(CrossRegionStow stow)
     {
-        var shortfalls = stow.Lines.Where(line => line.Code != "NoHome" && line.Stowed < line.Requested).ToList();
+        var shortfalls = stow.Lines.Where(line => line.Code != "NoHome" && line.Stowed < LocalRequested(line)).ToList();
         return shortfalls.Count == 0 ? null : shortfalls.All(line => line.Code == "NoRoom") ? CodeStowNoRoom : CodeStowPartial;
     }
 
@@ -988,16 +1021,15 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             log($"Quartermaster request {requestId} could not be cancelled: {error} It expires there if it never starts.", null);
     }
 
-    /// <summary>What this run put into the primary's bags: the delivered haul plus every completed collection.</summary>
-    private List<CrossRegionManifestLine> DeliveredItems() =>
-        (session.HaulDelivered ? session.HaulManifest : [])
-            .Concat(session.Collections.Where(collection => collection.State == CrossRegionCollectionState.Completed).SelectMany(collection => collection.Manifest))
-            .GroupBy(line => (line.ItemId, line.IsHq))
-            .Select(group => new CrossRegionManifestLine(group.Key.ItemId, group.First().ItemName, group.Key.IsHq,
-                (uint)Math.Min(group.Aggregate(0UL, (total, line) => total + line.Quantity), uint.MaxValue)))
-            .OrderBy(line => line.ItemId)
-            .ThenBy(line => line.IsHq)
-            .ToList();
+    /// <summary>
+    /// What this run put into the primary's bags: the delivered haul plus every completed collection, except legs
+    /// delivered straight to another character.
+    /// </summary>
+    private List<CrossRegionManifestLine> DeliveredItems() => MergeByVariant(
+        (session.HaulDelivered && session.HaulDirect is null ? session.HaulManifest : [])
+            .Concat(session.Collections
+                .Where(collection => collection.State == CrossRegionCollectionState.Completed && collection.Direct is null)
+                .SelectMany(collection => collection.Manifest)));
 
     // ---- Results ----------------------------------------------------------------------------
 
@@ -1007,15 +1039,26 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         var collected = CollectedUnits();
         if (collected > 0)
         {
-            var sources = session.Collections.Count(collection => collection.State == CrossRegionCollectionState.Completed) +
-                          (session.ShopperCounted is { State: CrossRegionCollectionState.Completed } ? 1 : 0);
+            var sources = session.Collections.Count(collection => collection.State == CrossRegionCollectionState.Completed && collection.Manifest.Count > 0) +
+                          (session.ShopperCounted is { State: CrossRegionCollectionState.Completed, Manifest.Count: > 0 } ? 1 : 0);
             parts.Add($"Collected {collected:N0} counted item(s) from {sources:N0} character(s).");
         }
+        if (session.KeptAtHome.Sum(outcome => (long)outcome.Quantity) is var kept and > 0)
+            parts.Add($"Left {kept:N0} counted item(s) on their home character.");
+        foreach (var group in DirectDeliveries().GroupBy(entry => entry.Destination.Label))
+            parts.Add($"Delivered {group.Sum(entry => (long)entry.Line.Quantity):N0} straight to {group.Key}.");
         if (session.Stow is { Settled: true } stow)
         {
             var stowed = stow.Lines.Sum(line => (long)line.Stowed);
             if (stowed > 0)
                 parts.Add($"Stowed {stowed:N0} into home retainers.");
+            var forwards = stow.Lines.Select(line => line.Forward).OfType<QuartermasterStowForwardLine>()
+                .Where(forward => !forward.IsNeutral && forward.Code != "NoRoom").ToList();
+            var names = string.Join(", ", forwards.Select(forward => forward.Character?.CharacterName).Distinct());
+            if (stow.ForwardOpen && forwards.Count > 0)
+                parts.Add($"Forwarding {forwards.Sum(forward => (long)forward.Wanted):N0} to {names}.");
+            else if (forwards.Sum(forward => (long)(forward.Delivered ?? 0)) is var forwarded and > 0)
+                parts.Add($"Forwarded {forwarded:N0} to {names}.");
             if (stow.OutcomeCode == CodeStowUnavailable)
                 parts.Add("Not stowed: Quartermaster has no delivered stow.");
             else if (stow.OutcomeCode is CodeStowRejected or CodeStowSubmitFailed or CodeStowFailed or CodeStowIndeterminate or CodeStowNotObserved or
@@ -1067,8 +1110,28 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             // Delivered units the bags no longer held were never asked for; they still count against the stow.
             var notCarried = noHome || session.Stow is not { } stow ? 0L
                 : Math.Max(0L, Sum(stow.Claimed, itemId) - Sum(stow.Items, itemId));
-            var stowPlanned = (uint)(stowLines.Sum(line => (long)line.Requested) + notCarried);
-            var stowed = (uint)stowLines.Sum(line => (long)line.Stowed);
+            var direct = DirectDeliveries().Where(entry => entry.Line.ItemId == itemId).ToList();
+            var sentDirect = direct.Sum(entry => (long)entry.Line.Quantity);
+            // A forward still on its way is shown as such, not as a shortfall.
+            var forwardOpen = session.Stow?.ForwardOpen == true;
+            var forwards = stowLines.Select(line => line.Forward)
+                .OfType<QuartermasterStowForwardLine>()
+                .Where(forward => !forward.IsNeutral && forward.Code != "NoRoom")
+                .ToList();
+            var settledForwards = forwardOpen ? forwards.Where(forward => forward.Code == "Delivered").ToList() : forwards;
+            var stowPlanned = (uint)(stowLines.Sum(line => (long)LocalRequested(line)) + notCarried + sentDirect +
+                                     settledForwards.Sum(forward => (long)forward.Wanted));
+            var stowed = (uint)(stowLines.Sum(line => (long)line.Stowed) + sentDirect +
+                                settledForwards.Sum(forward => (long)(forward.Delivered ?? 0)));
+            var notes = direct.GroupBy(entry => entry.Destination.CharacterName)
+                .Select(group => $"{group.Sum(entry => (long)entry.Line.Quantity):N0} sent to {group.Key}")
+                .Concat(forwards.Select(forward => ForwardNote(forward, forwardOpen)))
+                .Concat(session.DirectFallbacks.Where(outcome => outcome.ItemId == itemId)
+                    .Select(outcome => $"direct to {outcome.Source} refused ({outcome.Code})"))
+                .Concat(session.KeptAtHome.Where(outcome => outcome.ItemId == itemId)
+                    .Select(outcome => $"{outcome.Quantity:N0} left on {outcome.Source}"))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
             var codes = session.NotCollected.Where(outcome => outcome.ItemId == itemId).Select(outcome => outcome.Code)
                 .Concat(all.SelectMany(collection => collection.Outcomes).Where(outcome => outcome.ItemId == itemId).Select(outcome => outcome.Code))
                 .Concat(all.Where(collection => collection.Lines.Any(line => line.ItemId == itemId))
@@ -1079,7 +1142,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                             ? collection.RetrievalOutcomeCode : null,
                     }))
                 // Every unstowed unit carries a reason: the line's own, else the stow's outcome.
-                .Concat(stowLines.Where(line => line.Stowed < line.Requested)
+                .Concat(stowLines.Where(line => line.Stowed < LocalRequested(line))
                     .Select(line => line.Code is "NoRoom" or "PartlyStowed" or "NotStowed" or LineCodeNotCarried
                         ? line.Code
                         : session.Stow?.OutcomeCode ?? "NotStowed"))
@@ -1087,9 +1150,20 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 .OfType<string>()
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
-            if (collected < counted || stowed < stowPlanned || codes.Count > 0)
-                results.Add(new(itemId, name, bought, counted, collected, stowPlanned, stowed, codes));
+            if (collected < counted || stowed < stowPlanned || codes.Count > 0 || notes.Count > 0)
+                results.Add(new(itemId, name, bought, counted, collected, stowPlanned, stowed, codes, notes));
         }
         return results;
+    }
+
+    /// <summary>One forwarded line: delivered, partly delivered, not delivered (with its code), or still on its way.</summary>
+    private static string ForwardNote(QuartermasterStowForwardLine forward, bool open)
+    {
+        var who = forward.Character?.CharacterName ?? "another character";
+        var delivered = forward.Delivered ?? 0;
+        return forward.Code == "Delivered" ? $"{delivered:N0} forwarded to {who}"
+            : open ? forward.IsOpen ? $"{forward.Wanted:N0} on the way to {who}" : $"{forward.Wanted:N0} held for {who} ({forward.Code})"
+            : delivered > 0 ? $"{delivered:N0} of {forward.Wanted:N0} forwarded to {who} ({forward.Code})"
+            : $"not forwarded to {who} ({forward.Code})";
     }
 }

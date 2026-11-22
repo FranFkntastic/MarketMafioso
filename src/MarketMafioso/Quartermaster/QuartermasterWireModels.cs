@@ -514,11 +514,13 @@ public sealed record QuartermasterCourierStatus(
     ImmutableArray<QuartermasterCourierRosterEntry> Roster,
     QuartermasterCourierRun? Run);
 
+/// <summary>RetainerId (courierTransferToRetainer.v1): deposit these units into that retainer of the destination; null keeps them in its bags.</summary>
 public sealed record QuartermasterCourierItem(
     uint ItemId,
     string ItemName,
     bool IsHq,
-    int Quantity);
+    int Quantity,
+    ulong? RetainerId = null);
 
 public sealed record QuartermasterCourierTransferRequest(
     string RequestId,
@@ -650,6 +652,9 @@ internal sealed class QuartermasterCourierItemWire
     public string ItemName { get; init; } = string.Empty;
     public bool IsHq { get; init; }
     public int Quantity { get; init; }
+    // Omitted when null, so a bag-only request is the payload (and request hash) it always was.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? RetainerId { get; init; }
 }
 
 internal sealed class QuartermasterCourierTransferRequestWire

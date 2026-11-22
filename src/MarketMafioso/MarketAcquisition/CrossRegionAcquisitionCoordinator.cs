@@ -102,6 +102,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private readonly Func<DateTimeOffset> utcNow;
     private readonly Action<string, Exception?> log;
     private readonly IQuartermasterRunCustodyClient? custody;
+    private readonly IQuartermasterDirectDeliveryClient? directDelivery;
     private CrossRegionAcquisitionSession session;
     private DateTimeOffset nextPollUtc;
     private DateTimeOffset? lastSwitchRequestUtc;
@@ -133,9 +134,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         ICrossRegionAcquisitionStore store,
         Func<DateTimeOffset>? utcNow = null,
         Action<string, Exception?>? log = null,
-        IQuartermasterRunCustodyClient? custody = null)
+        IQuartermasterRunCustodyClient? custody = null,
+        IQuartermasterDirectDeliveryClient? directDelivery = null)
     {
         this.custody = custody;
+        this.directDelivery = directDelivery;
         this.courier = courier ?? throw new ArgumentNullException(nameof(courier));
         this.game = game ?? throw new ArgumentNullException(nameof(game));
         this.shopping = shopping ?? throw new ArgumentNullException(nameof(shopping));
@@ -568,7 +571,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public void Tick()
     {
         if (!session.IsActive)
+        {
+            TickForwardWatch();
             return;
+        }
         try { shopping.Tick(); }
         catch (Exception ex) { log("Cross-regional shop route tick failed.", ex); }
         var now = utcNow();
@@ -707,6 +713,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             }
             awaitingResumeTransitionUntilUtc = null;
             preResumeFailure = null;
+            // A refused run moved nothing: a direct delivery falls back to the primary once.
+            if (string.Equals(run.State, "Refused", StringComparison.OrdinalIgnoreCase) && DirectRouteOf(leg) is not null &&
+                run.CustodyUnits == 0 && run.CustodyGil == 0)
+            {
+                FallBackToPrimary(leg, run.Code ?? run.State, run.Detail ?? "no detail");
+                return;
+            }
             // Zero counters alone do not prove settled custody; only a clearable run may be skipped.
             if (leg == CourierLeg.Collect && run.CanClear && run.CustodyUnits == 0 && run.CustodyGil == 0)
             {
@@ -714,7 +727,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 return;
             }
             Fail(session.Phase, run.Code ?? run.State,
-                $"Courier {LegNoun(leg)} {run.State.ToLowerInvariant()}: {run.Detail ?? run.Code ?? "no detail"}",
+                $"Courier {LegNoun(leg)} {run.State.ToLowerInvariant()}: {run.Detail ?? run.Code ?? "no detail"}{DirectFailureNote(leg)}",
                 run.CanResume);
         }
     }
@@ -939,6 +952,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             session.LastMessage = "Closing the market board before the return haul.";
             return;
         }
+        if (session.ShopperCounted is { HomeChecked: false } uncheckedShopper)
+            KeepCountedStockAtHome(uncheckedShopper);
         if (session.ShopperCounted is { } shopperCounted && !shopperCounted.RetrievalSettled)
         {
             TickRetrieval(shopperCounted, -1, now);
@@ -969,9 +984,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         session.HaulRequestId = CrossRegionAcquisitionSession.HaulRequestIdFor(session.SessionId, session.HaulAttempt);
         session.HaulRunId = null;
         session.HaulManifest = manifest.ToList();
+        session.HaulDirect = DirectRouteFor(manifest, [], shopper, "The return haul");
         submitAttempts = 0;
         SetPhase(CrossRegionAcquisitionPhase.HaulingToPrimary,
-            $"Hauling {manifest.Sum(line => (long)line.Quantity):N0} item(s) back to {session.Primary?.Label}.");
+            $"Hauling {manifest.Sum(line => (long)line.Quantity):N0} item(s) {(session.HaulDirect is null ? "back" : "straight")} to {DestinationOf(CourierLeg.Haul).Label}.");
         SubmitCourier(CourierLeg.Haul);
     }
 
@@ -1054,11 +1070,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         {
             CourierLeg.Fund => new QuartermasterCourierTransferRequest(requestId, session.Primary.ToCourier(), session.Shopper.ToCourier(),
                 session.FundGil, [], ReturnOwner: false, ReturnDestinationHome: true, ReturnCarrier: true),
-            CourierLeg.Haul => new QuartermasterCourierTransferRequest(requestId, session.Shopper.ToCourier(), session.Primary.ToCourier(), 0,
-                ToCourierItems(session.HaulManifest), ReturnOwner: false, ReturnDestinationHome: false, ReturnCarrier: true),
-            // Ends on the primary (the destination) at its home world, ready for the next source or the stow.
-            _ => new QuartermasterCourierTransferRequest(requestId, collection!.Source.ToCourier(), session.Primary.ToCourier(), 0,
-                ToCourierItems(collection.Manifest), ReturnOwner: false, ReturnDestinationHome: true, ReturnCarrier: true),
+            CourierLeg.Haul => new QuartermasterCourierTransferRequest(requestId, session.Shopper.ToCourier(), DestinationOf(leg).ToCourier(), 0,
+                session.HaulDirect is { } haulDirect ? ToCourierItems(haulDirect) : ToCourierItems(session.HaulManifest),
+                ReturnOwner: false, ReturnDestinationHome: session.HaulDirect is not null, ReturnCarrier: true),
+            // Ends on the destination at its home world, ready for the next source or the stow.
+            _ => new QuartermasterCourierTransferRequest(requestId, collection!.Source.ToCourier(), DestinationOf(leg).ToCourier(), 0,
+                collection.Direct is { } collectDirect ? ToCourierItems(collectDirect) : ToCourierItems(collection.Manifest),
+                ReturnOwner: false, ReturnDestinationHome: true, ReturnCarrier: true),
         };
         if (!courier.TrySubmitCourierTransfer(request, out var ack, out var error))
         {
@@ -1096,6 +1114,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 session.LastMessage = $"Quartermaster is loading its courier history; retrying ({historyIndexingRetries}/{MaxHistoryIndexingRetries}).";
                 return;
             }
+            if (DirectRouteOf(leg) is not null)
+            {
+                // Refused before anything moved: the same goods go to the primary once, under a new request id.
+                FallBackToPrimary(leg, ack.ErrorCode ?? ack.Status, ack.Message ?? ack.ErrorCode ?? ack.Status);
+                return;
+            }
             if (leg == CourierLeg.Collect)
             {
                 // Rejected before any custody: this source is not collected and the run moves on.
@@ -1111,7 +1135,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         session.LastMessage = leg switch
         {
             CourierLeg.Fund => $"Courier accepted the {session.FundGil:N0} gil transfer to {session.Shopper.Label}.",
-            CourierLeg.Haul => $"Courier accepted the return haul to {session.Primary.Label}.",
+            CourierLeg.Haul => $"Courier accepted the return haul to {DestinationOf(leg).Label}.",
             _ => $"Courier accepted the collection from {collection!.Source.Label}.",
         };
         Save();
@@ -1232,7 +1256,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     {
         var returned = session.HaulManifest.Aggregate(0UL, (total, line) => total + line.Quantity);
         return $"Done: funded {session.FundGil:N0} gil, bought {session.PurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil, " +
-               $"returned {returned:N0} item(s) to {session.Primary?.Label}.";
+               (session.HaulDirect is { } direct
+                   ? $"delivered {returned:N0} item(s) straight to {direct.Destination.Label}."
+                   : $"returned {returned:N0} item(s) to {session.Primary?.Label}.");
     }
 
     private string PausedMessage(string reason) =>

@@ -88,7 +88,19 @@ public sealed record QuartermasterReserveItem(
     int ReserveUnits,
     int? CountedUnits,
     ImmutableArray<ulong> Homes,
-    bool AnySpace);
+    bool AnySpace,
+    QuartermasterRemoteHomes? RemoteHomes = null);
+
+/// <summary>reserveRemoteHomes.v1: ranked home retainers of this item on another character of the account.</summary>
+public sealed record QuartermasterRemoteHomes(
+    ulong LocalContentId,
+    uint HomeWorldId,
+    string CharacterName,
+    string HomeWorldName,
+    ImmutableArray<QuartermasterRemoteHome> Retainers);
+
+/// <summary>RetainerName is null while Quartermaster has not observed that retainer under its character.</summary>
+public sealed record QuartermasterRemoteHome(ulong RetainerId, string? RetainerName);
 
 public sealed record QuartermasterReserveItems(
     string ProviderInstanceId,
@@ -203,10 +215,25 @@ public sealed class QuartermasterWorkbenchClient
                     Math.Max(0, item.ReserveUnits),
                     item.CountedUnits,
                     (item.Homes ?? []).ToImmutableArray(),
-                    item.AnySpace))
+                    item.AnySpace,
+                    RemoteHomesOf(item.RemoteHomes)))
                 .ToImmutableArray());
         return true;
     }
+
+    // Absent or incomplete remote homes read as none: the item simply has no home on another character.
+    private static QuartermasterRemoteHomes? RemoteHomesOf(RemoteHomesWire? wire) =>
+        wire?.Character is not { LocalContentId: > 0, HomeWorldId: > 0 } character ||
+        (wire.Retainers ?? []).Where(retainer => retainer.RetainerId != 0).ToImmutableArray() is not { Length: > 0 } retainers
+            ? null
+            : new QuartermasterRemoteHomes(
+                character.LocalContentId.Value,
+                character.HomeWorldId.Value,
+                character.CharacterName?.Trim() ?? string.Empty,
+                character.HomeWorldName?.Trim() ?? string.Empty,
+                retainers.Select(retainer => new QuartermasterRemoteHome(
+                    retainer.RetainerId,
+                    string.IsNullOrWhiteSpace(retainer.RetainerName) ? null : retainer.RetainerName.Trim())).ToImmutableArray());
 
     /// <summary>Opens Quartermaster's placement editor on these items of the current character. Quality is NqOnly or HqOnly.</summary>
     public bool TryOpenPlacement(
@@ -394,6 +421,13 @@ public sealed class QuartermasterWorkbenchClient
         public int? CountedUnits { get; init; }
         public List<ulong>? Homes { get; init; }
         public bool AnySpace { get; init; }
+        public RemoteHomesWire? RemoteHomes { get; init; }
+    }
+
+    private sealed class RemoteHomesWire
+    {
+        public OwnerWire? Character { get; init; }
+        public List<HomeRetainerWire>? Retainers { get; init; }
     }
 
     private sealed class EditAckWire
