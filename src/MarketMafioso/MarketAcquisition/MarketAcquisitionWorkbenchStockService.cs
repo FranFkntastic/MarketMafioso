@@ -13,10 +13,11 @@ public sealed record WorkbenchStockSourceOption(
     bool IsCurrentCharacter,
     bool Selected,
     bool Fixed,
-    TimeSpan? StaleAge);
+    TimeSpan? StaleAge,
+    TimeSpan? NewestAge = null);
 
 /// <summary>One hover row under On hand. Quantity is null when that source is unknown.</summary>
-public sealed record WorkbenchStockBreakdownRow(string Label, uint? Quantity, TimeSpan? StaleAge);
+public sealed record WorkbenchStockBreakdownRow(string Label, uint? Quantity, TimeSpan? StaleAge, TimeSpan? NewestAge = null);
 
 /// <summary>
 /// A target line's counted stock. Total is null when any counted source is unknown; Counted holds the
@@ -440,11 +441,12 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             SourceLabel(ownerName, MarketAcquisitionStockSourceKey.Bags), true, true, true, null));
         if (snapshot is not null || document.CountRetainerStock)
         {
-            var oldest = snapshot?.Retainers.SelectMany(retainer => retainer.Bags)
-                .Select(bag => bag.ObservedAtUtc).Where(at => at is not null).Min();
+            var observed = snapshot?.Retainers.SelectMany(retainer => retainer.Bags)
+                .Select(bag => bag.ObservedAtUtc).Where(at => at is not null).ToArray() ?? [];
+            var oldest = observed.Min();
             options.Add(new(new(ownerId, ownerWorld, ownerName, owner.HomeWorldName ?? string.Empty, MarketAcquisitionStockSourceKey.Retainers),
                 SourceLabel(ownerName, MarketAcquisitionStockSourceKey.Retainers), true, document.CountRetainerStock, false,
-                StaleAge(oldest ?? snapshot?.GeneratedAtUtc)));
+                StaleAge(oldest ?? snapshot?.GeneratedAtUtc), Age(observed.Max())));
         }
 
         QuartermasterStockSources? current;
@@ -476,7 +478,8 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
                         MarketAcquisitionStockSourceKey.Retainers),
                     SourceLabel(character.CharacterName, MarketAcquisitionStockSourceKey.Retainers), false,
                     Selected(MarketAcquisitionStockSourceKey.Retainers), false,
-                    StaleAge(character.Retainers.Value.Min(retainer => retainer.ObservedAtUtc))));
+                    StaleAge(character.Retainers.Value.Min(retainer => retainer.ObservedAtUtc)),
+                    Age(character.Retainers.Value.Max(retainer => retainer.ObservedAtUtc))));
         }
         return options.ToImmutable();
     }
@@ -503,7 +506,8 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
                 rows.Add(new(SourceLabel(ownerName, MarketAcquisitionStockSourceKey.Retainers), null, null));
             else if (retainers.All(retainer => retainer.Quantity == 0))
                 rows.Add(new(SourceLabel(ownerName, MarketAcquisitionStockSourceKey.Retainers), 0,
-                    StaleAge(retainers.Count == 0 ? null : retainers.Min(retainer => retainer.ObservedAtUtc))));
+                    StaleAge(retainers.Count == 0 ? null : retainers.Min(retainer => retainer.ObservedAtUtc)),
+                    Age(retainers.Count == 0 ? null : retainers.Max(retainer => retainer.ObservedAtUtc))));
             else
             {
                 foreach (var retainer in retainers.Where(retainer => retainer.Quantity > 0))
@@ -535,11 +539,17 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
                             rows.Add(new($"{name} · {retainer.RetainerName}", quantity, StaleAge(retainer.ObservedAtUtc)));
                     continue;
                 }
-                rows.Add(new(SourceLabel(name, key.Container), contribution.Quantity, StaleAge(contribution.ObservedAtUtc)));
+                rows.Add(new(SourceLabel(name, key.Container), contribution.Quantity, StaleAge(contribution.ObservedAtUtc),
+                    key.Container == MarketAcquisitionStockSourceKey.Retainers
+                        ? Age(character!.Retainers!.Value.Max(retainer => retainer.ObservedAtUtc))
+                        : null));
             }
 
         var total = observer.Observe(line.ItemId, line.HqPolicy, line.TargetBasis);
-        var stale = rows.Where(row => row.StaleAge is not null).Select(row => row.StaleAge!.Value).DefaultIfEmpty().Max();
+        // Only sources that hold the item age the line: a retainer nobody has opened lately says nothing
+        // about stock counted from the others.
+        var stale = rows.Where(row => row is { StaleAge: not null, Quantity: > 0 })
+            .Select(row => row.StaleAge!.Value).DefaultIfEmpty().Max();
         return new WorkbenchLineStock(total.IsAvailable ? total.Quantity : null, stale > TimeSpan.Zero ? stale : null,
             rows.ToImmutable(), counted.ToImmutable());
     }
@@ -633,6 +643,9 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
         age > RetainerAwareMarketAcquisitionInventoryObserver.RetainerStockStaleThreshold
             ? age
             : null;
+
+    private static TimeSpan? Age(DateTimeOffset? observedAtUtc) =>
+        observedAtUtc is { } at ? DateTimeOffset.UtcNow - at : null;
 
     public static string SourceLabel(string characterName, string container) => $"{characterName} · {container}";
 
