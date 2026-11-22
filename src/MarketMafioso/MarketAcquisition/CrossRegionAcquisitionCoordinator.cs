@@ -700,7 +700,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             }
             awaitingResumeTransitionUntilUtc = null;
             preResumeFailure = null;
-            if (leg == CourierLeg.Collect && run.CustodyUnits == 0 && run.CustodyGil == 0)
+            // Zero counters alone do not prove settled custody; only a clearable run may be skipped.
+            if (leg == CourierLeg.Collect && run.CanClear && run.CustodyUnits == 0 && run.CustodyGil == 0)
             {
                 OnCollectFailedWithoutCustody(run);
                 return;

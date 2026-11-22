@@ -405,7 +405,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             ulong cap = line.BagQuantity + (collection.RetrievalAttempted ? line.RetainerQuantity : 0u);
             if (cap == 0)
                 continue;
-            bool[] qualities = line.HqPolicy switch
+            bool[] qualities = MarketAcquisitionPolicy.NormalizeHqPolicy(line.HqPolicy) switch
             {
                 "HqOnly" => [true],
                 "NqOnly" => [false],
