@@ -36,7 +36,7 @@ public interface IQuartermasterIpcAdapter
     void UnsubscribeChanged(Action<string> handler);
 }
 
-public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
+public sealed partial class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
 {
     private readonly ICallGateSubscriber<string> capabilities;
     private readonly ICallGateSubscriber<string> snapshot;
@@ -64,6 +64,7 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
         stopCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.StopCourierRunChannel);
         resumeCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.ResumeCourierRunChannel);
         pairCourierOwner = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.PairCourierOwnerChannel);
+        InitializeDeliveredStow(pluginInterface);
     }
 
     public bool HasCapabilities => capabilities.HasFunction;

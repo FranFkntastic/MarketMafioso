@@ -10,7 +10,7 @@ using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.Windows;
 
-/// <summary>Cross-regional shopping: Workbench group, planning world, and the 3-stage Guided Route pipeline.</summary>
+/// <summary>Cross-regional shopping: Workbench group, planning world, and the staged Guided Route pipeline.</summary>
 public partial class MainWindow
 {
     private string? crossRegionActionMessage;
@@ -198,7 +198,7 @@ public partial class MainWindow
 
     // ---- Guided Route pipeline --------------------------------------------------------------
 
-    private static readonly string[] CrossRegionStageLabels = ["1. Fund Shopper", "2. Shop", "3. Return Haul"];
+    private static readonly string[] CrossRegionStageLabels = ["Fund Shopper", "Shop", "Return Haul", "Collect", "Stow"];
 
     private static int StageOf(CrossRegionAcquisitionPhase? phase) => phase switch
     {
@@ -207,7 +207,9 @@ public partial class MainWindow
             CrossRegionAcquisitionPhase.Shopping or CrossRegionAcquisitionPhase.Paused => 1,
         CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul or CrossRegionAcquisitionPhase.HaulingToPrimary or
             CrossRegionAcquisitionPhase.ReturningToPrimary => 2,
-        CrossRegionAcquisitionPhase.Completed => 3,
+        CrossRegionAcquisitionPhase.CollectingCountedStock => 3,
+        CrossRegionAcquisitionPhase.StowingDelivered => 4,
+        CrossRegionAcquisitionPhase.Completed => 5,
         _ => -1,
     };
 
@@ -227,15 +229,22 @@ public partial class MainWindow
         var stage = StageOf(interrupted ? session.InterruptedPhase : phase);
         var region = CrossRegion.HasSession ? session.TargetRegion : DocumentRegion ?? string.Empty;
 
-        for (var index = 0; index < CrossRegionStageLabels.Length; index++)
+        var stages = new List<int> { 0, 1, 2 };
+        if (CrossRegion.HasSession && session.Collections.Count > 0)
+            stages.Add(3);
+        if (CrossRegion.HasSession ? session.RequestDocumentSnapshot?.StowAfterDelivery == true : CurrentDocumentStowsAfterDelivery())
+            stages.Add(4);
+        for (var position = 0; position < stages.Count; position++)
         {
-            if (index > 0)
+            var index = stages[position];
+            if (position > 0)
             {
                 ImGui.SameLine();
                 ImGui.TextColored(ColMuted, "→");
                 ImGui.SameLine();
             }
-            var label = index == 1 && region.Length > 0 ? $"2. Shop on {region}" : CrossRegionStageLabels[index];
+            var name = index == 1 && region.Length > 0 ? $"Shop on {region}" : CrossRegionStageLabels[index];
+            var label = $"{position + 1}. {name}";
             var skipped = index == 0 && CrossRegion.HasSession && session.FundGil == 0;
             var color = !CrossRegion.HasSession || skipped ? ColMuted
                 : index < stage || phase == CrossRegionAcquisitionPhase.Completed ? ColSuccess
@@ -256,6 +265,80 @@ public partial class MainWindow
             ImGui.TextColored(ColWarning, crossRegionActionMessage);
         if (CrossRegion.HasSession && session.PurchasedManifest.Count > 0)
             DrawCrossRegionPurchasedTable(session);
+        if (session.IsTerminal)
+            DrawCrossRegionLineResults(CrossRegion.LineResults());
+    }
+
+    private bool CurrentDocumentStowsAfterDelivery()
+    {
+        try { return acquisitionRequestBuilder.CurrentDocument.StowAfterDelivery; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    private static string DescribeCrossRegionCode(string code) => code switch
+    {
+        CrossRegionAcquisitionCoordinator.CodeCountedStockOnCarrier => "on courier carrier",
+        CrossRegionAcquisitionCoordinator.CodeCountedShort => "short in bags",
+        CrossRegionAcquisitionCoordinator.CodeCountedStockNotFound => "not in bags",
+        CrossRegionAcquisitionCoordinator.CodeCollectRejected => "transfer rejected",
+        CrossRegionAcquisitionCoordinator.CodeCollectBagsUnavailable => "bags unreadable",
+        CrossRegionAcquisitionCoordinator.CodeCountedRetrievalUnavailable => "retainers: no retrieval",
+        CrossRegionAcquisitionCoordinator.CodeCountedRetrievalRejected => "retainers: retrieval rejected",
+        CrossRegionAcquisitionCoordinator.CodeCountedRetrievalSubmitFailed => "retainers: retrieval not submitted",
+        CrossRegionAcquisitionCoordinator.CodeCountedRetrievalIncomplete => "retainers: retrieval incomplete",
+        "NoRoom" => "no room in home",
+        "PartlyStowed" => "partly stowed",
+        "NotStowed" => "not stowed",
+        _ => code,
+    };
+
+    private static void DrawCrossRegionLineResults(IReadOnlyList<CrossRegionLineResult> results)
+    {
+        if (results.Count == 0)
+            return;
+        var flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp;
+        var outer = Vector2.Zero;
+        if (results.Count > CrossRegionTableMaxVisibleRows)
+        {
+            flags |= ImGuiTableFlags.ScrollY;
+            outer = new Vector2(0, ImGui.GetFrameHeightWithSpacing() * (CrossRegionTableMaxVisibleRows + 1));
+        }
+        ImGui.Spacing();
+        if (!ImGui.BeginTable("CrossRegionLineResults", 6, flags, outer))
+            return;
+        ImGui.TableSetupScrollFreeze(0, 1);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 3f);
+        ImGui.TableSetupColumn("Bought", ImGuiTableColumnFlags.WidthStretch, 1f);
+        ImGui.TableSetupColumn("Counted elsewhere", ImGuiTableColumnFlags.WidthStretch, 1.4f);
+        ImGui.TableSetupColumn("Collected", ImGuiTableColumnFlags.WidthStretch, 1f);
+        ImGui.TableSetupColumn("Stowed", ImGuiTableColumnFlags.WidthStretch, 1f);
+        ImGui.TableSetupColumn("Why", ImGuiTableColumnFlags.WidthStretch, 2.4f);
+        ImGui.TableHeadersRow();
+        foreach (var row in results.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase))
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(row.ItemName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(row.Bought.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(row.CountedElsewhere > 0 ? row.CountedElsewhere.ToString("N0") : "—");
+            ImGui.TableNextColumn();
+            if (row.Collected < row.CountedElsewhere)
+                ImGui.TextColored(ColWarning, row.Collected.ToString("N0"));
+            else
+                ImGui.TextUnformatted(row.CountedElsewhere > 0 ? row.Collected.ToString("N0") : "—");
+            ImGui.TableNextColumn();
+            if (row.StowPlanned == 0)
+                ImGui.TextUnformatted("—");
+            else if (row.Stowed < row.StowPlanned)
+                ImGui.TextColored(ColWarning, $"{row.Stowed:N0}/{row.StowPlanned:N0}");
+            else
+                ImGui.TextUnformatted(row.Stowed.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextColored(ColMuted, string.Join(", ", row.Codes.Select(DescribeCrossRegionCode)));
+        }
+        ImGui.EndTable();
     }
 
     private const int CrossRegionTableMaxVisibleRows = 8;
@@ -263,7 +346,9 @@ public partial class MainWindow
     private static void DrawCrossRegionPurchasedTable(CrossRegionAcquisitionSession session)
     {
         var showHaul = session.HaulManifest.Count > 0;
-        var hauled = session.HaulManifest.ToDictionary(line => (line.ItemId, line.IsHq), line => line.Quantity);
+        var counted = session.ShopperCounted?.Manifest.ToDictionary(line => (line.ItemId, line.IsHq), line => line.Quantity) ?? [];
+        var hauled = session.HaulManifest.ToDictionary(line => (line.ItemId, line.IsHq),
+            line => line.Quantity - Math.Min(line.Quantity, counted.GetValueOrDefault((line.ItemId, line.IsHq))));
         var rows = session.PurchasedManifest.OrderBy(line => line.ItemName, StringComparer.OrdinalIgnoreCase).ThenBy(line => line.IsHq).ToArray();
         var flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp;
         var outer = Vector2.Zero;

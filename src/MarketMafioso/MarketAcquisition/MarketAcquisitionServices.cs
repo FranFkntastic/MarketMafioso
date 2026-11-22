@@ -252,7 +252,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
             crossRegionGame,
             crossRegionShopping,
             new FileCrossRegionAcquisitionStore(Plugin.PluginInterface.GetPluginConfigDirectory()),
-            log: (message, exception) => log.Warning(exception, "[MarketMafioso] {Message}", message));
+            log: (message, exception) => log.Warning(exception, "[MarketMafioso] {Message}", message),
+            custody: quartermaster);
     }
 
     internal void ConnectCurrentDocument(Func<MarketAcquisitionRequestDocument> provider) => currentDocument = provider;

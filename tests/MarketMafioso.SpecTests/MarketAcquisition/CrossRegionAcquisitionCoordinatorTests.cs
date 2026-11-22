@@ -135,6 +135,63 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         Assert.Empty(gone.Courier.Submitted);
     }
 
+    // Why this test exists: a counted-stock collection courier-trades real items off another character. If a
+    // persisted collect request that already completed were submitted again after a crash or Resume, the courier
+    // would move a second batch of that character's stock, and nothing in the logs tells the duplicate apart.
+    [Fact]
+    public void CompletedCollectRequestIsNotResubmittedOnRestartOrResume()
+    {
+        using var fixture = new Fixture();
+        var session = ShoppingSession();
+        var finishedRun = Guid.NewGuid();
+        var shippedRun = Guid.NewGuid();
+        session.Phase = CrossRegionAcquisitionPhase.Failed;
+        session.InterruptedPhase = CrossRegionAcquisitionPhase.CollectingCountedStock;
+        session.CanResumeCourier = true;
+        session.HaulDelivered = true;
+        session.CountedStockPlanned = true;
+        session.Collections =
+        [
+            new()
+            {
+                Source = new(0x3333, 73, "First Alt", "Adamantoise"),
+                Lines = [new(5057, "Iron Ingot", "Either", 10, 0)],
+                State = CrossRegionCollectionState.Completed,
+                RetrievalSettled = true,
+                RequestId = CrossRegionAcquisitionSession.CollectRequestIdFor(session.SessionId, 0, 1),
+                RunId = finishedRun,
+                Attempt = 1,
+                Manifest = [new(5057, "Iron Ingot", false, 10)],
+            },
+            new()
+            {
+                Source = new(0x4444, 73, "Second Alt", "Adamantoise"),
+                Lines = [new(5057, "Iron Ingot", "Either", 6, 0)],
+                State = CrossRegionCollectionState.Shipping,
+                RetrievalSettled = true,
+                RequestId = CrossRegionAcquisitionSession.CollectRequestIdFor(session.SessionId, 1, 1),
+                RunId = shippedRun,
+                Attempt = 1,
+                Manifest = [new(5057, "Iron Ingot", false, 6)],
+            },
+        ];
+        fixture.Store.Save(session);
+        // Quartermaster finished the second transfer while MMF was down; the courier ended on the primary.
+        fixture.Courier.Run = Run(shippedRun, session.Collections[1].RequestId, "Completed");
+        fixture.Game.LoggedIn = Primary;
+
+        var restarted = fixture.CreateCoordinator();
+        Assert.True(restarted.CanResume);
+        Assert.True(restarted.Resume().Success);
+        fixture.TickAfter(restarted);
+        fixture.TickAfter(restarted);
+
+        Assert.Empty(fixture.Courier.Submitted);
+        Assert.Empty(fixture.Courier.Resumed);
+        Assert.Equal(CrossRegionAcquisitionPhase.Completed, restarted.Phase);
+        Assert.All(fixture.Store.Load()!.Collections, collection => Assert.Equal(CrossRegionCollectionState.Completed, collection.State));
+    }
+
     private static CrossRegionAcquisitionSession ShoppingSession() => new()
     {
         SessionId = Guid.NewGuid(),
