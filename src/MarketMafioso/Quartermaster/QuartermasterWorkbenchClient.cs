@@ -14,11 +14,11 @@ public interface IQuartermasterWorkbenchIpcAdapter
 {
     bool HasStockSources { get; }
     bool HasReserveItems { get; }
-    bool HasSetItemHome { get; }
+    bool HasOpenPlacement { get; }
     bool HasSetReserveLevel { get; }
     string GetStockSources(string requestJson);
     string GetReserveItems();
-    string SetItemHome(string requestJson);
+    string OpenPlacement(string requestJson);
     string SetReserveLevel(string requestJson);
 }
 
@@ -26,7 +26,7 @@ public sealed class DalamudQuartermasterWorkbenchIpcAdapter : IQuartermasterWork
 {
     private readonly ICallGateSubscriber<string, string> stockSources;
     private readonly ICallGateSubscriber<string> reserveItems;
-    private readonly ICallGateSubscriber<string, string> setItemHome;
+    private readonly ICallGateSubscriber<string, string> openPlacement;
     private readonly ICallGateSubscriber<string, string> setReserveLevel;
 
     public DalamudQuartermasterWorkbenchIpcAdapter(IDalamudPluginInterface pluginInterface)
@@ -34,17 +34,17 @@ public sealed class DalamudQuartermasterWorkbenchIpcAdapter : IQuartermasterWork
         ArgumentNullException.ThrowIfNull(pluginInterface);
         stockSources = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterWorkbenchClient.GetStockSourcesChannel);
         reserveItems = pluginInterface.GetIpcSubscriber<string>(QuartermasterWorkbenchClient.GetReserveItemsChannel);
-        setItemHome = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterWorkbenchClient.SetItemHomeChannel);
+        openPlacement = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterWorkbenchClient.OpenPlacementChannel);
         setReserveLevel = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterWorkbenchClient.SetReserveLevelChannel);
     }
 
     public bool HasStockSources => stockSources.HasFunction;
     public bool HasReserveItems => reserveItems.HasFunction;
-    public bool HasSetItemHome => setItemHome.HasFunction;
+    public bool HasOpenPlacement => openPlacement.HasFunction;
     public bool HasSetReserveLevel => setReserveLevel.HasFunction;
     public string GetStockSources(string requestJson) => stockSources.InvokeFunc(requestJson);
     public string GetReserveItems() => reserveItems.InvokeFunc();
-    public string SetItemHome(string requestJson) => setItemHome.InvokeFunc(requestJson);
+    public string OpenPlacement(string requestJson) => openPlacement.InvokeFunc(requestJson);
     public string SetReserveLevel(string requestJson) => setReserveLevel.InvokeFunc(requestJson);
 }
 
@@ -106,16 +106,16 @@ public sealed class QuartermasterWorkbenchClient
 {
     public const string GetStockSourcesChannel = "Quartermaster.v1.GetStockSources";
     public const string GetReserveItemsChannel = "Quartermaster.v1.GetReserveItems";
-    public const string SetItemHomeChannel = "Quartermaster.v1.SetItemHome";
+    public const string OpenPlacementChannel = "Quartermaster.v1.OpenPlacement";
     public const string SetReserveLevelChannel = "Quartermaster.v1.SetReserveLevel";
     public const string StockSourcesCapability = "stockSources.v1";
     public const string ReserveItemsCapability = "reserveItems.v1";
-    public const string ItemHomesCapability = "itemHomes.v1";
+    public const string PlacementEditorCapability = "placementEditor.v1";
     public const string ReserveLevelsCapability = "reserveLevels.v1";
     public const string StockSourcesRequestSchema = "gooseworks-quartermaster-stock-sources-request/v1";
     public const string StockSourcesSchema = "gooseworks-quartermaster-stock-sources/v1";
     public const string ReserveItemsSchema = "gooseworks-quartermaster-reserve-items/v1";
-    public const string ItemHomeSchema = "gooseworks-quartermaster-item-home/v1";
+    public const string OpenPlacementSchema = "gooseworks-quartermaster-open-placement/v1";
     public const string ReserveLevelSchema = "gooseworks-quartermaster-reserve-level/v1";
     public const string ReserveEditAckSchema = "gooseworks-quartermaster-reserve-edit-ack/v1";
 
@@ -208,26 +208,21 @@ public sealed class QuartermasterWorkbenchClient
         return true;
     }
 
-    public bool TrySetItemHome(
+    /// <summary>Opens Quartermaster's placement editor on these items of the current character. Quality is NqOnly or HqOnly.</summary>
+    public bool TryOpenPlacement(
         string providerInstanceId,
         QuartermasterOwnerScope owner,
-        uint itemId,
-        string itemName,
-        string quality,
-        IReadOnlyList<ulong> retainerIds,
+        IReadOnlyList<(uint ItemId, string ItemName, string Quality)> items,
         out QuartermasterReserveEditAcknowledgement? acknowledgement,
         out string error) =>
-        TryEdit(() => adapter.HasSetItemHome, adapter.SetItemHome, new
+        TryEdit(() => adapter.HasOpenPlacement, adapter.OpenPlacement, new
         {
-            schema = ItemHomeSchema,
+            schema = OpenPlacementSchema,
             providerInstanceId,
             requestId = Guid.NewGuid().ToString("N"),
             owner = Owner(owner),
-            itemId,
-            itemName,
-            quality,
-            retainerIds,
-        }, "item home", out acknowledgement, out error);
+            items = items.Select(item => new { itemId = item.ItemId, itemName = item.ItemName, quality = item.Quality }),
+        }, "placement editor", out acknowledgement, out error);
 
     public bool TrySetReserveLevel(
         string providerInstanceId,

@@ -51,6 +51,8 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
     private static readonly TimeSpan VisibleWindow = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan ObservationMaxAge = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan PendingEditLifetime = TimeSpan.FromSeconds(6);
+    /// <summary>Off-screen refresh cadence while the buy list counts stock, so finalize never reads an empty cache.</summary>
+    private static readonly TimeSpan OffscreenRefreshInterval = TimeSpan.FromSeconds(5);
 
     private readonly QuartermasterIpcClient quartermaster;
     private readonly QuartermasterWorkbenchClient workbench;
@@ -60,7 +62,6 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
     private readonly Action<string> warn;
     private readonly object gate = new();
     private readonly List<Action> pendingWrites = [];
-    private readonly Dictionary<(uint ItemId, string Quality), (ImmutableArray<ulong> Homes, DateTimeOffset Until)> pendingHomes = new();
     private readonly Dictionary<(uint ItemId, string Quality), (int Level, DateTimeOffset Until)> pendingLevels = new();
     private QuartermasterStockSources? sources;
     private QuartermasterReserveItems? reserves;
@@ -69,6 +70,7 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
     private DateTimeOffset lastVisibleUtc = DateTimeOffset.MinValue;
     private bool dirty = true, refreshing, disposed;
     private long version;
+    private int documentShape;
 
     public MarketAcquisitionWorkbenchStockService(
         QuartermasterIpcClient quartermaster,
@@ -99,31 +101,73 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             return;
         FlushWrites();
         var now = DateTimeOffset.UtcNow;
-        if (now - lastVisibleUtc > VisibleWindow || !dirty && now - fetchedAtUtc < RefreshInterval)
+        var document = TryDocument();
+        var shape = DocumentShape(document);
+        var reshaped = shape != documentShape;
+        if (reshaped)
+        {
+            documentShape = shape;
+            dirty = true;
+        }
+        if (now - lastVisibleUtc > VisibleWindow)
+        {
+            // Off screen the cache still follows a buy list that counts stock (finalize reads it): at once when
+            // the list changes, otherwise on a slower cadence.
+            if (document is null || !document.Lines.Any(line => CountsOnHand(document, line)) ||
+                !reshaped && now - fetchedAtUtc < OffscreenRefreshInterval)
+                return;
+            Refresh(now);
+            return;
+        }
+        if (!dirty && now - fetchedAtUtc < RefreshInterval)
             return;
         Refresh(now);
     }
 
+    private static int DocumentShape(MarketAcquisitionRequestDocument? document)
+    {
+        if (document is null)
+            return 0;
+        var hash = new HashCode();
+        hash.Add(document.CountRetainerStock);
+        hash.Add(document.ExactAcquisitionAuthority is null);
+        foreach (var line in document.Lines)
+        {
+            hash.Add(line.ItemId);
+            hash.Add(line.HqPolicy);
+            hash.Add(line.QuantityMode);
+            hash.Add(line.TargetBasis);
+        }
+        foreach (var source in document.AdditionalStockSources)
+        {
+            hash.Add(source.LocalContentId);
+            hash.Add(source.HomeWorldId);
+            hash.Add(source.Container);
+        }
+        return hash.ToHashCode();
+    }
+
     // ---- Edits (queued from Draw, sent on the next tick) ----------------------------------------
 
-    public void RequestItemHome(MarketAcquisitionRequestLineDocument line, IReadOnlyList<ulong> homes)
+    /// <summary>Opens Quartermaster's placement editor for these lines' items; sent on the next tick.</summary>
+    public void RequestOpenPlacement(IReadOnlyList<MarketAcquisitionRequestLineDocument> lines)
     {
-        var quality = QualityFor(line.ItemId, line.HqPolicy);
-        var target = homes.Distinct().ToImmutableArray();
+        var items = lines.Where(line => line.ItemId > 0)
+            .Select(line => (line.ItemId, line.ItemName, Quality: QualityFor(line.ItemId, line.HqPolicy)))
+            .Distinct()
+            .ToArray();
+        if (items.Length == 0)
+            return;
         lock (gate)
-        {
-            pendingHomes[(line.ItemId, quality)] = (target, DateTimeOffset.UtcNow + PendingEditLifetime);
             pendingWrites.Add(() =>
             {
                 var current = Reserves();
                 string error = "Quartermaster reserve items are unavailable.";
                 if (current is not null &&
-                    workbench.TrySetItemHome(current.ProviderInstanceId, currentOwner(), line.ItemId, line.ItemName, quality, target, out _, out error))
+                    workbench.TryOpenPlacement(current.ProviderInstanceId, currentOwner(), items, out _, out error))
                     return;
-                lock (gate) pendingHomes.Remove((line.ItemId, quality));
-                warn($"[MarketMafioso] Could not set the Quartermaster home for {line.ItemName}: {error}");
+                warn($"[MarketMafioso] Could not open Quartermaster placement: {error}");
             });
-        }
     }
 
     public void RequestReserveLevel(MarketAcquisitionRequestLineDocument line, uint level)
@@ -205,15 +249,26 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             return pendingLevels.TryGetValue((line.ItemId, quality), out var pending) && pending.Until > DateTimeOffset.UtcNow;
     }
 
-    /// <summary>Home retainers for a line (empty = stays in bags), preferring an edit still in flight.</summary>
+    /// <summary>A line's placement in Quartermaster: ranked home retainers, then Any space (neither = stays in bags).</summary>
     public (ImmutableArray<ulong> Homes, bool AnySpace) HomesFor(MarketAcquisitionRequestLineDocument line)
     {
         var quality = QualityFor(line.ItemId, line.HqPolicy);
-        lock (gate)
-            if (pendingHomes.TryGetValue((line.ItemId, quality), out var pending) && pending.Until > DateTimeOffset.UtcNow)
-                return (pending.Homes, false);
         var reserve = View.Reserves?.Items.FirstOrDefault(item => item.ItemId == line.ItemId && item.Quality == quality);
         return reserve is null ? ([], false) : (reserve.Homes, reserve.AnySpace);
+    }
+
+    /// <summary>Quartermaster's wording for a placement: "Eris → Skrrt → Any space", or "Stays in bags".</summary>
+    public string PlacementSummary(MarketAcquisitionRequestLineDocument line)
+    {
+        var (homes, anySpace) = HomesFor(line);
+        var names = homes.Distinct()
+            .Select(id => View.Reserves?.Retainers.FirstOrDefault(retainer => retainer.RetainerId == id)?.RetainerName is { Length: > 0 } name
+                ? name
+                : $"Retainer {id}")
+            .ToList();
+        if (anySpace)
+            names.Add("Any space");
+        return names.Count == 0 ? "Stays in bags" : string.Join(" → ", names);
     }
 
     public int StowToRetainersCount(MarketAcquisitionRequestDocument document) =>
@@ -247,7 +302,8 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
     /// <summary>
     /// Stock on the selected other characters' sources, added to on-hand observations of items on the
     /// Workbench. Null when nothing extra applies (no selection, item not on the list, or Quartermaster
-    /// cannot report stock sources); unavailable when a selected source has never been observed.
+    /// cannot report stock sources). A selected source with no observation at all drops out of the count
+    /// (it is not offered either); a stale one still counts.
     /// </summary>
     private MarketAcquisitionInventoryObservation? ObserveAdditionalStock(uint itemId, string hqPolicy)
     {
@@ -265,12 +321,8 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
         var owner = currentOwner();
         var quantity = 0u;
         foreach (var (key, character) in SelectedExtras(document, owner))
-        {
-            if (Contribution(character, key.Container, itemId, hqPolicy) is not { } contribution)
-                return MarketAcquisitionInventoryObservation.Unavailable(
-                    $"{SourceLabel(key.CharacterName, key.Container)} stock has not been observed; stock is unknown, not zero.");
-            quantity = checked(quantity + contribution.Quantity);
-        }
+            if (Contribution(character, key.Container, itemId, hqPolicy) is { } contribution)
+                quantity = checked(quantity + contribution.Quantity);
         return MarketAcquisitionInventoryObservation.Available(quantity);
     }
 
@@ -294,7 +346,7 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             var stock = capabilities.Contains(QuartermasterWorkbenchClient.StockSourcesCapability);
             var reserveItems = capabilities.Contains(QuartermasterWorkbenchClient.ReserveItemsCapability);
             var levels = reserveItems && capabilities.Contains(QuartermasterWorkbenchClient.ReserveLevelsCapability);
-            var homes = reserveItems && capabilities.Contains(QuartermasterWorkbenchClient.ItemHomesCapability);
+            var homes = reserveItems && capabilities.Contains(QuartermasterWorkbenchClient.PlacementEditorCapability);
 
             QuartermasterStockSources? fetchedSources = null;
             if (stock && !workbench.TryGetStockSources(itemIds, out fetchedSources, out var stockError))
@@ -335,10 +387,6 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
 
     private void ExpirePending(QuartermasterReserveItems? current, DateTimeOffset now)
     {
-        foreach (var key in pendingHomes.Where(pair => pair.Value.Until <= now ||
-                     current?.Items.FirstOrDefault(item => item.ItemId == pair.Key.ItemId && item.Quality == pair.Key.Quality) is var item &&
-                     (item?.Homes ?? []).SequenceEqual(pair.Value.Homes)).Select(pair => pair.Key).ToArray())
-            pendingHomes.Remove(key);
         foreach (var key in pendingLevels.Where(pair => pair.Value.Until <= now ||
                      current?.Items.FirstOrDefault(item => item.ItemId == pair.Key.ItemId && item.Quality == pair.Key.Quality) is var item &&
                      (item?.ReserveUnits ?? 0) == pair.Value.Level).Select(pair => pair.Key).ToArray())
@@ -417,24 +465,19 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             var key = (character.LocalContentId, character.HomeWorldId);
             bool Selected(string container) => document.AdditionalStockSources.Any(source =>
                 source.IsCharacter(key.LocalContentId, key.HomeWorldId) && source.Container == container);
-            if (character.Bags is not null || Selected(MarketAcquisitionStockSourceKey.Bags))
+            // Only observed sources are offered: a never-observed one would be unknown, never zero.
+            if (character.Bags is not null)
                 options.Add(new(new(character.LocalContentId, character.HomeWorldId, character.CharacterName, character.HomeWorldName,
                         MarketAcquisitionStockSourceKey.Bags),
                     SourceLabel(character.CharacterName, MarketAcquisitionStockSourceKey.Bags), false,
                     Selected(MarketAcquisitionStockSourceKey.Bags), false, StaleAge(character.Bags?.ObservedAtUtc)));
-            if (character.Retainers is not null || Selected(MarketAcquisitionStockSourceKey.Retainers))
+            if (character.Retainers is { IsDefaultOrEmpty: false })
                 options.Add(new(new(character.LocalContentId, character.HomeWorldId, character.CharacterName, character.HomeWorldName,
                         MarketAcquisitionStockSourceKey.Retainers),
                     SourceLabel(character.CharacterName, MarketAcquisitionStockSourceKey.Retainers), false,
                     Selected(MarketAcquisitionStockSourceKey.Retainers), false,
-                    StaleAge(character.Retainers is { IsDefaultOrEmpty: false } retainers ? retainers.Min(retainer => retainer.ObservedAtUtc) : null)));
+                    StaleAge(character.Retainers.Value.Min(retainer => retainer.ObservedAtUtc))));
         }
-
-        // A saved choice stays visible (and removable) after its character drops out of Quartermaster.
-        foreach (var missing in document.AdditionalStockSources.Where(source =>
-                     !IsOwner(source.LocalContentId, source.HomeWorldId, owner) &&
-                     others.All(character => !source.IsCharacter(character.LocalContentId, character.HomeWorldId))))
-            options.Add(new(missing, SourceLabel(missing.CharacterName, missing.Container), false, true, false, null));
         return options.ToImmutable();
     }
 
@@ -479,11 +522,9 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             foreach (var (key, character) in SelectedExtras(document, owner))
             {
                 var name = character?.CharacterName ?? key.CharacterName;
+                // Never observed: dropped from the count quietly, not shown as unknown or zero.
                 if (Contribution(character, key.Container, line.ItemId, line.HqPolicy) is not { } contribution)
-                {
-                    rows.Add(new(SourceLabel(name, key.Container), null, null));
                     continue;
-                }
                 if (contribution.Quantity > 0)
                     counted.Add(new(key.LocalContentId, key.HomeWorldId, name, character!.HomeWorldName,
                         key.Container, contribution.Quantity, contribution.ObservedAtUtc));

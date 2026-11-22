@@ -344,7 +344,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var flags = AcquisitionRequestTableStyle.LineTableFlags |
                     ImGuiTableFlags.SizingStretchProp |
                     ImGuiTableFlags.NoSavedSettings;
-        // Goes to exists only while Quartermaster can report and accept item homes.
+        // Goes to exists only while Quartermaster reports reserve items and offers its placement editor.
         var showHomes = workbenchStock?.View.HasItemHomes == true;
         if (!ImGui.BeginTable(showHomes ? "AcquisitionWorkbenchLinesV7Homes" : "AcquisitionWorkbenchLinesV7", showHomes ? 12 : 11, flags,
                 new Vector2(0, tableHeight)))
@@ -369,15 +369,18 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (showHomes)
         {
             headers.Add("Goes to");
-            tooltips.Add("The item's home in Quartermaster.");
+            tooltips.Add("Where Quartermaster stows the item.");
         }
         headers.Add(string.Empty);
         tooltips.Add(string.Empty);
         for (var column = 0; column < headers.Count; column++)
         {
             ImGui.TableNextColumn();
+            var headerX = ImGui.GetCursorPosX();
             ImGui.TableHeader(headers[column]);
             if (tooltips[column].Length > 0 && ImGui.IsItemHovered()) ImGui.SetTooltip(tooltips[column]);
+            if (showHomes && headers[column] == "Goes to")
+                DrawPlacementHeaderButton(headerX + ImGui.CalcTextSize(headers[column]).X + 8);
         }
 
         for (var index = 0; index < document.Lines.Count; index++)
@@ -532,29 +535,30 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private static string FormatAge(TimeSpan age) =>
         age.TotalHours >= 48 ? $"{age.TotalDays:N1}d" : $"{age.TotalHours:N1}h";
 
+    /// <summary>Read-only placement summary; clicking opens Quartermaster's placement editor for this item.</summary>
     private void DrawGoesToCell(MarketAcquisitionRequestLineDocument line)
     {
-        if (workbenchStock?.View is not { HasItemHomes: true, Reserves: { } reserves })
+        if (workbenchStock?.View is not { HasItemHomes: true } || line.ItemId == 0)
             return;
-        var (homes, anySpace) = workbenchStock.HomesFor(line);
-        var names = reserves.Retainers.ToDictionary(retainer => retainer.RetainerId, retainer => retainer.RetainerName);
-        var preview = homes.Length == 0
-            ? anySpace ? "Any retainer" : "Stay in bags"
-            : (names.GetValueOrDefault(homes[0]) is { Length: > 0 } first ? first : "Retainer") +
-              (homes.Length > 1 ? $" +{homes.Length - 1}" : string.Empty);
-        ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo("##GoesTo", preview))
-            return;
-        if (ImGui.Selectable("Stay in bags", homes.Length == 0 && !anySpace) && (homes.Length > 0 || anySpace))
-            workbenchStock.RequestItemHome(line, []);
-        foreach (var retainer in reserves.Retainers)
-        {
-            var selected = homes.Contains(retainer.RetainerId);
-            if (ImGui.Selectable($"{retainer.RetainerName}##Home{retainer.RetainerId}", selected) &&
-                !(homes.Length == 1 && selected))
-                workbenchStock.RequestItemHome(line, [retainer.RetainerId]);
-        }
-        ImGui.EndCombo();
+        var summary = workbenchStock.PlacementSummary(line);
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+        var clicked = ImGui.Selectable($"{summary}##GoesTo");
+        ImGui.PopStyleColor();
+        if (ImGui.IsItemHovered() && ImGui.CalcTextSize(summary).X > ImGui.GetItemRectSize().X)
+            ImGui.SetTooltip(summary);
+        if (clicked)
+            workbenchStock.RequestOpenPlacement([line]);
+    }
+
+    /// <summary>Opens Quartermaster's placement editor for every item on the buy list.</summary>
+    private void DrawPlacementHeaderButton(float x)
+    {
+        ImGui.SameLine();
+        ImGui.SetCursorPosX(x);
+        ImGui.BeginDisabled(!document.Lines.Any(line => line.ItemId > 0));
+        if (ImGui.SmallButton("Placement##WorkbenchPlacement"))
+            workbenchStock!.RequestOpenPlacement(document.Lines);
+        ImGui.EndDisabled();
     }
 
     private void DrawStockSourcesCombo()
