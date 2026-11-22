@@ -228,6 +228,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
                 lifestream,
                 () => config.MarketAcquisitionAethernetDeparture));
+        var crossRegionGame = new DalamudCrossRegionGameState(playerState, characterLoginDriver, () => otherAutomationActive() || RouteEngine.IsRouteActive);
         crossRegionShopping = new MarketAcquisitionCrossRegionShoppingRoute(
             RouteEngine,
             Workspace,
@@ -236,10 +237,11 @@ internal sealed class MarketAcquisitionServices : IDisposable
             () => playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : null,
             GetMarketAcquisitionRecentWorldTtl,
             () => MarketAcquisitionRouteDiagnosticsPolicy.Resolve(config.MarketAcquisitionRouteDiagnostics),
-            () => config.EnableOpportunisticWorldChecks);
+            () => config.EnableOpportunisticWorldChecks,
+            () => crossRegionGame.CarriedGil);
         CrossRegion = new CrossRegionAcquisitionCoordinator(
             quartermaster,
-            new DalamudCrossRegionGameState(playerState, characterLoginDriver, () => otherAutomationActive() || RouteEngine.IsRouteActive),
+            crossRegionGame,
             crossRegionShopping,
             new FileCrossRegionAcquisitionStore(Plugin.PluginInterface.GetPluginConfigDirectory()),
             log: (message, exception) => log.Warning(exception, "[MarketMafioso] {Message}", message));

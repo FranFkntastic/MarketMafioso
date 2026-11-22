@@ -80,9 +80,16 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     }
 
     /// <param name="drawPipelineActions">When set, replaces the ordinary action row (the cross-regional pipeline owns Start/Stop).</param>
-    public void Draw(MarketAcquisitionPlan? plan, bool isPlanStale, bool canRefreshEvidence, Action? drawPipelineActions = null)
+    public void Draw(
+        MarketAcquisitionPlan? plan,
+        bool isPlanStale,
+        bool canRefreshEvidence,
+        Action? drawPipelineActions = null,
+        bool suppressIdleRouteSummary = false)
     {
         var snapshot = getRouteSnapshot();
+        // The cross-regional pipeline owns start blockers and status while no local route exists.
+        var pipelineOwnsIdleView = suppressIdleRouteSummary && !snapshot.IsRunning && !snapshot.IsPaused && snapshot.Stops.Count == 0;
         ImGuiUi.SectionHeader("Route", MarketMafiosoUiTheme.Header);
         if (ImGuiUi.Button("Open Logs Folder##MarketAcquisitionOpenLogsFolder", true))
             openLogsFolder();
@@ -113,17 +120,19 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
         DrawEvidenceRefreshConfirmation(canRefreshEvidence);
 
-        ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
+        if (!pipelineOwnsIdleView)
+            ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
         if (snapshot.RecoveryBlockedReason is { } recoveryBlockedReason)
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, recoveryBlockedReason);
-        if (isPlanStale)
+        if (isPlanStale && !pipelineOwnsIdleView)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Request changed after this plan was prepared. Prepare a fresh plan before starting.");
         drawPostRunDiagnosticSummary(snapshot);
         drawLatestWorldCompletionSummary(snapshot);
 
         if (snapshot.Stops.Count == 0)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Start after preparing a plan. Routes travel, validate live listings, and purchase safe rows automatically.");
+            if (!pipelineOwnsIdleView)
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Start after preparing a plan. Routes travel, validate live listings, and purchase safe rows automatically.");
             return;
         }
 

@@ -191,8 +191,17 @@ public sealed class CrossRegionAcquisitionCoordinator
         return cachedHasCourier;
     }
 
-    public CrossRegionReadiness EvaluateReadiness(CrossRegionCharacter? shopper, string targetRegion, int fundGil, bool force = false)
+    public CrossRegionReadiness EvaluateReadiness(
+        CrossRegionCharacter? shopper,
+        string targetRegion,
+        int fundGil,
+        MarketAcquisitionRequestDocument? document = null,
+        bool force = false)
     {
+        if (document?.ExactAcquisitionAuthority is not null)
+            return new(false, "External exact-acquisition plans cannot run cross-regionally.", null);
+        if (document?.Lines.Any(line => line.ItemId is >= 2 and <= 19) == true)
+            return new(false, "Cross-regional shopping does not support shards/crystals (item IDs 2–19) because the courier trades Inventory1–4 only.", null);
         if (!HasCrossRegionCourier(force))
             return new(false, "Quartermaster is not loaded or does not support the cross-region courier.", null);
         var status = GetCourierStatus(out var error, force);
@@ -204,6 +213,10 @@ public sealed class CrossRegionAcquisitionCoordinator
             return new(false, "No courier carrier is configured in Quartermaster.", status);
         if (!carrier.Online)
             return new(false, $"Carrier {carrier.CharacterName} is offline.", status);
+        if (carrier.CarrierOptIn == false)
+            return new(false, $"Enable 'Carry for another character' on {carrier.CharacterName}'s Quartermaster Courier settings.", status);
+        if (primary.IsPairedWithCarrier == false)
+            return new(false, $"Pair {primary.CharacterName} as an owner on {carrier.CharacterName}'s Quartermaster Courier settings.", status);
         if (!primary.HasMeetingBell)
             return new(false, $"{primary.CharacterName} has no saved meeting bell in Quartermaster.", status);
         if (status.Bridge is not { WorldId: > 0 })
@@ -219,17 +232,20 @@ public sealed class CrossRegionAcquisitionCoordinator
             return new(false, $"{shopper.Label} is the courier carrier and cannot shop.", status) { ShopperEntry = entry };
         if (!RegionMatches(entry.RegionName, targetRegion))
             return new(false, $"{shopper.Label} is not in {targetRegion}.", status) { ShopperEntry = entry };
+        if (entry.IsPairedWithCarrier == false)
+            return new(false, $"Pair {entry.CharacterName} as an owner on {carrier.CharacterName}'s Quartermaster Courier settings (needed for the return haul).", status) { ShopperEntry = entry };
         if (status.Run is { } run && (run.Active || run.IsRunning || run.IsFailure))
             return new(false, $"Quartermaster has an unresolved courier run ({run.State}); finish or clear it first.", status) { ShopperEntry = entry };
         if (fundGil < 0)
             return new(false, "Transfer gil cannot be negative.", status) { ShopperEntry = entry };
+        // The carrier teleports to the bridge and the primary's bell on the return haul even without a gil transfer.
+        if (carrier.CarriedGil < TravelFeeReserveGil)
+            return new(false, $"Carrier {carrier.CharacterName} needs at least {TravelFeeReserveGil:N0} gil of its own for teleport fees.", status) { ShopperEntry = entry };
         if (fundGil > 0)
         {
             var carried = game.CarriedGil ?? primary.CarriedGil;
             if (carried < (ulong)fundGil + TravelFeeReserveGil)
                 return new(false, $"{primary.CharacterName} carries {carried:N0} gil; {fundGil:N0} + {TravelFeeReserveGil:N0} travel reserve needed (retainer gil is never used).", status) { ShopperEntry = entry };
-            if (carrier.CarriedGil < TravelFeeReserveGil)
-                return new(false, $"Carrier {carrier.CharacterName} needs at least {TravelFeeReserveGil:N0} gil of its own for teleport fees.", status) { ShopperEntry = entry };
             if ((long)carrier.CarriedGil + fundGil > MaxCarriedGil)
                 return new(false, $"Carrier would exceed the {MaxCarriedGil:N0} gil cap.", status) { ShopperEntry = entry };
         }
@@ -245,11 +261,7 @@ public sealed class CrossRegionAcquisitionCoordinator
         ArgumentNullException.ThrowIfNull(request);
         if (session.Phase != CrossRegionAcquisitionPhase.Idle)
             return CrossRegionActionResult.Fail("A cross-regional session is still unresolved; finish or clear it first.");
-        if (request.Document.ExactAcquisitionAuthority is not null)
-            return CrossRegionActionResult.Fail("External exact-acquisition plans cannot run cross-regionally.");
-        if (request.Document.Lines.Any(line => line.ItemId is >= 2 and <= 19))
-            return CrossRegionActionResult.Fail("Cross-regional shopping does not support shards/crystals (item IDs 2–19) because the courier trades Inventory1–4 only.");
-        var readiness = EvaluateReadiness(request.Shopper, request.TargetRegion, request.FundGil, force: true);
+        var readiness = EvaluateReadiness(request.Shopper, request.TargetRegion, request.FundGil, request.Document, force: true);
         if (!readiness.Ready)
             return CrossRegionActionResult.Fail(readiness.Blocker ?? "Cross-regional shopping is not ready.");
         var primary = game.LoggedInCharacter;
@@ -336,6 +348,7 @@ public sealed class CrossRegionAcquisitionCoordinator
             case CrossRegionAcquisitionPhase.Paused:
             case CrossRegionAcquisitionPhase.SwitchingToShopper:
             case CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul:
+            case CrossRegionAcquisitionPhase.ReturningToPrimary:
                 if (phase == CrossRegionAcquisitionPhase.Paused)
                     shopping.Stop();
                 session.InterruptedPhase = phase;
@@ -368,6 +381,12 @@ public sealed class CrossRegionAcquisitionCoordinator
             case CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul:
                 closeStartedUtc = null;
                 SetPhase(CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul, "Preparing the return haul.");
+                return CrossRegionActionResult.Ok(session.LastMessage);
+            case CrossRegionAcquisitionPhase.ReturningToPrimary:
+                session.CharacterSwitchAttempts = 0;
+                lastSwitchRequestUtc = null;
+                closeStartedUtc = null;
+                SetPhase(CrossRegionAcquisitionPhase.ReturningToPrimary, $"Returning to {session.Primary?.Label}.");
                 return CrossRegionActionResult.Ok(session.LastMessage);
             default:
                 return CrossRegionActionResult.Fail("Nothing to resume.");
@@ -431,6 +450,9 @@ public sealed class CrossRegionAcquisitionCoordinator
                     break;
                 case CrossRegionAcquisitionPhase.HaulingToPrimary:
                     TickCourier(fund: false, now);
+                    break;
+                case CrossRegionAcquisitionPhase.ReturningToPrimary:
+                    TickReturning(now);
                     break;
             }
         }
@@ -555,22 +577,68 @@ public sealed class CrossRegionAcquisitionCoordinator
             SetPhase(CrossRegionAcquisitionPhase.PreparingShopRoute, $"Preparing the {session.TargetRegion} shop route on {shopper.Label}.");
             return;
         }
+        DriveCharacterSwitch(shopper, CrossRegionAcquisitionPhase.SwitchingToShopper, "ShopperSwitchFailed", now);
+    }
+
+    /// <summary>Requests a character switch with bounded retries; the caller detects arrival.</summary>
+    private void DriveCharacterSwitch(CrossRegionCharacter target, CrossRegionAcquisitionPhase phase, string failureCode, DateTimeOffset now)
+    {
         if (lastSwitchRequestUtc is { } last && now - last < SwitchRetryInterval)
             return;
-        if (me is null && lastSwitchRequestUtc is not null)
+        if (game.LoggedInCharacter is null && lastSwitchRequestUtc is not null)
             return;
         if (session.CharacterSwitchAttempts >= MaxCharacterSwitchAttempts)
         {
-            Fail(CrossRegionAcquisitionPhase.SwitchingToShopper, "ShopperSwitchFailed",
-                $"Could not switch to {shopper.Label} after {MaxCharacterSwitchAttempts} attempts.", canResumeCourier: false);
+            Fail(phase, failureCode,
+                $"Could not switch to {target.Label} after {MaxCharacterSwitchAttempts} attempts.", canResumeCourier: false);
             return;
         }
         session.CharacterSwitchAttempts++;
         lastSwitchRequestUtc = now;
-        session.LastMessage = game.TrySwitchCharacter(shopper, out var message)
-            ? $"Switching to {shopper.Label}…"
-            : $"Character switch to {shopper.Label} was not accepted: {message}";
+        session.LastMessage = game.TrySwitchCharacter(target, out var message)
+            ? $"Switching to {target.Label}…"
+            : $"Character switch to {target.Label} was not accepted: {message}";
         Save();
+    }
+
+    /// <summary>Nothing to haul: leave the shopper (market board closed first) and finish on the primary.</summary>
+    private void ReturnToPrimaryOrComplete(string reason)
+    {
+        if (session.Primary is not { } primary || primary.Matches(game.LoggedInCharacter))
+        {
+            Complete($"{reason}.");
+            return;
+        }
+        session.CharacterSwitchAttempts = 0;
+        lastSwitchRequestUtc = null;
+        closeStartedUtc = null;
+        SetPhase(CrossRegionAcquisitionPhase.ReturningToPrimary, $"{reason}; returning to {primary.Label}.");
+    }
+
+    private void TickReturning(DateTimeOffset now)
+    {
+        var primary = session.Primary!;
+        if (primary.Matches(game.LoggedInCharacter))
+        {
+            lastSwitchRequestUtc = null;
+            session.CharacterSwitchAttempts = 0;
+            Complete(session.PurchasedUnits == 0
+                ? "Shopping finished with no purchases; returned to primary."
+                : "None of the purchased items remained in bags; returned to primary.");
+            return;
+        }
+        if (session.Shopper?.Matches(game.LoggedInCharacter) == true)
+        {
+            closeStartedUtc ??= now;
+            if (shopping.State is CrossRegionShoppingState.Running or CrossRegionShoppingState.Paused or CrossRegionShoppingState.Preparing)
+                shopping.Stop();
+            if (!shopping.TryCloseMarketBoard() && now - closeStartedUtc.Value < CloseBoardTimeout)
+            {
+                session.LastMessage = "Closing the market board before returning to the primary.";
+                return;
+            }
+        }
+        DriveCharacterSwitch(primary, CrossRegionAcquisitionPhase.ReturningToPrimary, "PrimarySwitchFailed", now);
     }
 
     private void TickPreparing()
@@ -656,7 +724,7 @@ public sealed class CrossRegionAcquisitionCoordinator
         prepareIssued = false;
         if (session.PurchasedUnits == 0)
         {
-            Complete("Shopping finished with no purchases; return haul skipped.");
+            ReturnToPrimaryOrComplete("Shopping finished with no purchases");
             return;
         }
         BeginHaul($"Shopping finished: {session.PurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil. Preparing the return haul.");
@@ -698,7 +766,7 @@ public sealed class CrossRegionAcquisitionCoordinator
         var manifest = ReconcileManifest(session.PurchasedManifest, bags);
         if (manifest.Count == 0)
         {
-            Complete($"None of the purchased items remain in {shopper.CharacterName}'s bags; return haul skipped.");
+            ReturnToPrimaryOrComplete($"None of the purchased items remain in {shopper.CharacterName}'s bags");
             return;
         }
         // I1: persist the haul request before it is submitted.
@@ -862,13 +930,15 @@ public sealed class CrossRegionAcquisitionCoordinator
         }
         var index = session.PurchasedManifest.FindIndex(line => line.ItemId == purchase.ItemId && line.IsHq == purchase.IsHq);
         if (index < 0)
-            session.PurchasedManifest.Add(new CrossRegionManifestLine(purchase.ItemId, purchase.ItemName ?? purchase.ItemId.ToString(), purchase.IsHq, purchase.Quantity));
+            session.PurchasedManifest.Add(new CrossRegionManifestLine(purchase.ItemId, purchase.ItemName ?? purchase.ItemId.ToString(), purchase.IsHq,
+                purchase.Quantity, purchase.WalletGil));
         else
         {
             var line = session.PurchasedManifest[index];
             session.PurchasedManifest[index] = line with
             {
                 Quantity = checked(line.Quantity + purchase.Quantity),
+                SpentGil = checked(line.SpentGil + purchase.WalletGil),
                 ItemName = string.IsNullOrWhiteSpace(line.ItemName) ? purchase.ItemName ?? line.ItemName : line.ItemName,
             };
         }
@@ -894,7 +964,8 @@ public sealed class CrossRegionAcquisitionCoordinator
                 var bought = group.Aggregate(0UL, (total, line) => total + line.Quantity);
                 var live = carried.GetValueOrDefault(group.Key);
                 return new CrossRegionManifestLine(group.Key.ItemId, group.First().ItemName, group.Key.IsHq,
-                    (uint)Math.Min(Math.Min(bought, live), uint.MaxValue));
+                    (uint)Math.Min(Math.Min(bought, live), uint.MaxValue),
+                    group.Aggregate(0UL, (total, line) => total + line.SpentGil));
             })
             .Where(line => line.Quantity > 0)
             .OrderBy(line => line.ItemId)
@@ -994,7 +1065,26 @@ public sealed class CrossRegionAcquisitionCoordinator
         CrossRegionAcquisitionPhase.Paused => "paused shopping",
         CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul => "preparing the return haul",
         CrossRegionAcquisitionPhase.HaulingToPrimary => "the return haul",
+        CrossRegionAcquisitionPhase.ReturningToPrimary => "returning to the primary",
         _ => phase?.ToString() ?? "the session",
+    };
+
+    /// <summary>Title-case phase label for status headers.</summary>
+    public static string DescribeTitle(CrossRegionAcquisitionPhase phase) => phase switch
+    {
+        CrossRegionAcquisitionPhase.Idle => "Idle",
+        CrossRegionAcquisitionPhase.FundingShopper => "Funding shopper",
+        CrossRegionAcquisitionPhase.SwitchingToShopper => "Switching to shopper",
+        CrossRegionAcquisitionPhase.PreparingShopRoute => "Preparing shop route",
+        CrossRegionAcquisitionPhase.Shopping => "Shopping",
+        CrossRegionAcquisitionPhase.Paused => "Shopping paused",
+        CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul => "Preparing return haul",
+        CrossRegionAcquisitionPhase.HaulingToPrimary => "Hauling to primary",
+        CrossRegionAcquisitionPhase.ReturningToPrimary => "Returning to primary",
+        CrossRegionAcquisitionPhase.Completed => "Completed",
+        CrossRegionAcquisitionPhase.Stopped => "Stopped",
+        CrossRegionAcquisitionPhase.Failed => "Failed",
+        _ => phase.ToString(),
     };
 
     public static bool RegionMatches(string? a, string? b)

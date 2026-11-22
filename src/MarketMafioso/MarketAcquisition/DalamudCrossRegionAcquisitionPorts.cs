@@ -104,6 +104,7 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
     private readonly Func<TimeSpan> recentWorldTtl;
     private readonly Func<MarketAcquisitionRouteDiagnosticsLevel> diagnosticsLevel;
     private readonly Func<bool> opportunisticChecks;
+    private readonly Func<ulong?> carriedGil;
     private CancellationTokenSource? prepareCancellation;
     private Task<(MarketAcquisitionClaimView Request, MarketAcquisitionPlan Plan, string Message)>? prepareTask;
     private CrossRegionAcquisitionSession? preparingFor;
@@ -111,6 +112,8 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
     private bool ownsRun;
     private CrossRegionShoppingState? settledState;
     private string statusMessage = string.Empty;
+    private IReadOnlyDictionary<string, uint> preparedPrimaryBaselines = new Dictionary<string, uint>(StringComparer.Ordinal);
+    private IReadOnlyDictionary<string, uint>? preparedShopperStartingStock;
 
     public MarketAcquisitionCrossRegionShoppingRoute(
         MarketAcquisitionRouteEngine engine,
@@ -120,7 +123,8 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
         Func<string?> currentWorld,
         Func<TimeSpan> recentWorldTtl,
         Func<MarketAcquisitionRouteDiagnosticsLevel> diagnosticsLevel,
-        Func<bool> opportunisticChecks)
+        Func<bool> opportunisticChecks,
+        Func<ulong?> carriedGil)
     {
         this.engine = engine;
         this.workspace = workspace;
@@ -130,6 +134,7 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
         this.recentWorldTtl = recentWorldTtl;
         this.diagnosticsLevel = diagnosticsLevel;
         this.opportunisticChecks = opportunisticChecks;
+        this.carriedGil = carriedGil;
         engine.ConfirmedPurchaseRecorded += OnEnginePurchase;
     }
 
@@ -203,16 +208,45 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
             Settle(CrossRegionShoppingState.Failed, "Current world is unavailable.");
             return;
         }
+        // A shopper left outside the target region (e.g. on the bridge world) plans from home instead.
+        if (!CrossRegionAcquisitionCoordinator.RegionMatches(MarketAcquisitionWorkbenchCompositionInsights.RegionForWorld(world), session.TargetRegion) &&
+            !string.IsNullOrWhiteSpace(session.Shopper?.HomeWorldName))
+            world = session.Shopper.HomeWorldName;
+        if (!TryReadMaxSafeSpend(out var maxSafeSpend, out var gilProblem))
+        {
+            Settle(CrossRegionShoppingState.Failed, gilProblem);
+            return;
+        }
+        if (maxSafeSpend == 0)
+        {
+            Settle(CrossRegionShoppingState.Completed, NoSpendableGilMessage);
+            return;
+        }
+        var (resumedDocument, keptOrdinals) = ResumedDocument(document, session.PurchasedManifest);
+        if (resumedDocument.Lines.Count == 0)
+        {
+            Settle(CrossRegionShoppingState.Completed, "All shopping targets are already satisfied.");
+            return;
+        }
         IReadOnlyDictionary<string, uint> overrides;
         try
         {
-            overrides = BuildBaselineOverrides(session, workspace.ResolveLocalExecutionRequest(document));
+            // Line ids are ordinal-based; carry the session's per-line baselines over to the resumed ids.
+            var originalIds = MarketAcquisitionPlanPreparationService.GetPlanLines(workspace.ResolveLocalExecutionRequest(document))
+                .ToDictionary(line => line.Ordinal, line => line.LineId);
+            var resumedRequest = workspace.ResolveLocalExecutionRequest(resumedDocument);
+            var lineIds = MarketAcquisitionPlanPreparationService.GetPlanLines(resumedRequest)
+                .ToDictionary(line => originalIds[keptOrdinals[line.Ordinal]], line => line.LineId, StringComparer.Ordinal);
+            preparedPrimaryBaselines = RemapLineIds(session.PrimaryStockBaselines, lineIds);
+            preparedShopperStartingStock = session.ShopperStartingStock is null ? null : RemapLineIds(session.ShopperStartingStock, lineIds);
+            overrides = BuildBaselineOverrides(preparedPrimaryBaselines, preparedShopperStartingStock, resumedRequest);
         }
         catch (Exception exception)
         {
             Settle(CrossRegionShoppingState.Failed, exception.Message);
             return;
         }
+        document = resumedDocument;
         preparingFor = session;
         statusMessage = $"Preparing the {session.TargetRegion} shop route from {world}.";
         prepareCancellation = new CancellationTokenSource();
@@ -253,6 +287,19 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
             }
             plan = plan with { RunSpendCap = (uint)(plan.RunSpendCap - session.TotalSpentGil) };
         }
+        // Never spend into the teleport reserve the return haul needs on the shopper.
+        if (!TryReadMaxSafeSpend(out var maxSafeSpend, out var gilProblem))
+        {
+            Settle(CrossRegionShoppingState.Failed, gilProblem);
+            return;
+        }
+        if (maxSafeSpend == 0)
+        {
+            Settle(CrossRegionShoppingState.Completed, NoSpendableGilMessage);
+            return;
+        }
+        if (plan.RunSpendCap == 0 || plan.RunSpendCap > maxSafeSpend)
+            plan = plan with { RunSpendCap = (uint)Math.Min(maxSafeSpend, uint.MaxValue) };
         if (engine.IsRouteActive)
         {
             Settle(CrossRegionShoppingState.Failed, "Another Market Acquisition route is already active.");
@@ -260,8 +307,10 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
         }
         var level = diagnosticsLevel();
         var baseline = new MarketAcquisitionCrossRegionBaseline(
-            new Dictionary<string, uint>(session.PrimaryStockBaselines, StringComparer.Ordinal),
-            new Dictionary<string, uint>(session.ShopperStartingStock ?? [], StringComparer.Ordinal));
+            new Dictionary<string, uint>(preparedPrimaryBaselines, StringComparer.Ordinal),
+            preparedShopperStartingStock is null
+                ? new Dictionary<string, uint>(StringComparer.Ordinal)
+                : new Dictionary<string, uint>(preparedShopperStartingStock, StringComparer.Ordinal));
         var result = engine.Start(
             plan,
             request,
@@ -343,6 +392,67 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
             ConfirmedPurchase?.Invoke(purchase);
     }
 
+    private static readonly string NoSpendableGilMessage =
+        $"Shopper has no carried gil above the {CrossRegionAcquisitionCoordinator.TravelFeeReserveGil:N0} gil travel reserve.";
+
+    private bool TryReadMaxSafeSpend(out ulong maxSafeSpend, out string problem)
+    {
+        maxSafeSpend = 0;
+        problem = string.Empty;
+        if (carriedGil() is not { } gil)
+        {
+            problem = "Shopper carried gil is unreadable.";
+            return false;
+        }
+        const ulong reserve = CrossRegionAcquisitionCoordinator.TravelFeeReserveGil;
+        maxSafeSpend = gil > reserve ? gil - reserve : 0;
+        return true;
+    }
+
+    /// <summary>
+    /// The remaining request after this session's confirmed purchases. AllBelowThreshold lines carry no
+    /// on-hand target, so a re-prepared route would otherwise buy their full quantity/budget again.
+    /// TargetQuantity lines already resume through the primary baseline plus the shopper's bag delta.
+    /// </summary>
+    internal static (MarketAcquisitionRequestDocument Document, IReadOnlyList<int> KeptOrdinals) ResumedDocument(
+        MarketAcquisitionRequestDocument document,
+        IReadOnlyList<CrossRegionManifestLine> purchased)
+    {
+        var lines = new List<MarketAcquisitionRequestLineDocument>(document.Lines.Count);
+        var kept = new List<int>(document.Lines.Count);
+        for (var ordinal = 0; ordinal < document.Lines.Count; ordinal++)
+        {
+            var line = document.Lines[ordinal];
+            if (purchased.Count == 0 || string.Equals(line.QuantityMode, "TargetQuantity", StringComparison.Ordinal))
+            {
+                lines.Add(line);
+                kept.Add(ordinal);
+                continue;
+            }
+            var matches = purchased
+                .Where(bought => bought.ItemId == line.ItemId && MarketAcquisitionPolicy.HqMatches(line.HqPolicy, bought.IsHq))
+                .ToArray();
+            var boughtQuantity = matches.Aggregate(0UL, (total, bought) => total + bought.Quantity);
+            var spentGil = matches.Aggregate(0UL, (total, bought) => total + bought.SpentGil);
+            var resumed = line;
+            if (line.MaxQuantity > 0)
+            {
+                if (boughtQuantity >= line.MaxQuantity)
+                    continue;
+                resumed = resumed with { MaxQuantity = (uint)(line.MaxQuantity - boughtQuantity) };
+            }
+            if (line.GilCap > 0)
+            {
+                if (spentGil >= line.GilCap)
+                    continue;
+                resumed = resumed with { GilCap = (uint)(line.GilCap - spentGil) };
+            }
+            lines.Add(resumed);
+            kept.Add(ordinal);
+        }
+        return (document with { Lines = lines }, kept);
+    }
+
     private void Settle(CrossRegionShoppingState state, string message)
     {
         settledState = state;
@@ -360,7 +470,10 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
     }
 
     /// <summary>Primary baseline plus the shopper's own bag growth since shopping started.</summary>
-    private IReadOnlyDictionary<string, uint> BuildBaselineOverrides(CrossRegionAcquisitionSession session, MarketAcquisitionClaimView request)
+    private IReadOnlyDictionary<string, uint> BuildBaselineOverrides(
+        IReadOnlyDictionary<string, uint> primaryBaselines,
+        IReadOnlyDictionary<string, uint>? shopperStartingStock,
+        MarketAcquisitionClaimView request)
     {
         var overrides = new Dictionary<string, uint>(StringComparer.Ordinal);
         foreach (var line in TargetLines(request))
@@ -368,11 +481,22 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
             var observed = carriedObserver.Observe(line.ItemId, line.HqPolicy);
             if (!observed.IsAvailable)
                 throw new InvalidOperationException($"Shopper bags are not readable yet ({observed.Message}).");
-            var start = session.ShopperStartingStock?.GetValueOrDefault(line.LineId) ?? observed.Quantity;
+            var start = shopperStartingStock?.GetValueOrDefault(line.LineId) ?? observed.Quantity;
             var delta = observed.Quantity > start ? observed.Quantity - start : 0u;
-            overrides[line.LineId] = checked(session.PrimaryStockBaselines.GetValueOrDefault(line.LineId) + delta);
+            overrides[line.LineId] = checked(primaryBaselines.GetValueOrDefault(line.LineId) + delta);
         }
         return overrides;
+    }
+
+    private static Dictionary<string, uint> RemapLineIds(IReadOnlyDictionary<string, uint> values, IReadOnlyDictionary<string, string> lineIds)
+    {
+        var remapped = new Dictionary<string, uint>(StringComparer.Ordinal);
+        foreach (var (originalId, resumedId) in lineIds)
+        {
+            if (values.TryGetValue(originalId, out var value))
+                remapped[resumedId] = value;
+        }
+        return remapped;
     }
 
     internal static IEnumerable<MarketAcquisitionBatchLineView> TargetLines(MarketAcquisitionClaimView request) =>

@@ -21,6 +21,8 @@ public enum CrossRegionAcquisitionPhase
     Completed,
     Failed,
     Stopped,
+    /// <summary>Nothing to haul; switching back from the shopper to the primary before completing.</summary>
+    ReturningToPrimary,
 }
 
 public sealed record CrossRegionCharacter(
@@ -37,7 +39,8 @@ public sealed record CrossRegionCharacter(
     public string Label => $"{CharacterName} · {HomeWorldName}";
 }
 
-public sealed record CrossRegionManifestLine(uint ItemId, string ItemName, bool IsHq, uint Quantity);
+/// <summary>SpentGil is the confirmed wallet gil (tax included) for this (item, quality); 0 on older sessions.</summary>
+public sealed record CrossRegionManifestLine(uint ItemId, string ItemName, bool IsHq, uint Quantity, ulong SpentGil = 0);
 
 /// <summary>A server-confirmed live purchase; WalletGil includes market tax.</summary>
 public sealed record MarketAcquisitionConfirmedPurchase(

@@ -78,15 +78,22 @@ public partial class MainWindow
         var session = CrossRegion.Session;
         if (CrossRegion.HasSession)
         {
+            ImGui.AlignTextToFramePadding();
             ImGui.TextColored(PhaseColor(session.Phase),
-                $"{CrossRegionAcquisitionCoordinator.Describe(session.Phase)} · {session.Shopper?.Label} · {session.TargetRegion}");
+                $"{CrossRegionAcquisitionCoordinator.DescribeTitle(session.Phase)} · {session.Shopper?.Label} · {session.TargetRegion}");
+            ImGui.SameLine();
+            void OpenRoute() => QueueAgentTabSelection("Market Acquisition", "Route");
+            if (ImGuiUi.Button("Open Route##CrossRegionOpenRoute", true))
+                OpenRoute();
+            AgentReviewRegistry.RegisterLastButton("acquisition.cross-region.open-route", "Open the Route tab for the cross-regional run", true, OpenRoute);
             return;
         }
 
         var region = DocumentRegion!;
         var status = CrossRegion.GetCourierStatus(out _);
         var shopper = ResolveCrossRegionShopper(status, region, out var candidates);
-        ImGui.BeginDisabled(IsMarketAcquisitionRouteActive() || acquisitionWorkspace.IsBusy);
+        var locked = IsMarketAcquisitionRouteActive() || acquisitionWorkspace.IsBusy;
+        ImGui.BeginDisabled(locked);
         ImGui.SetNextItemWidth(240);
         var preview = shopper?.Label ?? (candidates.Count == 0 ? $"No roster character in {region}" : "Select shopper");
         if (ImGui.BeginCombo("Shopper##CrossRegionShopper", preview))
@@ -114,17 +121,34 @@ public partial class MainWindow
         }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Exact carried gil to transfer from primary to shopper via courier (retainers are never touched; 0 skips gil transfer).");
+        if (acquisitionWorkspace.PreparedPlan is { Status: "Ready", PlannedGil: > 0 } plan && !acquisitionWorkspace.IsPreparedPlanStale())
+        {
+            ImGui.SameLine();
+            var matched = (int)Math.Clamp((long)plan.PlannedGil, 0, CrossRegionAcquisitionCoordinator.MaxCarriedGil);
+            void MatchPlan()
+            {
+                config.CrossRegionFundGil = matched;
+                config.Save();
+            }
+            var canMatch = !locked && config.CrossRegionFundGil != matched;
+            if (ImGuiUi.Button($"Match plan ({plan.PlannedGil:N0})##CrossRegionMatchPlan", canMatch))
+                MatchPlan();
+            if (!canMatch && !locked && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Already matches the plan");
+            AgentReviewRegistry.RegisterLastButton("acquisition.cross-region.match-plan", "Set the transfer gil to the prepared plan's total", canMatch, MatchPlan);
+        }
         ImGui.EndDisabled();
 
-        var readiness = CrossRegion.EvaluateReadiness(shopper, region, config.CrossRegionFundGil);
+        var readiness = CrossRegion.EvaluateReadiness(shopper, region, config.CrossRegionFundGil, acquisitionRequestBuilder.CurrentDocument);
         if (readiness.Ready)
         {
             var carrier = readiness.Status!.Carrier!;
             var bridge = readiness.Status.Bridge?.Label ?? "Ravana — Ul'dah";
-            var summary = config.CrossRegionFundGil > 0
-                ? $"Ready · {config.CrossRegionFundGil:N0} gil → {shopper!.Label}"
-                : $"Ready · no gil transfer · {shopper!.Label}";
-            ImGui.TextColored(ColSuccess, $"{summary} · Carrier: {carrier.CharacterName} ({carrier.FreeBagSlots} free slots) · {bridge}");
+            var primary = readiness.Status.LoggedIn is { } loggedIn ? $"{loggedIn.CharacterName} carries {loggedIn.CarriedGil:N0} gil · " : string.Empty;
+            var transfer = config.CrossRegionFundGil > 0
+                ? $"{config.CrossRegionFundGil:N0} gil → {shopper!.Label}"
+                : $"No gil transfer → {shopper!.Label}";
+            ImGui.TextColored(ColSuccess, $"Ready · {primary}{transfer} · Carrier {carrier.CharacterName} ({carrier.FreeBagSlots} free slots) · {bridge}");
         }
         else
             ImGui.TextColored(readiness.Status is null ? ColError : ColWarning, readiness.Blocker ?? "Not ready.");
@@ -139,7 +163,8 @@ public partial class MainWindow
         CrossRegionAcquisitionPhase.FundingShopper => 0,
         CrossRegionAcquisitionPhase.SwitchingToShopper or CrossRegionAcquisitionPhase.PreparingShopRoute or
             CrossRegionAcquisitionPhase.Shopping or CrossRegionAcquisitionPhase.Paused => 1,
-        CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul or CrossRegionAcquisitionPhase.HaulingToPrimary => 2,
+        CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul or CrossRegionAcquisitionPhase.HaulingToPrimary or
+            CrossRegionAcquisitionPhase.ReturningToPrimary => 2,
         CrossRegionAcquisitionPhase.Completed => 3,
         _ => -1,
     };
@@ -182,23 +207,78 @@ public partial class MainWindow
             ImGui.TextColored(PhaseColor(phase), session.LastMessage);
             if (!string.IsNullOrWhiteSpace(session.CourierPhaseSummary))
                 ImGui.TextColored(ColMuted, $"Courier: {session.CourierPhaseSummary}");
-            if (session.PurchasedUnits > 0)
-                ImGui.TextColored(ColMuted, $"Bought {session.PurchasedUnits:N0} item(s) · {session.TotalSpentGil:N0} gil");
         }
 
         DrawCrossRegionActions();
         if (!string.IsNullOrWhiteSpace(crossRegionActionMessage))
             ImGui.TextColored(ColWarning, crossRegionActionMessage);
+        if (CrossRegion.HasSession && session.PurchasedManifest.Count > 0)
+            DrawCrossRegionPurchasedTable(session);
+    }
+
+    private const int CrossRegionTableMaxVisibleRows = 8;
+
+    private static void DrawCrossRegionPurchasedTable(CrossRegionAcquisitionSession session)
+    {
+        var showHaul = session.HaulManifest.Count > 0;
+        var hauled = session.HaulManifest.ToDictionary(line => (line.ItemId, line.IsHq), line => line.Quantity);
+        var rows = session.PurchasedManifest.OrderBy(line => line.ItemName, StringComparer.OrdinalIgnoreCase).ThenBy(line => line.IsHq).ToArray();
+        var flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp;
+        var outer = Vector2.Zero;
+        if (rows.Length > CrossRegionTableMaxVisibleRows)
+        {
+            flags |= ImGuiTableFlags.ScrollY;
+            outer = new Vector2(0, ImGui.GetFrameHeightWithSpacing() * (CrossRegionTableMaxVisibleRows + 1));
+        }
+        ImGui.Spacing();
+        if (!ImGui.BeginTable("CrossRegionPurchased", showHaul ? 5 : 4, flags, outer))
+            return;
+        ImGui.TableSetupScrollFreeze(0, 1);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 3f);
+        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthStretch, 0.5f);
+        ImGui.TableSetupColumn("Bought", ImGuiTableColumnFlags.WidthStretch, 1f);
+        ImGui.TableSetupColumn("Spent", ImGuiTableColumnFlags.WidthStretch, 1.4f);
+        if (showHaul)
+            ImGui.TableSetupColumn("Haul", ImGuiTableColumnFlags.WidthStretch, 1f);
+        ImGui.TableHeadersRow();
+        foreach (var line in rows)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.ItemName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.IsHq ? "HQ" : string.Empty);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.Quantity.ToString("N0"));
+            ImGui.TableNextColumn();
+            // Sessions saved before per-line spend tracking have no per-line figure.
+            ImGui.TextUnformatted(line.SpentGil > 0 ? $"{line.SpentGil:N0}" : "—");
+            if (showHaul)
+            {
+                ImGui.TableNextColumn();
+                var haul = hauled.GetValueOrDefault((line.ItemId, line.IsHq));
+                if (haul < line.Quantity)
+                    ImGui.TextColored(ColWarning, haul.ToString("N0"));
+                else
+                    ImGui.TextUnformatted(haul.ToString("N0"));
+            }
+        }
+        ImGui.EndTable();
     }
 
     private void DrawCrossRegionActions()
     {
         if (!CrossRegion.HasSession)
         {
-            var canStart = CanStartCrossRegionRun();
+            var blocker = GetCrossRegionStartBlocker();
+            var canStart = blocker is null;
             if (ImGuiUi.PrimaryButton("Start Cross-Regional Run##CrossRegionStart", canStart))
                 StartCrossRegionRun();
+            if (blocker is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(blocker);
             AgentReviewRegistry.RegisterLastButton("acquisition.cross-region.start", "Start the cross-regional shopping run", canStart, StartCrossRegionRun);
+            if (blocker is not null)
+                ImGui.TextColored(ColWarning, blocker);
             return;
         }
 
@@ -231,25 +311,37 @@ public partial class MainWindow
         AgentReviewRegistry.RegisterLastButton(id, description, enabled, Invoke);
     }
 
-    private bool CanStartCrossRegionRun() =>
-        !CrossRegion.HasSession &&
-        IsCrossRegionDocument &&
-        !routeEngine.IsRouteActive &&
-        !acquisitionWorkspace.IsBusy &&
-        acquisitionWorkspace.PreparedPlan is { Status: "Ready", WorldBatches.Count: > 0 } &&
-        !acquisitionWorkspace.IsPreparedPlanStale() &&
-        DocumentRegion is { } region &&
-        CrossRegion.EvaluateReadiness(ResolveCrossRegionShopper(CrossRegion.GetCourierStatus(out _), region, out _), region,
-            config.CrossRegionFundGil).Ready;
+    /// <summary>The single reason the cross-regional run cannot start, or null when it can.</summary>
+    private string? GetCrossRegionStartBlocker()
+    {
+        if (CrossRegion.HasSession)
+            return "A cross-regional session is still unresolved; finish or clear it first.";
+        if (!IsCrossRegionDocument || DocumentRegion is not { } region)
+            return "Set the request region to a region other than your home region.";
+        if (routeEngine.IsRouteActive)
+            return "Another Market Acquisition route is active.";
+        if (acquisitionWorkspace.IsBusy)
+            return "Market Acquisition is busy.";
+        if (acquisitionWorkspace.PreparedPlan is not { Status: "Ready", WorldBatches.Count: > 0 })
+            return "Prepare a plan in Workbench before starting.";
+        if (acquisitionWorkspace.IsPreparedPlanStale())
+            return "Request changed after this plan was prepared. Prepare a fresh plan first.";
+        var shopper = ResolveCrossRegionShopper(CrossRegion.GetCourierStatus(out _), region, out _);
+        var readiness = CrossRegion.EvaluateReadiness(shopper, region, config.CrossRegionFundGil, acquisitionRequestBuilder.CurrentDocument);
+        return readiness.Ready ? null : readiness.Blocker ?? "Cross-regional shopping is not ready.";
+    }
+
+    private bool CanStartCrossRegionRun() => GetCrossRegionStartBlocker() is null;
 
     private void StartCrossRegionRun()
     {
         crossRegionActionMessage = null;
-        if (!CanStartCrossRegionRun() || DocumentRegion is not { } region)
+        if (GetCrossRegionStartBlocker() is { } blocker)
         {
-            crossRegionActionMessage = "Prepare a fresh plan and resolve the readiness blockers first.";
+            crossRegionActionMessage = blocker;
             return;
         }
+        var region = DocumentRegion!;
         var shopper = ResolveCrossRegionShopper(CrossRegion.GetCourierStatus(out _, force: true), region, out _);
         if (shopper is null)
         {

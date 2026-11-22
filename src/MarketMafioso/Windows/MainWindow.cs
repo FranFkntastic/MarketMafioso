@@ -1736,7 +1736,10 @@ public partial class MainWindow : Window, IDisposable
             acquisitionWorkspace.PreparedPlan,
             acquisitionWorkspace.IsPreparedPlanStale(),
             CanStartEvidenceRefresh(),
-            ShowCrossRegion ? DrawCrossRegionPipeline : null);
+            ShowCrossRegion ? DrawCrossRegionPipeline : null,
+            suppressIdleRouteSummary: ShowCrossRegion &&
+                (!CrossRegion.HasSession || CrossRegion.Phase is not (CrossRegionAcquisitionPhase.PreparingShopRoute or
+                    CrossRegionAcquisitionPhase.Shopping or CrossRegionAcquisitionPhase.Paused)));
     }
 
     private bool CanStartEvidenceRefresh()
