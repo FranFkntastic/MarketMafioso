@@ -24,7 +24,7 @@ namespace MarketMafioso.MarketAcquisition;
 internal sealed class MarketAcquisitionServices : IDisposable
 {
     private readonly Configuration config;
-    internal TickTimings LastTickTimings { get; } = new(9);
+    internal TickTimings LastTickTimings { get; } = new(10);
     private readonly IPlayerState playerState;
     private readonly InventoryScanner scanner;
     private readonly IPluginLog log;
@@ -52,6 +52,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
     internal MarketBoardApproachService ApproachService { get; }
     internal string DiagnosticsDirectory { get; }
     internal RetainerAwareMarketAcquisitionInventoryObserver InventoryObserver { get; }
+    internal MarketAcquisitionWorkbenchStockService WorkbenchStock { get; }
     internal CrossRegionAcquisitionCoordinator CrossRegion { get; }
     private readonly MarketAcquisitionCrossRegionShoppingRoute crossRegionShopping;
 
@@ -87,6 +88,13 @@ internal sealed class MarketAcquisitionServices : IDisposable
         WorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         InventoryObserver = new RetainerAwareMarketAcquisitionInventoryObserver(
             new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope, scanner.ResolveItemName);
+        WorkbenchStock = new MarketAcquisitionWorkbenchStockService(
+            quartermaster,
+            new QuartermasterWorkbenchClient(new DalamudQuartermasterWorkbenchIpcAdapter(Plugin.PluginInterface)),
+            InventoryObserver,
+            GetCurrentQuartermasterOwnerScope,
+            () => currentDocument(),
+            message => log.Warning(message));
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
             WorldVisitCatalog,
@@ -244,7 +252,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
             crossRegionGame,
             crossRegionShopping,
             new FileCrossRegionAcquisitionStore(Plugin.PluginInterface.GetPluginConfigDirectory()),
-            log: (message, exception) => log.Warning(exception, "[MarketMafioso] {Message}", message));
+            log: (message, exception) => log.Warning(exception, "[MarketMafioso] {Message}", message),
+            custody: quartermaster);
     }
 
     internal void ConnectCurrentDocument(Func<MarketAcquisitionRequestDocument> provider) => currentDocument = provider;
@@ -262,6 +271,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
         }
         LastTickTimings.Mark("unlockCheck");
 
+        WorkbenchStock.Tick();
+        LastTickTimings.Mark("workbenchStock");
         ControlledBrowseProbe.Tick();
         LastTickTimings.Mark("controlledBrowseProbe");
 
@@ -672,6 +683,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
 
     public void Dispose()
     {
+        WorkbenchStock.Dispose();
         crossRegionShopping.Dispose();
         Workspace.Dispose();
         RouteEngine.Dispose();

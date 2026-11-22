@@ -112,9 +112,18 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     public void SetStatus(string status) => Status = status;
 
-    public void MarkPlanPrepared(string planHash)
+    public void MarkPlanPrepared(
+        string planHash,
+        Func<MarketAcquisitionRequestLineDocument, IReadOnlyList<MarketAcquisitionCountedStockSource>>? countedStock = null)
     {
-        Document = Document with { LastPlanHash = planHash, UpdatedAtUtc = DateTimeOffset.UtcNow };
+        Document = Document with
+        {
+            LastPlanHash = planHash,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            Lines = Document.Lines
+                .Select(line => line with { CountedStock = countedStock?.Invoke(line) ?? [] })
+                .ToList(),
+        };
         SaveDocument();
     }
 
@@ -346,19 +355,81 @@ public sealed class MarketAcquisitionRequestBuilderController
         return true;
     }
 
-    public bool SetIncludeRetainerStock(int index, bool include)
+    // Where stock is counted from is local stock policy, like the run budget: saved, never synchronized.
+    public void SetCountRetainerStock(bool include)
     {
-        if (!SelectLine(index) || IsExactAcquisitionLine(index) || Document.Lines[index].QuantityMode != "TargetQuantity")
-            return false;
-        var lines = Document.Lines.ToList();
-        lines[index] = lines[index] with
-        {
-            TargetBasis = include ? MarketAcquisitionTargetBases.OnHandIncludingRetainers : MarketAcquisitionTargetBases.OnHandTotal,
-        };
-        Document = Document with { Lines = lines };
-        Status = "Stock-up inventory scope updated.";
+        if (Document.CountRetainerStock == include)
+            return;
+        Document = Document with { CountRetainerStock = include };
+        Status = "Stock sources updated.";
         SaveDocument();
+    }
+
+    public void SetAdditionalStockSource(MarketAcquisitionStockSourceKey source, bool include)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var sources = Document.AdditionalStockSources.Where(existing => !existing.SameSource(source)).ToList();
+        if (include)
+            sources.Add(source);
+        Document = Document with { AdditionalStockSources = sources };
+        Status = "Stock sources updated.";
+        SaveDocument();
+    }
+
+    public void SetStowAfterDelivery(bool stow)
+    {
+        if (Document.StowAfterDelivery == stow)
+            return;
+        Document = Document with { StowAfterDelivery = stow };
+        Status = "Delivery stowing updated.";
+        SaveDocument();
+    }
+
+    /// <summary>Turns a line into (or out of) a Quartermaster reserve restock at the given reserve level.</summary>
+    public bool SetRestockReserve(int index, bool restock, uint reserveLevel)
+    {
+        if (!SelectLine(index) || IsExactAcquisitionLine(index))
+            return false;
+        var line = Document.Lines[index];
+        var updated = restock
+            ? line with
+            {
+                QuantityMode = "TargetQuantity",
+                TargetQuantity = Math.Max(1u, reserveLevel),
+                TargetBasis = MarketAcquisitionTargetBases.Normalize(line.TargetBasis),
+                MaxQuantity = 0,
+                RestockReserve = true,
+            }
+            : line with { RestockReserve = false };
+        CommitLocalEdit(RequestDocumentMutation.ReplaceLine(Document, index, updated), "Buying rule updated.");
         return true;
+    }
+
+    /// <summary>
+    /// Follows reserve levels changed in Quartermaster. A line whose reserve was removed there keeps its
+    /// target as an ordinary stock-up line.
+    /// </summary>
+    public void SyncRestockReserveTargets(Func<MarketAcquisitionRequestLineDocument, uint?> reserveLevel)
+    {
+        ArgumentNullException.ThrowIfNull(reserveLevel);
+        var changed = false;
+        var lines = Document.Lines.Select(line =>
+        {
+            if (!line.RestockReserve)
+                return line;
+            var level = reserveLevel(line);
+            if (level is null or 0)
+            {
+                changed = true;
+                return line with { RestockReserve = false };
+            }
+            if (level.Value == line.TargetQuantity)
+                return line;
+            changed = true;
+            return line with { TargetQuantity = level.Value };
+        }).ToList();
+        if (changed)
+            CommitLocalEdit(Document with { Lines = lines });
     }
 
     public bool ApplyLineEdit(
@@ -454,7 +525,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         ArgumentNullException.ThrowIfNull(composition);
         PreserveCurrentWorkbenchForRecovery();
         PauseHostedSync();
-        Document = composition.CreateDocument(characterName, world);
+        Document = WithStockPolicyOf(composition.CreateDocument(characterName, world), Document);
         ResetSelection();
         Status = $"Loaded {composition.Name} as a new Workbench draft.";
         SaveDocument();
@@ -582,7 +653,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     {
         PreserveCurrentWorkbenchForRecovery();
         PauseHostedSync();
-        Document = MarketAcquisitionRequestDocument.CreateDefault(characterName, world);
+        Document = WithStockPolicyOf(MarketAcquisitionRequestDocument.CreateDefault(characterName, world), Document);
         ResetSelection();
         syncRequested = false;
         syncDueAtUtc = DateTimeOffset.MaxValue;
@@ -674,7 +745,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     public void ClearDraft(string characterName, string world)
     {
         PauseHostedSync();
-        Document = MarketAcquisitionRequestDocument.CreateDefault(characterName, world);
+        Document = WithStockPolicyOf(MarketAcquisitionRequestDocument.CreateDefault(characterName, world), Document);
         ResetSelection();
         Status = "Work-order draft cleared.";
         SaveDocument();
@@ -731,7 +802,22 @@ public sealed class MarketAcquisitionRequestBuilderController
                !Document.SyncStatus.Equals("SyncedClean", StringComparison.OrdinalIgnoreCase);
     }
 
-    private void SaveDocument() => persistDocument(Document);
+    private void SaveDocument()
+    {
+        Document = Document.WithNormalizedStockScope();
+        persistDocument(Document);
+    }
+
+    // A fresh draft keeps where stock is counted from and whether deliveries are stowed.
+    private static MarketAcquisitionRequestDocument WithStockPolicyOf(
+        MarketAcquisitionRequestDocument fresh,
+        MarketAcquisitionRequestDocument previous) =>
+        fresh with
+        {
+            CountRetainerStock = previous.CountRetainerStock,
+            AdditionalStockSources = previous.AdditionalStockSources.ToList(),
+            StowAfterDelivery = previous.StowAfterDelivery,
+        };
 
     private static bool HasSameRemoteState(
         MarketAcquisitionRequestDocument current,
@@ -759,11 +845,27 @@ public sealed class MarketAcquisitionRequestBuilderController
         var merged = refreshed with
         {
             RunSpendCap = current.RunSpendCap,
-            Lines = refreshed.Lines.Select(line => line.QuantityMode == "TargetQuantity" &&
-                line.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal && current.Lines.Any(local =>
-                    local.ItemId == line.ItemId && local.QuantityMode == line.QuantityMode &&
-                    local.TargetBasis == MarketAcquisitionTargetBases.OnHandIncludingRetainers)
-                    ? line with { TargetBasis = MarketAcquisitionTargetBases.OnHandIncludingRetainers } : line).ToList(),
+            CountRetainerStock = current.CountRetainerStock,
+            AdditionalStockSources = current.AdditionalStockSources.ToList(),
+            StowAfterDelivery = current.StowAfterDelivery,
+            Lines = refreshed.Lines.Select(line =>
+            {
+                var local = current.Lines.FirstOrDefault(candidate =>
+                    candidate.ItemId == line.ItemId && candidate.QuantityMode == line.QuantityMode);
+                if (local is null)
+                    return line;
+                // Local-only line state: the retainer basis, the reserve link and finalize-time counts.
+                return line with
+                {
+                    TargetBasis = line.QuantityMode == "TargetQuantity" &&
+                                  line.TargetBasis == MarketAcquisitionTargetBases.OnHandTotal &&
+                                  local.TargetBasis == MarketAcquisitionTargetBases.OnHandIncludingRetainers
+                        ? MarketAcquisitionTargetBases.OnHandIncludingRetainers
+                        : line.TargetBasis,
+                    RestockReserve = local.RestockReserve,
+                    CountedStock = local.CountedStock,
+                };
+            }).ToList(),
             LocalRequestId = current.LocalRequestId,
             LocalRevision = current.LocalRevision,
             ExactAcquisitionAuthority = current.ExactAcquisitionAuthority,

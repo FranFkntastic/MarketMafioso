@@ -23,6 +23,10 @@ public enum CrossRegionAcquisitionPhase
     Stopped,
     /// <summary>Nothing to haul; switching back from the shopper to the primary before completing.</summary>
     ReturningToPrimary,
+    /// <summary>Couriering counted stock from other characters' bags to the primary, one source at a time.</summary>
+    CollectingCountedStock,
+    /// <summary>Asking Quartermaster to stow what this run delivered into each item's home retainers.</summary>
+    StowingDelivered,
 }
 
 public sealed record CrossRegionCharacter(
@@ -101,6 +105,24 @@ public sealed class CrossRegionAcquisitionSession
     public DateTimeOffset StartedAtUtc { get; set; }
     public DateTimeOffset UpdatedAtUtc { get; set; }
     public DateTimeOffset? CompletedAtUtc { get; set; }
+    /// <summary>True once Start planned counted-stock collection; older sessions never collect.</summary>
+    public bool CountedStockPlanned { get; set; }
+    /// <summary>Counted stock on the shopper: rides home with the haul (bags) after an optional retrieval (retainers).</summary>
+    public CrossRegionCollection? ShopperCounted { get; set; }
+    /// <summary>One entry per other source character, collected in order after the haul.</summary>
+    public List<CrossRegionCollection> Collections { get; set; } = [];
+    /// <summary>Counted stock the run never attempts (for example held by the courier carrier).</summary>
+    public List<CrossRegionLineOutcome> NotCollected { get; set; } = [];
+    public CrossRegionStow? Stow { get; set; }
+    /// <summary>True once the return haul's courier run completed (its manifest reached the primary).</summary>
+    public bool HaulDelivered { get; set; }
+    /// <summary>The haul/return outcome, kept while collection and stow run so the final summary can lead with it.</summary>
+    public string? DeliverySummary { get; set; }
+    /// <summary>
+    /// The primary's carried bags per item variant at Start, before anything was delivered to it. Delivered stow
+    /// asks only for what the bags gained since. Null for older sessions or when the bags were unreadable at Start.
+    /// </summary>
+    public List<CrossRegionManifestLine>? PrimaryBagBaseline { get; set; }
 
     [JsonIgnore]
     public uint PurchasedUnits => PurchasedManifest.Aggregate(0u, (total, line) => total + line.Quantity);
@@ -114,6 +136,85 @@ public sealed class CrossRegionAcquisitionSession
     public static string FundRequestIdFor(Guid sessionId) => $"mmf-xr-{sessionId:N}-fund";
 
     public static string HaulRequestIdFor(Guid sessionId, int attempt) => $"mmf-xr-{sessionId:N}-haul-{attempt}";
+
+    public static string CollectRequestIdFor(Guid sessionId, int index, int attempt) => $"mmf-xr-{sessionId:N}-collect-{index}-{attempt}";
+
+    /// <summary>index -1 is the shopper's own retainers.</summary>
+    public static string RetrievalRequestIdFor(Guid sessionId, int index) =>
+        index < 0 ? $"mmf-xr-{sessionId:N}-retrieve-shopper" : $"mmf-xr-{sessionId:N}-retrieve-{index}";
+
+    public static string StowRequestIdFor(Guid sessionId) => $"mmf-xr-{sessionId:N}-stow";
+}
+
+/// <summary>One plan line's counted stock on one source, split by container.</summary>
+public sealed record CrossRegionCountedLine(uint ItemId, string ItemName, string HqPolicy, uint BagQuantity, uint RetainerQuantity)
+{
+    [JsonIgnore]
+    public uint Total => BagQuantity + RetainerQuantity;
+}
+
+public sealed record CrossRegionLineOutcome(uint ItemId, string ItemName, string Source, uint Quantity, string Code);
+
+public enum CrossRegionCollectionState
+{
+    Pending,
+    Retrieving,
+    Shipping,
+    Completed,
+    NotCollected,
+}
+
+/// <summary>
+/// Counted stock on one source character. Retrieval and courier request ids are persisted before they are
+/// submitted; a settled collection is never resubmitted.
+/// </summary>
+public sealed class CrossRegionCollection
+{
+    public CrossRegionCharacter Source { get; set; } = new(0, 0, string.Empty, string.Empty);
+    public List<CrossRegionCountedLine> Lines { get; set; } = [];
+    public CrossRegionCollectionState State { get; set; }
+    public string? RetrievalRequestId { get; set; }
+    public string? RetrievalOperationId { get; set; }
+    public DateTimeOffset? RetrievalSubmittedAtUtc { get; set; }
+    public List<CrossRegionRetrievalItem> RetrievalItems { get; set; } = [];
+    public bool RetrievalSettled { get; set; }
+    /// <summary>True when retrieval ran to a terminal Quartermaster status, so retainer quantities count toward the cap.</summary>
+    public bool RetrievalAttempted { get; set; }
+    /// <summary>Why retainer-held counted stock was not (fully) retrieved; null when retrieval succeeded or was not needed.</summary>
+    public string? RetrievalOutcomeCode { get; set; }
+    public string? RequestId { get; set; }
+    public Guid? RunId { get; set; }
+    public int Attempt { get; set; }
+    public List<CrossRegionManifestLine> Manifest { get; set; } = [];
+    /// <summary>Per-line shortfalls and skipped retainer stock; Code names why.</summary>
+    public List<CrossRegionLineOutcome> Outcomes { get; set; } = [];
+    public string? OutcomeCode { get; set; }
+    public string? Detail { get; set; }
+
+    [JsonIgnore]
+    public bool IsSettled => State is CrossRegionCollectionState.Completed or CrossRegionCollectionState.NotCollected;
+}
+
+public sealed record CrossRegionRetrievalItem(uint ItemId, string ItemName, int TargetQuantity, int ShortageQuantity);
+
+/// <summary>The single delivered-stow request of a run.</summary>
+public sealed class CrossRegionStow
+{
+    public string? RequestId { get; set; }
+    /// <summary>What the run delivered to the primary (completed haul and collection manifests).</summary>
+    public List<CrossRegionManifestLine> Claimed { get; set; } = [];
+    /// <summary>What was asked of Quartermaster: per item, the claim capped by what the bags gained since Start.</summary>
+    public List<CrossRegionManifestLine> Items { get; set; } = [];
+    /// <summary>When the request was first persisted for submission; the stow deadline runs from here.</summary>
+    public DateTimeOffset? SubmittedAtUtc { get; set; }
+    public bool Submitted { get; set; }
+    public string? OperationId { get; set; }
+    public List<QuartermasterDeliveredStowLine> Lines { get; set; } = [];
+    public bool Settled { get; set; }
+    public string? Status { get; set; }
+    /// <summary>Null when everything with a home was stowed.</summary>
+    public string? OutcomeCode { get; set; }
+    public string? Detail { get; set; }
 }
 
 public interface ICrossRegionAcquisitionStore

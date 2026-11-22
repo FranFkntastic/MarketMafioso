@@ -72,7 +72,7 @@ public sealed record CrossRegionActionResult(bool Success, string Message)
 /// Single-cycle cross-regional shopping: fund the shopper through Quartermaster's courier, shop the
 /// foreign region on the shopper, then haul exactly what was bought back to the primary.
 /// </summary>
-public sealed class CrossRegionAcquisitionCoordinator
+public sealed partial class CrossRegionAcquisitionCoordinator
 {
     public const long MaxCarriedGil = 999_999_999L;
     public const int TravelFeeReserveGil = 5_000;
@@ -97,6 +97,7 @@ public sealed class CrossRegionAcquisitionCoordinator
     private readonly ICrossRegionAcquisitionStore store;
     private readonly Func<DateTimeOffset> utcNow;
     private readonly Action<string, Exception?> log;
+    private readonly IQuartermasterRunCustodyClient? custody;
     private CrossRegionAcquisitionSession session;
     private DateTimeOffset nextPollUtc;
     private DateTimeOffset? lastSwitchRequestUtc;
@@ -125,8 +126,10 @@ public sealed class CrossRegionAcquisitionCoordinator
         ICrossRegionShoppingRoute shopping,
         ICrossRegionAcquisitionStore store,
         Func<DateTimeOffset>? utcNow = null,
-        Action<string, Exception?>? log = null)
+        Action<string, Exception?>? log = null,
+        IQuartermasterRunCustodyClient? custody = null)
     {
+        this.custody = custody;
         this.courier = courier ?? throw new ArgumentNullException(nameof(courier));
         this.game = game ?? throw new ArgumentNullException(nameof(game));
         this.shopping = shopping ?? throw new ArgumentNullException(nameof(shopping));
@@ -158,10 +161,11 @@ public sealed class CrossRegionAcquisitionCoordinator
     {
         CrossRegionAcquisitionPhase.Paused => true,
         CrossRegionAcquisitionPhase.Failed or CrossRegionAcquisitionPhase.Stopped => session.InterruptedPhase is not null &&
-            (session.InterruptedPhase is not (CrossRegionAcquisitionPhase.FundingShopper or CrossRegionAcquisitionPhase.HaulingToPrimary) ||
+            (InterruptedCourierLeg() is not { } leg ||
              session.CanResumeCourier || session.Phase == CrossRegionAcquisitionPhase.Stopped ||
-             (session.InterruptedPhase == CrossRegionAcquisitionPhase.FundingShopper ? session.FundRunId : session.HaulRunId) is null),
-        CrossRegionAcquisitionPhase.FundingShopper or CrossRegionAcquisitionPhase.HaulingToPrimary => true,
+             RunIdOf(leg) is null),
+        CrossRegionAcquisitionPhase.FundingShopper or CrossRegionAcquisitionPhase.HaulingToPrimary or
+            CrossRegionAcquisitionPhase.CollectingCountedStock or CrossRegionAcquisitionPhase.StowingDelivered => true,
         _ => false,
     };
 
@@ -394,13 +398,21 @@ public sealed class CrossRegionAcquisitionCoordinator
             },
             StartedAtUtc = now,
         };
+        PlanCountedStock(readiness.Status?.Carrier);
+        if (request.Document.StowAfterDelivery)
+        {
+            // Nothing has reached the primary yet (funding moves gil only): what its bags hold now is not this run's.
+            session.PrimaryBagBaseline = PrimaryBagSnapshot(game.ReadCarriedBags(), request.Document);
+            if (session.PrimaryBagBaseline is null)
+                log("StowBaselineUnavailable: the primary's bags could not be read at Start; delivered items will stay in the bags.", null);
+        }
         ResetTransientState();
         if (request.FundGil > 0)
         {
             // I1: the deterministic request id is durable before anything is submitted.
             session.FundRequestId = CrossRegionAcquisitionSession.FundRequestIdFor(id);
             SetPhase(CrossRegionAcquisitionPhase.FundingShopper, $"Funding {request.Shopper.Label} with {request.FundGil:N0} gil via courier.");
-            SubmitCourier(fund: true);
+            SubmitCourier(CourierLeg.Fund);
         }
         else if (request.Shopper.Matches(primary))
             SetPhase(CrossRegionAcquisitionPhase.PreparingShopRoute, "Preparing the shop route.");
@@ -422,14 +434,23 @@ public sealed class CrossRegionAcquisitionCoordinator
     public CrossRegionActionResult Stop()
     {
         var phase = session.Phase;
+        if (session.IsActive)
+            CancelOpenCustodyOperations("Stopped from MarketMafioso.");
         switch (phase)
         {
+            case CrossRegionAcquisitionPhase.CollectingCountedStock when CurrentCollection()?.State != CrossRegionCollectionState.Shipping:
+            case CrossRegionAcquisitionPhase.StowingDelivered:
+                // No courier custody here; an open retrieval or stow was withdrawn above. Resume settles it from its status.
+                session.InterruptedPhase = phase;
+                SetPhase(CrossRegionAcquisitionPhase.Stopped, $"Stopped during {Describe(phase)}.");
+                return CrossRegionActionResult.Ok(session.LastMessage);
             case CrossRegionAcquisitionPhase.FundingShopper:
             case CrossRegionAcquisitionPhase.HaulingToPrimary:
+            case CrossRegionAcquisitionPhase.CollectingCountedStock:
             {
-                var fund = phase == CrossRegionAcquisitionPhase.FundingShopper;
-                var runId = fund ? session.FundRunId : session.HaulRunId;
-                if (runId is null && TryFindOwnRun(fund, out var run) && run!.RunId is { } discovered)
+                var leg = LegOf(phase)!.Value;
+                var runId = RunIdOf(leg);
+                if (runId is null && TryFindOwnRun(leg, out var run) && run!.RunId is { } discovered)
                     runId = discovered;
                 var detail = "Courier stop requested.";
                 if (runId is { } id)
@@ -477,6 +498,19 @@ public sealed class CrossRegionAcquisitionCoordinator
             case CrossRegionAcquisitionPhase.FundingShopper:
             case CrossRegionAcquisitionPhase.HaulingToPrimary:
                 return ResumeCourier(target.Value);
+            case CrossRegionAcquisitionPhase.CollectingCountedStock:
+                if (CurrentCollection()?.State == CrossRegionCollectionState.Shipping)
+                    return ResumeCourier(target.Value);
+                session.CharacterSwitchAttempts = 0;
+                lastSwitchRequestUtc = null;
+                collectBagWaitStartedUtc = null;
+                SetPhase(CrossRegionAcquisitionPhase.CollectingCountedStock, CollectingMessage());
+                return CrossRegionActionResult.Ok(session.LastMessage);
+            case CrossRegionAcquisitionPhase.StowingDelivered:
+                session.CharacterSwitchAttempts = 0;
+                lastSwitchRequestUtc = null;
+                SetPhase(CrossRegionAcquisitionPhase.StowingDelivered, "Stowing delivered items.");
+                return CrossRegionActionResult.Ok(session.LastMessage);
             case CrossRegionAcquisitionPhase.Paused:
             case CrossRegionAcquisitionPhase.Shopping:
             case CrossRegionAcquisitionPhase.PreparingShopRoute:
@@ -515,6 +549,7 @@ public sealed class CrossRegionAcquisitionCoordinator
     {
         if (!session.IsTerminal)
             return CrossRegionActionResult.Fail("Only a completed, failed, or stopped session can be cleared.");
+        CancelOpenCustodyOperations("Cleared from MarketMafioso.");
         try { store.Clear(); }
         catch (Exception ex) { log("Cross-regional session file could not be removed.", ex); }
         session = new CrossRegionAcquisitionSession { Phase = CrossRegionAcquisitionPhase.Idle };
@@ -539,7 +574,7 @@ public sealed class CrossRegionAcquisitionCoordinator
             switch (session.Phase)
             {
                 case CrossRegionAcquisitionPhase.FundingShopper:
-                    TickCourier(fund: true, now);
+                    TickCourier(CourierLeg.Fund, now);
                     break;
                 case CrossRegionAcquisitionPhase.SwitchingToShopper:
                     TickSwitch(now);
@@ -557,10 +592,16 @@ public sealed class CrossRegionAcquisitionCoordinator
                     TickClosing(now);
                     break;
                 case CrossRegionAcquisitionPhase.HaulingToPrimary:
-                    TickCourier(fund: false, now);
+                    TickCourier(CourierLeg.Haul, now);
                     break;
                 case CrossRegionAcquisitionPhase.ReturningToPrimary:
                     TickReturning(now);
+                    break;
+                case CrossRegionAcquisitionPhase.CollectingCountedStock:
+                    TickCollecting(now);
+                    break;
+                case CrossRegionAcquisitionPhase.StowingDelivered:
+                    TickStowing(now);
                     break;
             }
         }
@@ -571,8 +612,9 @@ public sealed class CrossRegionAcquisitionCoordinator
         }
     }
 
-    private void TickCourier(bool fund, DateTimeOffset now)
+    private void TickCourier(CourierLeg leg, DateTimeOffset now)
     {
+        var fund = leg == CourierLeg.Fund;
         if (fund && session.FundCompleted)
         {
             AdvanceAfterFund(now);
@@ -583,14 +625,14 @@ public sealed class CrossRegionAcquisitionCoordinator
             session.LastMessage = $"Waiting for Quartermaster courier status: {error}";
             return;
         }
-        var run = MatchOwnRun(status!, fund);
+        var run = MatchOwnRun(status!, leg);
         if (run is null)
         {
-            var runId = fund ? session.FundRunId : session.HaulRunId;
+            var runId = RunIdOf(leg);
             if (runId is null)
             {
                 awaitingRunAppearanceSinceUtc = null;
-                SubmitCourier(fund);
+                SubmitCourier(leg);
             }
             else
             {
@@ -608,9 +650,9 @@ public sealed class CrossRegionAcquisitionCoordinator
             return;
         }
         awaitingRunAppearanceSinceUtc = null;
-        if (run.RunId is { } id && (fund ? session.FundRunId : session.HaulRunId) != id)
+        if (run.RunId is { } id && RunIdOf(leg) != id)
         {
-            if (fund) session.FundRunId = id; else session.HaulRunId = id;
+            SetRunId(leg, id);
             Save();
         }
 
@@ -622,7 +664,7 @@ public sealed class CrossRegionAcquisitionCoordinator
             if (!string.Equals(summary, session.CourierPhaseSummary, StringComparison.Ordinal))
             {
                 session.CourierPhaseSummary = summary;
-                session.LastMessage = fund ? $"Funding shopper: {summary}" : $"Hauling to primary: {summary}";
+                session.LastMessage = $"{DescribeTitle(session.Phase)}: {summary}";
                 Save();
             }
             return;
@@ -639,10 +681,10 @@ public sealed class CrossRegionAcquisitionCoordinator
                 Save();
                 AdvanceAfterFund(now);
             }
+            else if (leg == CourierLeg.Collect)
+                OnCollectShipped();
             else
-            {
-                Complete(HaulSummary());
-            }
+                AfterDelivery(HaulSummary());
             return;
         }
         if (run.IsFailure)
@@ -653,13 +695,19 @@ public sealed class CrossRegionAcquisitionCoordinator
                 now < until &&
                 preResumeFailure == (run.State, run.Code, run.Detail))
             {
-                session.LastMessage = $"Waiting for Quartermaster to resume {(fund ? "funding" : "the return haul")}…";
+                session.LastMessage = $"Waiting for Quartermaster to resume {LegNoun(leg)}…";
                 return;
             }
             awaitingResumeTransitionUntilUtc = null;
             preResumeFailure = null;
+            // Zero counters alone do not prove settled custody; only a clearable run may be skipped.
+            if (leg == CourierLeg.Collect && run.CanClear && run.CustodyUnits == 0 && run.CustodyGil == 0)
+            {
+                OnCollectFailedWithoutCustody(run);
+                return;
+            }
             Fail(session.Phase, run.Code ?? run.State,
-                $"Courier {(fund ? "funding" : "return haul")} {run.State.ToLowerInvariant()}: {run.Detail ?? run.Code ?? "no detail"}",
+                $"Courier {LegNoun(leg)} {run.State.ToLowerInvariant()}: {run.Detail ?? run.Code ?? "no detail"}",
                 run.CanResume);
         }
     }
@@ -703,8 +751,12 @@ public sealed class CrossRegionAcquisitionCoordinator
         DriveCharacterSwitch(shopper, CrossRegionAcquisitionPhase.SwitchingToShopper, "ShopperSwitchFailed", now);
     }
 
-    /// <summary>Requests a character switch with bounded retries; the caller detects arrival.</summary>
-    private void DriveCharacterSwitch(CrossRegionCharacter target, CrossRegionAcquisitionPhase phase, string failureCode, DateTimeOffset now)
+    /// <summary>
+    /// Requests a character switch with bounded retries; the caller detects arrival. When attempts run out the
+    /// run fails, unless <paramref name="onExhausted"/> settles the step instead.
+    /// </summary>
+    private void DriveCharacterSwitch(CrossRegionCharacter target, CrossRegionAcquisitionPhase phase, string failureCode, DateTimeOffset now,
+        Action<string>? onExhausted = null)
     {
         if (lastSwitchRequestUtc is { } last && now - last < SwitchRetryInterval)
             return;
@@ -712,8 +764,11 @@ public sealed class CrossRegionAcquisitionCoordinator
             return;
         if (session.CharacterSwitchAttempts >= MaxCharacterSwitchAttempts)
         {
-            Fail(phase, failureCode,
-                $"Could not switch to {target.Label} after {MaxCharacterSwitchAttempts} attempts.", canResumeCourier: false);
+            var detail = $"Could not switch to {target.Label} after {MaxCharacterSwitchAttempts} attempts.";
+            if (onExhausted is not null)
+                onExhausted(detail);
+            else
+                Fail(phase, failureCode, detail, canResumeCourier: false);
             return;
         }
         session.CharacterSwitchAttempts++;
@@ -729,7 +784,7 @@ public sealed class CrossRegionAcquisitionCoordinator
     {
         if (session.Primary is not { } primary || primary.Matches(game.LoggedInCharacter))
         {
-            Complete($"{reason}.");
+            AfterDelivery($"{reason}.");
             return;
         }
         session.CharacterSwitchAttempts = 0;
@@ -745,7 +800,7 @@ public sealed class CrossRegionAcquisitionCoordinator
         {
             lastSwitchRequestUtc = null;
             session.CharacterSwitchAttempts = 0;
-            Complete(session.PurchasedUnits == 0
+            AfterDelivery(session.PurchasedUnits == 0
                 ? "Shopping finished with no purchases; returned to primary."
                 : "None of the purchased items remained in bags; returned to primary.");
             return;
@@ -845,12 +900,14 @@ public sealed class CrossRegionAcquisitionCoordinator
     private void FinishShopping()
     {
         prepareIssued = false;
-        if (session.PurchasedUnits == 0)
+        if (session.PurchasedUnits == 0 && !HasShopperCountedStock)
         {
             ReturnToPrimaryOrComplete("Shopping finished with no purchases");
             return;
         }
-        BeginHaul($"Shopping finished: {session.PurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil. Preparing the return haul.");
+        BeginHaul(session.PurchasedUnits == 0
+            ? "Shopping finished with no purchases. Preparing the return haul of counted stock."
+            : $"Shopping finished: {session.PurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil. Preparing the return haul.");
     }
 
     private void BeginHaul(string message)
@@ -875,6 +932,14 @@ public sealed class CrossRegionAcquisitionCoordinator
             session.LastMessage = "Closing the market board before the return haul.";
             return;
         }
+        if (session.ShopperCounted is { } shopperCounted && !shopperCounted.RetrievalSettled)
+        {
+            TickRetrieval(shopperCounted, -1, now);
+            // The bag-read window starts once the retrieval settles, not when the board closed.
+            if (shopperCounted.RetrievalSettled)
+                closeStartedUtc = now;
+            return;
+        }
         var bags = game.ReadCarriedBags();
         if (bags is null)
         {
@@ -886,7 +951,7 @@ public sealed class CrossRegionAcquisitionCoordinator
             return;
         }
 
-        var manifest = ReconcileManifest(session.PurchasedManifest, bags);
+        var manifest = AddShopperCountedStock(ReconcileManifest(session.PurchasedManifest, bags), bags);
         if (manifest.Count == 0)
         {
             ReturnToPrimaryOrComplete($"None of the purchased items remain in {shopper.CharacterName}'s bags");
@@ -900,12 +965,13 @@ public sealed class CrossRegionAcquisitionCoordinator
         submitAttempts = 0;
         SetPhase(CrossRegionAcquisitionPhase.HaulingToPrimary,
             $"Hauling {manifest.Sum(line => (long)line.Quantity):N0} item(s) back to {session.Primary?.Label}.");
-        SubmitCourier(fund: false);
+        SubmitCourier(CourierLeg.Haul);
     }
 
     private CrossRegionActionResult ResumeCourier(CrossRegionAcquisitionPhase target)
     {
-        var fund = target == CrossRegionAcquisitionPhase.FundingShopper;
+        var leg = LegOf(target)!.Value;
+        var fund = leg == CourierLeg.Fund;
         if (fund && session.FundCompleted)
         {
             SetPhase(CrossRegionAcquisitionPhase.FundingShopper, "Gil already delivered; continuing.");
@@ -913,8 +979,8 @@ public sealed class CrossRegionAcquisitionCoordinator
         }
         if (!courier.TryGetCourierStatus(out var status, out var error))
             return CrossRegionActionResult.Fail($"Quartermaster courier status is unavailable: {error}");
-        var run = MatchOwnRun(status!, fund);
-        var runId = fund ? session.FundRunId : session.HaulRunId;
+        var run = MatchOwnRun(status!, leg);
+        var runId = RunIdOf(leg);
         if (run is null)
         {
             if (runId is not null)
@@ -941,14 +1007,12 @@ public sealed class CrossRegionAcquisitionCoordinator
         if (ack is { IsAccepted: false } && ack.Status == QuartermasterCourierAckStatuses.Rejected)
             return CrossRegionActionResult.Fail($"Quartermaster refused to resume: {ack.Message ?? ack.ErrorCode}");
         if (run.RunId is { } id)
-        {
-            if (fund) session.FundRunId = id; else session.HaulRunId = id;
-        }
+            SetRunId(leg, id);
         session.CanResumeCourier = false;
         session.LastErrorCode = null;
         awaitingResumeTransitionUntilUtc = utcNow() + ResumeTransitionTimeout;
         preResumeFailure = (run.State, run.Code, run.Detail);
-        SetPhase(target, $"Resumed courier {(fund ? "funding" : "return haul")}.");
+        SetPhase(target, $"Resumed courier {LegNoun(leg)}.");
         return CrossRegionActionResult.Ok(session.LastMessage);
     }
 
@@ -969,21 +1033,26 @@ public sealed class CrossRegionAcquisitionCoordinator
 
     // ---- Courier submission -----------------------------------------------------------------
 
-    private void SubmitCourier(bool fund)
+    private void SubmitCourier(CourierLeg leg)
     {
-        var requestId = fund ? session.FundRequestId : session.HaulRequestId;
-        if (string.IsNullOrWhiteSpace(requestId) || session.Primary is null || session.Shopper is null)
+        var requestId = RequestIdOf(leg);
+        var collection = leg == CourierLeg.Collect ? CurrentCollection() : null;
+        if (string.IsNullOrWhiteSpace(requestId) || session.Primary is null || session.Shopper is null ||
+            leg == CourierLeg.Collect && collection is null)
         {
             Fail(session.Phase, "MissingRequest", "Courier request identity was not persisted.", canResumeCourier: false);
             return;
         }
-        var request = fund
-            ? new QuartermasterCourierTransferRequest(requestId, session.Primary.ToCourier(), session.Shopper.ToCourier(),
-                session.FundGil, [], ReturnOwner: false, ReturnDestinationHome: true, ReturnCarrier: true)
-            : new QuartermasterCourierTransferRequest(requestId, session.Shopper.ToCourier(), session.Primary.ToCourier(), 0,
-                session.HaulManifest.Select(line => new QuartermasterCourierItem(line.ItemId, line.ItemName, line.IsHq,
-                    (int)Math.Min(line.Quantity, int.MaxValue))).ToImmutableArray(),
-                ReturnOwner: false, ReturnDestinationHome: false, ReturnCarrier: true);
+        var request = leg switch
+        {
+            CourierLeg.Fund => new QuartermasterCourierTransferRequest(requestId, session.Primary.ToCourier(), session.Shopper.ToCourier(),
+                session.FundGil, [], ReturnOwner: false, ReturnDestinationHome: true, ReturnCarrier: true),
+            CourierLeg.Haul => new QuartermasterCourierTransferRequest(requestId, session.Shopper.ToCourier(), session.Primary.ToCourier(), 0,
+                ToCourierItems(session.HaulManifest), ReturnOwner: false, ReturnDestinationHome: false, ReturnCarrier: true),
+            // Ends on the primary (the destination) at its home world, ready for the next source or the stow.
+            _ => new QuartermasterCourierTransferRequest(requestId, collection!.Source.ToCourier(), session.Primary.ToCourier(), 0,
+                ToCourierItems(collection.Manifest), ReturnOwner: false, ReturnDestinationHome: true, ReturnCarrier: true),
+        };
         if (!courier.TrySubmitCourierTransfer(request, out var ack, out var error))
         {
             submitAttempts++;
@@ -1004,36 +1073,43 @@ public sealed class CrossRegionAcquisitionCoordinator
                 session.LastMessage = "Quartermaster is stopping a previous run; retrying shortly.";
                 return;
             }
+            if (leg == CourierLeg.Collect)
+            {
+                // Rejected before any custody: this source is not collected and the run moves on.
+                OnCollectRejected(ack.ErrorCode ?? ack.Status, ack.Message ?? ack.ErrorCode ?? ack.Status);
+                return;
+            }
             Fail(session.Phase, ack.ErrorCode ?? ack.Status, $"Quartermaster rejected the courier request: {ack.Message ?? ack.ErrorCode ?? ack.Status}",
                 canResumeCourier: false);
             return;
         }
         if (ack.RunId is { } runId)
+            SetRunId(leg, runId);
+        session.LastMessage = leg switch
         {
-            if (fund) session.FundRunId = runId; else session.HaulRunId = runId;
-        }
-        session.LastMessage = fund
-            ? $"Courier accepted the {session.FundGil:N0} gil transfer to {session.Shopper.Label}."
-            : $"Courier accepted the return haul to {session.Primary.Label}.";
+            CourierLeg.Fund => $"Courier accepted the {session.FundGil:N0} gil transfer to {session.Shopper.Label}.",
+            CourierLeg.Haul => $"Courier accepted the return haul to {session.Primary.Label}.",
+            _ => $"Courier accepted the collection from {collection!.Source.Label}.",
+        };
         Save();
     }
 
-    private QuartermasterCourierRun? MatchOwnRun(QuartermasterCourierStatus status, bool fund)
+    private QuartermasterCourierRun? MatchOwnRun(QuartermasterCourierStatus status, CourierLeg leg)
     {
         var run = status.Run;
         if (run is null)
             return null;
-        var runId = fund ? session.FundRunId : session.HaulRunId;
-        var requestId = fund ? session.FundRequestId : session.HaulRequestId;
+        var runId = RunIdOf(leg);
+        var requestId = RequestIdOf(leg);
         return runId is { } id && run.RunId == id ||
                !string.IsNullOrWhiteSpace(requestId) && string.Equals(run.RequestId, requestId, StringComparison.Ordinal)
             ? run
             : null;
     }
 
-    private bool TryFindOwnRun(bool fund, out QuartermasterCourierRun? run)
+    private bool TryFindOwnRun(CourierLeg leg, out QuartermasterCourierRun? run)
     {
-        run = courier.TryGetCourierStatus(out var status, out _) ? MatchOwnRun(status!, fund) : null;
+        run = courier.TryGetCourierStatus(out var status, out _) ? MatchOwnRun(status!, leg) : null;
         return run is not null;
     }
 
@@ -1106,7 +1182,8 @@ public sealed class CrossRegionAcquisitionCoordinator
     {
         session.Phase = phase;
         session.LastMessage = message;
-        if (phase is not (CrossRegionAcquisitionPhase.FundingShopper or CrossRegionAcquisitionPhase.HaulingToPrimary))
+        if (phase is not (CrossRegionAcquisitionPhase.FundingShopper or CrossRegionAcquisitionPhase.HaulingToPrimary or
+            CrossRegionAcquisitionPhase.CollectingCountedStock))
             session.CourierPhaseSummary = null;
         Save();
     }
@@ -1176,6 +1253,8 @@ public sealed class CrossRegionAcquisitionCoordinator
         preResumeFailure = null;
         prepareIssued = false;
         submitAttempts = 0;
+        collectBagWaitStartedUtc = null;
+        nextCustodyPollUtc = DateTimeOffset.MinValue;
     }
 
     public static string FormatCourierPhase(QuartermasterCourierRun run)
@@ -1195,6 +1274,8 @@ public sealed class CrossRegionAcquisitionCoordinator
         CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul => "preparing the return haul",
         CrossRegionAcquisitionPhase.HaulingToPrimary => "the return haul",
         CrossRegionAcquisitionPhase.ReturningToPrimary => "returning to the primary",
+        CrossRegionAcquisitionPhase.CollectingCountedStock => "collecting counted stock",
+        CrossRegionAcquisitionPhase.StowingDelivered => "stowing delivered items",
         _ => phase?.ToString() ?? "the session",
     };
 
@@ -1210,6 +1291,8 @@ public sealed class CrossRegionAcquisitionCoordinator
         CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul => "Preparing return haul",
         CrossRegionAcquisitionPhase.HaulingToPrimary => "Hauling to primary",
         CrossRegionAcquisitionPhase.ReturningToPrimary => "Returning to primary",
+        CrossRegionAcquisitionPhase.CollectingCountedStock => "Collecting counted stock",
+        CrossRegionAcquisitionPhase.StowingDelivered => "Stowing delivered items",
         CrossRegionAcquisitionPhase.Completed => "Completed",
         CrossRegionAcquisitionPhase.Stopped => "Stopped",
         CrossRegionAcquisitionPhase.Failed => "Failed",

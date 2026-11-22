@@ -9,6 +9,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Items;
+using Franthropy.Dalamud.UI.Layout;
 using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.CraftArchitectCompanion;
@@ -27,12 +28,12 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly DalamudItemAutocompleteState itemAutocomplete = new();
 
+    private readonly MarketAcquisitionWorkbenchStockService? workbenchStock;
     private string quantityMode = "AllBelowThreshold";
     private string targetQuantityBuffer = string.Empty;
     private string maximumOverageBuffer = string.Empty;
-    private readonly IMarketAcquisitionInventoryObserver inventoryObserver;
-    private readonly Dictionary<(uint, string, string), MarketAcquisitionInventoryObservation> inventory = new();
-    private DateTimeOffset nextInventoryRefresh;
+    private long syncedReserveVersion;
+    private uint? editingReserveItemId;
     private string maxUnitPriceBuffer = string.Empty;
     private string gilCapBuffer = string.Empty;
     private string hqPolicy = "Either";
@@ -50,10 +51,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderRefreshOutcome>> refreshRequest,
         Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted,
         AgentBridgeUiReviewRegistry reviewRegistry,
-        IMarketAcquisitionInventoryObserver? inventoryObserver = null)
+        MarketAcquisitionWorkbenchStockService? workbenchStock = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
-        this.inventoryObserver = inventoryObserver ?? new DalamudMarketAcquisitionInventoryObserver();
+        this.workbenchStock = workbenchStock;
         this.craftAppraisal = craftAppraisal;
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         controller = new MarketAcquisitionRequestBuilderController(
@@ -88,7 +89,12 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     public void MarkHostedCopyShelved() => controller.MarkHostedCopyShelved();
 
-    public void MarkPlanPrepared(string planHash) => controller.MarkPlanPrepared(planHash);
+    public void MarkPlanPrepared(string planHash) =>
+        controller.MarkPlanPrepared(planHash, workbenchStock is { } stock ? stock.CountedStockFor : null);
+
+    /// <summary>Lines whose stock goes to a retainer home after delivery; zero unless stowing is on.</summary>
+    public int StowToRetainersCount =>
+        document.StowAfterDelivery && workbenchStock is { View.HasItemHomes: true } stock ? stock.StowToRetainersCount(document) : 0;
 
     public void AdoptRequest(MarketAcquisitionRequestView request) => controller.AdoptRequest(request);
 
@@ -152,15 +158,19 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             !string.IsNullOrWhiteSpace(config.ServerUrl) &&
             !string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config)));
 
+        workbenchStock?.MarkVisible();
+        SyncRestockReserveTargets(context);
         DrawExactAcquisitionAuthority(context);
         DrawRouteScope(context);
         ImGui.BeginDisabled(context.IsBusy || context.IsRouteActive || IsSynchronizing);
         DrawRunBudgetInput();
+        DrawStockSourcesCombo();
+        DrawStowAfterDelivery();
         ImGui.EndDisabled();
         DrawRouteScopeExtras?.Invoke();
         ImGui.Spacing();
         DrawExceptionalStatus(context);
-        ImGuiUi.SectionHeader("Buy list", MainWindow.ColHeader);
+        DrawBuyListBar(context);
         DrawSelectedLineWorkspace(context, reservedFooterHeight);
     }
 
@@ -334,56 +344,60 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var flags = AcquisitionRequestTableStyle.LineTableFlags |
                     ImGuiTableFlags.SizingStretchProp |
                     ImGuiTableFlags.NoSavedSettings;
-        if (DateTimeOffset.UtcNow >= nextInventoryRefresh)
-        {
-            inventory.Clear();
-            foreach (var line in document.Lines.Where(line => line.QuantityMode == "TargetQuantity"))
-            {
-                inventory[(line.ItemId, line.HqPolicy, line.TargetBasis)] = inventoryObserver.Observe(line.ItemId, line.HqPolicy, line.TargetBasis);
-                inventory[(line.ItemId, line.HqPolicy, MarketAcquisitionTargetBases.OnHandIncludingRetainers)] =
-                    inventoryObserver.Observe(line.ItemId, line.HqPolicy, MarketAcquisitionTargetBases.OnHandIncludingRetainers);
-            }
-            nextInventoryRefresh = DateTimeOffset.UtcNow.AddSeconds(1);
-        }
-        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV6", 12, flags, new Vector2(0, tableHeight)))
+        // Goes to exists only while Quartermaster reports reserve items and offers its placement editor.
+        var showHomes = workbenchStock?.View.HasItemHomes == true;
+        if (!ImGui.BeginTable(showHomes ? "AcquisitionWorkbenchLinesV7Homes" : "AcquisitionWorkbenchLinesV7", showHomes ? 12 : 11, flags,
+                new Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.4f);
         ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthStretch, 1.5f);
         ImGui.TableSetupColumn("Target on hand", ImGuiTableColumnFlags.WidthStretch, 0.9f);
-        ImGui.TableSetupColumn("Stock scope", ImGuiTableColumnFlags.WidthFixed, 190f);
         ImGui.TableSetupColumn("Extra units allowed", ImGuiTableColumnFlags.WidthStretch, 0.8f);
-        ImGui.TableSetupColumn("On hand", ImGuiTableColumnFlags.WidthStretch, 0.8f);
+        ImGui.TableSetupColumn("On hand", ImGuiTableColumnFlags.WidthStretch, 1.0f);
         ImGui.TableSetupColumn("Still need", ImGuiTableColumnFlags.WidthStretch, 0.8f);
         ImGui.TableSetupColumn("Unit ceiling", ImGuiTableColumnFlags.WidthStretch, 1.1f);
         ImGui.TableSetupColumn("Spend ceiling", ImGuiTableColumnFlags.WidthStretch, 1.2f);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthStretch, 0.8f);
         ImGui.TableSetupColumn("Price source", ImGuiTableColumnFlags.WidthStretch, 1.4f);
+        if (showHomes)
+            ImGui.TableSetupColumn("Goes to", ImGuiTableColumnFlags.WidthStretch, 1.2f);
         ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed, 72f);
         ImGui.TableNextRow(ImGuiTableRowFlags.Headers);
-        var headers = new[] { "Item", "Buying rule", "Target on hand", "Stock scope", "Extra units allowed", "On hand", "Still need", "Unit ceiling", "Spend ceiling", "Quality", "Price source", "" };
-        var tooltips = new[] { "Item to acquire.", "Stock up to a target, or buy below a unit ceiling.", "Desired stock, not units to buy. Exact acquisition retains its required purchase quantity.", "Optionally count latest known retainer stock toward this target.", "Units accepted above the target when whole market stacks don't fit exactly; 0 = never exceed.", "Main bags + crystal pouch, plus latest known retainer stock when selected. Hover the line for snapshot age.", "Target minus current on-hand stock; unknown when inventory is not loaded.", "Maximum gil per unit.", "Maximum gil spent on this line.", "Accepted item quality.", "Typed ceiling or Craft Architect quote; a quote is not necessarily the active ceiling.", "" };
-        for (var column = 0; column < headers.Length; column++)
+        var headers = new List<string> { "Item", "Buying rule", "Target on hand", "Extra units allowed", "On hand", "Still need", "Unit ceiling", "Spend ceiling", "Quality", "Price source" };
+        var tooltips = new List<string> { "Item to acquire.", "Stock up to a target, or buy below a unit ceiling.", "Desired stock, not units to buy. Exact acquisition retains its required purchase quantity.", "Units accepted above the target when whole market stacks don't fit exactly; 0 = never exceed.", "Stock counted from the sources chosen under Count stock from. Hover for each source.", "Target minus counted stock; unknown while any counted source is unknown.", "Maximum gil per unit.", "Maximum gil spent on this line.", "Accepted item quality.", "Typed ceiling or Craft Architect quote; a quote is not necessarily the active ceiling." };
+        if (showHomes)
+        {
+            headers.Add("Goes to");
+            tooltips.Add("Where Quartermaster stows the item.");
+        }
+        headers.Add(string.Empty);
+        tooltips.Add(string.Empty);
+        for (var column = 0; column < headers.Count; column++)
         {
             ImGui.TableNextColumn();
+            var headerX = ImGui.GetCursorPosX();
             ImGui.TableHeader(headers[column]);
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(tooltips[column]);
+            if (tooltips[column].Length > 0 && ImGui.IsItemHovered()) ImGui.SetTooltip(tooltips[column]);
+            if (showHomes && headers[column] == "Goes to")
+                DrawPlacementHeaderButton(headerX + ImGui.CalcTextSize(headers[column]).X + 8);
         }
 
         for (var index = 0; index < document.Lines.Count; index++)
         {
             var line = document.Lines[index];
-            DrawCompactLineRow(context, line, index);
+            DrawCompactLineRow(context, line, index, showHomes);
         }
 
-        DrawCompactAddRow(context);
+        DrawCompactAddRow(context, showHomes);
         ImGui.EndTable();
     }
 
     private void DrawCompactLineRow(
         MarketAcquisitionRequestBuilderContext context,
         MarketAcquisitionRequestLineDocument line,
-        int index)
+        int index,
+        bool showHomes)
     {
         var canEdit = !context.IsBusy && !context.IsRouteActive && !IsSynchronizing;
         var isExactAcquisitionLine = controller.IsExactAcquisitionLine(index);
@@ -424,23 +438,21 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         DrawCompactQuantityCell(line, index);
-        ImGui.TableNextColumn();
-        if (line.QuantityMode == "TargetQuantity" && !isExactAcquisitionLine)
-            DrawRetainerStockOption(line, index);
-        else
-            ImGui.TextUnformatted("-");
 
         ImGui.TableNextColumn();
         DrawCompactOverageCell(line, index);
 
         var stockUp = line.QuantityMode == "TargetQuantity" && !isExactAcquisitionLine;
-        inventory.TryGetValue((line.ItemId, line.HqPolicy, line.TargetBasis), out var observed);
+        var counted = stockUp ? workbenchStock?.View.Lines.GetValueOrDefault(line.ItemId) : null;
         ImGui.TableNextColumn();
-        ImGui.TextUnformatted(!stockUp ? "-" : observed.IsAvailable ? $"{observed.Quantity:N0}" : "Unknown");
-        if (stockUp && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(InventoryTooltip(observed));
+        DrawOnHandCell(stockUp, counted);
         ImGui.TableNextColumn();
-        ImGui.TextUnformatted(!stockUp ? "-" : observed.IsAvailable ? $"{(line.TargetQuantity > observed.Quantity ? line.TargetQuantity - observed.Quantity : 0):N0}" : "Unknown");
+        if (!stockUp)
+            ImGui.TextUnformatted("-");
+        else if (counted?.Total is { } total)
+            ImGui.TextUnformatted($"{(line.TargetQuantity > total ? line.TargetQuantity - total : 0):N0}");
+        else
+            ImGui.TextColored(MainWindow.ColMuted, "—");
 
         ImGui.TableNextColumn();
         DrawCompactUnitCell(line, index);
@@ -455,61 +467,233 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TableNextColumn();
         DrawCompactEvidenceState(line);
 
+        if (showHomes)
+        {
+            ImGui.TableNextColumn();
+            DrawGoesToCell(line);
+        }
+
         if (!canEdit || isExactAcquisitionLine)
             ImGui.EndDisabled();
 
         ImGui.PopID();
     }
 
-    private static string InventoryTooltip(MarketAcquisitionInventoryObservation observation)
+    private static void DrawOnHandCell(bool stockUp, WorkbenchLineStock? counted)
     {
-        if (observation.RetainerObservedAtUtc is not { } observedAt) return observation.Message;
-        var age = DateTimeOffset.UtcNow - observedAt;
-        return $"{observation.Message}\nOldest retainer stock snapshot: {Math.Max(0, age.TotalHours):N1} hours ago ({observedAt:u}).";
+        if (!stockUp)
+        {
+            ImGui.TextUnformatted("-");
+            return;
+        }
+        ImGui.BeginGroup();
+        if (counted?.Total is { } total)
+        {
+            ImGui.TextUnformatted($"{total:N0}");
+            if (counted.StaleAge is { } age)
+            {
+                ImGui.SameLine(0, 0);
+                ImGui.TextColored(MainWindow.ColWarning, $" · {FormatAge(age)}");
+            }
+        }
+        else
+        {
+            ImGui.TextColored(MainWindow.ColMuted, "—");
+        }
+        ImGui.EndGroup();
+
+        if (counted is null || counted.Rows.IsDefaultOrEmpty || !ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            return;
+        ImGui.BeginTooltip();
+        if (ImGui.BeginTable("OnHandSources", 2, ImGuiTableFlags.SizingFixedFit))
+        {
+            foreach (var row in counted.Rows)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Label);
+                if (row.StaleAge is { } rowAge)
+                {
+                    ImGui.SameLine(0, 0);
+                    ImGui.TextColored(MainWindow.ColWarning, $" · {FormatAge(rowAge)}");
+                }
+                ImGui.TableNextColumn();
+                if (row.Quantity is { } quantity)
+                    DalamudUiLayout.DrawRightAligned($"{quantity:N0}");
+                else
+                    ImGui.TextColored(MainWindow.ColMuted, "Unavailable");
+            }
+            ImGui.EndTable();
+        }
+        ImGui.Separator();
+        ImGui.TextUnformatted("Counted");
+        ImGui.SameLine();
+        ImGui.TextUnformatted(counted.Total is { } countedTotal ? $"{countedTotal:N0}" : "—");
+        ImGui.EndTooltip();
     }
 
-    private void DrawRetainerStockOption(MarketAcquisitionRequestLineDocument line, int index)
+    private static string FormatAge(TimeSpan age) =>
+        age.TotalHours >= 48 ? $"{age.TotalDays:N1}d" : $"{age.TotalHours:N1}h";
+
+    /// <summary>Read-only placement summary; clicking opens Quartermaster's placement editor for this item.</summary>
+    private void DrawGoesToCell(MarketAcquisitionRequestLineDocument line)
     {
-        inventory.TryGetValue((line.ItemId, line.HqPolicy, MarketAcquisitionTargetBases.OnHandIncludingRetainers), out var snapshot);
-        var include = line.TargetBasis == MarketAcquisitionTargetBases.OnHandIncludingRetainers;
-        // A saved selection remains removable when its provider disappears, but cannot
-        // silently fall back to player-only accounting or be enabled without evidence.
-        ImGui.BeginDisabled(!snapshot.IsAvailable && !include);
-        if (ImGui.Checkbox("Include retainer stock", ref include))
-        {
-            controller.SetIncludeRetainerStock(index, include);
-            nextInventoryRefresh = default;
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(snapshot.IsAvailable ? InventoryTooltip(snapshot) : $"Unavailable: {snapshot.Message}");
-        ImGui.EndDisabled();
-        if (!snapshot.IsAvailable)
-            ImGui.TextColored(MainWindow.ColMuted, "Unavailable");
-        else if (snapshot.RetainerObservedAtUtc is { } observedAt &&
-                 DateTimeOffset.UtcNow - observedAt is var age &&
-                 age > RetainerAwareMarketAcquisitionInventoryObserver.RetainerStockStaleThreshold)
-            ImGui.TextColored(MainWindow.ColMuted, $"Stale ({age.TotalHours:N1}h)");
+        if (workbenchStock?.View is not { HasItemHomes: true } || line.ItemId == 0)
+            return;
+        var summary = workbenchStock.PlacementSummary(line);
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+        var clicked = ImGui.Selectable($"{summary}##GoesTo");
+        ImGui.PopStyleColor();
+        if (ImGui.IsItemHovered() && ImGui.CalcTextSize(summary).X > ImGui.GetItemRectSize().X)
+            ImGui.SetTooltip(summary);
+        if (clicked)
+            workbenchStock.RequestOpenPlacement([line]);
     }
+
+    /// <summary>Opens Quartermaster's placement editor for every item on the buy list.</summary>
+    private void DrawPlacementHeaderButton(float x)
+    {
+        ImGui.SameLine();
+        ImGui.SetCursorPosX(x);
+        ImGui.BeginDisabled(!document.Lines.Any(line => line.ItemId > 0));
+        if (ImGui.SmallButton("Placement##WorkbenchPlacement"))
+            workbenchStock!.RequestOpenPlacement(document.Lines);
+        ImGui.EndDisabled();
+    }
+
+    private void DrawStockSourcesCombo()
+    {
+        if (workbenchStock?.View is not { } view || view.SourceOptions.Length < 2)
+            return;
+        var selected = view.SourceOptions.Where(option => option.Selected).ToArray();
+        var preview = selected.Length switch
+        {
+            0 => string.Empty,
+            1 => selected[0].Label,
+            _ => $"{selected[0].Key.CharacterName} + {selected.Length - 1} more",
+        };
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(220);
+        if (!ImGui.BeginCombo("Count stock from##CountStockFrom", preview, ImGuiComboFlags.HeightLarge))
+            return;
+        string? character = null;
+        foreach (var option in view.SourceOptions)
+        {
+            var characterKey = $"{option.Key.LocalContentId}:{option.Key.HomeWorldId}";
+            if (character is not null && character != characterKey)
+                ImGui.Separator();
+            character = characterKey;
+            var check = option.Selected;
+            ImGui.BeginDisabled(option.Fixed);
+            if (ImGui.Checkbox($"{option.Label}##Source{characterKey}:{option.Key.Container}", ref check))
+            {
+                if (option.IsCurrentCharacter)
+                    controller.SetCountRetainerStock(check);
+                else
+                    controller.SetAdditionalStockSource(option.Key, check);
+            }
+            ImGui.EndDisabled();
+            if (option.Fixed && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Purchases arrive in these bags, so they always count.");
+            if (option.StaleAge is { } age)
+            {
+                ImGui.SameLine(0, 0);
+                ImGui.TextColored(MainWindow.ColWarning, $" · {FormatAge(age)}");
+            }
+        }
+        ImGui.EndCombo();
+    }
+
+    private void DrawStowAfterDelivery()
+    {
+        if (workbenchStock?.View.HasItemHomes != true)
+            return;
+        var stow = document.StowAfterDelivery;
+        ImGui.SameLine();
+        if (ImGui.Checkbox("Stow after delivery##StowAfterDelivery", ref stow))
+            controller.SetStowAfterDelivery(stow);
+    }
+
+    private void DrawBuyListBar(MarketAcquisitionRequestBuilderContext context)
+    {
+        var shortfalls = workbenchStock is { View.HasReserveLevels: true } stock
+            ? stock.ReserveShortfalls(document)
+            : [];
+        if (shortfalls.IsDefaultOrEmpty)
+        {
+            ImGuiUi.SectionHeader("Buy list", MainWindow.ColHeader);
+            return;
+        }
+
+        ImGuiUi.SectionHeaderWithActions("Buy list", MainWindow.ColHeader, () =>
+        {
+            ImGui.BeginDisabled(!CanEdit(context));
+            if (ImGui.SmallButton($"Add reserve shortfalls ({shortfalls.Length:N0})"))
+                controller.AddLines(shortfalls.Select(item => new MarketAcquisitionRequestLineDocument
+                {
+                    ItemId = item.ItemId,
+                    ItemName = item.ItemName,
+                    QuantityMode = "TargetQuantity",
+                    TargetQuantity = (uint)item.ReserveUnits,
+                    TargetBasis = MarketAcquisitionTargetBases.OnHandTotal,
+                    HqPolicy = item.Quality == "HqOnly" ? "HQOnly" : "NQOnly",
+                    RestockReserve = true,
+                }), "reserve shortfall");
+            ImGui.EndDisabled();
+        });
+    }
+
+    /// <summary>Restock lines follow reserve levels edited in Quartermaster (never mid-edit or mid-route).</summary>
+    private void SyncRestockReserveTargets(MarketAcquisitionRequestBuilderContext context)
+    {
+        if (workbenchStock?.View is not { HasReserveLevels: true } view || view.Version == syncedReserveVersion ||
+            !CanEdit(context) || editingReserveItemId is not null)
+            return;
+        syncedReserveVersion = view.Version;
+        if (document.ExactAcquisitionAuthority is null && document.Lines.Any(line => line.RestockReserve))
+            controller.SyncRestockReserveTargets(workbenchStock.ReserveLevelFor);
+    }
+
+    private bool IsRestockReserveLine(MarketAcquisitionRequestLineDocument line) =>
+        line.RestockReserve && workbenchStock?.View.HasReserveLevels == true;
 
     private void DrawCompactModeCell(MarketAcquisitionRequestLineDocument line, int index)
     {
-        var current = string.IsNullOrWhiteSpace(line.QuantityMode) ? "AllBelowThreshold" : line.QuantityMode;
+        const string restockReserve = "RestockReserve";
+        var current = IsRestockReserveLine(line)
+            ? restockReserve
+            : string.IsNullOrWhiteSpace(line.QuantityMode) ? "AllBelowThreshold" : line.QuantityMode;
+        // Restock reserve is offered only for items Quartermaster keeps a reserve level for.
+        var reserveLevel = workbenchStock?.View.HasReserveLevels == true && !controller.IsExactAcquisitionLine(index)
+            ? workbenchStock.ReserveLevelFor(line)
+            : null;
         ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo("##Mode", FormatEditorOption(current)))
+        if (!ImGui.BeginCombo("##Mode", current == restockReserve ? "Restock reserve" : FormatEditorOption(current)))
             return;
 
-        foreach (var mode in new[] { "AllBelowThreshold", "TargetQuantity" })
+        if (reserveLevel is not null || current == restockReserve)
+        {
+            if (ImGui.Selectable("Restock reserve", current == restockReserve) && current != restockReserve)
+                controller.SetRestockReserve(index, true, reserveLevel ?? line.TargetQuantity);
+            if (current == restockReserve)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        foreach (var mode in new[] { "TargetQuantity", "AllBelowThreshold" })
         {
             var selected = string.Equals(mode, current, StringComparison.Ordinal);
-            if (ImGui.Selectable(FormatEditorOption(mode), selected))
+            if (ImGui.Selectable(FormatEditorOption(mode), selected) && !selected)
             {
-                ApplyLineEdit(
-                    index,
-                    line,
-                    quantityMode: mode,
-                    targetQuantity: mode == "TargetQuantity" ? Math.Max(1u, line.TargetQuantity) : 0,
-                    maxQuantity: 0,
-                    message: "Buying rule updated.");
+                if (current == restockReserve && mode == "TargetQuantity")
+                    controller.SetRestockReserve(index, false, line.TargetQuantity);
+                else
+                    ApplyLineEdit(
+                        index,
+                        line,
+                        quantityMode: mode,
+                        targetQuantity: mode == "TargetQuantity" ? Math.Max(1u, line.TargetQuantity) : 0,
+                        maxQuantity: 0,
+                        message: "Buying rule updated.");
             }
 
             if (selected)
@@ -539,16 +723,32 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         long quantity = line.TargetQuantity;
         ImGui.SetNextItemWidth(-1);
-        if (!DalamudGroupedIntegerInput.InputGroupedInt("##Quantity", ref quantity, 0, 0))
-            return;
-
-        ApplyLineEdit(
-            index,
-            line,
-            targetQuantity: Math.Max(1u, ClampToUInt(quantity)),
-            maxQuantity: 0,
-            message: "Target quantity updated.");
+        var restock = IsRestockReserveLine(line);
+        if (restock)
+            quantity = Math.Min(quantity, MaxReserveLevel);
+        var changed = DalamudGroupedIntegerInput.InputGroupedInt("##Quantity", ref quantity, 0, 0);
+        if (restock)
+        {
+            // The local target follows each keystroke; Quartermaster's reserve level is written once, on blur.
+            if (ImGui.IsItemActive())
+                editingReserveItemId = line.ItemId;
+            else if (editingReserveItemId == line.ItemId)
+                editingReserveItemId = null;
+            quantity = Math.Clamp(quantity, 1, MaxReserveLevel);
+        }
+        if (changed)
+            ApplyLineEdit(
+                index,
+                line,
+                targetQuantity: Math.Max(1u, ClampToUInt(quantity)),
+                maxQuantity: 0,
+                message: restock ? "Reserve level updated." : "Target quantity updated.");
+        if (restock && ImGui.IsItemDeactivatedAfterEdit())
+            workbenchStock!.RequestReserveLevel(line, Math.Max(1u, ClampToUInt(quantity)));
     }
+
+    // Quartermaster's reserve level ceiling (ListingReserveRule.MaxReserveUnits).
+    private const long MaxReserveLevel = 999_999;
 
     private void DrawCompactUnitCell(MarketAcquisitionRequestLineDocument line, int index)
     {
@@ -951,7 +1151,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
     }
 
-    private void DrawCompactAddRow(MarketAcquisitionRequestBuilderContext context)
+    private void DrawCompactAddRow(MarketAcquisitionRequestBuilderContext context, bool showHomes)
     {
         var canEdit = CanEdit(context);
         ImGui.PushID("AcquisitionWorkbenchAddRow");
@@ -985,9 +1185,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
 
         ImGui.TableNextColumn();
-        ImGui.TextColored(MainWindow.ColMuted, "After add");
-
-        ImGui.TableNextColumn();
         ImGui.SetNextItemWidth(-1);
         if (quantityMode == "TargetQuantity")
             ImGui.InputTextWithHint("##NewOverage", "0", ref maximumOverageBuffer, 32);
@@ -1011,6 +1208,12 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         ImGui.TextColored(MainWindow.ColMuted, "After add");
+
+        if (showHomes)
+        {
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MainWindow.ColMuted, "After add");
+        }
 
         ImGui.TableNextColumn();
         var canAdd = canEdit && (quantityMode != "TargetQuantity" || string.IsNullOrWhiteSpace(maximumOverageBuffer) || uint.TryParse(maximumOverageBuffer.Trim(), out _)) && RequestLineInputValidator.CanAddIntentLine(
