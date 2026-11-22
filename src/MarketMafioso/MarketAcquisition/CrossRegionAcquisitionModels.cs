@@ -146,8 +146,12 @@ public sealed class CrossRegionAcquisitionSession
     public static string StowRequestIdFor(Guid sessionId) => $"mmf-xr-{sessionId:N}-stow";
 }
 
-/// <summary>One plan line's counted stock on one source, split by container.</summary>
-public sealed record CrossRegionCountedLine(uint ItemId, string ItemName, string HqPolicy, uint BagQuantity, uint RetainerQuantity)
+/// <summary>
+/// One plan line's counted stock on one source, split by container. BagHqQuantity (how many bag units are HQ) is
+/// tracked only for the courier carrier, whose bags this client cannot read.
+/// </summary>
+public sealed record CrossRegionCountedLine(uint ItemId, string ItemName, string HqPolicy, uint BagQuantity, uint RetainerQuantity,
+    uint BagHqQuantity = 0)
 {
     [JsonIgnore]
     public uint Total => BagQuantity + RetainerQuantity;
@@ -171,6 +175,11 @@ public enum CrossRegionCollectionState
 public sealed class CrossRegionCollection
 {
     public CrossRegionCharacter Source { get; set; } = new(0, 0, string.Empty, string.Empty);
+    /// <summary>
+    /// The source is the courier carrier: it sends bag stock it already holds while the primary stays logged in,
+    /// so there is no switch onto it, no retrieval and no local bag read.
+    /// </summary>
+    public bool FromCarrier { get; set; }
     public List<CrossRegionCountedLine> Lines { get; set; } = [];
     public CrossRegionCollectionState State { get; set; }
     public string? RetrievalRequestId { get; set; }

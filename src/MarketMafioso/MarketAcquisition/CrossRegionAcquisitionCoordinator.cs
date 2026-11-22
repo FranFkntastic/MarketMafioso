@@ -89,6 +89,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private static readonly TimeSpan ResumeTransitionTimeout = TimeSpan.FromSeconds(10);
     private const int MaxCharacterSwitchAttempts = 3;
     private const int MaxSubmitAttempts = 5;
+    private const string CodeCourierHistoryIndexing = "CourierHistoryIndexing";
+    // Quartermaster's request history is still loading: the same submit is retried this often, this many times.
+    private static readonly TimeSpan HistoryIndexingRetryInterval = TimeSpan.FromSeconds(2);
+    private const int MaxHistoryIndexingRetries = 30;
     private const int MaxRecordedPurchaseKeys = 4096;
 
     private readonly IQuartermasterCourierClient courier;
@@ -108,6 +112,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private (string State, string? Code, string? Detail)? preResumeFailure;
     private bool prepareIssued;
     private int submitAttempts;
+    private int historyIndexingRetries;
+    private DateTimeOffset nextSubmitRetryUtc;
     private QuartermasterCourierStatus? cachedStatus;
     private string? cachedStatusError;
     private DateTimeOffset cachedStatusAtUtc = DateTimeOffset.MinValue;
@@ -632,7 +638,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             if (runId is null)
             {
                 awaitingRunAppearanceSinceUtc = null;
-                SubmitCourier(leg);
+                if (now >= nextSubmitRetryUtc)
+                    SubmitCourier(leg);
             }
             else
             {
@@ -1073,6 +1080,22 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 session.LastMessage = "Quartermaster is stopping a previous run; retrying shortly.";
                 return;
             }
+            if (ack.ErrorCode == CodeCourierHistoryIndexing)
+            {
+                // Nothing started: the same request id is sent again shortly. Exhaustion stops the run with the
+                // request still unsent, so Resume retries it under the same id; nothing is settled or skipped.
+                if (++historyIndexingRetries > MaxHistoryIndexingRetries)
+                {
+                    historyIndexingRetries = 0;
+                    Fail(session.Phase, CodeCourierHistoryIndexing,
+                        $"Quartermaster's courier history was still loading after {MaxHistoryIndexingRetries} retries; resume to send {requestId} again.",
+                        canResumeCourier: false);
+                    return;
+                }
+                nextSubmitRetryUtc = utcNow() + HistoryIndexingRetryInterval;
+                session.LastMessage = $"Quartermaster is loading its courier history; retrying ({historyIndexingRetries}/{MaxHistoryIndexingRetries}).";
+                return;
+            }
             if (leg == CourierLeg.Collect)
             {
                 // Rejected before any custody: this source is not collected and the run moves on.
@@ -1253,6 +1276,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         preResumeFailure = null;
         prepareIssued = false;
         submitAttempts = 0;
+        historyIndexingRetries = 0;
+        nextSubmitRetryUtc = DateTimeOffset.MinValue;
         collectBagWaitStartedUtc = null;
         nextCustodyPollUtc = DateTimeOffset.MinValue;
     }

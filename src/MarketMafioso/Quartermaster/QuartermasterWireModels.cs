@@ -461,7 +461,8 @@ public sealed record QuartermasterCourierCarrier(
     string? RegionName,
     ulong CarriedGil,
     int FreeBagSlots,
-    bool? CarrierOptIn = null);
+    bool? CarrierOptIn = null,
+    bool? CanSendOwnStock = null);
 
 public sealed record QuartermasterCourierBridge(
     uint WorldId,
@@ -592,6 +593,7 @@ internal sealed class QuartermasterCourierCarrierWire
     public ulong? CarriedGil { get; init; }
     public int? FreeBagSlots { get; init; }
     public bool? CarrierOptIn { get; init; }
+    public bool? CanSendOwnStock { get; init; }
 }
 
 internal sealed class QuartermasterCourierBridgeWire

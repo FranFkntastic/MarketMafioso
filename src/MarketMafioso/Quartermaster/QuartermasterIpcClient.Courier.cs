@@ -252,7 +252,7 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
             : null;
         var carrier = wire.Carrier is { } c
             ? new QuartermasterCourierCarrier(c.Configured, c.Online, c.LocalContentId ?? 0, c.HomeWorldId ?? 0, c.CharacterName,
-                c.HomeWorldName, RegionText(c.RegionId), c.RegionName, c.CarriedGil ?? 0, c.FreeBagSlots ?? 0, c.CarrierOptIn)
+                c.HomeWorldName, RegionText(c.RegionId), c.RegionName, c.CarriedGil ?? 0, c.FreeBagSlots ?? 0, c.CarrierOptIn, c.CanSendOwnStock)
             : null;
         var bridge = wire.Bridge is { } b ? new QuartermasterCourierBridge(b.WorldId, b.WorldName, b.TerritoryId, b.Label) : null;
         var roster = (wire.Roster ?? [])
