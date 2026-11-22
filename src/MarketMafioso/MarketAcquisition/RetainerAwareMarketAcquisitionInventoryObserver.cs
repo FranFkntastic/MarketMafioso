@@ -11,7 +11,7 @@ public sealed class RetainerAwareMarketAcquisitionInventoryObserver(
     Func<QuartermasterOwnerScope> currentOwner,
     Func<uint, string?> itemName) : IMarketAcquisitionInventoryObserver
 {
-    private static readonly TimeSpan RetainerStockAgeLimit = TimeSpan.FromHours(6);
+    internal static readonly TimeSpan RetainerStockStaleThreshold = TimeSpan.FromHours(6);
     public MarketAcquisitionInventoryObservation Observe(uint itemId, string hqPolicy) => player.Observe(itemId, hqPolicy);
 
     public MarketAcquisitionCapacityObservation Capacity(uint itemId, bool isHq) => player.Capacity(itemId, isHq);
@@ -32,30 +32,44 @@ public sealed class RetainerAwareMarketAcquisitionInventoryObserver(
             return MarketAcquisitionInventoryObservation.Unavailable("Retainer snapshot unavailable or incomplete for this item; stock is unknown, not zero.");
 
         var quantity = carried.Quantity;
-        var oldest = snapshot.GeneratedAtUtc;
+        DateTimeOffset? oldest = null;
+        var hasUnverifiedBagTimestamp = false;
         foreach (var retainer in snapshot.Retainers)
         {
             // Bag timestamps are source-specific; the retainer timestamp can be newer because
-            // only listings or gil were observed. Use the oldest covered bag, conservatively.
+            // only listings or gil were observed. Track the oldest covered bag, conservatively.
             var bags = retainer.Bags.Where(bag =>
                 bag.BagName.Equals("RetainerCrystals", StringComparison.OrdinalIgnoreCase) == (itemId is >= 2 and <= 19)).ToArray();
-            if (bags.Length == 0 || bags.Any(bag => bag.ObservedAtUtc == null))
+            if (bags.Length == 0)
                 return MarketAcquisitionInventoryObservation.Unavailable(
-                    $"Retainer stock for {itemName(itemId) ?? $"item {itemId}"} has no verified observation time; open a summoning bell to refresh.");
-            var observedAt = bags.Min(bag => bag.ObservedAtUtc!.Value);
-            if (observedAt < oldest) oldest = observedAt;
+                    $"Retainer snapshot is missing bags for {itemName(itemId) ?? $"item {itemId}"}; stock is unknown, not zero.");
+            foreach (var bag in bags)
+            {
+                if (bag.ObservedAtUtc is { } observedAt)
+                {
+                    if (oldest == null || observedAt < oldest.Value)
+                        oldest = observedAt;
+                }
+                else
+                {
+                    hasUnverifiedBagTimestamp = true;
+                }
+            }
             foreach (var item in bags.SelectMany(bag => bag.Items).Where(item =>
                          item.ItemId == itemId && MarketAcquisitionPolicy.HqMatches(hqPolicy, item.IsHq)))
                 quantity = checked(quantity + item.Quantity);
         }
 
-        var age = DateTimeOffset.UtcNow - oldest;
-        if (age > RetainerStockAgeLimit)
-            return MarketAcquisitionInventoryObservation.Unavailable(
-                $"Retainer stock for {itemName(itemId) ?? $"item {itemId}"} is {age.TotalHours:N1}h old (limit {RetainerStockAgeLimit.TotalHours:N0}h); open a summoning bell to refresh.");
+        var observed = oldest ?? snapshot.GeneratedAtUtc;
+        var age = DateTimeOffset.UtcNow - observed;
+        var staleNote = age > RetainerStockStaleThreshold
+            ? $" Last observed {age.TotalHours:N1}h ago."
+            : hasUnverifiedBagTimestamp
+                ? " Some retainer bag timestamps are unverified."
+                : string.Empty;
 
         return new(true, quantity,
-            $"Player {carried.Quantity:N0} + retainers {quantity - carried.Quantity:N0}. Retainer bags/crystals only; listings, saddlebag, armoury and FC chest excluded.")
-        { RetainerObservedAtUtc = oldest };
+            $"Player {carried.Quantity:N0} + retainers {quantity - carried.Quantity:N0}. Retainer bags/crystals only; listings, saddlebag, armoury and FC chest excluded.{staleNote}")
+        { RetainerObservedAtUtc = observed };
     }
 }
