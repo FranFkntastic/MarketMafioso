@@ -21,6 +21,11 @@ public interface IQuartermasterRunCustodyClient
     bool TryGetOperation(string operationId, QuartermasterOwnerScope expectedOwner, out QuartermasterOperationStatus? operationStatus, out string error);
     bool TrySubmitDeliveredStow(QuartermasterDeliveredStowRequest request, out QuartermasterDeliveredStowStatus? acknowledgement, out string error);
     bool TryGetDeliveredStow(string requestId, out QuartermasterDeliveredStowStatus? status, out string error);
+    /// <summary>
+    /// Withdraws a retrieval or stow this plugin submitted: not started = cancelled; running = stops after the
+    /// current retainer. Returns false when the call could not be made or was rejected.
+    /// </summary>
+    bool TryCancelRequestedOperation(string requestId, string reason, out QuartermasterCancelAcknowledgement? acknowledgement, out string error);
 }
 
 public interface IQuartermasterDeliveredStowAdapter
@@ -29,6 +34,23 @@ public interface IQuartermasterDeliveredStowAdapter
     bool HasGetDeliveredStow { get; }
     string SubmitDeliveredStow(string requestJson);
     string GetDeliveredStow(string requestId);
+    bool HasCancelRequestedOperation { get; }
+    string CancelRequestedOperation(string requestJson);
+}
+
+/// <summary>Status: cancelled, stopping, already_terminal, cancel_queued or rejected (ErrorCode names why).</summary>
+public sealed record QuartermasterCancelAcknowledgement
+{
+    public string Schema { get; init; } = string.Empty;
+    public string? ProviderInstanceId { get; init; }
+    public string RequestId { get; init; } = string.Empty;
+    public string? OperationId { get; init; }
+    public string Status { get; init; } = string.Empty;
+    public string? OperationStatus { get; init; }
+    public string? ErrorCode { get; init; }
+    public string? Message { get; init; }
+
+    public bool IsRejected => string.Equals(Status, "rejected", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed record QuartermasterDeliveredStowItem(uint ItemId, string ItemName, bool IsHq, int Quantity);
@@ -45,6 +67,8 @@ public sealed record QuartermasterDeliveredStowLine
     public string ItemName { get; init; } = string.Empty;
     public bool IsHq { get; init; }
     public int Requested { get; init; }
+    /// <summary>Of Requested, what was in the bags at planning; null from older Quartermaster builds.</summary>
+    public int? Carried { get; init; }
     public int Planned { get; init; }
     public int Stowed { get; init; }
     public string Code { get; init; } = string.Empty;
@@ -77,14 +101,20 @@ public sealed partial class DalamudQuartermasterIpcAdapter : IQuartermasterDeliv
 
     private void InitializeDeliveredStow(IDalamudPluginInterface pluginInterface) => deliveredStowGates = new(
         pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.SubmitDeliveredStowChannel),
-        pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.GetDeliveredStowChannel));
+        pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.GetDeliveredStowChannel),
+        pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.CancelRequestedOperationChannel));
 
     public bool HasSubmitDeliveredStow => deliveredStowGates?.Submit.HasFunction == true;
     public bool HasGetDeliveredStow => deliveredStowGates?.Get.HasFunction == true;
     public string SubmitDeliveredStow(string requestJson) => deliveredStowGates!.Submit.InvokeFunc(requestJson);
     public string GetDeliveredStow(string requestId) => deliveredStowGates!.Get.InvokeFunc(requestId);
+    public bool HasCancelRequestedOperation => deliveredStowGates?.Cancel.HasFunction == true;
+    public string CancelRequestedOperation(string requestJson) => deliveredStowGates!.Cancel.InvokeFunc(requestJson);
 
-    private sealed record DeliveredStowGates(ICallGateSubscriber<string, string> Submit, ICallGateSubscriber<string, string> Get);
+    private sealed record DeliveredStowGates(
+        ICallGateSubscriber<string, string> Submit,
+        ICallGateSubscriber<string, string> Get,
+        ICallGateSubscriber<string, string> Cancel);
 }
 
 public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyClient
@@ -94,6 +124,61 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
     public const string GetDeliveredStowChannel = "Quartermaster.v1.GetDeliveredStow";
     public const string DeliveredStowRequestSchema = "gooseworks-quartermaster-delivered-stow/v1";
     public const string DeliveredStowNothingToStow = "nothing_to_stow";
+    public const string RequestedOperationCancelCapability = "requestedOperationCancel.v1";
+    public const string CancelRequestedOperationChannel = "Quartermaster.v1.CancelRequestedOperation";
+    public const string CancelRequestSchema = "gooseworks-quartermaster-cancel-request/v1";
+    public const string CancelAckSchema = "gooseworks-quartermaster-cancel-request-ack/v1";
+
+    public bool TryCancelRequestedOperation(string requestId, string reason, out QuartermasterCancelAcknowledgement? acknowledgement, out string error)
+    {
+        acknowledgement = null;
+        if (string.IsNullOrWhiteSpace(requestId))
+        {
+            error = "Cancel needs the request ID.";
+            return false;
+        }
+        if (!TryGetCapabilities(out var capabilities, out error))
+            return false;
+        if (!capabilities!.Capabilities.Contains(RequestedOperationCancelCapability, StringComparer.Ordinal) ||
+            adapter is not IQuartermasterDeliveredStowAdapter { HasCancelRequestedOperation: true } cancel)
+        {
+            error = $"Quartermaster does not advertise {RequestedOperationCancelCapability}.";
+            return false;
+        }
+        var requestJson = JsonSerializer.Serialize(new
+        {
+            schema = CancelRequestSchema,
+            providerInstanceId = capabilities.ProviderInstanceId,
+            requestId,
+            reason,
+        }, JsonOptions);
+        string json;
+        try { json = cancel.CancelRequestedOperation(requestJson); }
+        catch (Exception ex)
+        {
+            error = $"Quartermaster cancel call failed: {ex.Message}";
+            return false;
+        }
+        try { acknowledgement = JsonSerializer.Deserialize<QuartermasterCancelAcknowledgement>(json, JsonOptions); }
+        catch (JsonException ex)
+        {
+            error = $"Quartermaster cancel acknowledgement is not valid JSON: {ex.Message}";
+            return false;
+        }
+        if (acknowledgement is null || !string.Equals(acknowledgement.Schema, CancelAckSchema, StringComparison.Ordinal))
+        {
+            acknowledgement = null;
+            error = "Quartermaster cancel acknowledgement used an unsupported schema.";
+            return false;
+        }
+        if (acknowledgement.IsRejected)
+        {
+            error = $"Quartermaster rejected the cancel ({acknowledgement.ErrorCode ?? acknowledgement.Status}): {acknowledgement.Message}";
+            return false;
+        }
+        error = string.Empty;
+        return true;
+    }
 
     public bool HasAutomaticRetrieval
     {

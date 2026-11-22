@@ -118,6 +118,11 @@ public sealed class CrossRegionAcquisitionSession
     public bool HaulDelivered { get; set; }
     /// <summary>The haul/return outcome, kept while collection and stow run so the final summary can lead with it.</summary>
     public string? DeliverySummary { get; set; }
+    /// <summary>
+    /// The primary's carried bags per item variant at Start, before anything was delivered to it. Delivered stow
+    /// asks only for what the bags gained since. Null for older sessions or when the bags were unreadable at Start.
+    /// </summary>
+    public List<CrossRegionManifestLine>? PrimaryBagBaseline { get; set; }
 
     [JsonIgnore]
     public uint PurchasedUnits => PurchasedManifest.Aggregate(0u, (total, line) => total + line.Quantity);
@@ -196,7 +201,12 @@ public sealed record CrossRegionRetrievalItem(uint ItemId, string ItemName, int 
 public sealed class CrossRegionStow
 {
     public string? RequestId { get; set; }
+    /// <summary>What the run delivered to the primary (completed haul and collection manifests).</summary>
+    public List<CrossRegionManifestLine> Claimed { get; set; } = [];
+    /// <summary>What was asked of Quartermaster: per item, the claim capped by what the bags gained since Start.</summary>
     public List<CrossRegionManifestLine> Items { get; set; } = [];
+    /// <summary>When the request was first persisted for submission; the stow deadline runs from here.</summary>
+    public DateTimeOffset? SubmittedAtUtc { get; set; }
     public bool Submitted { get; set; }
     public string? OperationId { get; set; }
     public List<QuartermasterDeliveredStowLine> Lines { get; set; } = [];

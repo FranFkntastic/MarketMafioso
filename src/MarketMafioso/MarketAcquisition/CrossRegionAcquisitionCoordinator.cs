@@ -399,6 +399,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             StartedAtUtc = now,
         };
         PlanCountedStock(readiness.Status?.Carrier);
+        if (request.Document.StowAfterDelivery)
+        {
+            // Nothing has reached the primary yet (funding moves gil only): what its bags hold now is not this run's.
+            session.PrimaryBagBaseline = PrimaryBagSnapshot(game.ReadCarriedBags(), request.Document);
+            if (session.PrimaryBagBaseline is null)
+                log("StowBaselineUnavailable: the primary's bags could not be read at Start; delivered items will stay in the bags.", null);
+        }
         ResetTransientState();
         if (request.FundGil > 0)
         {
@@ -427,11 +434,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public CrossRegionActionResult Stop()
     {
         var phase = session.Phase;
+        if (session.IsActive)
+            CancelOpenCustodyOperations("Stopped from MarketMafioso.");
         switch (phase)
         {
             case CrossRegionAcquisitionPhase.CollectingCountedStock when CurrentCollection()?.State != CrossRegionCollectionState.Shipping:
             case CrossRegionAcquisitionPhase.StowingDelivered:
-                // No courier custody here; a Quartermaster retrieval or stow already handed over finishes on its own.
+                // No courier custody here; an open retrieval or stow was withdrawn above. Resume settles it from its status.
                 session.InterruptedPhase = phase;
                 SetPhase(CrossRegionAcquisitionPhase.Stopped, $"Stopped during {Describe(phase)}.");
                 return CrossRegionActionResult.Ok(session.LastMessage);
@@ -540,6 +549,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     {
         if (!session.IsTerminal)
             return CrossRegionActionResult.Fail("Only a completed, failed, or stopped session can be cleared.");
+        CancelOpenCustodyOperations("Cleared from MarketMafioso.");
         try { store.Clear(); }
         catch (Exception ex) { log("Cross-regional session file could not be removed.", ex); }
         session = new CrossRegionAcquisitionSession { Phase = CrossRegionAcquisitionPhase.Idle };
@@ -690,6 +700,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             }
             awaitingResumeTransitionUntilUtc = null;
             preResumeFailure = null;
+            if (leg == CourierLeg.Collect && run.CustodyUnits == 0 && run.CustodyGil == 0)
+            {
+                OnCollectFailedWithoutCustody(run);
+                return;
+            }
             Fail(session.Phase, run.Code ?? run.State,
                 $"Courier {LegNoun(leg)} {run.State.ToLowerInvariant()}: {run.Detail ?? run.Code ?? "no detail"}",
                 run.CanResume);
@@ -735,8 +750,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         DriveCharacterSwitch(shopper, CrossRegionAcquisitionPhase.SwitchingToShopper, "ShopperSwitchFailed", now);
     }
 
-    /// <summary>Requests a character switch with bounded retries; the caller detects arrival.</summary>
-    private void DriveCharacterSwitch(CrossRegionCharacter target, CrossRegionAcquisitionPhase phase, string failureCode, DateTimeOffset now)
+    /// <summary>
+    /// Requests a character switch with bounded retries; the caller detects arrival. When attempts run out the
+    /// run fails, unless <paramref name="onExhausted"/> settles the step instead.
+    /// </summary>
+    private void DriveCharacterSwitch(CrossRegionCharacter target, CrossRegionAcquisitionPhase phase, string failureCode, DateTimeOffset now,
+        Action<string>? onExhausted = null)
     {
         if (lastSwitchRequestUtc is { } last && now - last < SwitchRetryInterval)
             return;
@@ -744,8 +763,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return;
         if (session.CharacterSwitchAttempts >= MaxCharacterSwitchAttempts)
         {
-            Fail(phase, failureCode,
-                $"Could not switch to {target.Label} after {MaxCharacterSwitchAttempts} attempts.", canResumeCourier: false);
+            var detail = $"Could not switch to {target.Label} after {MaxCharacterSwitchAttempts} attempts.";
+            if (onExhausted is not null)
+                onExhausted(detail);
+            else
+                Fail(phase, failureCode, detail, canResumeCourier: false);
             return;
         }
         session.CharacterSwitchAttempts++;
