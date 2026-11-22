@@ -14,6 +14,8 @@ public interface IQuartermasterCourierClient
     bool TrySubmitCourierTransfer(QuartermasterCourierTransferRequest request, out QuartermasterCourierAcknowledgement? acknowledgement, out string error);
     bool TryStopCourierRun(string runId, out QuartermasterCourierAcknowledgement? acknowledgement, out string error);
     bool TryResumeCourierRun(string runId, out QuartermasterCourierAcknowledgement? acknowledgement, out string error);
+    /// <summary>Pairs <paramref name="owner"/> on the configured carrier. Blocks for the carrier round trip; call off the framework thread.</summary>
+    bool TryPairCourierOwner(QuartermasterCourierCharacter owner, out QuartermasterCourierAcknowledgement? acknowledgement, out string error);
 }
 
 public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
@@ -23,6 +25,7 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
     public const string SubmitCourierTransferChannel = "Quartermaster.v1.SubmitCourierTransfer";
     public const string StopCourierRunChannel = "Quartermaster.v1.StopCourierRun";
     public const string ResumeCourierRunChannel = "Quartermaster.v1.ResumeCourierRun";
+    public const string PairCourierOwnerChannel = "Quartermaster.v1.PairCourierOwner";
     public const string CourierStatusSchema = "gooseworks-quartermaster-courier-status/v1";
     public const string CourierTransferSchema = "gooseworks-quartermaster-courier-transfer/v1";
     public const string CourierTransferAckSchema = "gooseworks-quartermaster-courier-transfer-ack/v1";
@@ -118,6 +121,36 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
 
     public bool TryResumeCourierRun(string runId, out QuartermasterCourierAcknowledgement? acknowledgement, out string error) =>
         TryCourierRunCommand(runId, stop: false, out acknowledgement, out error);
+
+    public bool TryPairCourierOwner(QuartermasterCourierCharacter owner, out QuartermasterCourierAcknowledgement? acknowledgement, out string error)
+    {
+        acknowledgement = null;
+        ArgumentNullException.ThrowIfNull(owner);
+        if (owner.LocalContentId == 0 || owner.HomeWorldId == 0)
+        {
+            error = "A known character is required to pair it on the carrier.";
+            return false;
+        }
+        if (!EnsureUsable(out error))
+            return false;
+        bool available;
+        try { available = adapter.HasPairCourierOwner; }
+        catch (Exception ex) { error = $"Quartermaster courier availability check failed: {ex.Message}"; return false; }
+        if (!available)
+        {
+            error = "Quartermaster does not expose courier owner pairing; update Quartermaster.";
+            return false;
+        }
+        string json;
+        var payload = JsonSerializer.Serialize(ToCourierWire(owner), JsonOptions);
+        try { json = adapter.PairCourierOwner(payload); }
+        catch (Exception ex)
+        {
+            error = $"Quartermaster courier pairing failed; outcome is unknown: {ex.Message}";
+            return false;
+        }
+        return TryParseCourierAcknowledgement(json, out acknowledgement, out error);
+    }
 
     private bool TryCourierRunCommand(string runId, bool stop, out QuartermasterCourierAcknowledgement? acknowledgement, out string error)
     {

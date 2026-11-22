@@ -30,6 +30,8 @@ public interface IQuartermasterIpcAdapter
     string SubmitCourierTransfer(string requestJson);
     string StopCourierRun(string runId);
     string ResumeCourierRun(string runId);
+    bool HasPairCourierOwner { get; }
+    string PairCourierOwner(string ownerJson);
     void SubscribeChanged(Action<string> handler);
     void UnsubscribeChanged(Action<string> handler);
 }
@@ -46,6 +48,7 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
     private readonly ICallGateSubscriber<string, string> submitCourierTransfer;
     private readonly ICallGateSubscriber<string, string> stopCourierRun;
     private readonly ICallGateSubscriber<string, string> resumeCourierRun;
+    private readonly ICallGateSubscriber<string, string> pairCourierOwner;
 
     public DalamudQuartermasterIpcAdapter(IDalamudPluginInterface pluginInterface)
     {
@@ -60,6 +63,7 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
         submitCourierTransfer = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.SubmitCourierTransferChannel);
         stopCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.StopCourierRunChannel);
         resumeCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.ResumeCourierRunChannel);
+        pairCourierOwner = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.PairCourierOwnerChannel);
     }
 
     public bool HasCapabilities => capabilities.HasFunction;
@@ -80,6 +84,8 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
     public string SubmitCourierTransfer(string requestJson) => submitCourierTransfer.InvokeFunc(requestJson);
     public string StopCourierRun(string runId) => stopCourierRun.InvokeFunc(runId);
     public string ResumeCourierRun(string runId) => resumeCourierRun.InvokeFunc(runId);
+    public bool HasPairCourierOwner => pairCourierOwner.HasFunction;
+    public string PairCourierOwner(string ownerJson) => pairCourierOwner.InvokeFunc(ownerJson);
     public void SubscribeChanged(Action<string> handler) => changed.Subscribe(handler);
     public void UnsubscribeChanged(Action<string> handler) => changed.Unsubscribe(handler);
 }
