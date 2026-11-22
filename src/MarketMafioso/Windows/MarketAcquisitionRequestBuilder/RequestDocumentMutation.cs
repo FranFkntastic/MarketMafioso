@@ -68,6 +68,8 @@ public static class RequestDocumentMutation
                 ? maximumOverage
                 : 0,
             MaxQuantity = maxQuantity,
+            RestockReserve = originalLine.RestockReserve &&
+                             string.Equals(quantityMode, "TargetQuantity", StringComparison.OrdinalIgnoreCase),
             HqPolicy = string.IsNullOrWhiteSpace(hqPolicy) ? "Either" : hqPolicy,
             MaxUnitPrice = maxUnitPrice,
             GilCap = gilCap,

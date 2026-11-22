@@ -16,7 +16,28 @@ public sealed class RetainerAwareMarketAcquisitionInventoryObserver(
 
     public MarketAcquisitionCapacityObservation Capacity(uint itemId, bool isHq) => player.Capacity(itemId, isHq);
 
+    /// <summary>
+    /// Stock on other characters selected under "Count stock from", added to every on-hand basis. Returns
+    /// null when nothing extra applies; an unavailable observation makes the whole count unknown.
+    /// </summary>
+    internal Func<uint, string, MarketAcquisitionInventoryObservation?>? AdditionalStock { get; set; }
+
     public MarketAcquisitionInventoryObservation Observe(uint itemId, string hqPolicy, string targetBasis)
+    {
+        var own = ObserveOwn(itemId, hqPolicy, targetBasis);
+        if (!own.IsAvailable || !MarketAcquisitionTargetBases.CountsOnHand(targetBasis) ||
+            AdditionalStock?.Invoke(itemId, hqPolicy) is not { } extra)
+            return own;
+        if (!extra.IsAvailable)
+            return extra;
+        return own with
+        {
+            Quantity = checked(own.Quantity + extra.Quantity),
+            Message = $"{own.Message} Other characters {extra.Quantity:N0}.",
+        };
+    }
+
+    private MarketAcquisitionInventoryObservation ObserveOwn(uint itemId, string hqPolicy, string targetBasis)
     {
         var carried = player.Observe(itemId, hqPolicy);
         if (MarketAcquisitionTargetBases.Normalize(targetBasis) != MarketAcquisitionTargetBases.OnHandIncludingRetainers ||

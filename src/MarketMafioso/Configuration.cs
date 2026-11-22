@@ -477,6 +477,10 @@ public sealed class PersistedMarketAcquisitionRequestDocument
     public string SweepScope { get; set; } = string.Empty;
     public List<string> SweepDataCenters { get; set; } = [];
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
+    // Null in documents saved before the plan-level choice existed; derived from the lines then.
+    public bool? CountRetainerStock { get; set; }
+    public List<PersistedMarketAcquisitionStockSource>? AdditionalStockSources { get; set; }
+    public bool StowAfterDelivery { get; set; }
     public string? ExactAcquisitionAuthorityJson { get; set; }
     public string? RemoteRequestId { get; set; }
     public int RemoteRevision { get; set; }
@@ -502,6 +506,17 @@ public sealed class PersistedMarketAcquisitionRequestLineDocument
     public string HqPolicy { get; set; } = string.Empty;
     public uint MaxUnitPrice { get; set; }
     public uint GilCap { get; set; }
+    public bool RestockReserve { get; set; }
+}
+
+[Serializable]
+public sealed class PersistedMarketAcquisitionStockSource
+{
+    public ulong LocalContentId { get; set; }
+    public uint HomeWorldId { get; set; }
+    public string? CharacterName { get; set; }
+    public string? HomeWorldName { get; set; }
+    public string Container { get; set; } = string.Empty;
 }
 
 [Serializable]

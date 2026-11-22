@@ -17,7 +17,13 @@ public static class MarketAcquisitionRequestDocumentHasher
         ComputeIntentHash(document with
         {
             RunSpendCap = 0,
-            Lines = document.Lines.Select(line => line with { TargetBasis = MarketAcquisitionTargetBases.Hosted(line.TargetBasis) }).ToList(),
+            AdditionalStockSources = [],
+            StowAfterDelivery = false,
+            Lines = document.Lines.Select(line => line with
+            {
+                TargetBasis = MarketAcquisitionTargetBases.Hosted(line.TargetBasis),
+                RestockReserve = false,
+            }).ToList(),
         });
 
     public static string ComputeIntentHash(MarketAcquisitionRequestDocument document)
@@ -35,6 +41,15 @@ public static class MarketAcquisitionRequestDocumentHasher
                 .Select(value => value.Trim())
                 .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
+            // Local stock policy; omitted when unset so earlier documents keep their hashes.
+            AdditionalStockSources = document.AdditionalStockSources.Count == 0
+                ? null
+                : document.AdditionalStockSources
+                    .Select(source => $"{source.LocalContentId}:{source.HomeWorldId}:{source.Container}")
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(value => value, StringComparer.Ordinal)
+                    .ToArray(),
+            StowAfterDelivery = document.StowAfterDelivery ? true : (bool?)null,
             Lines = document.Lines
                 .Select(line => new
                 {
@@ -49,6 +64,7 @@ public static class MarketAcquisitionRequestDocumentHasher
                     HqPolicy = Normalize(line.HqPolicy),
                     line.MaxUnitPrice,
                     line.GilCap,
+                    RestockReserve = line.RestockReserve ? true : (bool?)null,
                 })
                 .ToArray(),
         };

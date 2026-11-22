@@ -306,7 +306,7 @@ public partial class MainWindow : Window, IDisposable
             RefreshAcquisitionRequestBuilderRemoteAsync,
             acquisitionWorkspace.OnDocumentAdopted,
             AgentReviewRegistry,
-            acquisitionServices.InventoryObserver)
+            acquisitionServices.WorkbenchStock)
         {
             DrawRouteScopeExtras = DrawCrossRegionWorkbenchSection,
         };
@@ -1526,6 +1526,11 @@ public partial class MainWindow : Window, IDisposable
 
         ImGui.BeginGroup();
         ImGui.TextColored(presentation.CanFinalize ? ColSuccess : ColMuted, presentation.Title);
+        if (acquisitionRequestBuilder.StowToRetainersCount is var stowCount and > 0)
+        {
+            ImGui.SameLine(0, 0);
+            ImGui.TextColored(ColMuted, $" · {stowCount:N0} stow to retainers");
+        }
         ImGui.TextColored(ColMuted, presentation.Detail);
         ImGui.EndGroup();
 

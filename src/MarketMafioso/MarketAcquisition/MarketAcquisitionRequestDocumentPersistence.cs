@@ -33,10 +33,22 @@ internal static class MarketAcquisitionRequestDocumentPersistence
         PersistedMarketAcquisitionRequestDocument stored,
         string characterName = "",
         string world = "") =>
-        new()
+        new MarketAcquisitionRequestDocument
         {
             LocalRequestId = stored.LocalRequestId,
             RunSpendCap = stored.RunSpendCap,
+            // Before the plan-level choice existed, any line counting retainer stock meant the
+            // current character's retainers were selected for the plan.
+            CountRetainerStock = stored.CountRetainerStock ?? stored.Lines.Any(line =>
+                line.QuantityMode == "TargetQuantity" &&
+                MarketAcquisitionTargetBases.Normalize(line.TargetBasis) == MarketAcquisitionTargetBases.OnHandIncludingRetainers),
+            AdditionalStockSources = (stored.AdditionalStockSources ?? [])
+                .Where(source => source.LocalContentId != 0 &&
+                                 source.Container is MarketAcquisitionStockSourceKey.Bags or MarketAcquisitionStockSourceKey.Retainers)
+                .Select(source => new MarketAcquisitionStockSourceKey(source.LocalContentId, source.HomeWorldId,
+                    source.CharacterName ?? string.Empty, source.HomeWorldName ?? string.Empty, source.Container))
+                .ToList(),
+            StowAfterDelivery = stored.StowAfterDelivery,
             LocalRevision = Math.Max(1, stored.LocalRevision),
             TargetCharacterName = string.IsNullOrWhiteSpace(stored.TargetCharacterName)
                 ? characterName
@@ -64,6 +76,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
                     HqPolicy = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy,
                     MaxUnitPrice = line.MaxUnitPrice,
                     GilCap = line.GilCap,
+                    RestockReserve = line.RestockReserve && line.QuantityMode == "TargetQuantity",
                 })
                 .ToList(),
             ExactAcquisitionAuthority = ExactAcquisitionWorkbenchAuthorityPersistence.Restore(stored.ExactAcquisitionAuthorityJson),
@@ -77,7 +90,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
             UpdatedAtUtc = stored.UpdatedAtUtc == default
                 ? DateTimeOffset.UtcNow
                 : new DateTimeOffset(DateTime.SpecifyKind(stored.UpdatedAtUtc, DateTimeKind.Utc)),
-        };
+        }.WithNormalizedStockScope();
 
     public static void Save(Configuration config, MarketAcquisitionRequestDocument document)
     {
@@ -90,6 +103,18 @@ internal static class MarketAcquisitionRequestDocumentPersistence
         {
             LocalRequestId = document.LocalRequestId,
             RunSpendCap = document.RunSpendCap,
+            CountRetainerStock = document.CountRetainerStock,
+            AdditionalStockSources = document.AdditionalStockSources
+                .Select(source => new PersistedMarketAcquisitionStockSource
+                {
+                    LocalContentId = source.LocalContentId,
+                    HomeWorldId = source.HomeWorldId,
+                    CharacterName = source.CharacterName,
+                    HomeWorldName = source.HomeWorldName,
+                    Container = source.Container,
+                })
+                .ToList(),
+            StowAfterDelivery = document.StowAfterDelivery,
             LocalRevision = document.LocalRevision,
             TargetCharacterName = document.TargetCharacterName,
             TargetWorld = document.TargetWorld,
@@ -111,6 +136,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
                     HqPolicy = line.HqPolicy,
                     MaxUnitPrice = line.MaxUnitPrice,
                     GilCap = line.GilCap,
+                    RestockReserve = line.RestockReserve,
                 })
                 .ToList(),
             ExactAcquisitionAuthorityJson = ExactAcquisitionWorkbenchAuthorityPersistence.Serialize(document.ExactAcquisitionAuthority),
