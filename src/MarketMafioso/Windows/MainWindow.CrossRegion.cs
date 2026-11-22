@@ -267,6 +267,20 @@ public partial class MainWindow
             DrawCrossRegionPurchasedTable(session);
         if (session.IsTerminal)
             DrawCrossRegionLineResults(CrossRegion.LineResults());
+        DrawCrossRegionForwards();
+    }
+
+    /// <summary>Forwards of earlier, possibly cleared runs; the current run shows its own in its summary and line results.</summary>
+    private void DrawCrossRegionForwards()
+    {
+        var current = CrossRegion.HasSession ? CrossRegion.Session.SessionId : (Guid?)null;
+        foreach (var watch in CrossRegion.Forwards)
+        {
+            if (watch.SessionId == current)
+                continue;
+            var color = !watch.Settled ? ColMuted : watch.Code == "Delivered" ? ColSuccess : ColWarning;
+            ImGui.TextColored(color, CrossRegionAcquisitionCoordinator.DescribeForward(watch));
+        }
     }
 
     private bool CurrentDocumentStowsAfterDelivery()
@@ -300,6 +314,7 @@ public partial class MainWindow
         CrossRegionAcquisitionCoordinator.CodeStowNotObserved => "stow not reported",
         CrossRegionAcquisitionCoordinator.CodeStowPartial => "partly stowed",
         CrossRegionAcquisitionCoordinator.LineCodeNotCarried => "no longer in bags",
+        CrossRegionAcquisitionCoordinator.CodeRetrievalWouldTakeHomeStock => "retainers: other quality stays home",
         "NoRoom" => "no room in home",
         "PartlyStowed" => "partly stowed",
         "NotStowed" => "not stowed",
@@ -350,7 +365,7 @@ public partial class MainWindow
             else
                 ImGui.TextUnformatted(row.Stowed.ToString("N0"));
             ImGui.TableNextColumn();
-            ImGui.TextColored(ColMuted, string.Join(", ", row.Codes.Select(DescribeCrossRegionCode)));
+            ImGui.TextColored(ColMuted, string.Join(", ", row.Codes.Select(DescribeCrossRegionCode).Concat(row.Notes ?? [])));
         }
         ImGui.EndTable();
     }

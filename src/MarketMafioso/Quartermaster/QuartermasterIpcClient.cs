@@ -65,6 +65,7 @@ public sealed partial class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAd
         resumeCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.ResumeCourierRunChannel);
         pairCourierOwner = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.PairCourierOwnerChannel);
         InitializeDeliveredStow(pluginInterface);
+        InitializeDirectDelivery(pluginInterface);
     }
 
     public bool HasCapabilities => capabilities.HasFunction;
