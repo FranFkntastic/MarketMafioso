@@ -17,6 +17,7 @@ public sealed record MarketAcquisitionRequestDocument
     public string SweepScope { get; init; } = "Region";
     public List<string> SweepDataCenters { get; init; } = [];
     public List<MarketAcquisitionRequestLineDocument> Lines { get; init; } = [];
+    public bool StowAfterDelivery { get; init; }
     public ExactAcquisitionWorkbenchAuthority? ExactAcquisitionAuthority { get; init; }
     public string? RemoteRequestId { get; init; }
     public int RemoteRevision { get; init; }
@@ -76,4 +77,5 @@ public sealed record MarketAcquisitionRequestLineDocument
     public string HqPolicy { get; init; } = "Either";
     public uint MaxUnitPrice { get; init; }
     public uint GilCap { get; init; }
+    public IReadOnlyList<MarketAcquisitionCountedStockSource> CountedStock { get; init; } = [];
 }
