@@ -22,6 +22,14 @@ public interface IQuartermasterIpcAdapter
     string SubmitShortages(string requestJson);
     string SubmitElementalDeposit(string requestJson);
     string GetOperation(string operationId);
+    bool HasCourierStatus { get; }
+    bool HasSubmitCourierTransfer { get; }
+    bool HasStopCourierRun { get; }
+    bool HasResumeCourierRun { get; }
+    string GetCourierStatus();
+    string SubmitCourierTransfer(string requestJson);
+    string StopCourierRun(string runId);
+    string ResumeCourierRun(string runId);
     void SubscribeChanged(Action<string> handler);
     void UnsubscribeChanged(Action<string> handler);
 }
@@ -34,6 +42,10 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
     private readonly ICallGateSubscriber<string, string> submitElementalDeposit;
     private readonly ICallGateSubscriber<string, string> operation;
     private readonly ICallGateSubscriber<string, object> changed;
+    private readonly ICallGateSubscriber<string> courierStatus;
+    private readonly ICallGateSubscriber<string, string> submitCourierTransfer;
+    private readonly ICallGateSubscriber<string, string> stopCourierRun;
+    private readonly ICallGateSubscriber<string, string> resumeCourierRun;
 
     public DalamudQuartermasterIpcAdapter(IDalamudPluginInterface pluginInterface)
     {
@@ -44,6 +56,10 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
         submitElementalDeposit = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.SubmitElementalDepositChannel);
         operation = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.GetOperationChannel);
         changed = pluginInterface.GetIpcSubscriber<string, object>(QuartermasterIpcClient.ChangedChannel);
+        courierStatus = pluginInterface.GetIpcSubscriber<string>(QuartermasterIpcClient.GetCourierStatusChannel);
+        submitCourierTransfer = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.SubmitCourierTransferChannel);
+        stopCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.StopCourierRunChannel);
+        resumeCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.ResumeCourierRunChannel);
     }
 
     public bool HasCapabilities => capabilities.HasFunction;
@@ -56,11 +72,19 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
     public string SubmitShortages(string requestJson) => submitShortages.InvokeFunc(requestJson);
     public string SubmitElementalDeposit(string requestJson) => submitElementalDeposit.InvokeFunc(requestJson);
     public string GetOperation(string operationId) => operation.InvokeFunc(operationId);
+    public bool HasCourierStatus => courierStatus.HasFunction;
+    public bool HasSubmitCourierTransfer => submitCourierTransfer.HasFunction;
+    public bool HasStopCourierRun => stopCourierRun.HasFunction;
+    public bool HasResumeCourierRun => resumeCourierRun.HasFunction;
+    public string GetCourierStatus() => courierStatus.InvokeFunc();
+    public string SubmitCourierTransfer(string requestJson) => submitCourierTransfer.InvokeFunc(requestJson);
+    public string StopCourierRun(string runId) => stopCourierRun.InvokeFunc(runId);
+    public string ResumeCourierRun(string runId) => resumeCourierRun.InvokeFunc(runId);
     public void SubscribeChanged(Action<string> handler) => changed.Subscribe(handler);
     public void UnsubscribeChanged(Action<string> handler) => changed.Unsubscribe(handler);
 }
 
-public sealed class QuartermasterIpcClient : IDisposable
+public sealed partial class QuartermasterIpcClient : IDisposable
 {
     public const string RetainerManagementChangedKind = "retainer_management";
     public const string RetainerListingsChangedKind = "retainer_listings";

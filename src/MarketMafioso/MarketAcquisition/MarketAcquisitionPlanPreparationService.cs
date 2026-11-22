@@ -49,6 +49,11 @@ public sealed class MarketAcquisitionPlanPreparationService
         foreach (var line in planLines.Where(line => line.QuantityMode == "TargetQuantity" &&
                      MarketAcquisitionTargetBases.CountsOnHand(line.TargetBasis)))
         {
+            if (request.InventoryBaselineOverrides?.TryGetValue(line.LineId, out var overridden) == true)
+            {
+                baselines[line.LineId] = overridden;
+                continue;
+            }
             var observation = inventoryObserver?.Observe(line.ItemId, line.HqPolicy, line.TargetBasis);
             if (observation?.IsAvailable != true)
                 throw new InvalidOperationException($"Cannot finalize safely for {line.ItemName}: {observation?.Message ?? "Inventory observer unavailable."}");
@@ -290,6 +295,8 @@ public sealed record MarketAcquisitionPlanPreparationRequest
     public DateTimeOffset PreparedAtUtc { get; init; } = DateTimeOffset.UtcNow;
     public TimeSpan RecentWorldTtl { get; init; }
     public bool IgnoreRecentWorldVisitsForSweep { get; init; }
+    /// <summary>Per-line on-hand counts that replace a live observation (a cross-regional shopper planning for its primary).</summary>
+    public IReadOnlyDictionary<string, uint>? InventoryBaselineOverrides { get; init; }
 }
 
 public sealed record MarketAcquisitionPlanPreparationResult

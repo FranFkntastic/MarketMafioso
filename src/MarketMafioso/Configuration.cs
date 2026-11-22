@@ -70,6 +70,10 @@ public class Configuration : IPluginConfiguration
         MarketAcquisitionRouteDiagnosticsLevel.Summary;
     public bool MarketAcquisitionExhaustiveResearchMode { get; set; } = false;
     public bool MarketAcquisitionAethernetDeparture { get; set; } = true;
+    /// <summary>Courier roster content id of the cross-regional shopper; 0 means none chosen.</summary>
+    public ulong CrossRegionShopperContentId { get; set; }
+    /// <summary>Exact carried gil the courier moves from primary to shopper before shopping; 0 skips the transfer.</summary>
+    public int CrossRegionFundGil { get; set; }
     public bool MarketAcquisitionRouteAlerts { get; set; } = true;
     public bool ArchiveCompletedMarketAcquisitionRouteDiagnostics { get; set; } = true;
     public int MarketAcquisitionRouteDiagnosticsHotDays { get; set; } = 14;
