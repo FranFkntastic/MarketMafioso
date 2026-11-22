@@ -529,6 +529,10 @@ public sealed class PersistedMarketAcquisitionWorkbenchComposition
     public string SweepScope { get; set; } = string.Empty;
     public List<string> SweepDataCenters { get; set; } = [];
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
+    // Null in a composition saved before stock scope was kept: loading it leaves the Workbench's scope as it is.
+    public bool? CountRetainerStock { get; set; }
+    public List<PersistedMarketAcquisitionStockSource>? AdditionalStockSources { get; set; }
+    public bool StowAfterDelivery { get; set; }
     public DateTime CreatedAtUtc { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
 }

@@ -515,7 +515,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 if (row.StaleAge is { } rowAge)
                 {
                     ImGui.SameLine(0, 0);
-                    ImGui.TextColored(MainWindow.ColWarning, $" · {FormatAge(rowAge)}");
+                    ImGui.TextColored(MainWindow.ColWarning, $" · {FormatAge(rowAge, row.NewestAge)}");
                 }
                 ImGui.TableNextColumn();
                 if (row.Quantity is { } quantity)
@@ -534,6 +534,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private static string FormatAge(TimeSpan age) =>
         age.TotalHours >= 48 ? $"{age.TotalDays:N1}d" : $"{age.TotalHours:N1}h";
+
+    /// <summary>A group of retainers seen at different times reads as a range, newest to oldest.</summary>
+    private static string FormatAge(TimeSpan oldest, TimeSpan? newest) =>
+        newest is { } fresh && FormatAge(fresh) != FormatAge(oldest) ? $"{FormatAge(fresh)}–{FormatAge(oldest)}" : FormatAge(oldest);
 
     /// <summary>Read-only placement summary; clicking opens Quartermaster's placement editor for this item.</summary>
     private void DrawGoesToCell(MarketAcquisitionRequestLineDocument line)
@@ -598,7 +602,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             if (option.StaleAge is { } age)
             {
                 ImGui.SameLine(0, 0);
-                ImGui.TextColored(MainWindow.ColWarning, $" · {FormatAge(age)}");
+                ImGui.TextColored(MainWindow.ColWarning, $" · {FormatAge(age, option.NewestAge)}");
             }
         }
         ImGui.EndCombo();

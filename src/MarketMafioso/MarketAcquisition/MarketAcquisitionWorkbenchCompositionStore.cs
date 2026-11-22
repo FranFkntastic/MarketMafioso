@@ -81,6 +81,17 @@ public sealed class ConfigurationMarketAcquisitionWorkbenchCompositionStore : IM
             SweepScope = string.IsNullOrWhiteSpace(stored.SweepScope) ? "Region" : stored.SweepScope,
             SweepDataCenters = stored.SweepDataCenters?.ToList() ?? [],
             Lines = (stored.Lines ?? []).Select(FromPersistedLine).ToList(),
+            StockScope = stored.CountRetainerStock is { } countRetainers
+                ? new(
+                    countRetainers,
+                    (stored.AdditionalStockSources ?? [])
+                        .Where(source => source.LocalContentId != 0 &&
+                                         source.Container is MarketAcquisitionStockSourceKey.Bags or MarketAcquisitionStockSourceKey.Retainers)
+                        .Select(source => new MarketAcquisitionStockSourceKey(source.LocalContentId, source.HomeWorldId,
+                            source.CharacterName ?? string.Empty, source.HomeWorldName ?? string.Empty, source.Container))
+                        .ToList(),
+                    stored.StowAfterDelivery)
+                : null,
             CreatedAtUtc = ToUtc(stored.CreatedAtUtc),
             UpdatedAtUtc = ToUtc(stored.UpdatedAtUtc),
         };
@@ -96,6 +107,18 @@ public sealed class ConfigurationMarketAcquisitionWorkbenchCompositionStore : IM
             SweepScope = composition.SweepScope,
             SweepDataCenters = composition.SweepDataCenters.ToList(),
             Lines = composition.Lines.Select(ToPersistedLine).ToList(),
+            CountRetainerStock = composition.StockScope?.CountRetainerStock,
+            AdditionalStockSources = composition.StockScope?.AdditionalStockSources
+                .Select(source => new PersistedMarketAcquisitionStockSource
+                {
+                    LocalContentId = source.LocalContentId,
+                    HomeWorldId = source.HomeWorldId,
+                    CharacterName = source.CharacterName,
+                    HomeWorldName = source.HomeWorldName,
+                    Container = source.Container,
+                })
+                .ToList(),
+            StowAfterDelivery = composition.StockScope?.StowAfterDelivery ?? false,
             CreatedAtUtc = composition.CreatedAtUtc.UtcDateTime,
             UpdatedAtUtc = composition.UpdatedAtUtc.UtcDateTime,
         };
