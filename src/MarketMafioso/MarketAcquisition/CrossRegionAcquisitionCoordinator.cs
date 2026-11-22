@@ -86,6 +86,7 @@ public sealed class CrossRegionAcquisitionCoordinator
     private static readonly TimeSpan CloseBoardTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan BagReadTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AcceptedRunAppearanceTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ResumeTransitionTimeout = TimeSpan.FromSeconds(10);
     private const int MaxCharacterSwitchAttempts = 3;
     private const int MaxSubmitAttempts = 5;
     private const int MaxRecordedPurchaseKeys = 4096;
@@ -102,6 +103,8 @@ public sealed class CrossRegionAcquisitionCoordinator
     private DateTimeOffset? fundArrivalWaitStartedUtc;
     private DateTimeOffset? closeStartedUtc;
     private DateTimeOffset? awaitingRunAppearanceSinceUtc;
+    private DateTimeOffset? awaitingResumeTransitionUntilUtc;
+    private (string State, string? Code, string? Detail)? preResumeFailure;
     private bool prepareIssued;
     private int submitAttempts;
     private QuartermasterCourierStatus? cachedStatus;
@@ -604,8 +607,10 @@ public sealed class CrossRegionAcquisitionCoordinator
             Save();
         }
 
-        if (run.IsRunning)
+        if (run.IsRunning || run.Active)
         {
+            awaitingResumeTransitionUntilUtc = null;
+            preResumeFailure = null;
             var summary = FormatCourierPhase(run);
             if (!string.Equals(summary, session.CourierPhaseSummary, StringComparison.Ordinal))
             {
@@ -617,6 +622,8 @@ public sealed class CrossRegionAcquisitionCoordinator
         }
         if (run.IsCompleted)
         {
+            awaitingResumeTransitionUntilUtc = null;
+            preResumeFailure = null;
             session.CourierPhaseSummary = null;
             if (fund)
             {
@@ -633,6 +640,17 @@ public sealed class CrossRegionAcquisitionCoordinator
         }
         if (run.IsFailure)
         {
+            // Quartermaster starts Resume() asynchronously; ignore the identical pre-resume failure briefly
+            // until QM transitions to Active/Running or settles into a new outcome.
+            if (awaitingResumeTransitionUntilUtc is { } until &&
+                now < until &&
+                preResumeFailure == (run.State, run.Code, run.Detail))
+            {
+                session.LastMessage = $"Waiting for Quartermaster to resume {(fund ? "funding" : "the return haul")}…";
+                return;
+            }
+            awaitingResumeTransitionUntilUtc = null;
+            preResumeFailure = null;
             Fail(session.Phase, run.Code ?? run.State,
                 $"Courier {(fund ? "funding" : "return haul")} {run.State.ToLowerInvariant()}: {run.Detail ?? run.Code ?? "no detail"}",
                 run.CanResume);
@@ -919,6 +937,8 @@ public sealed class CrossRegionAcquisitionCoordinator
         }
         session.CanResumeCourier = false;
         session.LastErrorCode = null;
+        awaitingResumeTransitionUntilUtc = utcNow() + ResumeTransitionTimeout;
+        preResumeFailure = (run.State, run.Code, run.Detail);
         SetPhase(target, $"Resumed courier {(fund ? "funding" : "return haul")}.");
         return CrossRegionActionResult.Ok(session.LastMessage);
     }
@@ -1143,6 +1163,8 @@ public sealed class CrossRegionAcquisitionCoordinator
         fundArrivalWaitStartedUtc = null;
         closeStartedUtc = null;
         awaitingRunAppearanceSinceUtc = null;
+        awaitingResumeTransitionUntilUtc = null;
+        preResumeFailure = null;
         prepareIssued = false;
         submitAttempts = 0;
     }
