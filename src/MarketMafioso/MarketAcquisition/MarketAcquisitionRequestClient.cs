@@ -740,6 +740,11 @@ public sealed class MarketAcquisitionLifecycleHttpException : HttpRequestExcepti
 
     public string? ResponseBody { get; }
 
+    /// <summary>The server released this claim (cancelled, reset or terminal); drop the local claim.</summary>
+    public bool IsClaimReleased =>
+        StatusCode == HttpStatusCode.Conflict &&
+        ResponseBody?.Contains("\"claim_released\"", StringComparison.Ordinal) == true;
+
     private static string BuildMessage(HttpStatusCode statusCode, string action, string? error) =>
         string.IsNullOrWhiteSpace(error)
             ? $"Market acquisition {action} failed with {(int)statusCode} {statusCode}."

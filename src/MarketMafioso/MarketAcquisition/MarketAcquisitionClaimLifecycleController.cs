@@ -74,6 +74,19 @@ public sealed class MarketAcquisitionClaimLifecycleController
         long reportSessionVersion,
         long currentSessionVersion)
     {
+        if (exception is MarketAcquisitionLifecycleHttpException { IsClaimReleased: true })
+        {
+            if (currentSessionVersion != reportSessionVersion || getClaimedRequest()?.Id != claimed.Id)
+                return true;
+
+            MarketAcquisitionClaimPersistence.Clear(config);
+            setClaimedRequest(null);
+            clearClaimMetadata();
+            setStatus("Server released this claim; fetch dashboard requests to continue.");
+            saveConfig();
+            return true;
+        }
+
         if (exception is not MarketAcquisitionLifecycleHttpException { StatusCode: HttpStatusCode.Conflict } conflict ||
             !TryExtractInvalidTransitionSourceStatus(conflict.Error, out var sourceStatus))
         {

@@ -1648,7 +1648,18 @@ public partial class MainWindow : Window, IDisposable
             world,
             IsExpectedCharacterScopeGap(),
             visibleStatus,
-            GetAcquisitionStatusColor(visibleStatus)));
+            GetAcquisitionStatusColor(visibleStatus),
+            routeEngine.StuckReportRequestId,
+            DropStuckAcquisitionReport));
+    }
+
+    private void DropStuckAcquisitionReport(string requestId)
+    {
+        if (routeEngine.DropStuckReport(requestId))
+        {
+            log.Warning($"[MarketMafioso] User dropped the stuck report at the head of acquisition request {requestId}'s outbox.");
+            acquisitionWorkspace.SetStatus("Dropped the stuck report; the order's other reports will keep sending.");
+        }
     }
 
     private void DrawMarketAcquisitionPlan()

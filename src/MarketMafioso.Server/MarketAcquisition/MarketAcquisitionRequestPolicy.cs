@@ -107,21 +107,16 @@ internal static class MarketAcquisitionRequestPolicy
 
     public static void EnsureCanReplaceBatch(MarketAcquisitionRequestView current)
     {
-        if (current.Status is MarketAcquisitionStatuses.Running
-            or MarketAcquisitionStatuses.RecoveryRequired
-            or MarketAcquisitionStatuses.Complete
-            or MarketAcquisitionStatuses.Failed
-            or MarketAcquisitionStatuses.Rejected
-            or MarketAcquisitionStatuses.Expired
-            or MarketAcquisitionStatuses.Cancelled
-            or MarketAcquisitionStatuses.Shelved
-            or MarketAcquisitionStatuses.Archived)
+        // A plugin that accepted or is executing the order still drives its intent.
+        if (current.Status is MarketAcquisitionStatuses.AcceptedInPlugin
+            or MarketAcquisitionStatuses.Running
+            or MarketAcquisitionStatuses.RecoveryRequired)
         {
             throw new MarketAcquisitionInvalidTransitionException(current.Status, "editable request intent");
         }
 
-        if (!string.IsNullOrWhiteSpace(current.LatestAttemptEventType) ||
-            current.Lines.Any(line => line.PurchasedQuantity > 0 || line.SpentGil > 0))
+        // Replacing deletes the batch lines, so recorded purchases (gil spent) must not be wiped.
+        if (current.Lines.Any(line => line.PurchasedQuantity > 0 || line.SpentGil > 0))
         {
             throw new MarketAcquisitionInvalidTransitionException(current.Status, "editable request intent");
         }
@@ -229,8 +224,6 @@ internal static class MarketAcquisitionRequestPolicy
             throw new ArgumentException("Retainer name is required.", nameof(request));
         if (request.Quantity == 0)
             throw new ArgumentException("Purchase quantity is required.", nameof(request));
-        if (request.UnitPrice == 0 || request.TotalGil == 0)
-            throw new ArgumentException("Purchase gil values are required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Result))
             throw new ArgumentException("Purchase result is required.", nameof(request));
     }

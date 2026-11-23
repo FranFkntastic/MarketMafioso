@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using MarketMafioso.MarketAcquisition;
@@ -17,4 +18,6 @@ internal sealed record MarketAcquisitionRequestPickupContext(
     string World,
     bool IsExpectedCharacterScopeGap,
     string VisibleStatus,
-    Vector4 VisibleStatusColor);
+    Vector4 VisibleStatusColor,
+    string? StuckReportRequestId = null,
+    Action<string>? DropStuckReport = null);

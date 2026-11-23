@@ -125,9 +125,12 @@
                                         {
                                             <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
                                         }
-                                        @if (context.Item.Status == "PendingPickup")
+                                        @if (IsActiveRequest(context.Item))
                                         {
                                             <MudMenuItem OnClick="@(() => ShelfRequested.InvokeAsync(context.Item))">Shelf</MudMenuItem>
+                                        }
+                                        @if (context.Item.Status == "PendingPickup")
+                                        {
                                             <MudMenuItem OnClick="@(() => SetMergeTarget(context.Item))">Merge others into this</MudMenuItem>
                                         }
                                         @if (context.Item.Status == "Shelved")
@@ -173,6 +176,7 @@
     [Parameter] public EventCallback<MarketAcquisitionMergeSelection> MergeRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> EditRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> CloneAndEditRequested { get; set; }
 
     private int ActiveRequestCount => Requests.Count(IsActiveRequest);
 
@@ -229,7 +233,7 @@
         request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired" or "Archived";
 
     private static bool CanArchive(MarketAcquisitionRequestView request) =>
-        request.Status is "PendingPickup" or "Shelved" or "Complete" or "Failed" or "Cancelled" or "Rejected";
+        request.Status != "Archived";
 
     private bool CanMergeIntoSelected(MarketAcquisitionRequestView source) =>
         MergeTarget is { Status: "PendingPickup" } target &&
@@ -244,6 +248,8 @@
     {
         if (MarketAcquisitionRequestDisplay.IsEditable(request))
             await EditRequested.InvokeAsync(request);
+        else if (MarketAcquisitionRequestDisplay.CanCloneAndEdit(request))
+            await CloneAndEditRequested.InvokeAsync(request);
         else
             await TemplateRequested.InvokeAsync(request);
     }
@@ -252,6 +258,8 @@
     {
         if (MarketAcquisitionRequestDisplay.IsEditable(request))
             return "Edit";
+        if (MarketAcquisitionRequestDisplay.CanCloneAndEdit(request))
+            return "Clone & edit";
 
         return IsTerminalRequest(request) ? "Run again" : "Use as template";
     }

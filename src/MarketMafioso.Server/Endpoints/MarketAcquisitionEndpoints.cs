@@ -254,6 +254,10 @@ internal static class MarketAcquisitionEndpoints
             var accepted = await store.AcceptAsync(id, acceptRequest, token);
             return accepted == null ? Results.NotFound() : Results.Ok(accepted);
         }
+        catch (MarketAcquisitionClaimReleasedException ex)
+        {
+            return ClaimReleased(ex);
+        }
         catch (UnauthorizedAccessException)
         {
             return InvalidApiKey();
@@ -274,6 +278,10 @@ internal static class MarketAcquisitionEndpoints
         {
             var result = await store.RejectAsync(id, lifecycleRequest, token);
             return result == null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (MarketAcquisitionClaimReleasedException ex)
+        {
+            return ClaimReleased(ex);
         }
         catch (UnauthorizedAccessException)
         {
@@ -359,6 +367,10 @@ internal static class MarketAcquisitionEndpoints
             var line = await store.RecordLineProgressAsync(id, lineId, progressRequest, token);
             return line == null ? Results.NotFound() : Results.Ok(line);
         }
+        catch (MarketAcquisitionClaimReleasedException ex)
+        {
+            return ClaimReleased(ex);
+        }
         catch (UnauthorizedAccessException)
         {
             return InvalidApiKey();
@@ -395,6 +407,10 @@ internal static class MarketAcquisitionEndpoints
         {
             var audit = await store.RecordPurchaseAuditAsync(id, purchaseRequest, token);
             return audit == null ? Results.NotFound() : Results.Ok(audit);
+        }
+        catch (MarketAcquisitionClaimReleasedException ex)
+        {
+            return ClaimReleased(ex);
         }
         catch (UnauthorizedAccessException)
         {
@@ -484,6 +500,10 @@ internal static class MarketAcquisitionEndpoints
             }, token);
             return Results.Ok(observation);
         }
+        catch (MarketAcquisitionClaimReleasedException ex)
+        {
+            return ClaimReleased(ex);
+        }
         catch (UnauthorizedAccessException)
         {
             return InvalidApiKey();
@@ -554,6 +574,10 @@ internal static class MarketAcquisitionEndpoints
                 ?? throw new ArgumentException("Lifecycle payload is required.");
             var result = await apply(id, lifecycleRequest, token);
             return result == null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (MarketAcquisitionClaimReleasedException ex)
+        {
+            return ClaimReleased(ex);
         }
         catch (UnauthorizedAccessException)
         {
@@ -631,6 +655,11 @@ internal static class MarketAcquisitionEndpoints
 
     private static bool IsDashboardApiRoute(HttpRequest request) =>
         request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase);
+
+    private static IResult ClaimReleased(MarketAcquisitionClaimReleasedException ex) =>
+        Results.Json(
+            new { error = ex.Message, code = MarketAcquisitionClaimReleasedException.Code, status = ex.Status },
+            statusCode: StatusCodes.Status409Conflict);
 
     private static IResult InvalidApiKey() =>
         Results.Json(new { error = "invalid_api_key" }, statusCode: StatusCodes.Status401Unauthorized);

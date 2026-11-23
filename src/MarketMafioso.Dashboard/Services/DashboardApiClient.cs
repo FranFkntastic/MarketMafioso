@@ -164,7 +164,7 @@ public sealed class DashboardApiClient
         EnsureAuthorizedSuccess(response);
     }
 
-    public async Task CloneAcquisitionWorkOrderAsync(
+    public async Task<MarketAcquisitionWorkOrderView?> CloneAcquisitionWorkOrderAsync(
         string id,
         int expectedRevision,
         CancellationToken cancellationToken = default)
@@ -179,6 +179,7 @@ public sealed class DashboardApiClient
             JsonOptions,
             cancellationToken);
         EnsureAuthorizedSuccess(response);
+        return await response.Content.ReadFromJsonAsync<MarketAcquisitionWorkOrderView>(JsonOptions, cancellationToken);
     }
 
     public async Task<MarketAcquisitionWorkOrderMergePreview> PreviewAcquisitionWorkOrderMergeAsync(

@@ -90,6 +90,12 @@ internal static class MarketAcquisitionWorkOrderEndpoints
         {
             return Results.BadRequest(new { error = ex.Message });
         }
+        catch (MarketAcquisitionClaimReleasedException ex)
+        {
+            return Results.Json(
+                new { error = ex.Message, code = MarketAcquisitionClaimReleasedException.Code, status = ex.Status },
+                statusCode: StatusCodes.Status409Conflict);
+        }
         catch (UnauthorizedAccessException)
         {
             return Results.Unauthorized();

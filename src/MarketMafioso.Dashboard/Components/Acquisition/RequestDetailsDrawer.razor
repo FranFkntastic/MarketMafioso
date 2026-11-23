@@ -170,7 +170,16 @@
                 {
                     <MudButton Variant="Variant.Outlined" OnClick="@(() => CancelRequested.InvokeAsync(Request.Id))">Cancel</MudButton>
                 }
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ResendRequested.InvokeAsync(Request.Id))">Resend</MudButton>
+                @if (Request.Status == "Running")
+                {
+                    <MudTooltip Text="The plugin is running this order. Cancel it first to resend.">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="true">Resend</MudButton>
+                    </MudTooltip>
+                }
+                else if (Request.Status is not ("Complete" or "Shelved" or "Archived"))
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ResendRequested.InvokeAsync(Request.Id))">Resend</MudButton>
+                }
                 <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => BuilderActionRequestedAsync(Request))">@BuilderActionText(Request)</MudButton>
             </MudStack>
         </MudStack>
@@ -184,6 +193,7 @@
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> EditRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> CloneAndEditRequested { get; set; }
 
     private string? _timelineRequestId;
     private MarketAcquisitionRequestTimelineView? _timeline;
@@ -249,6 +259,8 @@
     {
         if (MarketAcquisitionRequestDisplay.IsEditable(request))
             await EditRequested.InvokeAsync(request);
+        else if (MarketAcquisitionRequestDisplay.CanCloneAndEdit(request))
+            await CloneAndEditRequested.InvokeAsync(request);
         else
             await TemplateRequested.InvokeAsync(request);
     }
@@ -257,6 +269,8 @@
     {
         if (MarketAcquisitionRequestDisplay.IsEditable(request))
             return "Edit";
+        if (MarketAcquisitionRequestDisplay.CanCloneAndEdit(request))
+            return "Clone & edit";
 
         return IsTerminalRequest(request) ? "Run Again" : "Use as Template";
     }

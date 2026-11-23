@@ -67,6 +67,7 @@ else
                                CloneRequested="CloneRequestAsync"
                                MergeRequested="MergeIntoSelectedAsync"
                                EditRequested="EditRequestAsync"
+                               CloneAndEditRequested="CloneAndEditRequestAsync"
                                TemplateRequested="UseRequestAsTemplateAsync" />
         </div>
 
@@ -75,6 +76,7 @@ else
                               CancelRequested="CancelRequestAsync"
                               ResendRequested="ResendRequestAsync"
                               EditRequested="EditRequestAsync"
+                              CloneAndEditRequested="CloneAndEditRequestAsync"
                               TemplateRequested="UseRequestAsTemplateAsync" />
     </MudStack>
 }
@@ -254,6 +256,13 @@ else
         _builderPresetVersion++;
         Status.Info($"Loaded {MarketAcquisitionRequestDisplay.TitleFor(request)} as a draft.");
         return Task.CompletedTask;
+    }
+
+    private async Task CloneAndEditRequestAsync(MarketAcquisitionRequestView request)
+    {
+        var copy = await State.CloneForEditAsync(request);
+        if (copy is not null)
+            await EditRequestAsync(copy);
     }
 
     private Task EditRequestAsync(MarketAcquisitionRequestView request)
