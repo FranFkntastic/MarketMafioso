@@ -62,6 +62,7 @@ public class Configuration : IPluginConfiguration
     public List<PersistedMarketAcquisitionWorkbenchComposition> MarketAcquisitionWorkbenchCompositions { get; set; } = [];
     public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public PersistedMarketAcquisitionWorkbenchCompositionSource? MarketAcquisitionWorkbenchCompositionSource { get; set; }
+    public bool MarketAcquisitionStockScopeRailCollapsed { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
     public bool MarketAcquisitionLockedByUser { get; set; }
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
@@ -517,6 +518,9 @@ public sealed class PersistedMarketAcquisitionStockSource
     public string? CharacterName { get; set; }
     public string? HomeWorldName { get; set; }
     public string Container { get; set; } = string.Empty;
+    // Zero (and absent in sources saved before single retainers could be chosen): every retainer of the character.
+    public ulong RetainerId { get; set; }
+    public string? RetainerName { get; set; }
 }
 
 [Serializable]

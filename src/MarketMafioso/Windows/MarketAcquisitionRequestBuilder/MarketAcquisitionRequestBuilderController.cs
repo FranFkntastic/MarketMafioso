@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
+using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.MarketAcquisition.ExactAuthority;
 
@@ -61,7 +62,12 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     public MarketAcquisitionRequestDocument Document { get; private set; }
 
-    public int SelectedLineIndex { get; private set; } = -1;
+    /// <summary>Selected buy-list lines, keyed by item (a Workbench holds one line per item).</summary>
+    public TableSelectionModel<uint> Selection { get; } = new();
+
+    /// <summary>The only selected line's index, or -1 when none or several are selected.</summary>
+    public int SingleSelectedLineIndex =>
+        Selection.Count == 1 ? Document.Lines.FindIndex(line => Selection.IsSelected(line.ItemId)) : -1;
 
     public string Status { get; private set; } = "Request builder ready.";
 
@@ -317,20 +323,13 @@ public sealed class MarketAcquisitionRequestBuilderController
         return true;
     }
 
-    public bool SelectLine(int index)
-    {
-        if (index < 0 || index >= Document.Lines.Count)
-            return false;
+    public void ClearSelection() => Selection.Clear();
 
-        SelectedLineIndex = index;
-        return true;
-    }
-
-    public void ClearSelection() => SelectedLineIndex = -1;
+    private bool IsLineIndex(int index) => index >= 0 && index < Document.Lines.Count;
 
     public bool SetLineMaxUnitPrice(int index, uint maxUnitPrice, string message)
     {
-        if (!SelectLine(index))
+        if (!IsLineIndex(index))
             return false;
 
         CommitLocalEdit(RequestDocumentMutation.ApplyMaxUnitPrice(Document, index, maxUnitPrice), message);
@@ -345,33 +344,26 @@ public sealed class MarketAcquisitionRequestBuilderController
         SaveDocument();
     }
 
-    public bool SetLineGilCap(int index, uint gilCap, string message)
-    {
-        if (!SelectLine(index))
-            return false;
-
-        var line = Document.Lines[index];
-        CommitLocalEdit(RequestDocumentMutation.ApplyPricing(Document, index, line.MaxUnitPrice, gilCap), message);
-        return true;
-    }
-
     // Where stock is counted from is local stock policy, like the run budget: saved, never synchronized.
-    public void SetCountRetainerStock(bool include)
+    /// <summary>Sets one character's counted bags and/or retainers; null leaves that part as it is.</summary>
+    public void SetCharacterStockScope(
+        MarketAcquisitionStockSourceKey character,
+        bool isCurrentCharacter,
+        bool? includeBags,
+        MarketAcquisitionRetainerScope? retainers,
+        Func<ulong, string> retainerName)
     {
-        if (Document.CountRetainerStock == include)
+        ArgumentNullException.ThrowIfNull(character);
+        ArgumentNullException.ThrowIfNull(retainerName);
+        var updated = Document;
+        if (includeBags is { } bags && !isCurrentCharacter)
+            updated = MarketAcquisitionStockScope.WithBags(updated, character, bags);
+        if (retainers is not null)
+            updated = MarketAcquisitionStockScope.WithRetainers(updated, character, isCurrentCharacter, retainers, retainerName);
+        if (updated.CountRetainerStock == Document.CountRetainerStock &&
+            updated.AdditionalStockSources.SequenceEqual(Document.AdditionalStockSources))
             return;
-        Document = Document with { CountRetainerStock = include };
-        Status = "Stock sources updated.";
-        SaveDocument();
-    }
-
-    public void SetAdditionalStockSource(MarketAcquisitionStockSourceKey source, bool include)
-    {
-        ArgumentNullException.ThrowIfNull(source);
-        var sources = Document.AdditionalStockSources.Where(existing => !existing.SameSource(source)).ToList();
-        if (include)
-            sources.Add(source);
-        Document = Document with { AdditionalStockSources = sources };
+        Document = updated;
         Status = "Stock sources updated.";
         SaveDocument();
     }
@@ -388,7 +380,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     /// <summary>Turns a line into (or out of) a Quartermaster reserve restock at the given reserve level.</summary>
     public bool SetRestockReserve(int index, bool restock, uint reserveLevel)
     {
-        if (!SelectLine(index) || IsExactAcquisitionLine(index))
+        if (!IsLineIndex(index) || IsExactAcquisitionLine(index))
             return false;
         var line = Document.Lines[index];
         var updated = restock
@@ -443,7 +435,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         uint gilCap,
         string message)
     {
-        if (!SelectLine(index))
+        if (!IsLineIndex(index))
             return false;
 
         CommitLocalEdit(
@@ -461,37 +453,13 @@ public sealed class MarketAcquisitionRequestBuilderController
         return true;
     }
 
-    public void ApplyEditorLine(MarketAcquisitionRequestLineDocument line)
-    {
-        ArgumentNullException.ThrowIfNull(line);
-        var duplicateIndex = Document.Lines.FindIndex(existing => existing.ItemId == line.ItemId);
-        if (duplicateIndex >= 0 && duplicateIndex != SelectedLineIndex)
-        {
-            SelectedLineIndex = duplicateIndex;
-            Status = $"{line.ItemName} is already in the Workbench; selected the existing line.";
-            return;
-        }
-
-        if (SelectedLineIndex >= 0 && SelectedLineIndex < Document.Lines.Count)
-        {
-            CommitLocalEdit(RequestDocumentMutation.ReplaceLine(Document, SelectedLineIndex, line), "Work-order draft updated.");
-            return;
-        }
-
-        var previous = Document;
-        Document = RequestDocumentMutation.AddLine(Document, line);
-        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
-        SelectedLineIndex = Document.Lines.Count - 1;
-        FinishLocalEdit("Work-order draft updated.");
-    }
-
     public void AddEditorLine(MarketAcquisitionRequestLineDocument line)
     {
         ArgumentNullException.ThrowIfNull(line);
         var duplicateIndex = Document.Lines.FindIndex(existing => existing.ItemId == line.ItemId);
         if (duplicateIndex >= 0)
         {
-            SelectedLineIndex = duplicateIndex;
+            Selection.SelectOnly(line.ItemId);
             Status = $"{line.ItemName} is already in the Workbench; selected the existing line.";
             return;
         }
@@ -499,7 +467,6 @@ public sealed class MarketAcquisitionRequestBuilderController
         var previous = Document;
         Document = RequestDocumentMutation.AddLine(Document, line);
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
-        SelectedLineIndex = Document.Lines.Count - 1;
         FinishLocalEdit("Work-order draft updated.");
     }
 
@@ -550,25 +517,102 @@ public sealed class MarketAcquisitionRequestBuilderController
             Status = $"All {sourceLabel} items are already present in the Workbench.";
             return 0;
         }
-        SelectedLineIndex = -1;
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
         FinishLocalEdit($"Added {added:N0} {sourceLabel} line{(added == 1 ? string.Empty : "s")}.");
         return added;
     }
 
-    public bool RemoveLine(int index)
+    /// <summary>A removal the Workbench can undo: the document before it and the document it produced.</summary>
+    public sealed record LineRemoval(
+        MarketAcquisitionRequestDocument Before,
+        MarketAcquisitionRequestDocument After,
+        IReadOnlyList<(int Index, MarketAcquisitionRequestLineDocument Line)> Removed)
     {
-        if (index < 0 || index >= Document.Lines.Count)
-            return false;
+        public string Label => Removed.Count == 1
+            ? $"Removed {LineName(Removed[0].Line)}"
+            : $"Removed {Removed.Count:N0} lines";
+    }
+
+    public static string LineName(MarketAcquisitionRequestLineDocument line) =>
+        string.IsNullOrWhiteSpace(line.ItemName) ? $"Item {line.ItemId}" : line.ItemName;
+
+    /// <summary>Removes these items' lines as one edit; null when none of them is on the buy list.</summary>
+    public LineRemoval? RemoveLines(IEnumerable<uint> itemIds)
+    {
+        ArgumentNullException.ThrowIfNull(itemIds);
+        var ids = itemIds.ToHashSet();
+        var removed = Document.Lines
+            .Select((line, index) => (Index: index, Line: line))
+            .Where(entry => ids.Contains(entry.Line.ItemId))
+            .ToList();
+        if (removed.Count == 0)
+            return null;
 
         var previous = Document;
-        Document = RequestDocumentMutation.RemoveLine(Document, index);
-        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
-        SelectedLineIndex = Document.Lines.Count == 0
-            ? -1
-            : Math.Min(index, Document.Lines.Count - 1);
-        FinishLocalEdit("Line removed.");
-        return true;
+        var updated = (previous with
+        {
+            Lines = previous.Lines.Where(line => !ids.Contains(line.ItemId)).ToList(),
+        }).WithNextRevision(string.IsNullOrWhiteSpace(previous.RemoteRequestId) ? "NewDraft" : "LocalEdits");
+        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, updated);
+        foreach (var id in ids)
+            Selection.SetSelected(id, false);
+        FinishLocalEdit(removed.Count == 1 ? "Line removed." : $"Removed {removed.Count:N0} lines.");
+        return new LineRemoval(previous, Document, removed);
+    }
+
+    /// <summary>
+    /// Puts removed lines back. Straight after the removal this restores the earlier document, exact-acquisition
+    /// lineage included; after other edits the lines return at their old positions, skipping items re-added since.
+    /// </summary>
+    public void UndoRemoval(LineRemoval removal)
+    {
+        ArgumentNullException.ThrowIfNull(removal);
+        var previous = Document;
+        var syncStatus = string.IsNullOrWhiteSpace(previous.RemoteRequestId) ? "NewDraft" : "LocalEdits";
+        if (ReferenceEquals(previous, removal.After))
+        {
+            Document = (removal.Before with { LocalRevision = previous.LocalRevision }).WithNextRevision(syncStatus);
+        }
+        else
+        {
+            var lines = previous.Lines.ToList();
+            foreach (var (index, line) in removal.Removed.OrderBy(entry => entry.Index))
+                if (lines.All(existing => existing.ItemId != line.ItemId))
+                    lines.Insert(Math.Min(index, lines.Count), line);
+            Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(
+                previous,
+                (previous with { Lines = lines }).WithNextRevision(syncStatus));
+        }
+        FinishLocalEdit(removal.Removed.Count == 1 ? "Line restored." : $"Restored {removal.Removed.Count:N0} lines.");
+    }
+
+    /// <summary>
+    /// Applies one change to several lines as a single edit. Exact-acquisition lines and lines the change does
+    /// not apply to (edit returns null) are skipped. Returns how many lines changed.
+    /// </summary>
+    public int ApplyBulkLineEdit(
+        IEnumerable<uint> itemIds,
+        Func<MarketAcquisitionRequestLineDocument, MarketAcquisitionRequestLineDocument?> edit,
+        string message)
+    {
+        ArgumentNullException.ThrowIfNull(itemIds);
+        ArgumentNullException.ThrowIfNull(edit);
+        var ids = itemIds.ToHashSet();
+        var changed = 0;
+        var lines = Document.Lines.Select((line, index) =>
+        {
+            if (!ids.Contains(line.ItemId) || IsExactAcquisitionLine(index) || edit(line) is not { } updated || updated == line)
+                return line;
+            changed++;
+            return updated;
+        }).ToList();
+        if (changed == 0)
+            return 0;
+        CommitLocalEdit(
+            (Document with { Lines = lines }).WithNextRevision(
+                string.IsNullOrWhiteSpace(Document.RemoteRequestId) ? "NewDraft" : "LocalEdits"),
+            message);
+        return changed;
     }
 
     public int RemoveLinesByItemId(IEnumerable<uint> itemIds)
@@ -590,7 +634,8 @@ public sealed class MarketAcquisitionRequestBuilderController
         Document = Document with { Lines = remaining };
         Document = Document.WithNextRevision(string.IsNullOrWhiteSpace(Document.RemoteRequestId) ? "NewDraft" : "LocalEdits");
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
-        SelectedLineIndex = -1;
+        foreach (var id in removedIds)
+            Selection.SetSelected(id, false);
         FinishLocalEdit($"Returned {removed:N0} item{(removed == 1 ? string.Empty : "s")} to the inbox selection.");
         return removed;
     }
@@ -780,7 +825,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         syncDueAtUtc = DateTimeOffset.UtcNow.Add(delay ?? AutomaticSyncDelay);
     }
 
-    private void ResetSelection() => SelectedLineIndex = -1;
+    private void ResetSelection() => Selection.Clear();
 
     private bool ShouldAdoptRestoredRequest(MarketAcquisitionRequestView request)
     {

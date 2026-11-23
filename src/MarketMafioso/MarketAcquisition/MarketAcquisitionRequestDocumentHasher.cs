@@ -45,7 +45,9 @@ public static class MarketAcquisitionRequestDocumentHasher
             AdditionalStockSources = document.AdditionalStockSources.Count == 0
                 ? null
                 : document.AdditionalStockSources
-                    .Select(source => $"{source.LocalContentId}:{source.HomeWorldId}:{source.Container}")
+                    .Select(source => source.RetainerId == 0
+                        ? $"{source.LocalContentId}:{source.HomeWorldId}:{source.Container}"
+                        : $"{source.LocalContentId}:{source.HomeWorldId}:{source.Container}:{source.RetainerId}")
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(value => value, StringComparer.Ordinal)
                     .ToArray(),

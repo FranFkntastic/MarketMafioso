@@ -84,12 +84,7 @@ public sealed class ConfigurationMarketAcquisitionWorkbenchCompositionStore : IM
             StockScope = stored.CountRetainerStock is { } countRetainers
                 ? new(
                     countRetainers,
-                    (stored.AdditionalStockSources ?? [])
-                        .Where(source => source.LocalContentId != 0 &&
-                                         source.Container is MarketAcquisitionStockSourceKey.Bags or MarketAcquisitionStockSourceKey.Retainers)
-                        .Select(source => new MarketAcquisitionStockSourceKey(source.LocalContentId, source.HomeWorldId,
-                            source.CharacterName ?? string.Empty, source.HomeWorldName ?? string.Empty, source.Container))
-                        .ToList(),
+                    MarketAcquisitionStockScope.Restore(stored.AdditionalStockSources),
                     stored.StowAfterDelivery)
                 : null,
             CreatedAtUtc = ToUtc(stored.CreatedAtUtc),
@@ -108,16 +103,9 @@ public sealed class ConfigurationMarketAcquisitionWorkbenchCompositionStore : IM
             SweepDataCenters = composition.SweepDataCenters.ToList(),
             Lines = composition.Lines.Select(ToPersistedLine).ToList(),
             CountRetainerStock = composition.StockScope?.CountRetainerStock,
-            AdditionalStockSources = composition.StockScope?.AdditionalStockSources
-                .Select(source => new PersistedMarketAcquisitionStockSource
-                {
-                    LocalContentId = source.LocalContentId,
-                    HomeWorldId = source.HomeWorldId,
-                    CharacterName = source.CharacterName,
-                    HomeWorldName = source.HomeWorldName,
-                    Container = source.Container,
-                })
-                .ToList(),
+            AdditionalStockSources = composition.StockScope is { } scope
+                ? MarketAcquisitionStockScope.Persist(scope.AdditionalStockSources)
+                : null,
             StowAfterDelivery = composition.StockScope?.StowAfterDelivery ?? false,
             CreatedAtUtc = composition.CreatedAtUtc.UtcDateTime,
             UpdatedAtUtc = composition.UpdatedAtUtc.UtcDateTime,

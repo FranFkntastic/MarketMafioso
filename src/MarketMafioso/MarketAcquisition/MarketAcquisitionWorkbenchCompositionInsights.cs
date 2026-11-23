@@ -179,7 +179,9 @@ public static class MarketAcquisitionWorkbenchCompositionInsights
 
     private static string FormatStock(bool countRetainers, IEnumerable<MarketAcquisitionStockSourceKey> additional) =>
         string.Join(", ", new[] { countRetainers ? "Own bags, own retainers" : "Own bags" }.Concat(additional
-            .Select(source => $"{source.CharacterName} ({source.HomeWorldName}) · {source.Container}")
+            .Select(source => $"{source.CharacterName} ({source.HomeWorldName}) · {(source.IsSingleRetainer
+                ? string.IsNullOrWhiteSpace(source.RetainerName) ? $"Retainer {source.RetainerId}" : source.RetainerName
+                : source.Container)}")
             .OrderBy(label => label, StringComparer.OrdinalIgnoreCase)));
 
     public static string FormatRoute(string worldMode, string sweepScope, IReadOnlyCollection<string> sweepDataCenters)
