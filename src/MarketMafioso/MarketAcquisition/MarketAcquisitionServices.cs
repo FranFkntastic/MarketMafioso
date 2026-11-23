@@ -85,7 +85,10 @@ internal sealed class MarketAcquisitionServices : IDisposable
             ex => log.Warning(ex, "[MarketMafioso] Market intelligence reporting requires attention."),
             message => log.Information("[MarketMafioso] {Message}", message),
             (exception, message) => log.Warning(exception, "[MarketMafioso] {Message}", message));
-        var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
+        var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient)
+        {
+            Warn = message => log.Warning("{Message}", message),
+        };
         WorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         InventoryObserver = new RetainerAwareMarketAcquisitionInventoryObserver(
             new DalamudMarketAcquisitionInventoryObserver(dataManager), quartermaster, GetCurrentQuartermasterOwnerScope, scanner.ResolveItemName);
@@ -187,7 +190,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
         var shardCheckpoints = new ShardAcquisitionCheckpointCoordinator(
             quartermaster,
             shardCheckpointRuntime,
-            new ConfigurationShardAcquisitionCheckpointStateStore(config, config.Save));
+            new ConfigurationShardAcquisitionCheckpointStateStore(config, config.Save),
+            message => log.Warning("{Message}", message));
         var marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
             DiagnosticsDirectory,
             universalisFreshnessVerifier.VerifyAsync,
@@ -243,7 +247,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
             new MarketAcquisitionAethernetDeparture(
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
                 lifestream,
-                () => config.MarketAcquisitionAethernetDeparture));
+                () => config.MarketAcquisitionAethernetDeparture),
+            message => log.Warning("{Message}", message));
         var crossRegionGame = new DalamudCrossRegionGameState(playerState, characterLoginDriver, () => otherAutomationActive() || RouteEngine.IsRouteActive);
         crossRegionShopping = new MarketAcquisitionCrossRegionShoppingRoute(
             RouteEngine,
@@ -357,6 +362,26 @@ internal sealed class MarketAcquisitionServices : IDisposable
         });
     }
 
+    private void ArchiveOrphanedExactState(ExactAcquisitionRouteExecutionState orphaned)
+    {
+        var json = Newtonsoft.Json.JsonConvert.SerializeObject(orphaned, Newtonsoft.Json.Formatting.None);
+        log.Warning(
+            "[MarketMafioso] Archived orphaned External plan route state {ContractId} with {ReceiptCount} sunk purchase receipt(s): {State}",
+            orphaned.ContractId,
+            orphaned.SunkPurchases.Count,
+            json);
+        try
+        {
+            File.AppendAllText(
+                Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "exact-acquisition-orphaned-route-states.jsonl"),
+                json + Environment.NewLine);
+        }
+        catch (Exception exception)
+        {
+            log.Warning(exception, "[MarketMafioso] Could not write the orphaned External plan route state archive file; the state is in the log entry above.");
+        }
+    }
+
     private void MaybeAutoResumeExactAcquisitionRoute()
     {
         var routeActive = RouteEngine.IsRouteActive;
@@ -366,7 +391,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
                 routeActive,
                 persisted,
                 contract,
-                ExactStateStore))
+                ExactStateStore,
+                ArchiveOrphanedExactState))
             return;
         if (Workspace.IsBusy || DateTimeOffset.UtcNow < nextExactAcquisitionAutoResumeAtUtc ||
             exactAcquisitionAutoResumeTask is { IsCompleted: false })

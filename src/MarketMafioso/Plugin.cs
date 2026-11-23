@@ -307,7 +307,8 @@ public sealed class Plugin : IDalamudPlugin
                 tradeQueueRunner.IsActive ? "MarketMafioso Trade Queue is running." :
                 Configuration.TradeQueueRecovery.CancellationPending ? "MarketMafioso trade cancellation is pending." :
                 tradeQueueIo.IsTradeOpen ? "A trade window is already open." : null,
-            message => Log.Information("{Message}", message), () => Environment.TickCount64);
+            message => Log.Information("{Message}", message), () => Environment.TickCount64,
+            message => Log.Warning("{Message}", message));
         tradeQueueRunner.ExternalHold = tradeHold;
         tradeAutoAcceptController.ExternalHold = tradeHold;
         tradeHoldProvider = new(PluginInterface, tradeHold);
@@ -885,7 +886,7 @@ public sealed class Plugin : IDalamudPlugin
         frameTimings.Mark("marketLockoutAttention");
         mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
         frameTimings.Mark("listingOverlay");
-        if (Configuration.AutoAcceptIncomingTrades || tradeQueueRunner.IsActive)
+        if (Configuration.AutoAcceptIncomingTrades || tradeQueueRunner.IsActive || tradeQueueRunner.IsHoldingAutoConfirmUntilTradeCloses)
             tradeAutomationCoordinator.SuppressDropboxAutoAccept();
         else
             tradeAutomationCoordinator.RestoreDropboxAutoAccept();

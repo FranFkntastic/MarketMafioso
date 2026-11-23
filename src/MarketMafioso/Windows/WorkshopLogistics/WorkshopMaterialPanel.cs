@@ -77,20 +77,64 @@ internal sealed class WorkshopMaterialPanel
         var visibleStatus = run is null
             ? actionStatus
             : WorkshopVendorRestockPresentation.Describe(run, review);
-        if (!string.IsNullOrWhiteSpace(visibleStatus))
-            ImGui.TextColored(RunStatusColor(run), visibleStatus);
-
-        if (runner.CanAcknowledgeUnresolvedPurchase && runner.UnresolvedPurchaseMessage is { } unresolved)
+        var inlineHatch = !string.IsNullOrWhiteSpace(visibleStatus);
+        if (inlineHatch)
         {
-            var unresolvedRun = config.ActiveWorkshopVendorBuyRun!;
-            var unresolvedRunId = unresolvedRun.RunId;
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(RunStatusColor(run), visibleStatus);
+        }
+        if (runner.OpenQuartermasterOperation(getOwnerScope()) is { } openOperation)
+        {
+            if (inlineHatch) ImGui.SameLine();
+            inlineHatch = true;
+            if (ImGui.SmallButton("Forget this operation##workshopRestockForgetQuartermaster"))
+                runner.ForgetQuartermasterOperation(getOwnerScope());
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"Quartermaster operation {openOperation}");
+            RegisterSimpleAction(
+                "workshop-logistics.vendor-restock.forget-quartermaster-operation",
+                "Forget the Quartermaster retrieval operation",
+                true,
+                () => runner.ForgetQuartermasterOperation(getOwnerScope()));
+        }
+        if (runner.CanRetryRetrieval)
+        {
+            if (inlineHatch) ImGui.SameLine();
+            if (ImGui.SmallButton("Retry retrieval##workshopRestockRetryRetrieval"))
+                runner.RetryRetrieval(out actionStatus);
+            RegisterSimpleAction(
+                "workshop-logistics.vendor-restock.retry-retrieval",
+                "Retry workshop retainer retrieval",
+                true,
+                () => runner.RetryRetrieval(out actionStatus));
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Stop##workshopRestockStopIndeterminate"))
+                runner.Stop();
+            RegisterSimpleAction(
+                "workshop-logistics.vendor-restock.stop-indeterminate",
+                "Stop workshop restock",
+                true,
+                () => runner.Stop());
+        }
+
+        if (runner.UnresolvedPurchaseMessage is { } unresolved)
+        {
             ImGui.TextWrapped(unresolved);
-            ImGui.TextWrapped(unresolvedRun.Phase == GilVendorBuyPhase.Indeterminate
-                ? "The purchase couldn't be confirmed automatically. Check your items and gil in game before clearing it. Clearing allows a new restock to buy again."
-                : "Let the purchase finish verifying, or check your items and gil in game before clearing it. Clearing allows a new restock to buy again.");
-            // Human-only: deliberately not registered with the agent bridge, so an agent can never clear purchase protection.
-            if (ImGuiUi.Button("I checked in game - clear this", runner.CanAcknowledgeUnresolvedPurchase))
-                runner.AcknowledgeUnresolvedPurchase(unresolvedRunId, out actionStatus);
+            // The method itself refuses during a live receipt check, for agent presses too.
+            if (runner.IsVerifyingPurchase)
+            {
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Verifying purchase…");
+            }
+            else
+            {
+                if (ImGui.SmallButton("I checked in game - clear this"))
+                    runner.AcknowledgeUnresolvedPurchase(out actionStatus);
+                RegisterSimpleAction(
+                    "workshop-logistics.vendor-restock.clear-unresolved-purchase",
+                    "Clear the unresolved vendor purchase after checking it in game",
+                    true,
+                    () => runner.AcknowledgeUnresolvedPurchase(out actionStatus));
+            }
         }
 
         var automatic = run is not null && (runner.IsRunning || run.Phase == WorkshopVendorRestockPhase.Paused)

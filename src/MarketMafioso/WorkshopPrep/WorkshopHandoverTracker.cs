@@ -46,6 +46,10 @@ public sealed class WorkshopHandoverTracker : IDisposable
     private readonly Dictionary<Guid, WorkshopHoldingsLookup> holdings = [];
     private readonly HashSet<Guid> reporting = [];
     private readonly Dictionary<Guid, string> reportErrors = [];
+    // Shares whose in-flight record belongs to a batch this session started (anything else is a stale record).
+    private readonly HashSet<Guid> liveInFlight = [];
+    // Live in-flight records the user resolved by hand before the batch verified: true when counted.
+    private readonly Dictionary<Guid, bool> resolvedLive = [];
     private readonly CancellationTokenSource lifetime = new();
     private DateTimeOffset nextRetryAt;
 
@@ -66,9 +70,6 @@ public sealed class WorkshopHandoverTracker : IDisposable
     }
 
     public TradeQueueRecipientBinding? Binding => config.TradeQueueBinding;
-
-    /// <summary>True while the Trade Queue runner is trading (an in-flight record then belongs to the live batch).</summary>
-    public bool TradeActive => tradeActive();
 
     /// <summary>
     /// The binding and its share when the binding applies to the logged-in character. A binding whose share
@@ -105,7 +106,12 @@ public sealed class WorkshopHandoverTracker : IDisposable
         var (binding, share) = active;
         ClearUnlockedInFlight(share);
         if (share.HandoverInFlight is { } inFlight)
-            return $"{UnverifiedTradeText(inFlight)} for {share.Name}; count it as handed over or discard it before trading again.";
+        {
+            log.Warning(
+                "[MarketMafioso] Trading for {Share} with an unresolved handover still recorded: {Unverified}. The record is kept.",
+                share.Name,
+                UnverifiedTradeText(inFlight));
+        }
         return binding.Mismatch(partner);
     }
 
@@ -124,8 +130,21 @@ public sealed class WorkshopHandoverTracker : IDisposable
         if (ActiveBinding("batch start") is not { } active || !active.Binding.Matches(partner))
             return;
         var (binding, share) = active;
+        if (share.HandoverInFlight is { Locked: true } stale && !liveInFlight.Contains(share.Id))
+        {
+            log.Warning(
+                "[MarketMafioso] Batch for {Share} is not tracked in flight: an earlier unresolved handover is kept ({Unverified}).",
+                share.Name,
+                UnverifiedTradeText(stale));
+            return;
+        }
 
         var items = MaterialLines(batch, materialIds(share));
+        resolvedLive.Remove(share.Id);
+        if (items.Count == 0)
+            liveInFlight.Remove(share.Id);
+        else
+            liveInFlight.Add(share.Id);
         share.HandoverInFlight = items.Count == 0
             ? null
             : new WorkshopHandoverInFlight { Items = items, StartedAt = DateTimeOffset.UtcNow, Recipient = binding.RecipientKey };
@@ -162,6 +181,7 @@ public sealed class WorkshopHandoverTracker : IDisposable
         if (share.HandoverInFlight is not { Locked: false } inFlight || tradeActive())
             return false;
         share.HandoverInFlight = null;
+        liveInFlight.Remove(share.Id);
         config.Save();
         log.Information(
             "[MarketMafioso] Cleared unlocked handover batch share={Share} recipient={Recipient} units={Units} startedAt={StartedAt:O}: Ready was never clicked, so nothing traded.",
@@ -200,7 +220,16 @@ public sealed class WorkshopHandoverTracker : IDisposable
             return;
         }
 
-        share.HandoverInFlight = null;
+        if (liveInFlight.Remove(share.Id))
+            share.HandoverInFlight = null;
+        if (resolvedLive.Remove(share.Id, out var counted) && counted)
+        {
+            log.Warning(
+                "[MarketMafioso] Verified batch for {Share} was already counted by hand; not credited again.",
+                share.Name);
+            return;
+        }
+
         var credited = Credit(share, MaterialLines(batch, materialIds(share)));
         if (credited == 0)
             return;
@@ -218,20 +247,21 @@ public sealed class WorkshopHandoverTracker : IDisposable
 
     /// <summary>
     /// Resolves a share's unverified in-flight batch: <paramref name="count"/> credits its lines to the ledger
-    /// and marks the report pending; otherwise the record is discarded. Refused while the Trade Queue trades.
+    /// and marks the report pending; otherwise the record is discarded. Works while the Trade Queue trades; a
+    /// batch that verifies afterwards is not credited twice.
     /// </summary>
     public (bool Success, string Message) ResolveInFlight(WorkshopFrozenQueue share, bool count)
     {
         if (share.HandoverInFlight is not { } inFlight)
-            return (false, $"{share.Name} has no unverified trade.");
-        if (tradeActive())
-            return (false, "The Trade Queue is trading; stop it before resolving the unverified trade.");
+            return (true, $"{share.Name} has no unverified trade.");
 
         share.HandoverInFlight = null;
+        if (liveInFlight.Remove(share.Id))
+            resolvedLive[share.Id] = count;
         if (!count)
         {
             config.Save();
-            log.Information(
+            log.Warning(
                 "[MarketMafioso] Unverified handover discarded share={Share} recipient={Recipient} units={Units} startedAt={StartedAt:O}.",
                 share.Name,
                 inFlight.Recipient,

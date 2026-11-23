@@ -137,20 +137,24 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
     private readonly QuartermasterIpcClient quartermaster;
     private readonly IShardAcquisitionCheckpointRuntime runtime;
     private readonly IShardAcquisitionCheckpointStateStore store;
+    private readonly Action<string> warn;
     private ShardAcquisitionCheckpointState? state;
 
     public ShardAcquisitionCheckpointCoordinator(
         QuartermasterIpcClient quartermaster,
         IShardAcquisitionCheckpointRuntime runtime,
-        IShardAcquisitionCheckpointStateStore store)
+        IShardAcquisitionCheckpointStateStore store,
+        Action<string>? warn = null)
     {
         this.quartermaster = quartermaster;
         this.runtime = runtime;
         this.store = store;
+        this.warn = warn ?? (_ => { });
         state = store.Restore();
     }
 
-    public bool IsActive => state?.Phase is not null and not ShardAcquisitionCheckpointPhase.Ready;
+    /// <summary>A storage checkpoint is in progress. A failed checkpoint is not active: it locks nothing.</summary>
+    public bool IsActive => state?.Phase is not null and not ShardAcquisitionCheckpointPhase.Ready and not ShardAcquisitionCheckpointPhase.Failed;
 
     public ShardAcquisitionCheckpointSnapshot Snapshot
     {
@@ -182,7 +186,8 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
             if (state is not null &&
                 (IsActive || Outstanding(state).Values.Any(quantity => quantity > 0)))
             {
-                return new(false, true, "A persisted shard storage checkpoint must be reconciled before starting a non-shard route.");
+                warn($"[MarketMafioso] Starting a non-shard route with a persisted shard ledger kept as is: {Describe(state)}");
+                return new(true, false, "This route contains no shard purchases; the persisted shard ledger is kept.");
             }
 
             state = null;
@@ -197,7 +202,9 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
              !state.RouteRequestId.Equals(plan.RequestId, StringComparison.Ordinal)) &&
             (IsActive || Outstanding(state).Values.Any(quantity => quantity > 0)))
         {
-            return new(false, true, "A persisted shard storage checkpoint for another route or character must be reconciled first.");
+            warn($"[MarketMafioso] Replacing a persisted shard ledger for another route or character: {Describe(state)}");
+            state = null;
+            store.Save(null);
         }
         if (state is not null &&
             state.Owner.LocalContentId == owner.LocalContentId &&
@@ -206,9 +213,7 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
             (IsActive || Outstanding(state).Values.Any(quantity => quantity > 0)))
         {
             state = state with { RouteRunId = routeRunId };
-            if (state.Phase == ShardAcquisitionCheckpointPhase.Failed)
-                return new(false, true, $"Persisted shard storage recovery is required: {state.Message}");
-            if (state.Phase == ShardAcquisitionCheckpointPhase.Ready)
+            if (state.Phase is ShardAcquisitionCheckpointPhase.Ready or ShardAcquisitionCheckpointPhase.Failed)
                 BeginCheckpoint(isFinal: false, "Recovering purchased shards before acquisition resumes.");
             else
                 Persist();
@@ -294,7 +299,8 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
 
     public bool RequestFinalCheckpoint()
     {
-        if (state is null || IsActive || Outstanding(state).Values.All(quantity => quantity <= 0))
+        if (state is null || IsActive || state.Phase == ShardAcquisitionCheckpointPhase.Failed ||
+            Outstanding(state).Values.All(quantity => quantity <= 0))
             return false;
         BeginCheckpoint(isFinal: true, "Acquisition complete; returning home to store purchased shards.");
         return true;
@@ -379,9 +385,16 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
 
     public void Reset()
     {
+        if (state is not null)
+            warn($"[MarketMafioso] Shard ledger forgotten: {Describe(state)}");
         state = null;
         store.Save(null);
     }
+
+    private static string Describe(ShardAcquisitionCheckpointState current) =>
+        $"route={current.RouteRequestId} owner={current.Owner.CharacterName} phase={current.Phase} " +
+        $"outstanding=[{string.Join(", ", Outstanding(current).Where(entry => entry.Value > 0).Select(entry => $"{entry.Key}:{entry.Value}"))}] " +
+        $"message={current.Message}";
 
     private ShardAcquisitionCheckpointTickResult SubmitDeposit()
     {
@@ -392,11 +405,13 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
             .Select(entry =>
             {
                 var transferable = Math.Max(0, physical.GetValueOrDefault(entry.Key) - state!.BaselineByItem.GetValueOrDefault(entry.Key));
+                var quantity = Math.Min(transferable, entry.Value);
                 if (transferable != entry.Value)
-                    throw new InvalidOperationException($"Physical shard delta for item {entry.Key} is {transferable:N0}, but the durable ledger authorizes {entry.Value:N0}.");
+                    warn($"[MarketMafioso] Physical shard delta for item {entry.Key} is {transferable:N0}, but the ledger authorizes {entry.Value:N0}; depositing {quantity:N0}.");
                 var name = state.ItemNamesByItem.GetValueOrDefault(entry.Key) ?? $"Shard {entry.Key}";
-                return new QuartermasterElementalDepositTarget(entry.Key, name, entry.Value);
+                return new QuartermasterElementalDepositTarget(entry.Key, name, quantity);
             })
+            .Where(target => target.MaximumQuantity > 0)
             .ToImmutableArray();
         if (targets.IsDefaultOrEmpty)
             return CompleteCheckpoint();
@@ -441,7 +456,7 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
             deposited[receipt.ItemId!.Value] = checked(deposited.GetValueOrDefault(receipt.ItemId.Value) + receipt.Quantity!.Value);
         var expected = Outstanding(state);
         if (expected.Any(entry => deposited.GetValueOrDefault(entry.Key) - state.ConfirmedDepositsByItem.GetValueOrDefault(entry.Key) != entry.Value))
-            return Fail("Quartermaster succeeded without exact receipts matching the authorized shard delta.");
+            warn($"[MarketMafioso] Quartermaster shard deposit receipts differ from the ledger; recording the receipts as reported. {Describe(state)}");
         state = state with { ConfirmedDepositsByItem = deposited };
         return CompleteCheckpoint();
     }

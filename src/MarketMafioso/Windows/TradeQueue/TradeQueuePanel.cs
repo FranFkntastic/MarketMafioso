@@ -35,7 +35,6 @@ internal sealed class TradeQueuePanel
     private readonly DalamudTableProjection<TradeQueueInventoryRow> inventoryTable;
     private string inventoryFilter = string.Empty;
     private bool showQueuedOnly;
-    private bool confirmClear;
     private int bulkQuantity = 1;
     private uint? editingQuantityItemId;
     private bool quantityEditorNeedsFocus;
@@ -111,11 +110,8 @@ internal sealed class TradeQueuePanel
 
     public bool TryReplaceWithWorkshopMaterials(IReadOnlyList<WorkshopMaterialAvailability> availability, out string message)
     {
-        if (runner.IsActive)
-        {
-            message = "Stop the active trade before replacing Trade Queue.";
+        if (!TryStopIdleRunner(out message))
             return false;
-        }
 
         var handoff = WorkshopTradeQueueHandoffService.Build(availability);
         message = handoff.Message;
@@ -127,7 +123,6 @@ internal sealed class TradeQueuePanel
             config.TradeQueueItems.Add(Clone(item));
         config.TradeQueueBinding = null;
         config.Save();
-        confirmClear = false;
         return true;
     }
 
@@ -144,11 +139,8 @@ internal sealed class TradeQueuePanel
     /// <summary>Replaces the queue with a share's owed materials and binds it to the share's assembler.</summary>
     public bool TryHandOver(IReadOnlyList<TradeQueueItem> items, TradeQueueRecipientBinding binding, out string message)
     {
-        if (runner.IsActive)
-        {
-            message = "Stop the active trade before handing over materials.";
+        if (!TryStopIdleRunner(out message))
             return false;
-        }
 
         var lines = items.Where(item => item.Quantity > 0).ToArray();
         if (lines.Length == 0)
@@ -162,14 +154,32 @@ internal sealed class TradeQueuePanel
             config.TradeQueueItems.Add(Clone(item));
         config.TradeQueueBinding = binding;
         config.Save();
-        confirmClear = false;
         message = $"Trade Queue filled with {lines.Length:N0} line(s), {lines.Sum(item => item.Quantity):N0} units, for {binding.RecipientKey}.";
         return true;
     }
 
+    /// <summary>Stops an active run unless a trade window is mid-trade.</summary>
+    private bool TryStopIdleRunner(out string message)
+    {
+        message = string.Empty;
+        if (!runner.IsActive)
+            return true;
+        if (io.IsTradeOpen)
+        {
+            message = "A trade window is open; finish or cancel it first.";
+            return false;
+        }
+        runner.Stop("Trade Queue stopped to replace its contents.");
+        if (!runner.IsActive)
+            return true;
+        message = runner.Snapshot.Message;
+        return false;
+    }
+
     private bool Unbind()
     {
-        if (runner.IsActive || config.TradeQueueBinding == null)
+        runner.Stop("Trade Queue stopped to unbind its recipient.");
+        if (config.TradeQueueBinding == null)
             return false;
         config.TradeQueueBinding = null;
         config.Save();
@@ -243,7 +253,29 @@ internal sealed class TradeQueuePanel
             ]);
         if (config.TradeQueueBinding is { } binding)
             DrawBindingRow(binding, hasPartner ? partner : null);
-        ImGui.TextColored(StatusColor(snapshot.State), runner.HoldReason ?? snapshot.Message);
+        if (runner.HoldReason is { } holdStatus)
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(MainWindow.ColWarning, holdStatus);
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Release hold##tradeQueueReleaseHold"))
+                runner.ReleaseHold();
+            RegisterLastAction(
+                "trade-queue.release-hold",
+                "Release the external trade hold",
+                true,
+                holdStatus,
+                arguments: null,
+                _ =>
+                {
+                    runner.ReleaseHold();
+                    return AgentBridgeUiActionResult.Ok("Released the external trade hold.");
+                });
+        }
+        else
+        {
+            ImGui.TextColored(StatusColor(snapshot.State), snapshot.Message);
+        }
         ImGui.Spacing();
 
         DrawInventoryHeader();
@@ -257,34 +289,32 @@ internal sealed class TradeQueuePanel
 
     private void DrawQueueActions()
     {
-        if (ImGuiUi.Button("...##TradeQueueActions", HasItems && !runner.IsActive))
+        if (ImGui.Button("...##TradeQueueActions"))
             ImGui.OpenPopup("TradeQueueActions");
+        RegisterLastAction(
+            "trade-queue.clear-queue",
+            "Clear the entire Trade Queue, stopping any active run",
+            true,
+            null,
+            arguments: null,
+            _ =>
+            {
+                ClearEntireQueue();
+                return AgentBridgeUiActionResult.Ok("Trade Queue cleared.");
+            });
         if (!ImGui.BeginPopup("TradeQueueActions"))
-        {
-            confirmClear = false;
             return;
-        }
-        if (!confirmClear && ImGui.Selectable("Clear entire queue...", false, ImGuiSelectableFlags.DontClosePopups))
-            confirmClear = true;
-        if (confirmClear)
-        {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Remove every queued item and gil amount?");
-            if (ImGuiUi.Button("Clear queue", HasItems && !runner.IsActive))
-            {
-                config.TradeQueueItems.Clear();
-                config.TradeQueueBinding = null;
-                config.Save();
-                confirmClear = false;
-                ImGui.CloseCurrentPopup();
-            }
-            ImGui.SameLine();
-            if (ImGui.Button("Cancel"))
-            {
-                confirmClear = false;
-                ImGui.CloseCurrentPopup();
-            }
-        }
+        if (ImGui.Selectable("Clear entire queue"))
+            ClearEntireQueue();
         ImGui.EndPopup();
+    }
+
+    private void ClearEntireQueue()
+    {
+        runner.Stop("Trade Queue stopped because the queue was cleared.");
+        config.TradeQueueItems.Clear();
+        config.TradeQueueBinding = null;
+        config.Save();
     }
 
     /// <summary>The lock row shown while the queue is bound to a workshop share's assembler.</summary>
@@ -330,18 +360,16 @@ internal sealed class TradeQueuePanel
 
             var unbindWidth = ImGui.CalcTextSize("Unbind").X + (ImGui.GetStyle().FramePadding.X * 2f);
             ImGuiUi.SameLineRight(unbindWidth);
-            if (ImGuiUi.Button("Unbind", !runner.IsActive))
+            if (ImGui.Button("Unbind"))
                 Unbind();
             RegisterLastAction(
                 "trade-queue.unbind",
                 $"Unbind the Trade Queue from {binding.RecipientKey}",
-                !runner.IsActive,
+                true,
                 $"recipient={binding.RecipientKey}; share={binding.ShareName}; sender={binding.SenderKey ?? "any"}; active={active}",
                 arguments: null,
                 _ =>
                 {
-                    if (runner.IsActive)
-                        return AgentBridgeUiActionResult.Fail("The Trade Queue binding cannot change while trading is active.");
                     var recipient = config.TradeQueueBinding?.RecipientKey;
                     return Unbind()
                         ? AgentBridgeUiActionResult.Ok($"Unbound the Trade Queue from {recipient}; it now trades to the current target.")
@@ -829,14 +857,7 @@ internal sealed class TradeQueuePanel
                         : "Trade Queue will preserve and trade HQ items.");
             });
 
-        if (runner.HoldReason is {} holdReason)
-        {
-            ImGuiUi.Button("Start Trading", false);
-            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip(holdReason);
-            RegisterLastAction("trade-queue.start-exact","Start Trade Queue for an exact nearby recipient",
-                true,holdReason,ExactRecipientSchema,args=>StartExactRecipient(args));
-            return;
-        }
+        var holdReason = runner.HoldReason;
         ImGui.TextColored(
             MainWindow.ColMuted,
             config.AutoAcceptIncomingTrades
@@ -844,7 +865,30 @@ internal sealed class TradeQueuePanel
                 : "Incoming trades require manual confirmation.");
         if (runner.IsActive)
         {
-            ImGuiUi.SameLineRight(ImGui.CalcTextSize("Stop Trading").X + ImGui.GetStyle().FramePadding.X * 2f);
+            var closing = runner.Snapshot.State == TradeQueueExecutionState.ClosingTrade;
+            var style = ImGui.GetStyle();
+            var controlsWidth = ImGui.CalcTextSize("Stop Trading").X + style.FramePadding.X * 2f +
+                                (closing ? ImGui.CalcTextSize("Forget it").X + style.FramePadding.X * 2f + style.ItemSpacing.X : 0f);
+            ImGuiUi.SameLineRight(controlsWidth);
+            if (closing)
+            {
+                if (ImGui.Button("Forget it##tradeQueueForgetClosing"))
+                    runner.ForgetClosingTrade();
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("Stop waiting for the trade window to close.");
+                RegisterLastAction(
+                    "trade-queue.forget-closing",
+                    "Stop waiting for the trade window to close",
+                    enabled: true,
+                    value: runner.Snapshot.Message,
+                    arguments: null,
+                    _ =>
+                    {
+                        runner.ForgetClosingTrade();
+                        return AgentBridgeUiActionResult.Ok(runner.Snapshot.Message, runner.Snapshot.RunId, runner.Snapshot);
+                    });
+                ImGui.SameLine();
+            }
             if (ImGui.Button("Stop Trading"))
                 runner.Stop();
             RegisterLastAction(
@@ -882,15 +926,17 @@ internal sealed class TradeQueuePanel
         ImGuiUi.SameLineRight(ImGui.CalcTextSize(startLabel).X + ImGui.GetStyle().FramePadding.X * 2f);
         if (ImGuiUi.Button(
                 startLabel,
-                validation.Success && hasPartner))
+                validation.Success && hasPartner && holdReason == null))
         {
             runner.Start();
         }
+        if (holdReason != null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(holdReason);
         var availablePartners = io.GetAvailablePartners();
         RegisterLastAction(
             "trade-queue.start-exact",
             "Start Trade Queue for an exact nearby recipient",
-            validation.Success && availablePartners.Count > 0,
+            validation.Success && availablePartners.Count > 0 && holdReason == null,
             $"queue={config.TradeQueueItems.Count:N0} lines/{config.TradeQueueItems.Sum(item => item.Quantity):N0} units; " +
             $"nearby={string.Join(", ", availablePartners.Select(candidate => $"{candidate.Name} @ {candidate.HomeWorldName}"))}",
             ExactRecipientSchema,
@@ -996,7 +1042,6 @@ internal sealed class TradeQueuePanel
 
     private AgentBridgeUiActionResult InvokeReceiverCancel()
     {
-        if (runner.HoldReason is {} reason) return AgentBridgeUiActionResult.Fail(reason);
         if (!io.TryCancelTrade(out var error))
         {
             return AgentBridgeUiActionResult.Fail(

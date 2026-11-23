@@ -53,6 +53,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool exactAcquisitionDryRunFaultInjected;
     private bool exactAcquisitionDryRunNoViableConsumed;
     private bool purchaseEvidenceRouteBlocked;
+    private static readonly TimeSpan UnresolvedTravelLeaseExpiry = TimeSpan.FromMinutes(10);
+    private DateTimeOffset? unresolvedTravelLeaseSinceUtc;
+    private readonly Action<string> warn;
     private readonly Dictionary<string, uint> initialOnHandByLine = new(StringComparer.Ordinal);
     private readonly Dictionary<string, uint> inventoryCoveredPurchases = new(StringComparer.Ordinal);
     private string? reconciledDepartureWorld;
@@ -94,8 +97,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         Func<bool>? exhaustiveResearchModeProvider = null,
         IMarketAcquisitionIntelligenceReporter? intelligenceReporter = null,
         IMarketAcquisitionInventoryObserver? inventoryObserver = null,
-        MarketAcquisitionAethernetDeparture? aethernetDeparture = null)
+        MarketAcquisitionAethernetDeparture? aethernetDeparture = null,
+        Action<string>? warn = null)
     {
+        this.warn = warn ?? (_ => { });
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
         this.uiAutomation = uiAutomation ?? throw new ArgumentNullException(nameof(uiAutomation));
@@ -177,6 +182,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ManualRecoveryBlockedReason == null &&
             exactAcquisitionAuthority is null,
         RecoveryBlockedReason = state.ManualRecoveryBlockedReason,
+        UnresolvedTravelTarget = unresolvedTravelLease?.TargetWorld,
         CanFinalizeInputCaptureLog = runner.CanFinalizeInputCaptureLog,
         CompletedOrProbedStopCount = runner.CompletedOrProbedStops.Count,
         RouteState = runner.State,
@@ -269,7 +275,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     workbenchDocument,
                     routePlan,
                     claimed,
-                    authorityStore);
+                    authorityStore,
+                    this.warn);
                 exactAcquisitionAuthority.CompletePreflight(routePlan);
             }
             catch (Exception exception)
@@ -625,7 +632,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
         CleanupOwnedTravel("Replacement");
-        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
+        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
         ClearExecutionState(preserveExecutionMode: true);
@@ -667,7 +674,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (state.ManualRecoveryBlockedReason is { } blockedReason)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(blockedReason));
         CleanupOwnedTravel("Replacement");
-        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
+        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
         ClearExecutionState(preserveExecutionMode: true);
@@ -2816,6 +2823,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private bool TryPreflightRouteAction(out string blockReason)
     {
+        AutoApplyConfirmedPurchaseEvidence();
         var preflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
             purchase.PurchaseEvidenceState,
             purchaseSessionActive: false,
@@ -2857,13 +2865,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return false;
         }
 
+        var autoApplied = AutoApplyConfirmedPurchaseEvidence();
         var preflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
-            purchase.PurchaseEvidenceState ?? advance.State,
+            autoApplied ? purchase.PurchaseEvidenceState : purchase.PurchaseEvidenceState ?? advance.State,
             purchaseSessionActive: allowActivePurchaseSession && purchaseAutomation.PurchaseSession?.IsActive == true,
             nowUtc: clock.UtcNow);
         if (preflight.CanExecute)
         {
-            if (purchaseEvidenceRouteBlocked && purchase.PurchaseEvidenceState is null && advance.State is null)
+            if (purchaseEvidenceRouteBlocked && purchase.PurchaseEvidenceState is null && (advance.State is null || autoApplied))
             {
                 purchaseEvidenceRouteBlocked = false;
                 state.ManualRecoveryBlockedReason = null;
@@ -2873,6 +2882,64 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         BlockRouteForPurchaseEvidence(preflight.BlockReason!);
         return false;
+    }
+
+    /// <summary>
+    /// Server-confirmed evidence left outside a purchase session is applied exactly once instead of blocking the
+    /// route. Pending, timed-out and conflicting evidence still block.
+    /// </summary>
+    private bool AutoApplyConfirmedPurchaseEvidence()
+    {
+        if (purchase.PurchaseEvidenceState is not ConfirmedMarketPurchase confirmed ||
+            purchaseAutomation.PurchaseSession?.IsActive == true)
+            return false;
+        var intent = confirmed.Intent;
+        var result = ReconcileTerminalPurchaseEvidence(true, "Auto-applied server-confirmed purchase evidence.");
+        warn($"[MarketMafioso] Server-confirmed purchase intent {intent.IntentId} for listing {intent.ListingId} " +
+             $"({intent.Quantity:N0} item(s), {intent.TotalGil:N0} gil on {intent.WorldName}) was outside a purchase session; " +
+             (result.IsResolved ? "applied it automatically." : $"automatic apply failed, so the route stays blocked: {result.Message}"));
+        return result.IsResolved;
+    }
+
+    /// <summary>Drops a recovery block that is not backed by unresolved purchase evidence. The game is left as it is.</summary>
+    public bool DiscardManualRecoveryBlock()
+    {
+        if (state.ManualRecoveryBlockedReason is not { } reason || purchase.PurchaseEvidenceState is not null)
+            return false;
+        warn($"[MarketMafioso] User discarded the route recovery block and will handle it in game. Dropped block: {reason}");
+        state.ManualRecoveryBlockedReason = null;
+        purchaseEvidenceRouteBlocked = false;
+        state.AcquisitionStatus = "Recovery block discarded.";
+        return true;
+    }
+
+    /// <summary>Drops the persisted shard storage ledger. Items already in the inventory stay where they are.</summary>
+    public bool ForgetShardLedger()
+    {
+        if (shardCheckpoints is null)
+            return false;
+        shardCheckpoints.Reset();
+        return true;
+    }
+
+    /// <summary>Drops the unresolved Lifestream travel lease. Lifestream itself is left as it is.</summary>
+    public bool ForgetTravelLease()
+    {
+        if (unresolvedTravelLease is not { } lease)
+            return false;
+        ReleaseUnresolvedTravelLease(lease, "ForgottenByUser",
+            "Forgot the unresolved Lifestream travel lease; Lifestream itself was not changed.");
+        return true;
+    }
+
+    private void ReleaseUnresolvedTravelLease(MarketAcquisitionTravelLease lease, string status, string message)
+    {
+        unresolvedTravelLease = null;
+        unresolvedTravelLeaseSinceUtc = null;
+        warn($"[MarketMafioso] {message} Lease {lease.LeaseId}, operation {lease.OperationId}, target {lease.TargetWorld}.");
+        runner.RecordRouteCleanup(
+            message,
+            CreateTravelCleanupDetails(lease, "ManualRecovery", status, unresolvedExternalAutomation: false));
     }
 
     private void BlockRouteForPurchaseEvidence(string message)
@@ -3298,6 +3365,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CaptureManualRecoverySafetyBlock()
     {
+        AutoApplyConfirmedPurchaseEvidence();
         var evidencePreflight = MarketPurchaseEvidenceRoutePreflight.Evaluate(
             purchase.PurchaseEvidenceState,
             purchaseSessionActive: false,
@@ -3308,8 +3376,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return;
         }
 
+        // Only a submitted confirmation whose outcome is still unknown can have bought the listing.
         var purchaseSession = purchaseAutomation.PurchaseSession;
-        state.ManualRecoveryBlockedReason = purchaseSession?.ConfirmationWasSubmitted != true
+        state.ManualRecoveryBlockedReason = purchaseSession is not { ConfirmationWasSubmitted: true } ||
+                                            purchaseSession.Phase == MarketBoardPurchaseSessionPhase.Completed
             ? null
             : $"The retained route cannot resume automatically because listing {purchaseSession.Candidate.ListingId} may have been purchased. Reconcile that purchase outcome before retrying it.";
     }
@@ -3386,7 +3456,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var unresolved = result.UnresolvedExternalAutomation ||
                          result.Status is MarketAcquisitionTravelCleanupStatus.Unsupported or MarketAcquisitionTravelCleanupStatus.Unavailable or MarketAcquisitionTravelCleanupStatus.Failed;
         if (unresolved)
+        {
             unresolvedTravelLease = lease;
+            unresolvedTravelLeaseSinceUtc = clock.UtcNow;
+        }
 
         runner.RecordRouteCleanup(
             result.Message,
@@ -3432,6 +3505,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var lease = unresolvedTravelLease;
         if (lease == null)
         {
+            message = string.Empty;
+            return true;
+        }
+
+        if (unresolvedTravelLeaseSinceUtc is { } since && clock.UtcNow - since >= UnresolvedTravelLeaseExpiry)
+        {
+            ReleaseUnresolvedTravelLease(lease, "Expired",
+                $"Released the unresolved Lifestream travel lease after {UnresolvedTravelLeaseExpiry.TotalMinutes:N0} minutes.");
             message = string.Empty;
             return true;
         }

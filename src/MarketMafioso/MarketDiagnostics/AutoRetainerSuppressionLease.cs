@@ -31,7 +31,8 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
     public static bool TryAcquire(
         IAutoRetainerIpc autoRetainer,
         out AutoRetainerSuppressionLease? lease,
-        out string message)
+        out string message,
+        Action<string>? warn = null)
     {
         ArgumentNullException.ThrowIfNull(autoRetainer);
         lease = null;
@@ -45,12 +46,13 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
 
         var initialStateKnown = false;
         var initiallySuppressed = false;
+        var wasBusy = false;
         try
         {
             if (autoRetainer.IsBusy)
             {
-                message = "AutoRetainer is busy. Wait for it to become idle before running a remote bell probe.";
-                return false;
+                wasBusy = true;
+                warn?.Invoke("[MarketMafioso] AutoRetainer is busy; suppressing it and continuing the remote bell probe.");
             }
 
             initiallySuppressed = autoRetainer.IsSuppressed;
@@ -70,6 +72,8 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
             message = initiallySuppressed
                 ? "AutoRetainer was already suppressed."
                 : "AutoRetainer suppression acquired.";
+            if (wasBusy)
+                message = $"AutoRetainer was busy. {message}";
             return true;
         }
         catch (Exception ex)

@@ -99,7 +99,7 @@ internal sealed partial class RemoteSummoningBellProbe
         if (releaseSuppressionWhenRetainerListCloses)
             ReleaseAutoRetainerSuppression();
 
-        if (!AutoRetainerSuppressionLease.TryAcquire(autoRetainer, out var suppression, out var suppressionMessage))
+        if (!AutoRetainerSuppressionLease.TryAcquire(autoRetainer, out var suppression, out var suppressionMessage, warning => log.Warning("{Message}", warning)))
             return suppressionMessage;
         autoRetainerSuppression = suppression;
 
