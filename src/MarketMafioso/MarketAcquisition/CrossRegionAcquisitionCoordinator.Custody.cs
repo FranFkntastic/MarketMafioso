@@ -46,6 +46,16 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public const string CodeCountedRetrievalTimedOut = "CountedRetrievalTimedOut";
     public const string CodeCountedRetrievalCancelled = "CountedRetrievalCancelled";
     public const string CodeCountedRetrievalScopeNarrowed = "CountedRetrievalScopeNarrowed";
+    /// <summary>A retrieval limited to the chosen retainers ran, and they held fewer units than were counted.</summary>
+    public const string CodeCountedRetrievalSourceShort = "CountedRetrievalSourceShort";
+    /// <summary>Quartermaster refused the chosen retainers (unknown, unassigned, or an invalid restriction); nothing was retrieved.</summary>
+    public const string CodeCountedRetrievalSourceRefused = "CountedRetrievalSourceRefused";
+    /// <summary>A chosen retainer could not be reached, so its units were not retrieved; the outcome names it.</summary>
+    public const string CodeCountedRetrievalSourceUnreached = "CountedRetrievalSourceUnreached";
+    /// <summary>Quartermaster's operation code when every allowed source was reached and together held too few.</summary>
+    private const string QuartermasterSourceRestrictionShort = "SourceRestrictionShort";
+    /// <summary>Quartermaster's warning receipt for an allowed source it could not reach.</summary>
+    private const string QuartermasterSourceRetainerUnreached = "SourceRetainerUnreached";
     public const string CodeStowUnavailable = "StowUnavailable";
     public const string CodeStowPrimarySwitchFailed = "StowPrimarySwitchFailed";
     public const string CodeStowRejected = "StowRejected";
@@ -159,6 +169,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         if (session.RequestDocumentSnapshot is not { } document)
             return;
         session.CountedStockPlanned = true;
+        // Retainers outside a narrowed scope are only safe from the retrieval when it can be limited to the counted ones.
+        var restrictable = custody is { HasShortageSourceRetainers: true };
         var bySource = new List<(CrossRegionCharacter Source, Dictionary<(uint ItemId, string HqPolicy), CrossRegionCountedLine> Lines)>();
         var seen = new HashSet<(ulong LocalContentId, uint HomeWorldId, bool InRetainers, uint ItemId, string Policy)>();
         foreach (var line in document.Lines)
@@ -194,7 +206,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                         continue;
                     }
                 }
-                if (inRetainers && IsCountedRetainerScopeNarrowed(document, source))
+                if (inRetainers && IsCountedRetainerScopeNarrowed(document, source) && CountedRetainerIds(document, source, restrictable) is null)
                 {
                     session.NotCollected.Add(new(line.ItemId, line.ItemName, source.Label, counted.Quantity, CodeCountedRetrievalScopeNarrowed));
                     log($"{CodeCountedRetrievalScopeNarrowed}: {counted.Quantity} {line.ItemName} counted on {source.Label}'s chosen retainers stays put.", null);
@@ -226,7 +238,15 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         }
         foreach (var (source, lines) in bySource)
         {
-            var collection = new CrossRegionCollection { Source = source, FromCarrier = IsCarrier(source), Lines = lines.Values.ToList() };
+            var collection = new CrossRegionCollection
+            {
+                Source = source,
+                FromCarrier = IsCarrier(source),
+                Lines = lines.Values.ToList(),
+                SourceRetainerIds = lines.Values.Any(line => line.RetainerQuantity > 0) && IsCountedRetainerScopeNarrowed(document, source)
+                    ? CountedRetainerIds(document, source, restrictable)
+                    : null,
+            };
             if (source.Matches(session.Shopper))
                 session.ShopperCounted = collection;
             else
@@ -235,12 +255,22 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     }
 
     /// <summary>
-    /// Whether the plan counted only some of this character's retainers. A retrieval takes from whichever of the
-    /// character's retainers hold the item, so those units are reported instead of collected. When a shortage
-    /// request can name its source retainers, pass these retainers to the retrieval here instead.
+    /// Whether the plan counted only some of this character's retainers. An unrestricted retrieval takes from
+    /// whichever retainers hold the item, so those units are collected only when Quartermaster can limit the
+    /// retrieval to the counted retainers (<see cref="CountedRetainerIds"/>); otherwise they are reported.
     /// </summary>
     private static bool IsCountedRetainerScopeNarrowed(MarketAcquisitionRequestDocument document, CrossRegionCharacter source) =>
         !MarketAcquisitionStockScope.CountedRetainers(document, source.LocalContentId, source.HomeWorldId).All;
+
+    /// <summary>
+    /// The retainers a narrowed scope counted, when the retrieval can be limited to them
+    /// (shortageSourceRetainers.v1); null when it cannot or nothing is ticked.
+    /// </summary>
+    private static List<ulong>? CountedRetainerIds(MarketAcquisitionRequestDocument document, CrossRegionCharacter source, bool restrictable) =>
+        restrictable &&
+        MarketAcquisitionStockScope.CountedRetainers(document, source.LocalContentId, source.HomeWorldId) is { All: false, IsNone: false } scope
+            ? scope.Ids.Order().ToList()
+            : null;
 
     /// <summary>How many of a counted source's units are HQ: implied by an HQ-only/NQ-only line, else as observed.</summary>
     private static uint? CountedHq(string hqPolicy, MarketAcquisitionCountedStockSource counted) =>
@@ -502,10 +532,16 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             }
             if (remaining > 0)
             {
-                var code = collection.RetrievalOutcomeCode is not null && line.RetainerQuantity > 0 && collection.RetrievalAttempted
-                    ? collection.RetrievalOutcomeCode
-                    : CodeCountedShort;
-                outcomes.Add(new(line.ItemId, line.ItemName, collection.Source.Label, (uint)Math.Min(remaining, uint.MaxValue), code));
+                var unreached = collection.UnreachedSources.Where(source => source.ItemId == line.ItemId).ToList();
+                var code = line.RetainerQuantity > 0 && collection.RetrievalAttempted && unreached.Count > 0
+                    ? CodeCountedRetrievalSourceUnreached
+                    : collection.RetrievalOutcomeCode is not null && line.RetainerQuantity > 0 && collection.RetrievalAttempted
+                        ? collection.RetrievalOutcomeCode
+                        : CodeCountedShort;
+                var sourceLabel = code == CodeCountedRetrievalSourceUnreached
+                    ? $"{collection.Source.Label} · {string.Join(", ", unreached.Select(source => source.Name).Distinct())}"
+                    : collection.Source.Label;
+                outcomes.Add(new(line.ItemId, line.ItemName, sourceLabel, (uint)Math.Min(remaining, uint.MaxValue), code));
                 log($"{code}: {collection.Source.Label} holds {cap - remaining} of {cap} counted {line.ItemName} ({line.HqPolicy}) in bags; " +
                     $"{remaining} not collected.", null);
             }
@@ -596,6 +632,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                     "Quartermaster does not advertise automatic retrieval.");
                 return;
             }
+            if (collection.SourceRetainerIds is { Count: > 0 } && !custody.HasShortageSourceRetainers)
+            {
+                SettleRetrieval(collection, attempted: false, CodeCountedRetrievalScopeNarrowed,
+                    $"Quartermaster no longer advertises {QuartermasterIpcClient.ShortageSourceRetainersCapability}, so the retrieval cannot be limited to the chosen retainers.");
+                return;
+            }
             if (ReadSourceBags(collection, now) is not { } bags)
                 return;
             var carried = bags.GroupBy(stack => stack.ItemId).ToDictionary(group => group.Key, group => group.Aggregate(0L, (total, stack) => total + stack.Quantity));
@@ -646,8 +688,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                     session.LastMessage = $"Retrieving counted stock from {collection.Source.CharacterName}'s retainers: {operation.Status}.";
                 return;
             }
+            RecordUnreachedSources(collection, operation);
             if (operation.Status.Equals("succeeded", StringComparison.OrdinalIgnoreCase) || operation.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
                 SettleRetrieval(collection, attempted: true, code: null, detail: null);
+            else if (string.Equals(operation.Code, QuartermasterSourceRestrictionShort, StringComparison.Ordinal))
+                SettleRetrieval(collection, attempted: true, CodeCountedRetrievalSourceShort, $"{operation.Status}: {operation.Message ?? operation.Code}");
             else if (operation.Status.Equals("rejected", StringComparison.OrdinalIgnoreCase))
                 SettleRetrieval(collection, attempted: false, CodeCountedRetrievalRejected, operation.Message ?? operation.Code ?? operation.Status);
             else if (operation.Status.Equals("cancelled", StringComparison.OrdinalIgnoreCase))
@@ -668,7 +713,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             collection.RetrievalSubmittedAtUtc ?? now,
             new QuartermasterOwner(collection.Source.LocalContentId, collection.Source.HomeWorldId, collection.Source.CharacterName, collection.Source.HomeWorldName),
             ExecuteImmediately: true,
-            collection.RetrievalItems.Select(item => new QuartermasterShortageTarget(item.ItemId, item.ItemName, item.TargetQuantity, item.ShortageQuantity)).ToImmutableArray());
+            collection.RetrievalItems.Select(item => new QuartermasterShortageTarget(item.ItemId, item.ItemName, item.TargetQuantity, item.ShortageQuantity,
+                collection.SourceRetainerIds is { Count: > 0 } ids ? ids : null)).ToImmutableArray());
         if (!custody.TrySubmitShortages(request, out var ack, out error))
         {
             custodySubmitAttempts++;
@@ -682,10 +728,55 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         custodySubmitAttempts = 0;
         if (!ack!.Accepted)
         {
-            SettleRetrieval(collection, attempted: false, CodeCountedRetrievalRejected, ack.Message ?? ack.Status);
+            // A refused source restriction is final: the same retainers would be refused again.
+            var code = ack.ErrorCode switch
+            {
+                "unknown_source_retainer" or "invalid_source_restriction" or "source_restriction_requires_immediate" => CodeCountedRetrievalSourceRefused,
+                "source_restriction_unavailable" => CodeCountedRetrievalScopeNarrowed,
+                _ => CodeCountedRetrievalRejected,
+            };
+            SettleRetrieval(collection, attempted: false, code,
+                (ack.ErrorCode is null ? string.Empty : $"{ack.ErrorCode}: ") + (ack.Message ?? ack.Status) +
+                (ack.RetainerId is { } retainerId ? $" (retainer {retainerId})" : string.Empty));
             return;
         }
         session.LastMessage = $"Retrieving counted stock from {collection.Source.CharacterName}'s retainers.";
+    }
+
+    /// <summary>
+    /// Keeps the chosen sources Quartermaster reported it could not reach, named as the plan counted them, so a
+    /// shortfall they cause reads as unreached rather than as the chosen retainers running out.
+    /// </summary>
+    private void RecordUnreachedSources(CrossRegionCollection collection, QuartermasterOperationStatus operation)
+    {
+        var receipts = operation.Receipts.IsDefaultOrEmpty
+            ? []
+            : operation.Receipts.Where(receipt => string.Equals(receipt.Code, QuartermasterSourceRetainerUnreached, StringComparison.Ordinal) &&
+                                                  receipt.ItemId is > 0).ToList();
+        if (receipts.Count == 0)
+            return;
+        // Names as the plan knew them: the shopper's own retainer selection and other characters' sources, by content id
+        // (a character's world can change).
+        var document = session.RequestDocumentSnapshot;
+        var known = document is null
+            ? []
+            : document.OwnRetainerSelection.Concat(document.AdditionalStockSources)
+                .Where(key => key.LocalContentId == collection.Source.LocalContentId && key.RetainerId != 0 &&
+                              !string.IsNullOrWhiteSpace(key.RetainerName))
+                .ToList();
+        collection.UnreachedSources = receipts
+            .Select(receipt => new CrossRegionUnreachedSource(
+                receipt.ItemId!.Value,
+                receipt.RetainerId,
+                receipt.RetainerId is not { } retainerId ? "saddlebag"
+                    : known.FirstOrDefault(key => key.RetainerId == retainerId)?.RetainerName is { Length: > 0 } name ? name
+                    : $"retainer {retainerId}",
+                receipt.Quantity,
+                receipt.Message))
+            .ToList();
+        foreach (var source in collection.UnreachedSources)
+            log($"{CodeCountedRetrievalSourceUnreached}: {collection.Source.Label} · {source.Name} was not reached for item {source.ItemId}" +
+                (source.Quantity is { } left ? $" ({left:N0} unit(s) missing)" : string.Empty) + $": {source.Message}", null);
     }
 
     /// <summary>

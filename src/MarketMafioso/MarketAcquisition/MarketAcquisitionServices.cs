@@ -53,6 +53,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
     internal string DiagnosticsDirectory { get; }
     internal RetainerAwareMarketAcquisitionInventoryObserver InventoryObserver { get; }
     internal MarketAcquisitionWorkbenchStockService WorkbenchStock { get; }
+    internal MarketAcquisitionPlacementService Placement { get; }
     internal CrossRegionAcquisitionCoordinator CrossRegion { get; }
     private readonly MarketAcquisitionCrossRegionShoppingRoute crossRegionShopping;
 
@@ -94,6 +95,13 @@ internal sealed class MarketAcquisitionServices : IDisposable
             InventoryObserver,
             GetCurrentQuartermasterOwnerScope,
             () => currentDocument(),
+            message => log.Warning(message));
+        Placement = new MarketAcquisitionPlacementService(
+            quartermaster,
+            new QuartermasterPlacementClient(new DalamudQuartermasterPlacementIpcAdapter(Plugin.PluginInterface)),
+            GetCurrentQuartermasterOwnerScope,
+            () => currentDocument(),
+            itemId => dataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>().GetRowOrDefault(itemId)?.CanBeHq ?? true,
             message => log.Warning(message));
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
@@ -274,6 +282,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
 
         WorkbenchStock.Tick();
         LastTickTimings.Mark("workbenchStock");
+        Placement.Tick();
+        LastTickTimings.Mark("placement");
         ControlledBrowseProbe.Tick();
         LastTickTimings.Mark("controlledBrowseProbe");
 
@@ -685,6 +695,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
     public void Dispose()
     {
         WorkbenchStock.Dispose();
+        Placement.Dispose();
         crossRegionShopping.Dispose();
         Workspace.Dispose();
         RouteEngine.Dispose();

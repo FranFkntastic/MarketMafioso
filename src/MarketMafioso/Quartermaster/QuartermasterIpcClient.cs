@@ -111,6 +111,7 @@ public sealed partial class QuartermasterIpcClient : IDisposable
     public const string OperationSchema = "gooseworks-quartermaster-operation/v1";
     public const string ChangedSchema = "gooseworks-quartermaster-changed/v1";
     public const string AutomaticRetrievalCapability = "automaticRetrieval";
+    public const string ShortageSourceRetainersCapability = "shortageSourceRetainers.v1";
     public const string AutomaticElementalDepositCapability = "automaticElementalDeposit";
     public const string StowagePlansCapability = "stowagePlans.v1";
     public const string StowagePlansSchema = "gooseworks-quartermaster-stowage-plans/v1";
@@ -997,7 +998,12 @@ public sealed partial class QuartermasterIpcClient : IDisposable
             wire.Revision,
             accepted,
             status,
-            wire.Message);
+            wire.Message)
+        {
+            ErrorCode = string.IsNullOrWhiteSpace(wire.ErrorCode) ? null : wire.ErrorCode,
+            ItemId = wire.ItemId,
+            RetainerId = wire.RetainerId,
+        };
         return true;
     }
 
@@ -1182,6 +1188,8 @@ public sealed partial class QuartermasterIpcClient : IDisposable
             ItemName = item.ItemName,
             TargetQuantity = item.TargetQuantity,
             ShortageQuantity = item.ShortageQuantity,
+            SourceRetainerIds = item.SourceRetainerIds?.ToList(),
+            SourceSaddlebag = item.SourceRetainerIds is not null && item.SourceSaddlebag ? true : null,
         }).ToList(),
     };
 

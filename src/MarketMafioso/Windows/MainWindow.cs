@@ -75,6 +75,10 @@ public partial class MainWindow : Window, IDisposable
     private readonly UiStateCaptureService uiStateCapture;
     private readonly MarketAcquisitionGuidedRoutePanel marketAcquisitionGuidedRoutePanel;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
+    private readonly DepositionPanel acquisitionDeposition;
+    private readonly Action openDepositionTab;
+    // Set by the Acquisition tab's Placement button; selects the Deposition tab on that same frame.
+    private bool depositionTabRequested;
     private readonly WorkshopPrepQueuePanel workshopPrepQueue;
     private readonly WorkshopMaterialPanel workshopMaterials;
     private readonly WorkshopAssemblyPanel workshopAssembly;
@@ -200,12 +204,12 @@ public partial class MainWindow : Window, IDisposable
             () => _ = FetchDashboardRequestsAsync(),
             requestId =>
             {
-                QueueAgentTabSelection("Market Acquisition", "Workbench");
+                QueueAgentTabSelection("Market Acquisition", "Acquisition");
                 _ = ClaimAcquisitionRequestAsync(requestId);
             },
             AddAcquisitionLinesToWorkbench,
             ReturnAcquisitionLinesToInbox,
-            () => QueueAgentTabSelection("Market Acquisition", "Workbench"),
+            () => QueueAgentTabSelection("Market Acquisition", "Acquisition"),
             AgentReviewRegistry);
         workshopVendorRestockRunner = restock.Runner;
         var vendorPlanner = new WorkshopVendorProcurementPlanner(
@@ -309,6 +313,12 @@ public partial class MainWindow : Window, IDisposable
             acquisitionServices.WorkbenchStock)
         {
             DrawRouteScopeExtras = DrawCrossRegionWorkbenchSection,
+        };
+        acquisitionDeposition = new DepositionPanel(config, dataManager, acquisitionRequestBuilder, acquisitionServices.Placement, AgentReviewRegistry);
+        openDepositionTab = () =>
+        {
+            acquisitionDeposition.ShowPlan();
+            depositionTabRequested = true;
         };
         acquisitionCompositionCatalog = new MarketAcquisitionWorkbenchCompositionCatalog(
             new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save));
@@ -917,7 +927,7 @@ public partial class MainWindow : Window, IDisposable
             throw new InvalidOperationException("Market Acquisition must be unlocked before an external plan can be staged.");
 
         acquisitionRequestBuilder.StageExactAcquisitionTransfer(transfer);
-        QueueAgentTabSelection("Market Acquisition", "Workbench");
+        QueueAgentTabSelection("Market Acquisition", "Acquisition");
         IsOpen = true;
     }
 
@@ -948,14 +958,14 @@ public partial class MainWindow : Window, IDisposable
     {
         ArgumentNullException.ThrowIfNull(line);
         if (!CanStageWorkshopMarketAcquisition())
-            return "Market Acquisition is unavailable while its Workbench or route is busy.";
+            return "Market Acquisition is unavailable while its buy list or route is busy.";
         if (line.VendorNeed <= 0)
             return $"{line.Availability.ItemName} has no uncovered quantity to acquire.";
 
         var staged = acquisitionRequestBuilder.StageLines(
             [WorkshopMaterialPanel.CreateMarketAcquisitionLine(line)],
             "Workshop Logistics");
-        QueueAgentTabSelection("Market Acquisition", "Workbench");
+        QueueAgentTabSelection("Market Acquisition", "Acquisition");
         IsOpen = true;
         return staged > 0
             ? $"Added {line.VendorNeed:N0} {line.Availability.ItemName} to Market Acquisition."
@@ -967,7 +977,7 @@ public partial class MainWindow : Window, IDisposable
         if (itemId == 0 || string.IsNullOrWhiteSpace(itemName))
             return "The selected item could not be resolved.";
         if (!CanStageContextMenuItemToWorkbench())
-            return "Market Acquisition is unavailable while its Workbench or route is busy.";
+            return "Market Acquisition is unavailable while its buy list or route is busy.";
 
         var staged = acquisitionRequestBuilder.StageLines(
             [
@@ -980,11 +990,11 @@ public partial class MainWindow : Window, IDisposable
                     HqPolicy = "Either",
                 },
             ]);
-        QueueAgentTabSelection("Market Acquisition", "Workbench");
+        QueueAgentTabSelection("Market Acquisition", "Acquisition");
         IsOpen = true;
         return staged > 0
-            ? $"Added 1 {itemName.Trim()} to the Market Acquisition Workbench."
-            : $"{itemName.Trim()} is already in the Market Acquisition Workbench.";
+            ? $"Added 1 {itemName.Trim()} to the Market Acquisition buy list."
+            : $"{itemName.Trim()} is already in the Market Acquisition buy list.";
     }
 
     internal static bool TryNormalizeAgentBridgeTab(string tabName, out string mainTab, out string? workspaceView)
@@ -1037,7 +1047,7 @@ public partial class MainWindow : Window, IDisposable
         workspaceView is null || (mainTab, workspaceView) switch
         {
             ("Workshop Logistics", "Combined" or "Queue" or "Materials" or "Assembly") => true,
-            ("Market Acquisition", "Workbench" or "Inbox" or "Route" or "Compose" or "Working Set" or "Request" or "Plan") => true,
+            ("Market Acquisition", "Acquisition" or "Deposition" or "Workbench" or "Inbox" or "Route" or "Compose" or "Working Set" or "Request" or "Plan") => true,
             _ => false,
         };
 
@@ -1202,18 +1212,46 @@ public partial class MainWindow : Window, IDisposable
             ImGui.EndTabItem();
         }
 
+        // Placement opens the Deposition tab while Quartermaster offers placement editing, else its own editor.
+        acquisitionRequestBuilder.OpenDeposition = acquisitionDeposition.IsAvailable ? openDepositionTab : null;
         if (ImGui.BeginTabItem(
-                BuildCountedWorkspaceTabLabel("Workbench", acquisitionRequestBuilder.LineCount, "MarketAcquisitionWorkbench"),
-                GetAgentWorkspaceTabFlags("Workbench", "Compose", "Working Set", "Request", "Plan")))
+                BuildCountedWorkspaceTabLabel("Acquisition", acquisitionRequestBuilder.LineCount, "MarketAcquisitionWorkbench"),
+                GetAgentWorkspaceTabFlags("Acquisition", "Workbench", "Compose", "Working Set", "Request", "Plan")))
         {
             DrawMarketAcquisitionWorkbench();
             ImGui.EndTabItem();
         }
 
+        if (acquisitionDeposition.IsAvailable)
+        {
+            var flags = GetAgentWorkspaceTabFlags("Deposition");
+            if (depositionTabRequested)
+                flags |= ImGuiTabItemFlags.SetSelected;
+            depositionTabRequested = false;
+            var open = ImGui.BeginTabItem("Deposition###MarketAcquisitionDeposition", flags);
+            AgentReviewRegistry.RegisterLastItem(
+                "acquisition.deposition.tab",
+                "Show the Deposition tab",
+                AgentBridgeUiControlKind.Button,
+                enabled: true,
+                selected: open,
+                open ? "Shown" : "Hidden",
+                () => depositionTabRequested = true);
+            if (open)
+            {
+                acquisitionDeposition.Draw(CreateMarketAcquisitionRequestBuilderContext());
+                ImGui.EndTabItem();
+            }
+        }
+        else
+        {
+            depositionTabRequested = false;
+        }
+
         if (ImGui.BeginTabItem("Route", GetAgentWorkspaceTabFlags("Route")))
         {
             if (acquisitionWorkspace.PreparedPlan is null)
-                ImGui.TextColored(ColMuted, "Finalize the Workbench before starting a route.");
+                ImGui.TextColored(ColMuted, "Finalize the buy list before starting a route.");
             DrawMarketAcquisitionPlan();
             ImGui.Spacing();
             DrawMarketAcquisitionGuidedRoute();
@@ -1355,9 +1393,9 @@ public partial class MainWindow : Window, IDisposable
         if (!ImGui.BeginPopup("AcquisitionWorkbenchRecovery"))
             return;
 
-        if (ImGuiUi.MenuItem("New blank Workbench", canMutate && canClearWorkbench))
+        if (ImGuiUi.MenuItem("New blank buy list", canMutate && canClearWorkbench))
             _ = StartBlankWorkbenchAsync(context);
-        if (ImGuiUi.MenuItem("Restore previous Workbench", canMutate && acquisitionRequestBuilder.HasPreviousWorkbench))
+        if (ImGuiUi.MenuItem("Restore previous buy list", canMutate && acquisitionRequestBuilder.HasPreviousWorkbench))
             acquisitionRequestBuilder.RestorePreviousWorkbench();
         if (ImGuiUi.MenuItem(
                 "Sync hosted copy",
@@ -1450,7 +1488,7 @@ public partial class MainWindow : Window, IDisposable
         if (IsMarketAcquisitionRouteActive() || acquisitionWorkspace.IsBusy || acquisitionRequestBuilder.IsSynchronizing)
         {
             acquisitionRequestBuilder.SetStatus(
-                "Stop the active route and wait for the current Workbench operation before replacing the local plan.");
+                "Stop the active route and wait for the current buy-list operation before replacing the local plan.");
             return false;
         }
 
@@ -1477,7 +1515,7 @@ public partial class MainWindow : Window, IDisposable
                 current.RemoteRevision).ConfigureAwait(false))
         {
             acquisitionRequestBuilder.SetStatus(
-                "Remote shelving failed; the local Workbench and hosted association were retained.");
+                "Remote shelving failed; the local buy list and hosted association were retained.");
             return;
         }
 

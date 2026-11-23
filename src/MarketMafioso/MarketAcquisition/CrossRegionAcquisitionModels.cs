@@ -169,6 +169,9 @@ public sealed record CrossRegionCountedLine(uint ItemId, string ItemName, string
 
 public sealed record CrossRegionLineOutcome(uint ItemId, string ItemName, string Source, uint Quantity, string Code);
 
+/// <summary>A chosen retainer (null: the saddlebag) a restricted retrieval could not reach, with the units still missing.</summary>
+public sealed record CrossRegionUnreachedSource(uint ItemId, ulong? RetainerId, string Name, int? Quantity, string Message);
+
 public enum CrossRegionCollectionState
 {
     Pending,
@@ -196,6 +199,13 @@ public sealed class CrossRegionCollection
     public string? RetrievalOperationId { get; set; }
     public DateTimeOffset? RetrievalSubmittedAtUtc { get; set; }
     public List<CrossRegionRetrievalItem> RetrievalItems { get; set; } = [];
+    /// <summary>
+    /// The only retainers the retrieval may draw from, when the plan counted some of the source's retainers;
+    /// null retrieves from any of them.
+    /// </summary>
+    public List<ulong>? SourceRetainerIds { get; set; }
+    /// <summary>Chosen sources Quartermaster could not reach during the retrieval, as it reported them.</summary>
+    public List<CrossRegionUnreachedSource> UnreachedSources { get; set; } = [];
     public bool RetrievalSettled { get; set; }
     /// <summary>True when retrieval ran to a terminal Quartermaster status, so retainer quantities count toward the cap.</summary>
     public bool RetrievalAttempted { get; set; }

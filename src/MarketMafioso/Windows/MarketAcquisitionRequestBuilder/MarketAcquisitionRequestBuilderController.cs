@@ -307,7 +307,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     {
         Document = ExactAcquisitionWorkbenchAuthorityService.Stage(Document, transfer);
         ResetSelection();
-        FinishLocalEdit("Selected exact-quality external exact-acquisition solution added to the Workbench.");
+        FinishLocalEdit("Selected exact-quality external exact-acquisition solution added to the buy list.");
     }
 
     public void UpdateExactAcquisitionPriceFlex(int priceFlexPercent)
@@ -482,7 +482,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         if (duplicateIndex >= 0)
         {
             Selection.SelectOnly(WorkbenchLineKey.For(Document.Lines)[duplicateIndex]);
-            Status = $"{line.ItemName} is already in the Workbench; selected the existing line.";
+            Status = $"{line.ItemName} is already on the buy list; selected the existing line.";
             return;
         }
 
@@ -536,7 +536,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
         if (added == 0)
         {
-            Status = $"All {sourceLabel} items are already present in the Workbench.";
+            Status = $"All {sourceLabel} items are already on the buy list.";
             return 0;
         }
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
@@ -675,7 +675,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         var removed = Document.Lines.Count - remaining.Count;
         if (removed == 0)
         {
-            Status = "The selected inbox items are not in the Workbench.";
+            Status = "The selected inbox items are not on the buy list.";
             return 0;
         }
 

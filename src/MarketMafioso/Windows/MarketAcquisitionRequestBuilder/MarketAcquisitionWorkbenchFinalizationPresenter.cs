@@ -54,7 +54,7 @@ public static class MarketAcquisitionWorkbenchFinalizationPresenter
         if (state.IsRouteActive)
             return "Route in progress";
         if (!state.IsDraftValid)
-            return "Complete the Workbench";
+            return "Complete the buy list";
         if (state.IsBusy)
             return "Updating work order...";
         if (state.HasCurrentPlan && !state.IsCurrentPlanStale)
