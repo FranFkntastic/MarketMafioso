@@ -63,6 +63,14 @@ public class Configuration : IPluginConfiguration
     public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public PersistedMarketAcquisitionWorkbenchCompositionSource? MarketAcquisitionWorkbenchCompositionSource { get; set; }
     public bool MarketAcquisitionStockScopeRailCollapsed { get; set; }
+    public bool MarketAcquisitionDepositionRailCollapsed { get; set; }
+    /// <summary>
+    /// Deposition destinations shown as matrix columns, as "contentId:retainerId" (retainer 0 = Any space). Null until
+    /// first use, when the owner's retainers and every destination already holding a home are ticked.
+    /// </summary>
+    public List<string>? MarketAcquisitionDepositionDestinations { get; set; }
+    /// <summary>Deposition rail expansion by character content id; absent = the owner open, others closed.</summary>
+    public Dictionary<ulong, bool> MarketAcquisitionDepositionExpanded { get; set; } = new();
     public bool EnableMarketAcquisition { get; set; } = false;
     public bool MarketAcquisitionLockedByUser { get; set; }
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }

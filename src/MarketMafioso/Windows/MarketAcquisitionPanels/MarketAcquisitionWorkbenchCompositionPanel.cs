@@ -374,7 +374,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
         ImGui.SameLine();
         var mergeBlocker = context.IsRouteActive
             ? "Stop the active route first."
-            : context.IsBusy ? "Wait for the current Workbench operation." : null;
+            : context.IsBusy ? "Wait for the current buy-list operation." : null;
         if (ImGuiUi.Button("Merge", mergeBlocker is null))
             mergeComposition(selected);
         if (mergeBlocker is null && ImGui.IsItemHovered())
@@ -803,7 +803,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
 
     private static string? LoadBlocker(MarketAcquisitionWorkbenchCompositionContext context) =>
         context.IsRouteActive ? "Stop the active route first."
-        : context.IsBusy ? "Wait for the current Workbench operation."
+        : context.IsBusy ? "Wait for the current buy-list operation."
         : !context.HasCharacterScope ? "Log in to a character first."
         : null;
 

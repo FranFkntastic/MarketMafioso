@@ -32,6 +32,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private readonly DalamudItemAutocompleteState itemAutocomplete = new();
 
     private readonly MarketAcquisitionWorkbenchStockService? workbenchStock;
+    private readonly CharacterTreeRail stockScopeRail;
     private string quantityMode = "AllBelowThreshold";
     private string targetQuantityBuffer = string.Empty;
     private string maximumOverageBuffer = string.Empty;
@@ -59,7 +60,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     // "Stock up to" chosen in the bulk editor and waiting for a target on hand.
     private bool bulkStockUpPending;
 
-    private const float StockScopeRailWidth = 184f;
     // Quartermaster's rail colours: the logged-in character, and characters on other service accounts.
     private static readonly Vector4 CurrentCharacterTint = new(.56f, .70f, .85f, 1f);
     private static readonly Vector4 OtherAccountTint = new(.86f, .68f, .42f, .9f);
@@ -103,6 +103,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         this.workbenchStock = workbenchStock;
         this.craftAppraisal = craftAppraisal;
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
+        stockScopeRail = new CharacterTreeRail(reviewRegistry, "Count stock from", "acquisition.workbench.stock", "stock sources");
         controller = new MarketAcquisitionRequestBuilderController(
             config,
             syncRequest,
@@ -141,6 +142,29 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     /// <summary>Lines whose stock goes to a retainer home after delivery; zero unless stowing is on.</summary>
     public int StowToRetainersCount =>
         document.StowAfterDelivery && workbenchStock is { View.HasItemHomes: true } stock ? stock.StowToRetainersCount(document) : 0;
+
+    /// <summary>Shows the Deposition tab; unset while it is unavailable, and Placement opens Quartermaster's editor instead.</summary>
+    public Action? OpenDeposition { get; set; }
+
+    public void SetStowAfterDelivery(bool stow) => controller.SetStowAfterDelivery(stow);
+
+    /// <summary>
+    /// Units still to arrive for a line: a stock-up line's still-need from counted stock, an exact line's quantity.
+    /// Null when unknown (stock not counted yet, or a line that buys every listing below its ceiling).
+    /// </summary>
+    public uint? ArrivingQuantity(int index)
+    {
+        if (index < 0 || index >= document.Lines.Count)
+            return null;
+        var line = document.Lines[index];
+        if (controller.IsExactAcquisitionLine(index))
+            return line.TargetQuantity;
+        if (line.QuantityMode != "TargetQuantity")
+            return null;
+        return workbenchStock?.View.Lines.GetValueOrDefault(line.ItemId)?.Total is { } total
+            ? line.TargetQuantity > total ? line.TargetQuantity - total : 0
+            : null;
+    }
 
     public void AdoptRequest(MarketAcquisitionRequestView request) => controller.AdoptRequest(request);
 
@@ -211,7 +235,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         DrawRouteScope(context);
         ImGui.BeginDisabled(context.IsBusy || context.IsRouteActive || IsSynchronizing);
         DrawRunBudgetInput();
-        DrawStowAfterDelivery();
         ImGui.EndDisabled();
         DrawRouteScopeExtras?.Invoke();
         ImGui.Spacing();
@@ -336,7 +359,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         if (!context.HasCharacterScope && !context.CharacterScopeTemporarilyUnavailable)
         {
-            ImGui.TextColored(MainWindow.ColError, "Character scope is unavailable; the Workbench cannot synchronize or finalize.");
+            ImGui.TextColored(MainWindow.ColError, "Character scope is unavailable; the buy list cannot synchronize or finalize.");
             ImGui.Spacing();
             return;
         }
@@ -639,17 +662,25 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (ImGui.IsItemHovered() && ImGui.CalcTextSize(summary).X > ImGui.GetItemRectSize().X)
             ImGui.SetTooltip(summary);
         if (clicked)
-            workbenchStock.RequestOpenPlacement([line]);
+            OpenPlacement([line]);
     }
 
-    /// <summary>Opens Quartermaster's placement editor for every item on the buy list.</summary>
+    private void OpenPlacement(IReadOnlyList<MarketAcquisitionRequestLineDocument> lines)
+    {
+        if (OpenDeposition is { } open)
+            open();
+        else
+            workbenchStock?.RequestOpenPlacement(lines);
+    }
+
+    /// <summary>Shows the Deposition tab, or Quartermaster's placement editor, for every item on the buy list.</summary>
     private void DrawPlacementHeaderButton(float x)
     {
         ImGui.SameLine();
         ImGui.SetCursorPosX(x);
         ImGui.BeginDisabled(!document.Lines.Any(line => line.ItemId > 0));
         if (ImGui.SmallButton("Placement##WorkbenchPlacement"))
-            workbenchStock!.RequestOpenPlacement(document.Lines);
+            OpenPlacement(document.Lines);
         ImGui.EndDisabled();
     }
 
@@ -658,54 +689,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImmutableArray<WorkbenchStockScopeCharacter> scope,
         float height)
     {
-        var collapsed = config.MarketAcquisitionStockScopeRailCollapsed;
-        var width = collapsed
-            ? DalamudUiLayout.ButtonWidth(">") + (ImGui.GetStyle().WindowPadding.X * 2f)
-            : StockScopeRailWidth;
-        if (ImGui.BeginChild("AcquisitionWorkbenchStockScope", new Vector2(width, height), true))
+        var canEdit = CanEdit(context);
+        var groups = new List<CharacterTreeGroup>(scope.Length);
+        var otherAccounts = false;
+        foreach (var character in scope)
         {
-            if (collapsed)
-            {
-                DrawStockScopeRailToggle(collapse: false);
-            }
-            else
-            {
-                ImGui.AlignTextToFramePadding();
-                ImGui.TextColored(MainWindow.ColHeader, "Count stock from");
-                DalamudUiLayout.SameLineRight(DalamudUiLayout.ButtonWidth("<"));
-                DrawStockScopeRailToggle(collapse: true);
-                ImGui.Separator();
-                var canEdit = CanEdit(context);
-                var otherAccounts = false;
-                foreach (var character in scope)
-                {
-                    if (character.OtherAccount && !otherAccounts)
-                    {
-                        otherAccounts = true;
-                        ImGui.Spacing();
-                        ImGui.Separator();
-                        ImGui.TextDisabled("Other accounts");
-                    }
-                    DrawStockScopeCharacter(character, canEdit);
-                }
-            }
+            var section = character.OtherAccount && !otherAccounts ? "Other accounts" : null;
+            otherAccounts |= character.OtherAccount;
+            groups.Add(StockScopeGroup(character, canEdit, section));
         }
-        ImGui.EndChild();
-    }
-
-    private void DrawStockScopeRailToggle(bool collapse)
-    {
-        if (ImGui.Button(collapse ? "<##StockScopeRail" : ">##StockScopeRail"))
-            SetStockScopeRailCollapsed(collapse);
-        if (!collapse && ImGui.IsItemHovered())
-            ImGui.SetTooltip("Count stock from");
-        RegisterLastControl(
-            "acquisition.workbench.stock.rail",
-            collapse ? "Collapse Count stock from" : "Expand Count stock from",
-            enabled: true,
-            selected: collapse,
-            collapse ? "Expanded" : "Collapsed",
-            () => SetStockScopeRailCollapsed(collapse));
+        stockScopeRail.Draw("AcquisitionWorkbenchStockScope", groups, config.MarketAcquisitionStockScopeRailCollapsed,
+            SetStockScopeRailCollapsed, height);
     }
 
     private void SetStockScopeRailCollapsed(bool collapsed)
@@ -716,125 +710,51 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         config.Save();
     }
 
-    private void DrawStockScopeCharacter(WorkbenchStockScopeCharacter character, bool canEdit)
+    private CharacterTreeGroup StockScopeGroup(WorkbenchStockScopeCharacter character, bool canEdit, string? section)
     {
         var id = (character.Character.LocalContentId, character.Character.HomeWorldId);
         var name = string.IsNullOrWhiteSpace(character.Character.CharacterName) ? "Character" : character.Character.CharacterName;
         var sources = character.Sources.ToList();
-        var ticked = sources.Count(source => source.Selected);
-        var all = ticked == sources.Count;
-        var mixed = ticked > 0 && !all;
-        var toggleable = canEdit && sources.Any(source => !source.Fixed && (source.Available || source.Selected));
-        var controlId = $"acquisition.workbench.stock.{id.LocalContentId}.{id.HomeWorldId}";
-        ImGui.PushID($"{id.LocalContentId}:{id.HomeWorldId}");
-        var rightEdge = ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X;
-
-        var check = all;
-        ImGui.BeginDisabled(!toggleable);
-        if (mixed)
-            ImGuiP.PushItemFlag(ImGuiItemFlags.MixedValue, true);
-        var toggled = ImGui.Checkbox("##Character", ref check);
-        if (mixed)
-            ImGuiP.PopItemFlag();
-        ImGui.EndDisabled();
-        if (toggled)
-            SetCharacterStockScope(character, !all);
-        RegisterLastToggle(
-            controlId,
-            $"Count all of {name}'s stock",
-            toggleable,
-            all,
-            all ? "All" : mixed ? $"{ticked:N0} of {sources.Count:N0}" : "None",
-            () => SetCharacterStockScope(character, !all));
-
         var expanded = scopeExpanded.TryGetValue(id, out var remembered) ? remembered : character.IsCurrent;
         var age = expanded ? null : CollapsedStaleAge(sources);
-        var ageText = age is { } stale ? FormatAge(stale) : null;
-        ImGui.SameLine();
-        var room = rightEdge - ImGui.GetCursorPosX() - ImGui.GetTreeNodeToLabelSpacing() -
-                   (ageText is null ? 0f : ImGui.CalcTextSize(ageText).X + ImGui.GetStyle().ItemSpacing.X);
-        var shown = DalamudUiLayout.ElideText(name, Math.Max(0f, room));
         Vector4? tint = !character.Available ? MainWindow.ColMuted
             : character.IsCurrent ? CurrentCharacterTint
             : character.OtherAccount ? OtherAccountTint
             : null;
-        if (tint is { } color)
-            ImGui.PushStyleColor(ImGuiCol.Text, color);
-        ImGui.SetNextItemOpen(expanded, ImGuiCond.Always);
-        var open = ImGui.TreeNodeEx($"{shown}##Node", ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.NoTreePushOnOpen);
-        if (tint is not null)
-            ImGui.PopStyleColor();
-        if (open != expanded)
-            scopeExpanded[id] = open;
-        if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(character.Character.HomeWorldName))
-            ImGui.SetTooltip($"{name} · {character.Character.HomeWorldName}");
-        RegisterLastControl(
-            $"{controlId}.expand",
-            $"{(open ? "Collapse" : "Expand")} {name}'s stock sources",
-            enabled: true,
-            selected: open,
-            open ? "Expanded" : "Collapsed",
-            () => scopeExpanded[id] = !(scopeExpanded.TryGetValue(id, out var current) ? current : character.IsCurrent));
-        if (ageText is not null)
-        {
-            ImGui.SameLine(rightEdge - ImGui.CalcTextSize(ageText).X);
-            ImGui.TextColored(MainWindow.ColMuted, ageText);
-        }
-
-        if (open)
-        {
-            ImGui.Indent(ImGui.GetTreeNodeToLabelSpacing());
-            foreach (var source in sources)
-                DrawStockScopeSource(character, source, name, canEdit);
-            ImGui.Unindent(ImGui.GetTreeNodeToLabelSpacing());
-        }
-        ImGui.PopID();
+        return new CharacterTreeGroup(
+            id.LocalContentId,
+            id.HomeWorldId,
+            name,
+            character.Character.HomeWorldName,
+            tint,
+            section,
+            expanded,
+            open => scopeExpanded[id] = open,
+            canEdit && sources.Any(source => !source.Fixed && (source.Available || source.Selected)),
+            $"Count all of {name}'s stock",
+            include => SetCharacterStockScope(character, include),
+            age is { } stale ? FormatAge(stale) : null,
+            sources.Select(source => StockScopeLeaf(character, source, name, canEdit)).ToList());
     }
 
-    private void DrawStockScopeSource(
+    private CharacterTreeLeaf StockScopeLeaf(
         WorkbenchStockScopeCharacter character,
         WorkbenchStockScopeSource source,
         string characterName,
         bool canEdit)
     {
         var bags = source.Key.Container == MarketAcquisitionStockSourceKey.Bags;
-        var part = bags ? "bags" : source.Key.RetainerId == 0 ? "retainers" : source.Key.RetainerId.ToString();
-        ImGui.PushID(part);
-        var rightEdge = ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X;
-        var check = source.Selected;
-        var enabled = canEdit && !source.Fixed && (source.Available || source.Selected);
-        ImGui.BeginDisabled(!enabled);
-        var toggled = ImGui.Checkbox("##Source", ref check);
-        ImGui.EndDisabled();
-        if (toggled)
-            SetSourceStockScope(character, source, check);
-        if (source.Fixed && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Purchases arrive in these bags, so they always count.");
-        RegisterLastToggle(
-            $"acquisition.workbench.stock.{source.Key.LocalContentId}.{source.Key.HomeWorldId}.{part}",
-            $"Count {characterName} · {source.Label}",
-            enabled,
+        return new CharacterTreeLeaf(
+            bags ? "bags" : source.Key.RetainerId == 0 ? "retainers" : source.Key.RetainerId.ToString(),
+            source.Label,
             source.Selected,
+            canEdit && !source.Fixed && (source.Available || source.Selected),
+            source.Available,
+            StaleAgeSince(source.ObservedAtUtc) is { } age ? FormatAge(age) : null,
+            source.Fixed ? "Purchases arrive in these bags, so they always count." : null,
+            $"Count {characterName} · {source.Label}",
             source.Selected ? "Counted" : "Not counted",
-            () => SetSourceStockScope(character, source, !source.Selected));
-
-        var ageText = StaleAgeSince(source.ObservedAtUtc) is { } age ? FormatAge(age) : null;
-        ImGui.SameLine();
-        var room = rightEdge - ImGui.GetCursorPosX() -
-                   (ageText is null ? 0f : ImGui.CalcTextSize(ageText).X + ImGui.GetStyle().ItemSpacing.X);
-        var shown = DalamudUiLayout.ElideText(source.Label, Math.Max(0f, room));
-        if (source.Available)
-            ImGui.TextUnformatted(shown);
-        else
-            ImGui.TextColored(MainWindow.ColMuted, shown);
-        if (shown.Length != source.Label.Length && ImGui.IsItemHovered())
-            ImGui.SetTooltip(source.Label);
-        if (ageText is not null)
-        {
-            ImGui.SameLine(rightEdge - ImGui.CalcTextSize(ageText).X);
-            ImGui.TextColored(MainWindow.ColMuted, ageText);
-        }
-        ImGui.PopID();
+            include => SetSourceStockScope(character, source, include));
     }
 
     /// <summary>A collapsed character's age: its oldest ticked source, else its oldest source; only when stale.</summary>
@@ -880,16 +800,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private static Func<ulong, string> RetainerNames(WorkbenchStockScopeCharacter character) =>
         retainerId => character.Retainers.FirstOrDefault(source => source.Key.RetainerId == retainerId)?.Key.RetainerName ?? string.Empty;
-
-    private void DrawStowAfterDelivery()
-    {
-        if (workbenchStock?.View.HasItemHomes != true)
-            return;
-        var stow = document.StowAfterDelivery;
-        ImGui.SameLine();
-        if (ImGui.Checkbox("Stow after delivery##StowAfterDelivery", ref stow))
-            controller.SetStowAfterDelivery(stow);
-    }
 
     private void DrawBuyListBar(MarketAcquisitionRequestBuilderContext context)
     {

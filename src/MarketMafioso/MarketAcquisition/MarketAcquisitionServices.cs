@@ -53,6 +53,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
     internal string DiagnosticsDirectory { get; }
     internal RetainerAwareMarketAcquisitionInventoryObserver InventoryObserver { get; }
     internal MarketAcquisitionWorkbenchStockService WorkbenchStock { get; }
+    internal MarketAcquisitionPlacementService Placement { get; }
     internal CrossRegionAcquisitionCoordinator CrossRegion { get; }
     private readonly MarketAcquisitionCrossRegionShoppingRoute crossRegionShopping;
 
@@ -92,6 +93,12 @@ internal sealed class MarketAcquisitionServices : IDisposable
             quartermaster,
             new QuartermasterWorkbenchClient(new DalamudQuartermasterWorkbenchIpcAdapter(Plugin.PluginInterface)),
             InventoryObserver,
+            GetCurrentQuartermasterOwnerScope,
+            () => currentDocument(),
+            message => log.Warning(message));
+        Placement = new MarketAcquisitionPlacementService(
+            quartermaster,
+            new QuartermasterPlacementClient(new DalamudQuartermasterPlacementIpcAdapter(Plugin.PluginInterface)),
             GetCurrentQuartermasterOwnerScope,
             () => currentDocument(),
             message => log.Warning(message));
@@ -274,6 +281,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
 
         WorkbenchStock.Tick();
         LastTickTimings.Mark("workbenchStock");
+        Placement.Tick();
+        LastTickTimings.Mark("placement");
         ControlledBrowseProbe.Tick();
         LastTickTimings.Mark("controlledBrowseProbe");
 
@@ -685,6 +694,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
     public void Dispose()
     {
         WorkbenchStock.Dispose();
+        Placement.Dispose();
         crossRegionShopping.Dispose();
         Workspace.Dispose();
         RouteEngine.Dispose();
