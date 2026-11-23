@@ -16,7 +16,6 @@ public enum MarketAcquisitionSelectedLineActionKind
     RefreshQuote,
     UseQuote,
     OpenPlan,
-    RemoveLine,
 }
 
 public sealed record MarketAcquisitionSelectedLineActionPresentation(
@@ -111,12 +110,6 @@ public static class MarketAcquisitionSelectedLinePresenter
                     "Open plan",
                     canOpenPlan,
                     Value: quote?.PlanId),
-                new(
-                    MarketAcquisitionSelectedLineActionKind.RemoveLine,
-                    "Remove line",
-                    canEdit,
-                    IsDestructive: true,
-                    Value: line.ItemId.ToString()),
             ]);
     }
 

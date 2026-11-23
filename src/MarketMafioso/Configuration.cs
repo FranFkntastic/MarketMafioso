@@ -62,6 +62,7 @@ public class Configuration : IPluginConfiguration
     public List<PersistedMarketAcquisitionWorkbenchComposition> MarketAcquisitionWorkbenchCompositions { get; set; } = [];
     public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public PersistedMarketAcquisitionWorkbenchCompositionSource? MarketAcquisitionWorkbenchCompositionSource { get; set; }
+    public bool MarketAcquisitionStockScopeRailCollapsed { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
     public bool MarketAcquisitionLockedByUser { get; set; }
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
@@ -479,6 +480,7 @@ public sealed class PersistedMarketAcquisitionRequestDocument
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
     // Null in documents saved before the plan-level choice existed; derived from the lines then.
     public bool? CountRetainerStock { get; set; }
+    public List<PersistedMarketAcquisitionStockSource>? OwnRetainerSelection { get; set; }
     public List<PersistedMarketAcquisitionStockSource>? AdditionalStockSources { get; set; }
     public bool StowAfterDelivery { get; set; }
     public string? ExactAcquisitionAuthorityJson { get; set; }
@@ -517,6 +519,9 @@ public sealed class PersistedMarketAcquisitionStockSource
     public string? CharacterName { get; set; }
     public string? HomeWorldName { get; set; }
     public string Container { get; set; } = string.Empty;
+    // Zero (and absent in sources saved before single retainers could be chosen): every retainer of the character.
+    public ulong RetainerId { get; set; }
+    public string? RetainerName { get; set; }
 }
 
 [Serializable]
@@ -531,6 +536,7 @@ public sealed class PersistedMarketAcquisitionWorkbenchComposition
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
     // Null in a composition saved before stock scope was kept: loading it leaves the Workbench's scope as it is.
     public bool? CountRetainerStock { get; set; }
+    public List<PersistedMarketAcquisitionStockSource>? OwnRetainerSelection { get; set; }
     public List<PersistedMarketAcquisitionStockSource>? AdditionalStockSources { get; set; }
     public bool StowAfterDelivery { get; set; }
     public DateTime CreatedAtUtc { get; set; }

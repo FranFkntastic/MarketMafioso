@@ -56,8 +56,30 @@ public static class RequestDocumentMutation
         if (selectedLineIndex < 0 || selectedLineIndex >= document.Lines.Count)
             throw new ArgumentOutOfRangeException(nameof(selectedLineIndex));
 
-        var originalLine = document.Lines[selectedLineIndex];
-        var line = originalLine with
+        return ReplaceLine(document, selectedLineIndex, EditLine(
+            document.Lines[selectedLineIndex],
+            quantityMode,
+            targetQuantity,
+            maximumOverage,
+            maxQuantity,
+            hqPolicy,
+            maxUnitPrice,
+            gilCap));
+    }
+
+    /// <summary>A line with these editable fields, normalized the way a cell edit normalizes them.</summary>
+    public static MarketAcquisitionRequestLineDocument EditLine(
+        MarketAcquisitionRequestLineDocument originalLine,
+        string quantityMode,
+        uint targetQuantity,
+        uint maximumOverage,
+        uint maxQuantity,
+        string hqPolicy,
+        uint maxUnitPrice,
+        uint gilCap)
+    {
+        ArgumentNullException.ThrowIfNull(originalLine);
+        return originalLine with
         {
             QuantityMode = string.IsNullOrWhiteSpace(quantityMode) ? "AllBelowThreshold" : quantityMode,
             TargetQuantity = targetQuantity,
@@ -74,8 +96,6 @@ public static class RequestDocumentMutation
             MaxUnitPrice = maxUnitPrice,
             GilCap = gilCap,
         };
-
-        return ReplaceLine(document, selectedLineIndex, line);
     }
 
     public static MarketAcquisitionRequestDocument ApplyRouteScope(
@@ -116,19 +136,6 @@ public static class RequestDocumentMutation
         ArgumentNullException.ThrowIfNull(line);
         var lines = document.Lines.ToList();
         lines.Add(line);
-        return MarkEdited(document, document with { Lines = lines });
-    }
-
-    public static MarketAcquisitionRequestDocument RemoveLine(
-        MarketAcquisitionRequestDocument document,
-        int selectedLineIndex)
-    {
-        ArgumentNullException.ThrowIfNull(document);
-        if (selectedLineIndex < 0 || selectedLineIndex >= document.Lines.Count)
-            throw new ArgumentOutOfRangeException(nameof(selectedLineIndex));
-
-        var lines = document.Lines.ToList();
-        lines.RemoveAt(selectedLineIndex);
         return MarkEdited(document, document with { Lines = lines });
     }
 

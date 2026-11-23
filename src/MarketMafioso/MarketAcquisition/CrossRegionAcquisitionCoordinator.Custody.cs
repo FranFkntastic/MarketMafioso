@@ -45,6 +45,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public const string CodeCountedRetrievalIncomplete = "CountedRetrievalIncomplete";
     public const string CodeCountedRetrievalTimedOut = "CountedRetrievalTimedOut";
     public const string CodeCountedRetrievalCancelled = "CountedRetrievalCancelled";
+    public const string CodeCountedRetrievalScopeNarrowed = "CountedRetrievalScopeNarrowed";
     public const string CodeStowUnavailable = "StowUnavailable";
     public const string CodeStowPrimarySwitchFailed = "StowPrimarySwitchFailed";
     public const string CodeStowRejected = "StowRejected";
@@ -193,6 +194,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                         continue;
                     }
                 }
+                if (inRetainers && IsCountedRetainerScopeNarrowed(document, source))
+                {
+                    session.NotCollected.Add(new(line.ItemId, line.ItemName, source.Label, counted.Quantity, CodeCountedRetrievalScopeNarrowed));
+                    log($"{CodeCountedRetrievalScopeNarrowed}: {counted.Quantity} {line.ItemName} counted on {source.Label}'s chosen retainers stays put.", null);
+                    continue;
+                }
                 var entry = bySource.FindIndex(candidate => candidate.Source.Matches(source));
                 if (entry < 0)
                 {
@@ -226,6 +233,14 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 session.Collections.Add(collection);
         }
     }
+
+    /// <summary>
+    /// Whether the plan counted only some of this character's retainers. A retrieval takes from whichever of the
+    /// character's retainers hold the item, so those units are reported instead of collected. When a shortage
+    /// request can name its source retainers, pass these retainers to the retrieval here instead.
+    /// </summary>
+    private static bool IsCountedRetainerScopeNarrowed(MarketAcquisitionRequestDocument document, CrossRegionCharacter source) =>
+        !MarketAcquisitionStockScope.CountedRetainers(document, source.LocalContentId, source.HomeWorldId).All;
 
     /// <summary>How many of a counted source's units are HQ: implied by an HQ-only/NQ-only line, else as observed.</summary>
     private static uint? CountedHq(string hqPolicy, MarketAcquisitionCountedStockSource counted) =>

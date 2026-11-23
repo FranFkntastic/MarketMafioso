@@ -6,15 +6,33 @@ using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.MarketAcquisition;
 
-/// <summary>One choice under "Count stock from".</summary>
-public sealed record WorkbenchStockSourceOption(
+/// <summary>
+/// One tickable source under a character in the "Count stock from" tree: its bags, one retainer, or (when
+/// the retainers are not listed individually) all of its retainers. Unavailable sources are selected but no
+/// longer observed; they count nothing and can only be unticked.
+/// </summary>
+public sealed record WorkbenchStockScopeSource(
     MarketAcquisitionStockSourceKey Key,
     string Label,
-    bool IsCurrentCharacter,
     bool Selected,
     bool Fixed,
-    TimeSpan? StaleAge,
-    TimeSpan? NewestAge = null);
+    bool Available,
+    DateTimeOffset? ObservedAtUtc);
+
+/// <summary>One character in the "Count stock from" tree with its sources in game order.</summary>
+public sealed record WorkbenchStockScopeCharacter(
+    MarketAcquisitionStockSourceKey Character,
+    bool IsCurrent,
+    bool OtherAccount,
+    bool Available,
+    WorkbenchStockScopeSource? Bags,
+    ImmutableArray<WorkbenchStockScopeSource> Retainers,
+    MarketAcquisitionRetainerScope RetainerScope,
+    ImmutableArray<ulong> KnownRetainerIds)
+{
+    public IEnumerable<WorkbenchStockScopeSource> Sources =>
+        Bags is null ? Retainers : Retainers.Prepend(Bags);
+}
 
 /// <summary>One hover row under On hand. Quantity is null when that source is unknown.</summary>
 public sealed record WorkbenchStockBreakdownRow(string Label, uint? Quantity, TimeSpan? StaleAge, TimeSpan? NewestAge = null);
@@ -33,7 +51,7 @@ public sealed record WorkbenchStockView(
     bool HasStockSources,
     bool HasReserveLevels,
     bool HasItemHomes,
-    ImmutableArray<WorkbenchStockSourceOption> SourceOptions,
+    ImmutableArray<WorkbenchStockScopeCharacter> Scope,
     ImmutableDictionary<uint, WorkbenchLineStock> Lines,
     QuartermasterReserveItems? Reserves,
     long Version,
@@ -90,6 +108,7 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
         this.warn = warn;
         quartermaster.Changed += OnQuartermasterChanged;
         observer.AdditionalStock = ObserveAdditionalStock;
+        observer.OwnRetainerScope = ObserveOwnRetainerScope;
     }
 
     public WorkbenchStockView View { get; private set; } = WorkbenchStockView.Empty;
@@ -140,11 +159,18 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             hash.Add(line.QuantityMode);
             hash.Add(line.TargetBasis);
         }
+        foreach (var source in document.OwnRetainerSelection)
+        {
+            hash.Add(source.LocalContentId);
+            hash.Add(source.HomeWorldId);
+            hash.Add(source.RetainerId);
+        }
         foreach (var source in document.AdditionalStockSources)
         {
             hash.Add(source.LocalContentId);
             hash.Add(source.HomeWorldId);
             hash.Add(source.Container);
+            hash.Add(source.RetainerId);
         }
         return hash.ToHashCode();
     }
@@ -342,10 +368,23 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             return null;
         var owner = currentOwner();
         var quantity = 0u;
-        foreach (var (key, character) in SelectedExtras(document, owner))
-            if (Contribution(character, key.Container, itemId, hqPolicy) is { } contribution)
-                quantity = checked(quantity + contribution.Quantity);
+        foreach (var extra in SelectedExtras(document, owner))
+        {
+            if (extra.Bags && BagsContribution(extra.Character, itemId, hqPolicy) is { } bags)
+                quantity = checked(quantity + bags.Quantity);
+            if (RetainersContribution(extra.Character, extra.Retainers, itemId, hqPolicy) is { } retainers)
+                quantity = checked(quantity + retainers.Quantity);
+        }
         return MarketAcquisitionInventoryObservation.Available(quantity);
+    }
+
+    /// <summary>The current character's retainers ticked on the Workbench; every one when no document is loaded.</summary>
+    private MarketAcquisitionRetainerScope ObserveOwnRetainerScope()
+    {
+        if (TryDocument() is not { } document)
+            return MarketAcquisitionRetainerScope.Every;
+        var owner = currentOwner();
+        return MarketAcquisitionStockScope.OwnRetainers(document, owner.LocalContentId ?? 0, owner.HomeWorldId ?? 0);
     }
 
     // ---- Refresh ------------------------------------------------------------------------------
@@ -436,7 +475,7 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
                                 owner.Matches(snapshot.Owner) && !snapshot.Retainers.IsDefaultOrEmpty
             ? snapshot
             : null;
-        var options = document is null ? [] : BuildSourceOptions(document, owner, snapshotRetainers);
+        var scope = document is null ? [] : BuildScope(document, owner, snapshotRetainers);
         var lines = ImmutableDictionary.CreateBuilder<uint, WorkbenchLineStock>();
         foreach (var line in document?.Lines ?? [])
             if (CountsOnHand(document!, line) && !lines.ContainsKey(line.ItemId))
@@ -451,30 +490,19 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             homes = hasItemHomes;
             remote = hasRemoteDelivery;
         }
-        return new WorkbenchStockView(stock, levels, homes, options, lines.ToImmutable(), currentReserves, ++version, remote);
+        return new WorkbenchStockView(stock, levels, homes, scope, lines.ToImmutable(), currentReserves, ++version, remote);
     }
 
-    private ImmutableArray<WorkbenchStockSourceOption> BuildSourceOptions(
+    /// <summary>
+    /// The "Count stock from" tree: the current character, the other characters of this account by name, then
+    /// characters on other accounts. Only observed sources are offered (a never-observed one would be unknown,
+    /// never zero); a selected source that is no longer observed stays listed, unavailable, so it can be unticked.
+    /// </summary>
+    private ImmutableArray<WorkbenchStockScopeCharacter> BuildScope(
         MarketAcquisitionRequestDocument document,
         QuartermasterOwnerScope owner,
         QuartermasterSnapshot? snapshot)
     {
-        var options = ImmutableArray.CreateBuilder<WorkbenchStockSourceOption>();
-        var ownerName = string.IsNullOrWhiteSpace(owner.CharacterName) ? "This character" : owner.CharacterName!;
-        var ownerId = owner.LocalContentId ?? 0;
-        var ownerWorld = owner.HomeWorldId ?? 0;
-        options.Add(new(new(ownerId, ownerWorld, ownerName, owner.HomeWorldName ?? string.Empty, MarketAcquisitionStockSourceKey.Bags),
-            SourceLabel(ownerName, MarketAcquisitionStockSourceKey.Bags), true, true, true, null));
-        if (snapshot is not null || document.CountRetainerStock)
-        {
-            var observed = snapshot?.Retainers.SelectMany(retainer => retainer.Bags)
-                .Select(bag => bag.ObservedAtUtc).Where(at => at is not null).ToArray() ?? [];
-            var oldest = observed.Min();
-            options.Add(new(new(ownerId, ownerWorld, ownerName, owner.HomeWorldName ?? string.Empty, MarketAcquisitionStockSourceKey.Retainers),
-                SourceLabel(ownerName, MarketAcquisitionStockSourceKey.Retainers), true, document.CountRetainerStock, false,
-                StaleAge(oldest ?? snapshot?.GeneratedAtUtc), Age(observed.Max())));
-        }
-
         QuartermasterStockSources? current;
         bool stock;
         lock (gate)
@@ -482,32 +510,96 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             current = sources;
             stock = hasStockSources;
         }
-        if (!stock || current is null)
-            return options.ToImmutable();
+        var known = stock && current is not null ? current.Characters : [];
+        var result = ImmutableArray.CreateBuilder<WorkbenchStockScopeCharacter>();
+        var ownerId = owner.LocalContentId ?? 0;
+        var ownerWorld = owner.HomeWorldId ?? 0;
+        var ownerName = string.IsNullOrWhiteSpace(owner.CharacterName) ? "This character" : owner.CharacterName!;
+        var ownerKey = new MarketAcquisitionStockSourceKey(ownerId, ownerWorld, ownerName, owner.HomeWorldName ?? string.Empty,
+            MarketAcquisitionStockSourceKey.Bags);
 
-        var others = current.Characters
+        // The current character: bags always count; retainers from the owner-matched snapshot, else Quartermaster's list.
+        var ownScope = MarketAcquisitionStockScope.OwnRetainers(document, ownerId, ownerWorld);
+        var ownListed = snapshot is not null
+            ? snapshot.Retainers.Select(retainer => (retainer.RetainerId, retainer.RetainerName,
+                ObservedAtUtc: (DateTimeOffset?)(retainer.Bags.Select(bag => bag.ObservedAtUtc).Where(at => at is not null).Min()
+                                                 ?? retainer.ObservedAtUtc))).ToList()
+            : known.FirstOrDefault(character => IsOwner(character.LocalContentId, character.HomeWorldId, owner))?.Retainers is { IsDefaultOrEmpty: false } ownerListed
+                ? ownerListed.Select(retainer => (retainer.RetainerId, retainer.RetainerName, ObservedAtUtc: (DateTimeOffset?)retainer.ObservedAtUtc)).ToList()
+                : [];
+        var ownRetainers = RetainerNodes(ownerKey, ownListed, ownScope, document.CountRetainerStock);
+        result.Add(new WorkbenchStockScopeCharacter(
+            ownerKey, true, false, true,
+            new WorkbenchStockScopeSource(ownerKey, "Bags", true, true, true, null),
+            ownRetainers, ownScope, ownListed.Select(retainer => retainer.RetainerId).ToImmutableArray()));
+
+        var others = known
             .Where(character => !IsOwner(character.LocalContentId, character.HomeWorldId, owner))
+            .OrderBy(character => character.OtherAccount)
+            .ThenBy(character => character.CharacterName, StringComparer.OrdinalIgnoreCase)
             .ToList();
         foreach (var character in others)
         {
-            var key = (character.LocalContentId, character.HomeWorldId);
-            bool Selected(string container) => document.AdditionalStockSources.Any(source =>
-                source.IsCharacter(key.LocalContentId, key.HomeWorldId) && source.Container == container);
-            // Only observed sources are offered: a never-observed one would be unknown, never zero.
-            if (character.Bags is not null)
-                options.Add(new(new(character.LocalContentId, character.HomeWorldId, character.CharacterName, character.HomeWorldName,
-                        MarketAcquisitionStockSourceKey.Bags),
-                    SourceLabel(character.CharacterName, MarketAcquisitionStockSourceKey.Bags), false,
-                    Selected(MarketAcquisitionStockSourceKey.Bags), false, StaleAge(character.Bags?.ObservedAtUtc)));
-            if (character.Retainers is { IsDefaultOrEmpty: false })
-                options.Add(new(new(character.LocalContentId, character.HomeWorldId, character.CharacterName, character.HomeWorldName,
-                        MarketAcquisitionStockSourceKey.Retainers),
-                    SourceLabel(character.CharacterName, MarketAcquisitionStockSourceKey.Retainers), false,
-                    Selected(MarketAcquisitionStockSourceKey.Retainers), false,
-                    StaleAge(character.Retainers.Value.Min(retainer => retainer.ObservedAtUtc)),
-                    Age(character.Retainers.Value.Max(retainer => retainer.ObservedAtUtc))));
+            var key = new MarketAcquisitionStockSourceKey(character.LocalContentId, character.HomeWorldId, character.CharacterName,
+                character.HomeWorldName, MarketAcquisitionStockSourceKey.Bags);
+            var bagsSelected = MarketAcquisitionStockScope.CharacterBags(document, character.LocalContentId, character.HomeWorldId);
+            var bags = character.Bags is { } observedBags
+                ? new WorkbenchStockScopeSource(key, "Bags", bagsSelected, false, true, observedBags.ObservedAtUtc)
+                : bagsSelected
+                    ? new WorkbenchStockScopeSource(key, "Bags", true, false, false, null)
+                    : null;
+            var scope = MarketAcquisitionStockScope.CharacterRetainers(document, character.LocalContentId, character.HomeWorldId);
+            var listed = character.Retainers is { IsDefaultOrEmpty: false } observed
+                ? observed.Select(retainer => (retainer.RetainerId, retainer.RetainerName, ObservedAtUtc: (DateTimeOffset?)retainer.ObservedAtUtc)).ToList()
+                : [];
+            var retainers = RetainerNodes(key, listed, scope, !scope.IsNone);
+            if (bags is null && retainers.IsEmpty)
+                continue;
+            result.Add(new WorkbenchStockScopeCharacter(key, false, character.OtherAccount, true, bags, retainers, scope,
+                listed.Select(retainer => retainer.RetainerId).ToImmutableArray()));
         }
-        return options.ToImmutable();
+
+        // Selected characters Quartermaster no longer reports: listed so their scope can still be cleared.
+        foreach (var group in document.AdditionalStockSources
+                     .Where(key => !IsOwner(key.LocalContentId, key.HomeWorldId, owner) &&
+                                   !result.Any(character => character.Character.IsCharacter(key.LocalContentId, key.HomeWorldId)))
+                     .GroupBy(key => (key.LocalContentId, key.HomeWorldId)))
+        {
+            var first = group.First();
+            var key = first with { Container = MarketAcquisitionStockSourceKey.Bags, RetainerId = 0, RetainerName = string.Empty };
+            var bags = group.Any(source => source.Container == MarketAcquisitionStockSourceKey.Bags)
+                ? new WorkbenchStockScopeSource(key, "Bags", true, false, false, null)
+                : null;
+            var scope = MarketAcquisitionStockScope.CharacterRetainers(group, key.LocalContentId, key.HomeWorldId);
+            var retainers = RetainerNodes(key, [], scope, !scope.IsNone, group.ToList());
+            result.Add(new WorkbenchStockScopeCharacter(key, false, false, false, bags, retainers, scope, []));
+        }
+        return result.ToImmutable();
+    }
+
+    /// <summary>One node per listed retainer, then any selected retainer no longer listed.</summary>
+    private static ImmutableArray<WorkbenchStockScopeSource> RetainerNodes(
+        MarketAcquisitionStockSourceKey character,
+        IReadOnlyList<(ulong RetainerId, string RetainerName, DateTimeOffset? ObservedAtUtc)> listed,
+        MarketAcquisitionRetainerScope scope,
+        bool showWhole,
+        IReadOnlyList<MarketAcquisitionStockSourceKey>? selectedKeys = null)
+    {
+        var nodes = ImmutableArray.CreateBuilder<WorkbenchStockScopeSource>();
+        foreach (var retainer in listed)
+            nodes.Add(new(character.ForRetainer(retainer.RetainerId, retainer.RetainerName),
+                string.IsNullOrWhiteSpace(retainer.RetainerName) ? $"Retainer {retainer.RetainerId}" : retainer.RetainerName,
+                scope.Includes(retainer.RetainerId), false, true, retainer.ObservedAtUtc));
+        foreach (var id in scope.Ids.Where(id => listed.All(retainer => retainer.RetainerId != id)).Order())
+        {
+            var name = selectedKeys?.FirstOrDefault(key => key.RetainerId == id)?.RetainerName;
+            nodes.Add(new(character.ForRetainer(id, name ?? string.Empty),
+                string.IsNullOrWhiteSpace(name) ? $"Retainer {id}" : name, true, false, false, null));
+        }
+        // Retainers that cannot be listed cannot be counted either: offered only so the choice can be undone.
+        if (listed.Count == 0 && scope.All && showWhole)
+            nodes.Add(new(character with { Container = MarketAcquisitionStockSourceKey.Retainers }, "Retainers", true, false, false, null));
+        return nodes.ToImmutable();
     }
 
     private WorkbenchLineStock BuildLineStock(
@@ -528,20 +620,17 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
                 MarketAcquisitionStockSourceKey.Bags, carried.Quantity, now));
         if (document.CountRetainerStock)
         {
-            if (PrimaryRetainers(snapshot, line.ItemId, line.HqPolicy) is not { } retainers)
+            var scope = MarketAcquisitionStockScope.OwnRetainers(document, owner.LocalContentId ?? 0, owner.HomeWorldId ?? 0);
+            if (PrimaryRetainers(snapshot, scope, line.ItemId, line.HqPolicy) is not { } retainers)
                 rows.Add(new(SourceLabel(ownerName, MarketAcquisitionStockSourceKey.Retainers), null, null));
-            else if (retainers.All(retainer => retainer.Quantity == 0))
-                rows.Add(new(SourceLabel(ownerName, MarketAcquisitionStockSourceKey.Retainers), 0,
-                    StaleAge(retainers.Count == 0 ? null : retainers.Min(retainer => retainer.ObservedAtUtc)),
-                    Age(retainers.Count == 0 ? null : retainers.Max(retainer => retainer.ObservedAtUtc))));
             else
             {
-                foreach (var retainer in retainers.Where(retainer => retainer.Quantity > 0))
-                    rows.Add(new($"{ownerName} · {retainer.Name}", retainer.Quantity, StaleAge(retainer.ObservedAtUtc)));
-                counted.Add(new(owner.LocalContentId ?? 0, owner.HomeWorldId ?? 0, ownerName, ownerWorld,
-                    MarketAcquisitionStockSourceKey.Retainers,
-                    retainers.Aggregate(0u, (sum, retainer) => checked(sum + retainer.Quantity)),
-                    retainers.Min(retainer => retainer.ObservedAtUtc)));
+                AddRetainerRows(rows, ownerName, retainers.Select(retainer => (retainer.Name, retainer.Quantity, retainer.ObservedAtUtc)).ToList());
+                if (retainers.Any(retainer => retainer.Quantity > 0))
+                    counted.Add(new(owner.LocalContentId ?? 0, owner.HomeWorldId ?? 0, ownerName, ownerWorld,
+                        MarketAcquisitionStockSourceKey.Retainers,
+                        retainers.Aggregate(0u, (sum, retainer) => checked(sum + retainer.Quantity)),
+                        retainers.Min(retainer => retainer.ObservedAtUtc)));
             }
         }
 
@@ -549,26 +638,23 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
         lock (gate)
             stock = hasStockSources;
         if (stock)
-            foreach (var (key, character) in SelectedExtras(document, owner))
+            foreach (var extra in SelectedExtras(document, owner))
             {
-                var name = character?.CharacterName ?? key.CharacterName;
                 // Never observed: dropped from the count quietly, not shown as unknown or zero.
-                if (Contribution(character, key.Container, line.ItemId, line.HqPolicy) is not { } contribution)
-                    continue;
-                if (contribution.Quantity > 0)
-                    counted.Add(new(key.LocalContentId, key.HomeWorldId, name, character!.HomeWorldName,
-                        key.Container, contribution.Quantity, contribution.ObservedAtUtc, contribution.HqQuantity));
-                if (key.Container == MarketAcquisitionStockSourceKey.Retainers && contribution.Quantity > 0)
+                var name = extra.Character?.CharacterName ?? extra.Key.CharacterName;
+                if (extra.Bags && BagsContribution(extra.Character, line.ItemId, line.HqPolicy) is { } bags)
                 {
-                    foreach (var retainer in character!.Retainers!.Value)
-                        if (Sum(retainer.Items, line.ItemId, line.HqPolicy) is var quantity && quantity > 0)
-                            rows.Add(new($"{name} · {retainer.RetainerName}", quantity, StaleAge(retainer.ObservedAtUtc)));
-                    continue;
+                    if (bags.Quantity > 0)
+                        counted.Add(new(extra.Key.LocalContentId, extra.Key.HomeWorldId, name, extra.Character!.HomeWorldName,
+                            MarketAcquisitionStockSourceKey.Bags, bags.Quantity, bags.ObservedAtUtc, bags.HqQuantity));
+                    rows.Add(new(SourceLabel(name, MarketAcquisitionStockSourceKey.Bags), bags.Quantity, StaleAge(bags.ObservedAtUtc)));
                 }
-                rows.Add(new(SourceLabel(name, key.Container), contribution.Quantity, StaleAge(contribution.ObservedAtUtc),
-                    key.Container == MarketAcquisitionStockSourceKey.Retainers
-                        ? Age(character!.Retainers!.Value.Max(retainer => retainer.ObservedAtUtc))
-                        : null));
+                if (RetainersContribution(extra.Character, extra.Retainers, line.ItemId, line.HqPolicy) is not { } retainers)
+                    continue;
+                if (retainers.Quantity > 0)
+                    counted.Add(new(extra.Key.LocalContentId, extra.Key.HomeWorldId, name, extra.Character!.HomeWorldName,
+                        MarketAcquisitionStockSourceKey.Retainers, retainers.Quantity, retainers.ObservedAtUtc, retainers.HqQuantity));
+                AddRetainerRows(rows, name, retainers.PerRetainer);
             }
 
         var total = observer.Observe(line.ItemId, line.HqPolicy, line.TargetBasis);
@@ -580,46 +666,93 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             rows.ToImmutable(), counted.ToImmutable());
     }
 
+    /// <summary>
+    /// Hover rows for one character's counted retainers: each retainer holding the item, or one zero row when none
+    /// does (a group seen at different times reads as an age range).
+    /// </summary>
+    private static void AddRetainerRows(
+        ImmutableArray<WorkbenchStockBreakdownRow>.Builder rows,
+        string characterName,
+        IReadOnlyList<(string Name, uint Quantity, DateTimeOffset ObservedAtUtc)> retainers)
+    {
+        if (retainers.Any(retainer => retainer.Quantity > 0))
+        {
+            foreach (var retainer in retainers.Where(retainer => retainer.Quantity > 0))
+                rows.Add(new($"{characterName} · {retainer.Name}", retainer.Quantity, StaleAge(retainer.ObservedAtUtc)));
+            return;
+        }
+        if (retainers.Count == 1)
+        {
+            rows.Add(new($"{characterName} · {retainers[0].Name}", 0, StaleAge(retainers[0].ObservedAtUtc)));
+            return;
+        }
+        rows.Add(new(SourceLabel(characterName, MarketAcquisitionStockSourceKey.Retainers), 0,
+            StaleAge(retainers.Count == 0 ? null : retainers.Min(retainer => retainer.ObservedAtUtc)),
+            Age(retainers.Count == 0 ? null : retainers.Max(retainer => retainer.ObservedAtUtc))));
+    }
+
     // ---- Stock helpers --------------------------------------------------------------------------
 
-    private IEnumerable<(MarketAcquisitionStockSourceKey Key, QuartermasterStockCharacter? Character)> SelectedExtras(
+    /// <summary>Another character's selected bags and retainers.</summary>
+    private sealed record SelectedCharacter(
+        MarketAcquisitionStockSourceKey Key,
+        QuartermasterStockCharacter? Character,
+        bool Bags,
+        MarketAcquisitionRetainerScope Retainers);
+
+    private IEnumerable<SelectedCharacter> SelectedExtras(
         MarketAcquisitionRequestDocument document,
         QuartermasterOwnerScope owner)
     {
         QuartermasterStockSources? current;
         lock (gate)
             current = sources;
-        foreach (var key in document.AdditionalStockSources)
+        foreach (var group in document.AdditionalStockSources
+                     .Where(key => !IsOwner(key.LocalContentId, key.HomeWorldId, owner))
+                     .GroupBy(key => (key.LocalContentId, key.HomeWorldId)))
         {
-            if (IsOwner(key.LocalContentId, key.HomeWorldId, owner))
-                continue;
-            yield return (key, current?.Characters.FirstOrDefault(character =>
-                key.IsCharacter(character.LocalContentId, character.HomeWorldId)));
+            var key = group.First();
+            yield return new SelectedCharacter(
+                key,
+                current?.Characters.FirstOrDefault(character => key.IsCharacter(character.LocalContentId, character.HomeWorldId)),
+                group.Any(source => source.Container == MarketAcquisitionStockSourceKey.Bags),
+                MarketAcquisitionStockScope.CharacterRetainers(group, key.LocalContentId, key.HomeWorldId));
         }
     }
 
-    private static (uint Quantity, uint HqQuantity, DateTimeOffset ObservedAtUtc)? Contribution(
+    private static (uint Quantity, uint HqQuantity, DateTimeOffset ObservedAtUtc)? BagsContribution(
         QuartermasterStockCharacter? character,
-        string container,
+        uint itemId,
+        string hqPolicy) =>
+        character?.Bags is { } bags
+            ? (Sum(bags.Items, itemId, hqPolicy), Sum(bags.Items, itemId, hqPolicy, hqOnly: true), bags.ObservedAtUtc)
+            : null;
+
+    /// <summary>The selected retainers' stock, or null when none of them is observed.</summary>
+    private static (uint Quantity, uint HqQuantity, DateTimeOffset ObservedAtUtc,
+        IReadOnlyList<(string Name, uint Quantity, DateTimeOffset ObservedAtUtc)> PerRetainer)? RetainersContribution(
+        QuartermasterStockCharacter? character,
+        MarketAcquisitionRetainerScope scope,
         uint itemId,
         string hqPolicy)
     {
-        if (character is null)
+        if (scope.IsNone || character?.Retainers is not { IsDefaultOrEmpty: false } retainers)
             return null;
-        if (container == MarketAcquisitionStockSourceKey.Bags)
-            return character.Bags is { } bags
-                ? (Sum(bags.Items, itemId, hqPolicy), Sum(bags.Items, itemId, hqPolicy, hqOnly: true), bags.ObservedAtUtc)
-                : null;
-        if (character.Retainers is not { IsDefaultOrEmpty: false } retainers)
+        var selected = retainers.Where(retainer => scope.Includes(retainer.RetainerId)).ToList();
+        if (selected.Count == 0)
             return null;
         var quantity = 0u;
         var hq = 0u;
-        foreach (var retainer in retainers)
+        var perRetainer = new List<(string, uint, DateTimeOffset)>(selected.Count);
+        foreach (var retainer in selected)
         {
-            quantity = checked(quantity + Sum(retainer.Items, itemId, hqPolicy));
+            var units = Sum(retainer.Items, itemId, hqPolicy);
+            quantity = checked(quantity + units);
             hq = checked(hq + Sum(retainer.Items, itemId, hqPolicy, hqOnly: true));
+            perRetainer.Add((string.IsNullOrWhiteSpace(retainer.RetainerName) ? $"Retainer {retainer.RetainerId}" : retainer.RetainerName,
+                units, retainer.ObservedAtUtc));
         }
-        return (quantity, hq, retainers.Min(retainer => retainer.ObservedAtUtc));
+        return (quantity, hq, selected.Min(retainer => retainer.ObservedAtUtc), perRetainer);
     }
 
     private static uint Sum(ImmutableArray<QuartermasterStockItem> items, uint itemId, string hqPolicy, bool hqOnly = false) =>
@@ -628,20 +761,23 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             .Sum(item => item.Quantity));
 
     /// <summary>
-    /// The current character's retainers holding the item, from the same owner-matched Quartermaster
-    /// snapshot the inventory observer counts. Null when that snapshot cannot vouch for the item.
+    /// The current character's counted retainers and their stock of the item, from the same owner-matched
+    /// Quartermaster snapshot the inventory observer counts. Null when that snapshot cannot vouch for the item.
     /// </summary>
     private static List<(string Name, uint Quantity, DateTimeOffset ObservedAtUtc)>? PrimaryRetainers(
         QuartermasterSnapshot? snapshot,
+        MarketAcquisitionRetainerScope scope,
         uint itemId,
         string hqPolicy)
     {
-        if (snapshot is null || snapshot.Retainers.IsDefaultOrEmpty ||
-            snapshot.Retainers.Any(retainer => !QuartermasterStockCoverage.CoversItem(retainer, itemId)))
+        if (snapshot is null || snapshot.Retainers.IsDefaultOrEmpty)
+            return null;
+        var counted = snapshot.Retainers.Where(retainer => scope.Includes(retainer.RetainerId)).ToList();
+        if (counted.Any(retainer => !QuartermasterStockCoverage.CoversItem(retainer, itemId)))
             return null;
         var crystal = itemId is >= 2 and <= 19;
         var result = new List<(string, uint, DateTimeOffset)>();
-        foreach (var retainer in snapshot.Retainers)
+        foreach (var retainer in counted)
         {
             var bags = retainer.Bags.Where(bag =>
                 bag.BagName.Equals("RetainerCrystals", StringComparison.OrdinalIgnoreCase) == crystal).ToArray();
@@ -688,5 +824,6 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
         disposed = true;
         quartermaster.Changed -= OnQuartermasterChanged;
         observer.AdditionalStock = null;
+        observer.OwnRetainerScope = null;
     }
 }

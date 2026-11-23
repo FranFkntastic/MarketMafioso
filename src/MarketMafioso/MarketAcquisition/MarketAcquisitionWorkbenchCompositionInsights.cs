@@ -60,10 +60,12 @@ public static class MarketAcquisitionWorkbenchCompositionInsights
         if (scope is null ||
             scope.CountRetainerStock != workbench.CountRetainerStock ||
             scope.AdditionalStockSources.Count != workbench.AdditionalStockSources.Count ||
-            scope.AdditionalStockSources.Any(source => !workbench.AdditionalStockSources.Any(source.SameSource)))
+            scope.AdditionalStockSources.Any(source => !workbench.AdditionalStockSources.Any(source.SameSource)) ||
+            scope.OwnRetainerSelection.Count != workbench.OwnRetainerSelection.Count ||
+            scope.OwnRetainerSelection.Any(source => !workbench.OwnRetainerSelection.Any(source.SameSource)))
             settings.Add(new("Count stock from",
-                scope is null ? "Not saved" : FormatStock(scope.CountRetainerStock, scope.AdditionalStockSources),
-                FormatStock(workbench.CountRetainerStock, workbench.AdditionalStockSources)));
+                scope is null ? "Not saved" : FormatStock(scope.CountRetainerStock, scope.OwnRetainerSelection, scope.AdditionalStockSources),
+                FormatStock(workbench.CountRetainerStock, workbench.OwnRetainerSelection, workbench.AdditionalStockSources)));
         if (scope is not null && scope.StowAfterDelivery != workbench.StowAfterDelivery)
             settings.Add(new("Stow after delivery", scope.StowAfterDelivery ? "On" : "Off", workbench.StowAfterDelivery ? "On" : "Off"));
 
@@ -177,10 +179,23 @@ public static class MarketAcquisitionWorkbenchCompositionInsights
         return null;
     }
 
-    private static string FormatStock(bool countRetainers, IEnumerable<MarketAcquisitionStockSourceKey> additional) =>
-        string.Join(", ", new[] { countRetainers ? "Own bags, own retainers" : "Own bags" }.Concat(additional
-            .Select(source => $"{source.CharacterName} ({source.HomeWorldName}) · {source.Container}")
+    private static string FormatStock(
+        bool countRetainers,
+        IReadOnlyCollection<MarketAcquisitionStockSourceKey> ownRetainers,
+        IEnumerable<MarketAcquisitionStockSourceKey> additional)
+    {
+        var own = !countRetainers
+            ? "Own bags"
+            : ownRetainers.Count == 0
+                ? "Own bags; own retainers"
+                : $"Own bags; Own retainers: {string.Join(", ", ownRetainers.Select(RetainerLabel).Order(StringComparer.OrdinalIgnoreCase))}";
+        return string.Join("; ", new[] { own }.Concat(additional
+            .Select(source => $"{source.CharacterName} ({source.HomeWorldName}) · {(source.IsSingleRetainer ? RetainerLabel(source) : source.Container)}")
             .OrderBy(label => label, StringComparer.OrdinalIgnoreCase)));
+
+        static string RetainerLabel(MarketAcquisitionStockSourceKey source) =>
+            string.IsNullOrWhiteSpace(source.RetainerName) ? $"Retainer {source.RetainerId}" : source.RetainerName;
+    }
 
     public static string FormatRoute(string worldMode, string sweepScope, IReadOnlyCollection<string> sweepDataCenters)
     {

@@ -42,12 +42,8 @@ internal static class MarketAcquisitionRequestDocumentPersistence
             CountRetainerStock = stored.CountRetainerStock ?? stored.Lines.Any(line =>
                 line.QuantityMode == "TargetQuantity" &&
                 MarketAcquisitionTargetBases.Normalize(line.TargetBasis) == MarketAcquisitionTargetBases.OnHandIncludingRetainers),
-            AdditionalStockSources = (stored.AdditionalStockSources ?? [])
-                .Where(source => source.LocalContentId != 0 &&
-                                 source.Container is MarketAcquisitionStockSourceKey.Bags or MarketAcquisitionStockSourceKey.Retainers)
-                .Select(source => new MarketAcquisitionStockSourceKey(source.LocalContentId, source.HomeWorldId,
-                    source.CharacterName ?? string.Empty, source.HomeWorldName ?? string.Empty, source.Container))
-                .ToList(),
+            OwnRetainerSelection = MarketAcquisitionStockScope.RestoreOwnRetainers(stored.OwnRetainerSelection),
+            AdditionalStockSources = MarketAcquisitionStockScope.Restore(stored.AdditionalStockSources),
             StowAfterDelivery = stored.StowAfterDelivery,
             LocalRevision = Math.Max(1, stored.LocalRevision),
             TargetCharacterName = string.IsNullOrWhiteSpace(stored.TargetCharacterName)
@@ -104,16 +100,8 @@ internal static class MarketAcquisitionRequestDocumentPersistence
             LocalRequestId = document.LocalRequestId,
             RunSpendCap = document.RunSpendCap,
             CountRetainerStock = document.CountRetainerStock,
-            AdditionalStockSources = document.AdditionalStockSources
-                .Select(source => new PersistedMarketAcquisitionStockSource
-                {
-                    LocalContentId = source.LocalContentId,
-                    HomeWorldId = source.HomeWorldId,
-                    CharacterName = source.CharacterName,
-                    HomeWorldName = source.HomeWorldName,
-                    Container = source.Container,
-                })
-                .ToList(),
+            OwnRetainerSelection = MarketAcquisitionStockScope.PersistOwnRetainers(document.OwnRetainerSelection),
+            AdditionalStockSources = MarketAcquisitionStockScope.Persist(document.AdditionalStockSources),
             StowAfterDelivery = document.StowAfterDelivery,
             LocalRevision = document.LocalRevision,
             TargetCharacterName = document.TargetCharacterName,

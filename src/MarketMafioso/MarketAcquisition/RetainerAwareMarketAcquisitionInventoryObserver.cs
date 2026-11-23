@@ -22,6 +22,12 @@ public sealed class RetainerAwareMarketAcquisitionInventoryObserver(
     /// </summary>
     internal Func<uint, string, MarketAcquisitionInventoryObservation?>? AdditionalStock { get; set; }
 
+    /// <summary>
+    /// Which of the current character's retainers count when the basis includes retainers; every one when
+    /// unset. The Workbench narrows it to the retainers ticked under "Count stock from".
+    /// </summary>
+    internal Func<MarketAcquisitionRetainerScope>? OwnRetainerScope { get; set; }
+
     public MarketAcquisitionInventoryObservation Observe(uint itemId, string hqPolicy, string targetBasis)
     {
         var own = ObserveOwn(itemId, hqPolicy, targetBasis);
@@ -48,14 +54,17 @@ public sealed class RetainerAwareMarketAcquisitionInventoryObserver(
         if (!quartermaster.TryGetSnapshot(out var snapshot, out var error) || snapshot is null ||
             !owner.Matches(snapshot.Owner) || !currentOwner().Matches(snapshot.Owner))
             return MarketAcquisitionInventoryObservation.Unavailable($"No owner-matched Quartermaster retainer snapshot. {error}");
-        if (snapshot.Retainers.IsDefaultOrEmpty || snapshot.Retainers.Any(retainer =>
-                !QuartermasterStockCoverage.CoversItem(retainer, itemId)))
+        if (snapshot.Retainers.IsDefaultOrEmpty)
+            return MarketAcquisitionInventoryObservation.Unavailable("Retainer snapshot unavailable or incomplete for this item; stock is unknown, not zero.");
+        var scope = OwnRetainerScope?.Invoke() ?? MarketAcquisitionRetainerScope.Every;
+        var counted = snapshot.Retainers.Where(retainer => scope.Includes(retainer.RetainerId)).ToArray();
+        if (counted.Any(retainer => !QuartermasterStockCoverage.CoversItem(retainer, itemId)))
             return MarketAcquisitionInventoryObservation.Unavailable("Retainer snapshot unavailable or incomplete for this item; stock is unknown, not zero.");
 
         var quantity = carried.Quantity;
         DateTimeOffset? oldest = null;
         var hasUnverifiedBagTimestamp = false;
-        foreach (var retainer in snapshot.Retainers)
+        foreach (var retainer in counted)
         {
             // Bag timestamps are source-specific; the retainer timestamp can be newer because
             // only listings or gil were observed. Track the oldest covered bag, conservatively.

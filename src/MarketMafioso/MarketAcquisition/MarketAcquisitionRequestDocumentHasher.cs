@@ -17,6 +17,7 @@ public static class MarketAcquisitionRequestDocumentHasher
         ComputeIntentHash(document with
         {
             RunSpendCap = 0,
+            OwnRetainerSelection = [],
             AdditionalStockSources = [],
             StowAfterDelivery = false,
             Lines = document.Lines.Select(line => line with
@@ -45,7 +46,17 @@ public static class MarketAcquisitionRequestDocumentHasher
             AdditionalStockSources = document.AdditionalStockSources.Count == 0
                 ? null
                 : document.AdditionalStockSources
-                    .Select(source => $"{source.LocalContentId}:{source.HomeWorldId}:{source.Container}")
+                    .Select(source => source.RetainerId == 0
+                        ? $"{source.LocalContentId}:{source.HomeWorldId}:{source.Container}"
+                        : $"{source.LocalContentId}:{source.HomeWorldId}:{source.Container}:{source.RetainerId}")
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(value => value, StringComparer.Ordinal)
+                    .ToArray(),
+            // Local stock policy; omitted when unset so earlier documents keep their hashes.
+            OwnRetainerSelection = document.OwnRetainerSelection.Count == 0
+                ? null
+                : document.OwnRetainerSelection
+                    .Select(source => $"{source.LocalContentId}:{source.HomeWorldId}:{source.RetainerId}")
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(value => value, StringComparer.Ordinal)
                     .ToArray(),
