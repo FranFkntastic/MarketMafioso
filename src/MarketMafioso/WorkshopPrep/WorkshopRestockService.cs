@@ -19,6 +19,7 @@ public sealed class WorkshopRestockService : IDisposable
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
     private readonly ExternalAutomationCoordinator automation;
+    private readonly DalamudOrdinaryGilShop vendorShop;
     private readonly WorkshopRestockPersistence persistence;
     private DateTimeOffset nextPolicyAt;
     private bool disposed;
@@ -52,9 +53,10 @@ public sealed class WorkshopRestockService : IDisposable
             playerState,
             Plugin.ObjectTable,
             Plugin.AetheryteList);
+        vendorShop = new DalamudOrdinaryGilShop(Plugin.GameGui, dataManager, Plugin.AddonLifecycle);
         var vendorRuntime = new DalamudGilVendorBuyRuntime(
             Access,
-            new DalamudOrdinaryGilShop(Plugin.GameGui, dataManager),
+            vendorShop,
             new DalamudVNavmeshTravel(Plugin.PluginInterface),
             new DalamudLifestreamAetheryteTravel(Plugin.PluginInterface),
             new DalamudLifestreamAethernetTravel(Plugin.PluginInterface),
@@ -166,6 +168,7 @@ public sealed class WorkshopRestockService : IDisposable
         Plugin.ClientState.Login -= OnLogin;
         Plugin.ClientState.TerritoryChanged -= OnTerritoryChanged;
         Runner.Dispose();
+        vendorShop.Dispose();
         Requests.Dispose();
         automation.Dispose();
         persistence.Flush();
