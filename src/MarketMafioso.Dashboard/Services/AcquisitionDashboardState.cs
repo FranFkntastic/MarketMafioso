@@ -91,6 +91,20 @@ public sealed class AcquisitionDashboardState
         }, "Clone failed.");
     }
 
+    public async Task<MarketAcquisitionRequestView?> CloneForEditAsync(
+        MarketAcquisitionRequestView workOrder,
+        CancellationToken cancellationToken = default)
+    {
+        MarketAcquisitionRequestView? copy = null;
+        await RunAsync(async () =>
+        {
+            var cloned = await api.CloneAcquisitionWorkOrderAsync(workOrder.Id, workOrder.Revision, cancellationToken);
+            copy = cloned?.Request;
+            await RefreshCoreAsync(cancellationToken);
+        }, "Clone failed.");
+        return copy;
+    }
+
     public async Task MergeAsync(
         MarketAcquisitionRequestView target,
         MarketAcquisitionRequestView source,

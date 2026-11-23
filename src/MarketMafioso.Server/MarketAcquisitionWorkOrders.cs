@@ -307,12 +307,16 @@ public sealed partial class MarketAcquisitionRequestStore
             UPDATE acquisition_requests
             SET status = $status,
                 revision = $revision,
-                claimed_at_utc = NULL,
-                claim_expires_at_utc = NULL,
-                claim_token = NULL,
-                claimed_by = NULL
+                claimed_at_utc = CASE WHEN $releaseClaim = 1 THEN NULL ELSE claimed_at_utc END,
+                claim_expires_at_utc = CASE WHEN $releaseClaim = 1 THEN NULL ELSE claim_expires_at_utc END,
+                claim_token = CASE WHEN $releaseClaim = 1 THEN NULL ELSE claim_token END,
+                claimed_by = CASE WHEN $releaseClaim = 1 THEN NULL ELSE claimed_by END
             WHERE id = $id AND revision = $expectedRevision;
             """;
+        // Only Restore (back to the inbox) releases the claim. Shelve and Archive keep it so
+        // a plugin still finishing purchases can record the gil it spent; lease renewal
+        // refuses those statuses, which is what stops the plugin.
+        update.Parameters.AddWithValue("$releaseClaim", targetStatus == MarketAcquisitionStatuses.PendingPickup ? 1 : 0);
         update.Parameters.AddWithValue("$status", targetStatus);
         update.Parameters.AddWithValue("$revision", updated.Revision);
         update.Parameters.AddWithValue("$id", id);

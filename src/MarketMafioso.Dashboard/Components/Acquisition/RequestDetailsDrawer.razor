@@ -193,6 +193,7 @@
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> EditRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> CloneAndEditRequested { get; set; }
 
     private string? _timelineRequestId;
     private MarketAcquisitionRequestTimelineView? _timeline;
@@ -258,6 +259,8 @@
     {
         if (MarketAcquisitionRequestDisplay.IsEditable(request))
             await EditRequested.InvokeAsync(request);
+        else if (MarketAcquisitionRequestDisplay.CanCloneAndEdit(request))
+            await CloneAndEditRequested.InvokeAsync(request);
         else
             await TemplateRequested.InvokeAsync(request);
     }
@@ -266,6 +269,8 @@
     {
         if (MarketAcquisitionRequestDisplay.IsEditable(request))
             return "Edit";
+        if (MarketAcquisitionRequestDisplay.CanCloneAndEdit(request))
+            return "Clone & edit";
 
         return IsTerminalRequest(request) ? "Run Again" : "Use as Template";
     }

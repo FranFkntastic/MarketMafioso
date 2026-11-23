@@ -273,6 +273,8 @@ public sealed partial class MarketAcquisitionRequestStore
             throw new MarketAcquisitionRevisionConflictException(request.ExpectedRevision, current.Revision);
 
         EnsureCanReplaceBatch(current);
+        if (await HasLineHistoryAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false))
+            throw new MarketAcquisitionInvalidTransitionException(current.Status, "editable request intent");
 
         await DeleteBatchLinesAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         var lines = await InsertBatchLinesAsync(
@@ -727,8 +729,6 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
-
         await EnsureLineBelongsToRequestAsync(connection, transaction, requestId, lineId, cancellationToken).ConfigureAwait(false);
 
         var existingByKey = await GetLineProgressEventByIdempotencyKeyAsync(
@@ -765,11 +765,21 @@ public sealed partial class MarketAcquisitionRequestStore
             return await LoadLineByIdAsync(connection, transaction, lineId, cancellationToken).ConfigureAwait(false);
         }
 
-        if (current.Status is not (MarketAcquisitionStatuses.AcceptedInPlugin or MarketAcquisitionStatuses.Running or MarketAcquisitionStatuses.RecoveryRequired))
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
+
+        // The claim holder may still be finishing purchases after the order was shelved,
+        // archived or cancelled; record the gil spent without reviving the order.
+        var isLiveExecution = current.Status is MarketAcquisitionStatuses.AcceptedInPlugin
+            or MarketAcquisitionStatuses.Running
+            or MarketAcquisitionStatuses.RecoveryRequired;
+        if (!isLiveExecution && current.Status is not (MarketAcquisitionStatuses.Shelved
+            or MarketAcquisitionStatuses.Archived
+            or MarketAcquisitionStatuses.Cancelled))
             throw new MarketAcquisitionInvalidTransitionException(current.Status, MarketAcquisitionStatuses.Running);
 
-        await using (var updateRequest = connection.CreateCommand())
+        if (isLiveExecution)
         {
+            await using var updateRequest = connection.CreateCommand();
             updateRequest.Transaction = (SqliteTransaction)transaction;
             updateRequest.CommandText =
                 """
@@ -843,8 +853,6 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
-
         await EnsureLineBelongsToRequestAsync(connection, transaction, requestId, request.LineId, cancellationToken).ConfigureAwait(false);
 
         var existingByKey = await GetPurchaseAuditByIdempotencyKeyAsync(
@@ -876,6 +884,8 @@ public sealed partial class MarketAcquisitionRequestStore
 
             return existingBySequence.Value.View;
         }
+
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
 
         var auditId = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..26];
         await using (var command = connection.CreateCommand())
@@ -968,8 +978,6 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
-
         await EnsureLineBelongsToRequestAsync(connection, transaction, requestId, request.LineId, cancellationToken).ConfigureAwait(false);
 
         var existingByKey = await GetMarketObservationAsync(
@@ -1002,6 +1010,8 @@ public sealed partial class MarketAcquisitionRequestStore
 
             return existingBySequence.View;
         }
+
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
 
         var observationId = $"{createdAtUtc:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..26];
         await using (var command = connection.CreateCommand())
@@ -1199,13 +1209,11 @@ public sealed partial class MarketAcquisitionRequestStore
         update.CommandText =
             """
             UPDATE acquisition_requests
-            SET status = $status,
-                claimed_at_utc = NULL,
-                claim_expires_at_utc = NULL,
-                claim_token = NULL,
-                claimed_by = NULL
+            SET status = $status
             WHERE id = $id;
             """;
+        // The claim is kept so the plugin can still record purchases it already made;
+        // lease renewal refuses Cancelled, which is what stops the plugin.
         update.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.Cancelled);
         update.Parameters.AddWithValue("$id", id);
         await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -1214,8 +1222,6 @@ public sealed partial class MarketAcquisitionRequestStore
         return current with
         {
             Status = MarketAcquisitionStatuses.Cancelled,
-            ClaimedAtUtc = null,
-            ClaimExpiresAtUtc = null,
         };
     }
 
@@ -1292,6 +1298,26 @@ public sealed partial class MarketAcquisitionRequestStore
     }
 
 
+    // Progress, observation and purchase-audit rows reference the batch lines, so a request
+    // that ran cannot have its lines replaced; the dashboard offers Clone & edit instead.
+    private static async Task<bool> HasLineHistoryAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT EXISTS (SELECT 1 FROM acquisition_line_progress_events WHERE request_id = $requestId)
+                OR EXISTS (SELECT 1 FROM acquisition_market_observations WHERE request_id = $requestId)
+                OR EXISTS (SELECT 1 FROM acquisition_purchase_audit WHERE request_id = $requestId);
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) != 0;
+    }
+
     private int ClampPickupExpirySeconds(int expiresInSeconds) =>
         Math.Clamp(expiresInSeconds, minimumExpirySeconds, maximumExpirySeconds);
 
@@ -1320,8 +1346,6 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
-
         var existingEvent = await GetEventByIdempotencyKeyAsync(
             connection,
             transaction,
@@ -1341,6 +1365,8 @@ public sealed partial class MarketAcquisitionRequestStore
                 existingEvent.Value.PayloadJson,
                 DateTimeOffset.Parse(existingEvent.Value.CreatedAtUtc));
         }
+
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
 
         if (!allowedSourceStatuses.Contains(current.Status))
             throw new MarketAcquisitionInvalidTransitionException(current.Status, targetStatus);
@@ -1422,8 +1448,6 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
-
         var existingByKey = await GetAttemptEventByIdempotencyKeyAsync(
             connection,
             transaction,
@@ -1462,6 +1486,8 @@ public sealed partial class MarketAcquisitionRequestStore
                 Result = MarketAcquisitionAttemptEventResults.Replayed,
             };
         }
+
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
 
         var attemptExists = await AttemptExistsAsync(
             connection,

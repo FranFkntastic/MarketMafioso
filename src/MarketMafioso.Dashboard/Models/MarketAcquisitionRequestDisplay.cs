@@ -60,11 +60,18 @@ public static class MarketAcquisitionRequestDisplay
     public static string GilCapDisplay(MarketAcquisitionBatchLineView line) =>
         line.GilCap == 0 ? "No cap" : line.GilCap.ToString("N0");
 
+    public static bool CanCloneAndEdit(MarketAcquisitionRequestView request) =>
+        !IsEditable(request) &&
+        request.Status is not ("AcceptedInPlugin" or "Running" or "RecoveryRequired");
+
     public static bool IsEditable(MarketAcquisitionRequestView request)
     {
         if (request.Status is "AcceptedInPlugin" or "Running" or "RecoveryRequired")
             return false;
 
-        return LinesFor(request).All(line => line.PurchasedQuantity == 0 && line.SpentGil == 0);
+        // Any attempt means progress/observation/audit rows may reference the lines,
+        // which the server refuses to replace; those orders get Clone & edit instead.
+        return string.IsNullOrWhiteSpace(request.LatestAttemptEventType) &&
+            LinesFor(request).All(line => line.PurchasedQuantity == 0 && line.SpentGil == 0);
     }
 }
