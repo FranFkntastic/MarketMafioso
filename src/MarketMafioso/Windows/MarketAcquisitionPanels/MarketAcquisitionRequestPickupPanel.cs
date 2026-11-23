@@ -34,6 +34,20 @@ internal sealed class MarketAcquisitionRequestPickupPanel
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
+    // Human-only escape hatch beside the status line; deliberately not registered with the agent bridge.
+    private static void DrawStatus(MarketAcquisitionRequestPickupContext context)
+    {
+        ImGui.TextColored(context.VisibleStatusColor, context.VisibleStatus);
+        if (context.StuckReportRequestId is not { } stuckRequestId || context.DropStuckReport is null)
+            return;
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Drop stuck report##MarketAcquisitionDropStuckReport"))
+            context.DropStuckReport(stuckRequestId);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Move the report that keeps failing to the dead-letter store so this order's other reports can send.");
+    }
+
     public void Draw(MarketAcquisitionRequestPickupContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -48,7 +62,7 @@ internal sealed class MarketAcquisitionRequestPickupPanel
             if (context.ClaimedRequest != null)
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Active request: {FormatAcquisitionItem(context.ClaimedRequest)}");
             ImGui.SameLine();
-            ImGui.TextColored(context.VisibleStatusColor, context.VisibleStatus);
+            DrawStatus(context);
             return;
         }
 
@@ -67,7 +81,7 @@ internal sealed class MarketAcquisitionRequestPickupPanel
                 fetchDashboardRequests);
 
             ImGui.SameLine();
-            ImGui.TextColored(context.VisibleStatusColor, context.VisibleStatus);
+            DrawStatus(context);
             return;
         }
 
@@ -86,7 +100,7 @@ internal sealed class MarketAcquisitionRequestPickupPanel
             fetchDashboardRequests);
 
         ImGui.SameLine();
-        ImGui.TextColored(context.VisibleStatusColor, context.VisibleStatus);
+        DrawStatus(context);
 
         if (context.WorkbenchItemIds.Count > 0)
         {

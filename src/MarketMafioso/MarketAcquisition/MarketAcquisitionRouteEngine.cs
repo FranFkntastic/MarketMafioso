@@ -474,6 +474,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         return result;
     }
 
+    public string? StuckReportRequestId => reportDispatcher.GetStuckReportRequestId();
+
+    public bool DropStuckReport(string requestId) => reportDispatcher.DropStuckReport(requestId);
+
     public MarketAcquisitionRouteActionResult Pause()
     {
         inventoryReflectionWaitStartedUtc = null;

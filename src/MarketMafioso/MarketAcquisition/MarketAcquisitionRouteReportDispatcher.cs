@@ -407,6 +407,16 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             return ReportFailureResolution.Quarantined;
         }
 
+        // A purchase audit the server permanently refuses (validation, not found, idempotency or
+        // sequence conflict) would otherwise block the order's queue forever. Auth, timeout and
+        // rate-limit refusals stay retryable.
+        if (entry.ReportType.Equals(PurchaseAuditType, StringComparison.Ordinal) &&
+            statusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests))
+        {
+            QuarantineEntry(entry, requestId, $"audit_refused_{(int)statusCode}", exception);
+            return ReportFailureResolution.Quarantined;
+        }
+
         MarketAcquisitionRequestView remote;
         try
         {
@@ -605,6 +615,50 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             lastFailureKind = failureKind;
             lastFailureAtUtc = now;
         }
+    }
+
+    /// <summary>The order whose head report has failed and is waiting to retry, if any.</summary>
+    public string? GetStuckReportRequestId()
+    {
+        lock (sync)
+        {
+            var current = claimed?.Id;
+            if (current != null && IsStuck(current))
+                return current;
+            foreach (var requestId in retryStatesByRequest.Keys)
+            {
+                if (IsStuck(requestId))
+                    return requestId;
+            }
+            return null;
+        }
+
+        bool IsStuck(string requestId) =>
+            retryStatesByRequest.ContainsKey(requestId) &&
+            pendingEntriesByRequest.TryGetValue(requestId, out var pending) &&
+            pending.Count > 0;
+    }
+
+    /// <summary>Human escape hatch: dead-letter the head report of an order's queue so the rest can send.</summary>
+    public bool DropStuckReport(string requestId)
+    {
+        MarketAcquisitionReportOutboxEntry? head;
+        lock (sync)
+        {
+            head = pendingEntriesByRequest.TryGetValue(requestId, out var pending) && pending.Count > 0
+                ? pending.Peek()
+                : null;
+        }
+        if (head == null)
+            return false;
+
+        QuarantineEntry(
+            head,
+            requestId,
+            "dropped_by_user",
+            new InvalidOperationException("Dropped by the user from the stuck-report action."));
+        QueueRequestHead(requestId);
+        return true;
     }
 
     public MarketAcquisitionReportBacklogSnapshot GetBacklogSnapshot()
