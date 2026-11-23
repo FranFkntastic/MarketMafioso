@@ -93,6 +93,36 @@ public sealed class TradeQueueRunner : IDisposable
             closingDeadline = clock() + ClosingTradeTimeout;
             SetActive(TradeQueueExecutionState.ClosingTrade, pendingFinish.Value.Message, null);
         }
+        else if (externalAutomation is not null)
+        {
+            // An earlier load may have unloaded while it held auto-confirm off for a still-open trade window.
+            if (TradeWindowMayBeOpen())
+            {
+                externalAutomation.SuppressTradeAutoConfirm();
+                restoreAutoConfirmWhenTradeCloses = true;
+            }
+            else
+            {
+                externalAutomation.ReleaseStaleTradeSuppression();
+            }
+        }
+    }
+
+    /// <summary>True while a released trade closure keeps auto-confirm off until the trade window closes.</summary>
+    public bool IsHoldingAutoConfirmUntilTradeCloses => restoreAutoConfirmWhenTradeCloses;
+
+    /// <summary>Reads the trade window state; a failed read counts as open.</summary>
+    private bool TradeWindowMayBeOpen()
+    {
+        try
+        {
+            return io.IsTradeOpen;
+        }
+        catch (Exception exception)
+        {
+            log.Warning(exception, "[MarketMafioso] Could not read the trade window state; treating it as open.");
+            return true;
+        }
     }
 
     public TradeQueueExecutionSnapshot Snapshot { get; private set; } =
@@ -303,7 +333,7 @@ public sealed class TradeQueueRunner : IDisposable
     {
         try
         {
-            if (restoreAutoConfirmWhenTradeCloses && !io.IsTradeOpen)
+            if (restoreAutoConfirmWhenTradeCloses && !TradeWindowMayBeOpen())
             {
                 restoreAutoConfirmWhenTradeCloses = false;
                 externalAutomation.RestoreTradeAutoConfirm();
@@ -425,9 +455,17 @@ public sealed class TradeQueueRunner : IDisposable
 
     public void Dispose()
     {
-        if (IsActive)
-            Stop("Trade Queue stopped because MarketMafioso is unloading.");
-        if (recovery.CancellationPending || (restoreAutoConfirmWhenTradeCloses && io.IsTradeOpen))
+        try
+        {
+            if (IsActive)
+                Stop("Trade Queue stopped because MarketMafioso is unloading.");
+        }
+        catch (Exception exception)
+        {
+            log.Warning(exception, "[MarketMafioso] Trade Queue stop during unload failed; continuing the unload.");
+        }
+        // The next load re-suppresses if the window is still open, or clears the leftover pause if it closed.
+        if (recovery.CancellationPending || (restoreAutoConfirmWhenTradeCloses && TradeWindowMayBeOpen()))
             externalAutomation.RetainTradeSuppressionOnDispose();
         else
             externalAutomation.RestoreTradeAutoConfirm();
@@ -970,7 +1008,7 @@ public sealed class TradeQueueRunner : IDisposable
 
         if (qualityLowering.Snapshot.IsActive)
             qualityLowering.Stop("Trade Queue released quality-lowering ownership.");
-        if (deferAutoConfirmWhileTradeOpen && io.IsTradeOpen)
+        if (deferAutoConfirmWhileTradeOpen && TradeWindowMayBeOpen())
             restoreAutoConfirmWhenTradeCloses = true;
         else
             externalAutomation.RestoreTradeAutoConfirm();

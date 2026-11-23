@@ -886,7 +886,7 @@ public sealed class Plugin : IDalamudPlugin
         frameTimings.Mark("marketLockoutAttention");
         mainWindow.MarketListingOverlay.SynchronizePresentationLifetime();
         frameTimings.Mark("listingOverlay");
-        if (Configuration.AutoAcceptIncomingTrades || tradeQueueRunner.IsActive)
+        if (Configuration.AutoAcceptIncomingTrades || tradeQueueRunner.IsActive || tradeQueueRunner.IsHoldingAutoConfirmUntilTradeCloses)
             tradeAutomationCoordinator.SuppressDropboxAutoAccept();
         else
             tradeAutomationCoordinator.RestoreDropboxAutoAccept();

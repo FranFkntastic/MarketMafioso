@@ -106,6 +106,9 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     private bool retainTradeSuppressionOnDispose;
     private bool dropboxAutoAcceptSuppressed;
     private bool pandoraAutoSelectTurninSuppressed;
+    // Every coordinator shares the "MarketMafioso" owner entry, so count live holders across instances.
+    private static int liveTradeAutoConfirmHolders;
+    private static int liveDropboxHolders;
 
     internal ExternalAutomationCoordinator(
         IPluginDataStore pluginDataStore,
@@ -248,6 +251,8 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         if (!pluginDataStore.TryGetData<HashSet<string>>(YesAlreadyStopRequests, out var stopRequests) || stopRequests == null)
             return;
 
+        if (!tradeAutoConfirmSuppressed)
+            System.Threading.Interlocked.Increment(ref liveTradeAutoConfirmHolders);
         tradeAutoConfirmSuppressed = true;
         if (stopRequests.Add(StopRequestOwner))
         {
@@ -264,6 +269,7 @@ public sealed class ExternalAutomationCoordinator : IDisposable
             log.Debug("[MarketMafioso] Restored YesAlready after Trade Queue execution.");
 
         tradeAutoConfirmSuppressed = false;
+        System.Threading.Interlocked.Decrement(ref liveTradeAutoConfirmHolders);
     }
 
     public void SuppressDropboxAutoAccept()
@@ -271,6 +277,8 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         if (!pluginDataStore.TryGetData<HashSet<string>>(DropboxStopRequests, out var stopRequests) || stopRequests == null)
             return;
 
+        if (!dropboxAutoAcceptSuppressed)
+            System.Threading.Interlocked.Increment(ref liveDropboxHolders);
         dropboxAutoAcceptSuppressed = true;
         if (stopRequests.Add(StopRequestOwner))
         {
@@ -287,6 +295,23 @@ public sealed class ExternalAutomationCoordinator : IDisposable
             log.Debug("[MarketMafioso] Restored Dropbox trade auto-accept ownership.");
 
         dropboxAutoAcceptSuppressed = false;
+        System.Threading.Interlocked.Decrement(ref liveDropboxHolders);
+    }
+
+    /// <summary>
+    /// Removes a "MarketMafioso" YesAlready/Dropbox stop request left behind by an earlier load, even though this
+    /// instance never set it. An entry a live coordinator still holds is left alone.
+    /// </summary>
+    public void ReleaseStaleTradeSuppression()
+    {
+        if (System.Threading.Volatile.Read(ref liveTradeAutoConfirmHolders) == 0 &&
+            pluginDataStore.TryGetData<HashSet<string>>(YesAlreadyStopRequests, out var yesAlready) &&
+            yesAlready?.Remove(StopRequestOwner) == true)
+            log.Warning("[MarketMafioso] Released a YesAlready pause left over from an earlier MarketMafioso load.");
+        if (System.Threading.Volatile.Read(ref liveDropboxHolders) == 0 &&
+            pluginDataStore.TryGetData<HashSet<string>>(DropboxStopRequests, out var dropbox) &&
+            dropbox?.Remove(StopRequestOwner) == true)
+            log.Warning("[MarketMafioso] Released a Dropbox pause left over from an earlier MarketMafioso load.");
     }
 
     public void Dispose()
