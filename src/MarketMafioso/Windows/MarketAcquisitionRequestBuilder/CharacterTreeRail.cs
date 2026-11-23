@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Layout;
@@ -55,6 +56,47 @@ internal sealed class CharacterTreeRail
     private readonly string title;
     private readonly string agentPrefix;
     private readonly string expandNoun;
+    private readonly string railId;
+    private readonly string collapseLabel;
+    private readonly string expandLabel;
+    // Ids, labels and agent callbacks per group and leaf object: a caller that keeps its group list between frames
+    // draws the rail without building any of them again.
+    private readonly ConditionalWeakTable<CharacterTreeGroup, GroupText> groupText = new();
+    private readonly ConditionalWeakTable<CharacterTreeLeaf, LeafText> leafText = new();
+    private Action<bool>? toggleTarget;
+    private Action collapseRail = static () => { }, expandRail = static () => { };
+
+    private sealed class GroupText(CharacterTreeRail rail, CharacterTreeGroup group)
+    {
+        public readonly string ControlId = $"{rail.agentPrefix}.{group.LocalContentId}.{group.HomeWorldId}";
+        public readonly string ExpandId = $"{rail.agentPrefix}.{group.LocalContentId}.{group.HomeWorldId}.expand";
+        public readonly string CollapseLabel = $"Collapse {group.Name}'s {rail.expandNoun}";
+        public readonly string ExpandLabel = $"Expand {group.Name}'s {rail.expandNoun}";
+        public readonly string? Tooltip = string.IsNullOrWhiteSpace(group.HomeWorldName) ? null : $"{group.Name} · {group.HomeWorldName}";
+        public readonly int Ticked = CountTicked(group.Leaves);
+        public readonly Action ToggleAll = () => group.SetAll(!(group.Leaves.Count > 0 && CountTicked(group.Leaves) == group.Leaves.Count));
+        public readonly Action ToggleExpanded = () => group.SetExpanded(!group.Expanded);
+        public string? Value;
+        public float NodeRoom = -1f;
+        public string NodeLabel = string.Empty;
+    }
+
+    private sealed class LeafText(string groupControlId, CharacterTreeLeaf leaf)
+    {
+        public readonly string ControlId = $"{groupControlId}.{leaf.IdPart}";
+        public readonly Action Toggle = () => leaf.Set(!leaf.Checked);
+        public float Room = -1f;
+        public string Shown = leaf.Label;
+    }
+
+    private static int CountTicked(IReadOnlyList<CharacterTreeLeaf> leaves)
+    {
+        var ticked = 0;
+        for (var index = 0; index < leaves.Count; index++)
+            if (leaves[index].Checked)
+                ticked++;
+        return ticked;
+    }
 
     /// <param name="expandNoun">What a character's children are, for agent labels ("stock sources", "destinations").</param>
     public CharacterTreeRail(AgentBridgeUiReviewRegistry reviewRegistry, string title, string agentPrefix, string expandNoun)
@@ -63,6 +105,9 @@ internal sealed class CharacterTreeRail
         this.title = title;
         this.agentPrefix = agentPrefix;
         this.expandNoun = expandNoun;
+        railId = $"{agentPrefix}.rail";
+        collapseLabel = $"Collapse {title}";
+        expandLabel = $"Expand {title}";
     }
 
     public static float CollapsedWidth => DalamudUiLayout.ButtonWidth(">") + (ImGui.GetStyle().WindowPadding.X * 2f);
@@ -75,17 +120,21 @@ internal sealed class CharacterTreeRail
         var style = ImGui.GetStyle();
         var check = ImGui.GetFrameHeight() + style.ItemSpacing.X;
         var widest = ImGui.CalcTextSize(title).X + style.ItemSpacing.X + DalamudUiLayout.ButtonWidth("<");
-        foreach (var group in groups)
+        for (var groupIndex = 0; groupIndex < groups.Count; groupIndex++)
         {
+            var group = groups[groupIndex];
             var right = group.Expanded || group.CollapsedRightText is null ? 0f : ImGui.CalcTextSize(group.CollapsedRightText).X + style.ItemSpacing.X;
             widest = Math.Max(widest, check + ImGui.GetTreeNodeToLabelSpacing() + ImGui.CalcTextSize(group.Name).X + right);
             if (group.SectionBefore is { } section)
                 widest = Math.Max(widest, ImGui.CalcTextSize(section).X);
             if (!group.Expanded)
                 continue;
-            foreach (var leaf in group.Leaves)
+            for (var leafIndex = 0; leafIndex < group.Leaves.Count; leafIndex++)
+            {
+                var leaf = group.Leaves[leafIndex];
                 widest = Math.Max(widest, ImGui.GetTreeNodeToLabelSpacing() + check + ImGui.CalcTextSize(leaf.Label).X +
                                           (leaf.RightText is null ? 0f : ImGui.CalcTextSize(leaf.RightText).X + style.ItemSpacing.X));
+            }
         }
         // Room for the child's padding and a vertical scrollbar when the tree outgrows the rail.
         return Math.Clamp(widest + (style.WindowPadding.X * 2f) + style.ScrollbarSize, MinWidth, MaxWidth);
@@ -106,8 +155,9 @@ internal sealed class CharacterTreeRail
                 DalamudUiLayout.SameLineRight(DalamudUiLayout.ButtonWidth("<"));
                 DrawToggle(collapse: true, setCollapsed);
                 ImGui.Separator();
-                foreach (var group in groups)
+                for (var index = 0; index < groups.Count; index++)
                 {
+                    var group = groups[index];
                     if (group.SectionBefore is { } section)
                     {
                         ImGui.Spacing();
@@ -123,28 +173,36 @@ internal sealed class CharacterTreeRail
 
     private void DrawToggle(bool collapse, Action<bool> setCollapsed)
     {
+        if (!ReferenceEquals(toggleTarget, setCollapsed))
+        {
+            toggleTarget = setCollapsed;
+            collapseRail = () => setCollapsed(true);
+            expandRail = () => setCollapsed(false);
+        }
         if (ImGui.Button(collapse ? "<##RailToggle" : ">##RailToggle"))
             setCollapsed(collapse);
         if (!collapse && ImGui.IsItemHovered())
             ImGui.SetTooltip(title);
         reviewRegistry.RegisterLastItem(
-            $"{agentPrefix}.rail",
-            collapse ? $"Collapse {title}" : $"Expand {title}",
+            railId,
+            collapse ? collapseLabel : expandLabel,
             AgentBridgeUiControlKind.Button,
             enabled: true,
             selected: collapse,
             collapse ? "Expanded" : "Collapsed",
-            () => setCollapsed(collapse));
+            collapse ? collapseRail : expandRail);
     }
 
     private void DrawGroup(CharacterTreeGroup group)
     {
-        var controlId = $"{agentPrefix}.{group.LocalContentId}.{group.HomeWorldId}";
-        ImGui.PushID($"{group.LocalContentId}:{group.HomeWorldId}");
+        var text = groupText.GetValue(group, created => new GroupText(this, created));
+        var controlId = text.ControlId;
+        ImGui.PushID(controlId);
         var rightEdge = ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X;
-        var ticked = group.Leaves.Count(leaf => leaf.Checked);
+        var ticked = text.Ticked;
         var all = group.Leaves.Count > 0 && ticked == group.Leaves.Count;
         var mixed = ticked > 0 && !all;
+        text.Value ??= all ? "All" : mixed ? $"{ticked:N0} of {group.Leaves.Count:N0}" : "None";
 
         var check = all;
         ImGui.BeginDisabled(!group.Toggleable);
@@ -162,32 +220,37 @@ internal sealed class CharacterTreeRail
             AgentBridgeUiControlKind.Toggle,
             group.Toggleable,
             all,
-            all ? "All" : mixed ? $"{ticked:N0} of {group.Leaves.Count:N0}" : "None",
-            () => group.SetAll(!all));
+            text.Value,
+            text.ToggleAll);
 
         var rightText = group.Expanded ? null : group.CollapsedRightText;
         ImGui.SameLine();
         var room = rightEdge - ImGui.GetCursorPosX() - ImGui.GetTreeNodeToLabelSpacing() -
                    (rightText is null ? 0f : ImGui.CalcTextSize(rightText).X + ImGui.GetStyle().ItemSpacing.X);
-        var shown = DalamudUiLayout.ElideText(group.Name, Math.Max(0f, room));
+        room = Math.Max(0f, room);
+        if (room != text.NodeRoom)
+        {
+            text.NodeRoom = room;
+            text.NodeLabel = $"{DalamudUiLayout.ElideText(group.Name, room)}##Node";
+        }
         if (group.Tint is { } tint)
             ImGui.PushStyleColor(ImGuiCol.Text, tint);
         ImGui.SetNextItemOpen(group.Expanded, ImGuiCond.Always);
-        var open = ImGui.TreeNodeEx($"{shown}##Node", ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.NoTreePushOnOpen);
+        var open = ImGui.TreeNodeEx(text.NodeLabel, ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.NoTreePushOnOpen);
         if (group.Tint is not null)
             ImGui.PopStyleColor();
         if (open != group.Expanded)
             group.SetExpanded(open);
-        if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(group.HomeWorldName))
-            ImGui.SetTooltip($"{group.Name} · {group.HomeWorldName}");
+        if (text.Tooltip is { } tooltip && ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip);
         reviewRegistry.RegisterLastItem(
-            $"{controlId}.expand",
-            $"{(open ? "Collapse" : "Expand")} {group.Name}'s {expandNoun}",
+            text.ExpandId,
+            open ? text.CollapseLabel : text.ExpandLabel,
             AgentBridgeUiControlKind.Button,
             enabled: true,
             selected: open,
             open ? "Expanded" : "Collapsed",
-            () => group.SetExpanded(!group.Expanded));
+            text.ToggleExpanded);
         if (rightText is not null)
         {
             ImGui.SameLine(rightEdge - ImGui.CalcTextSize(rightText).X);
@@ -197,8 +260,8 @@ internal sealed class CharacterTreeRail
         if (open)
         {
             ImGui.Indent(ImGui.GetTreeNodeToLabelSpacing());
-            foreach (var leaf in group.Leaves)
-                DrawLeaf(controlId, leaf);
+            for (var index = 0; index < group.Leaves.Count; index++)
+                DrawLeaf(controlId, group.Leaves[index]);
             ImGui.Unindent(ImGui.GetTreeNodeToLabelSpacing());
         }
         ImGui.PopID();
@@ -206,6 +269,7 @@ internal sealed class CharacterTreeRail
 
     private void DrawLeaf(string groupControlId, CharacterTreeLeaf leaf)
     {
+        var text = leafText.GetValue(leaf, created => new LeafText(groupControlId, created));
         ImGui.PushID(leaf.IdPart);
         var rightEdge = ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X;
         var check = leaf.Checked;
@@ -217,18 +281,24 @@ internal sealed class CharacterTreeRail
         if (leaf.CheckTooltip is { } tooltip && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(tooltip);
         reviewRegistry.RegisterLastItem(
-            $"{groupControlId}.{leaf.IdPart}",
+            text.ControlId,
             leaf.AgentLabel,
             AgentBridgeUiControlKind.Toggle,
             leaf.Enabled,
             leaf.Checked,
             leaf.AgentValue,
-            () => leaf.Set(!leaf.Checked));
+            text.Toggle);
 
         ImGui.SameLine();
         var room = rightEdge - ImGui.GetCursorPosX() -
                    (leaf.RightText is null ? 0f : ImGui.CalcTextSize(leaf.RightText).X + ImGui.GetStyle().ItemSpacing.X);
-        var shown = DalamudUiLayout.ElideText(leaf.Label, Math.Max(0f, room));
+        room = Math.Max(0f, room);
+        if (room != text.Room)
+        {
+            text.Room = room;
+            text.Shown = DalamudUiLayout.ElideText(leaf.Label, room);
+        }
+        var shown = text.Shown;
         if (leaf.Available)
             ImGui.TextUnformatted(shown);
         else

@@ -235,6 +235,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         DrawRouteScope(context);
         ImGui.BeginDisabled(context.IsBusy || context.IsRouteActive || IsSynchronizing);
         DrawRunBudgetInput();
+        DrawStowAfterDelivery(context);
         ImGui.EndDisabled();
         DrawRouteScopeExtras?.Invoke();
         ImGui.Spacing();
@@ -800,6 +801,26 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private static Func<ulong, string> RetainerNames(WorkbenchStockScopeCharacter character) =>
         retainerId => character.Retainers.FirstOrDefault(source => source.Key.RetainerId == retainerId)?.Key.RetainerName ?? string.Empty;
+
+    /// <summary>Shown here only while there is no Deposition tab to hold it and Quartermaster has item homes.</summary>
+    private void DrawStowAfterDelivery(MarketAcquisitionRequestBuilderContext context)
+    {
+        if (OpenDeposition is not null || workbenchStock?.View.HasItemHomes != true)
+            return;
+        var stow = document.StowAfterDelivery;
+        ImGui.SameLine();
+        if (ImGui.Checkbox("Stow after delivery##StowAfterDelivery", ref stow))
+            controller.SetStowAfterDelivery(stow);
+        if (StowDisabledReason(context) is { } reason && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(reason);
+    }
+
+    /// <summary>Why the buy list's run options are greyed, or null while they can be changed.</summary>
+    public string? StowDisabledReason(MarketAcquisitionRequestBuilderContext context) =>
+        context.IsRouteActive ? "Route in progress"
+        : context.IsBusy ? "Buy list is busy"
+        : IsSynchronizing ? "Buy list is synchronizing"
+        : null;
 
     private void DrawBuyListBar(MarketAcquisitionRequestBuilderContext context)
     {

@@ -101,6 +101,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
             new QuartermasterPlacementClient(new DalamudQuartermasterPlacementIpcAdapter(Plugin.PluginInterface)),
             GetCurrentQuartermasterOwnerScope,
             () => currentDocument(),
+            itemId => dataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>().GetRowOrDefault(itemId)?.CanBeHq ?? true,
             message => log.Warning(message));
         var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,

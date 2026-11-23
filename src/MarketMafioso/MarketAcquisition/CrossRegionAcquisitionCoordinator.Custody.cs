@@ -755,9 +755,15 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                                                   receipt.ItemId is > 0).ToList();
         if (receipts.Count == 0)
             return;
-        var known = session.RequestDocumentSnapshot?.AdditionalStockSources
-            .Where(key => key.IsCharacter(collection.Source.LocalContentId, collection.Source.HomeWorldId) && key.RetainerId != 0)
-            .ToList() ?? [];
+        // Names as the plan knew them: the shopper's own retainer selection and other characters' sources, by content id
+        // (a character's world can change).
+        var document = session.RequestDocumentSnapshot;
+        var known = document is null
+            ? []
+            : document.OwnRetainerSelection.Concat(document.AdditionalStockSources)
+                .Where(key => key.LocalContentId == collection.Source.LocalContentId && key.RetainerId != 0 &&
+                              !string.IsNullOrWhiteSpace(key.RetainerName))
+                .ToList();
         collection.UnreachedSources = receipts
             .Select(receipt => new CrossRegionUnreachedSource(
                 receipt.ItemId!.Value,

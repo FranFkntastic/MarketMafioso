@@ -37,7 +37,10 @@ public sealed record PlacementEditRequest(
     QuartermasterPlacementDestination? Destination,
     IReadOnlyList<QuartermasterPlacementEditItem> Items);
 
-/// <summary>The Deposition tab's status line: what the last edit or read did. Problem marks a refusal or failure.</summary>
+/// <summary>
+/// The Deposition tab's status line: what the last edit did. Problem marks a refusal or failure; it stays until a later
+/// edit replaces it. A success is transient (see <see cref="MarketAcquisitionPlacementService.Status"/>).
+/// </summary>
 public sealed record PlacementStatus(string Text, bool Problem);
 
 /// <summary>
@@ -50,12 +53,18 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
     private static readonly TimeSpan VisibleWindow = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan VisibleRefreshInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CapabilityInterval = TimeSpan.FromSeconds(5);
+    // Quartermaster can signal Changed on many frames in a row during its own runs; reads are coalesced to this.
+    private static readonly TimeSpan MinimumRefreshInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan SuccessStatusLifetime = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan SuccessStatusMinimum = TimeSpan.FromSeconds(3);
 
     private readonly QuartermasterIpcClient quartermaster;
     private readonly QuartermasterPlacementClient placement;
     private readonly Func<QuartermasterOwnerScope> currentOwner;
     private readonly Func<MarketAcquisitionRequestDocument?> currentDocument;
     private readonly Action<string> warn;
+    private readonly Func<uint, bool> canBeHq;
+    private readonly Dictionary<uint, bool> hqVariants = new();
     private readonly object gate = new();
     private readonly List<PlacementEditRequest> pendingEdits = [];
     private readonly HashSet<PlacementRuleKey> pendingRules = [];
@@ -66,18 +75,22 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
     private int planShape;
     private long version;
     private string? lastLogged;
+    private ulong lastOwnerContentId;
+    private DateTimeOffset statusSetAtUtc;
 
     public MarketAcquisitionPlacementService(
         QuartermasterIpcClient quartermaster,
         QuartermasterPlacementClient placement,
         Func<QuartermasterOwnerScope> currentOwner,
         Func<MarketAcquisitionRequestDocument?> currentDocument,
+        Func<uint, bool> canBeHq,
         Action<string> warn)
     {
         this.quartermaster = quartermaster;
         this.placement = placement;
         this.currentOwner = currentOwner;
         this.currentDocument = currentDocument;
+        this.canBeHq = canBeHq;
         this.warn = warn;
         quartermaster.Changed += OnQuartermasterChanged;
     }
@@ -90,21 +103,46 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
     /// <summary>Why the last read failed; null after a good read.</summary>
     public string? ReadProblem { get; private set; }
 
+    /// <summary>
+    /// What the last edit did. A refusal or failure stays until a later edit; a success clears on the first good read
+    /// once it has been shown a moment, after a short lifetime, or when the tab is reopened.
+    /// </summary>
     public PlacementStatus? Status { get; private set; }
 
-    /// <summary>Called from Draw while the Deposition tab is on screen.</summary>
-    public void MarkVisible() => lastVisibleUtc = DateTimeOffset.UtcNow;
+    /// <summary>Called from Draw while the Deposition tab is on screen; reopening the tab retires a success message.</summary>
+    public void MarkVisible()
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now - lastVisibleUtc > VisibleWindow && Status is { Problem: false })
+            Status = null;
+        lastVisibleUtc = now;
+    }
 
     public void ClearStatus() => Status = null;
 
-    /// <summary>The rules a buy-list line maps to: one for HQ or NQ only, both for either quality.</summary>
-    public static ImmutableArray<PlacementRuleKey> RulesFor(uint itemId, string hqPolicy) =>
+    /// <summary>
+    /// The rules a buy-list line maps to: one for HQ or NQ only, both for either quality, and only the NQ rule for an
+    /// item the game never makes in HQ.
+    /// </summary>
+    public ImmutableArray<PlacementRuleKey> RulesFor(uint itemId, string hqPolicy) =>
         hqPolicy switch
         {
             "HQOnly" or "HqOnly" => [new(itemId, "HqOnly")],
             "NQOnly" or "NqOnly" => [new(itemId, "NqOnly")],
+            _ when !HasHqVariant(itemId) => [new(itemId, "NqOnly")],
             _ => [new(itemId, "NqOnly"), new(itemId, "HqOnly")],
         };
+
+    private bool HasHqVariant(uint itemId)
+    {
+        if (hqVariants.TryGetValue(itemId, out var known))
+            return known;
+        bool hq;
+        try { hq = canBeHq(itemId); }
+        catch (Exception) { hq = true; }
+        hqVariants[itemId] = hq;
+        return hq;
+    }
 
     public bool IsPending(PlacementRuleKey rule)
     {
@@ -144,6 +182,19 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
             return;
         }
 
+        // A relog makes the last read another character's: editing stops at once and the matrix is read again.
+        var ownerId = currentOwner() is { IsAvailable: true, LocalContentId: { } id } ? id : 0UL;
+        if (ownerId != lastOwnerContentId)
+        {
+            lastOwnerContentId = ownerId;
+            dirty = true;
+            if (View.OwnerMatches)
+                View = View with { OwnerMatches = false };
+        }
+
+        if (Status is { Problem: false } && now - statusSetAtUtc >= SuccessStatusLifetime)
+            Status = null;
+
         var edited = FlushEdits();
         var shape = PlanShape(TryDocument());
         if (shape != planShape)
@@ -153,6 +204,9 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
         }
         var visible = now - lastVisibleUtc <= VisibleWindow;
         if (!edited && !(visible && (dirty || now - fetchedAtUtc >= VisibleRefreshInterval)))
+            return;
+        // Own edits read back at once; anything else waits out the interval so a burst of Changed is one read.
+        if (!edited && now - fetchedAtUtc < MinimumRefreshInterval)
             return;
         Refresh(now);
     }
@@ -199,20 +253,34 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
             try { Apply(edit); }
             catch (Exception ex)
             {
-                Status = new($"{edit.OperationLabel} failed: {ex.Message}", true);
+                SetStatus(new($"{edit.OperationLabel} failed: {ex.Message}", true));
                 LogOnce($"Placement edit failed: {ex.Message}");
             }
         }
         return true;
     }
 
+    private void SetStatus(PlacementStatus status)
+    {
+        Status = status;
+        statusSetAtUtc = DateTimeOffset.UtcNow;
+    }
+
     private void Apply(PlacementEditRequest edit)
     {
         var view = View;
         var owner = currentOwner();
+        // The view's characters (and who is the owner) belong to whoever was logged in when it was read: sending them
+        // for another character would edit that character's own homes instead.
+        if (!owner.IsAvailable || owner.LocalContentId != view.Owner.LocalContentId)
+        {
+            SetStatus(new($"{edit.OperationLabel} not sent: logged in as another character.", true));
+            dirty = true;
+            return;
+        }
         if (string.IsNullOrEmpty(view.ProviderInstanceId) || !view.OwnerMatches)
         {
-            Status = new($"{edit.OperationLabel} not sent: Quartermaster's placement is not loaded for this character.", true);
+            SetStatus(new($"{edit.OperationLabel} not sent: Quartermaster's placement is not loaded for this character.", true));
             return;
         }
         // Quartermaster allows at most MaxItems per edit; a larger selection goes in consecutive edits.
@@ -265,7 +333,7 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
                 : $"{edit.OperationLabel} refused for {refusal}";
         if (notes.Count > 0)
             text += " " + string.Join("; ", notes.Take(2)) + (notes.Count > 2 ? $"; {notes.Count - 2:N0} more." : ".");
-        Status = new(text, refusal is not null);
+        SetStatus(new(text, refusal is not null));
         if (refusal is not null)
             LogOnce($"Placement edit: {text}");
         dirty = true;
@@ -315,6 +383,8 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
             View = new PlacementView(all.ProviderInstanceId, all.Owner, ownerMatches, all.Characters,
                 items.ToImmutableDictionary(), rules, ++version);
             ReadProblem = null;
+            if (Status is { Problem: false } && now - statusSetAtUtc >= SuccessStatusMinimum)
+                Status = null;
             lock (gate)
                 if (pendingEdits.Count == 0)
                     pendingRules.Clear();
