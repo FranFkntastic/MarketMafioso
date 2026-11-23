@@ -23,21 +23,6 @@ This directory contains public setup and operator documentation.
 - [Environment sample](samples/marketmafioso.env.example)
 - [Inventory report sample](samples/inventory-report.sample.json)
 
-## Contributor And Release Prep
+## Hosting Notes
 
-- [Dev Plugin Deployment](dev-plugin-deployment.md) - contributor workflow for deploying a local Dalamud dev plugin.
-- [Hosted Workshop Host](hosted-receiver.md) - contributor notes for the dev hosted receiver environment and VPS deployment path.
-
-- [Submission preview](pluginmaster/submission-preview.md)
-- [PluginMaster preview JSON](pluginmaster/pluginmaster.preview.json)
-- [Plugin icon](pluginmaster/assets/icon.png)
-
-## Test contributions
-
-Add or expand a test only when its actual assertions detect a problem that would
-be too difficult for an agent to diagnose or repair alone **and** would seriously
-frustrate the user. Before writing it, explain both conditions, the plausible
-maintained-code edit it detects, and how its assertions detect the harm. Ordinary
-coverage, easy fixes, safety labels, source-text checks, and habit do not qualify.
-Use the smallest relevant verification; pull-request validation currently checks
-patch whitespace, not behavior.
+- [Hosted Workshop Host](hosted-receiver.md) - notes for running a hosted receiver environment and VPS deployment path.

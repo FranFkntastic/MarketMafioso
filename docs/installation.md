@@ -30,8 +30,6 @@ In game:
 7. Search for `MarketMafioso` and install it.
 8. Open MarketMafioso with `/mmf`.
 
-Until the repository URL and release ZIP are published, MarketMafioso is not available through the standard third-party install path. Development plugin builds are only for local contributor testing and are documented separately in `docs/dev-plugin-deployment.md`.
-
 ## Decide Whether You Need Workshop Host
 
 You do not need Workshop Host for basic plugin use.
