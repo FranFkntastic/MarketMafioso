@@ -124,11 +124,17 @@ public sealed record QuartermasterOwnerScope(
         owner.HomeWorldId == HomeWorldId;
 }
 
+/// <summary>
+/// One shortage line. SourceRetainerIds (shortageSourceRetainers.v1, immediate requests only) limits retrieval to
+/// those retainers of the owner, plus the saddlebag when SourceSaddlebag; null retrieves from any of them.
+/// </summary>
 public sealed record QuartermasterShortageTarget(
     uint ItemId,
     string ItemName,
     int TargetQuantity,
-    int ShortageQuantity);
+    int ShortageQuantity,
+    IReadOnlyList<ulong>? SourceRetainerIds = null,
+    bool SourceSaddlebag = false);
 
 public sealed record QuartermasterShortageRequest(
     string RequestId,
@@ -160,6 +166,15 @@ public sealed record QuartermasterAcknowledgement(
     string? Message)
 {
     public bool ExecuteImmediately { get; init; }
+
+    /// <summary>Why a rejected request was refused, when Quartermaster said.</summary>
+    public string? ErrorCode { get; init; }
+
+    /// <summary>The item a rejection is about, when it is about one.</summary>
+    public uint? ItemId { get; init; }
+
+    /// <summary>The retainer a rejection is about, when it is about one.</summary>
+    public ulong? RetainerId { get; init; }
 }
 
 public sealed record QuartermasterOperationStatus(
@@ -355,6 +370,8 @@ internal sealed class QuartermasterShortageTargetWire
     public string ItemName { get; init; } = string.Empty;
     public int TargetQuantity { get; init; }
     public int ShortageQuantity { get; init; }
+    public List<ulong>? SourceRetainerIds { get; init; }
+    public bool? SourceSaddlebag { get; init; }
 }
 
 internal sealed class QuartermasterElementalDepositRequestWire
@@ -386,6 +403,9 @@ internal sealed class QuartermasterAcknowledgementWire
     public bool? Accepted { get; init; }
     public string? Status { get; init; }
     public string? Message { get; init; }
+    public string? ErrorCode { get; init; }
+    public uint? ItemId { get; init; }
+    public ulong? RetainerId { get; init; }
 }
 
 internal sealed class QuartermasterOperationStatusWire

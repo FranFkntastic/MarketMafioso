@@ -18,6 +18,11 @@ public interface IQuartermasterRunCustodyClient
     bool HasAutomaticRetrieval { get; }
     /// <summary>True when Quartermaster advertises deliveredStow.v1 and exposes its channels. Never throws.</summary>
     bool HasDeliveredStow { get; }
+    /// <summary>
+    /// True when Quartermaster advertises automatic retrieval and shortageSourceRetainers.v1, so an immediate
+    /// retrieval can be limited to chosen retainers. Never throws.
+    /// </summary>
+    bool HasShortageSourceRetainers { get; }
     bool TrySubmitShortages(QuartermasterShortageRequest request, out QuartermasterAcknowledgement? acknowledgement, out string error);
     bool TryGetOperation(string operationId, QuartermasterOwnerScope expectedOwner, out QuartermasterOperationStatus? operationStatus, out string error);
     bool TrySubmitDeliveredStow(QuartermasterDeliveredStowRequest request, out QuartermasterDeliveredStowStatus? acknowledgement, out string error);
@@ -268,6 +273,23 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
                 return adapter.HasSubmitShortages && adapter.HasOperation &&
                        TryGetCapabilities(out var capabilities, out _) &&
                        capabilities!.Capabilities.Contains(AutomaticRetrievalCapability, StringComparer.Ordinal);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    public bool HasShortageSourceRetainers
+    {
+        get
+        {
+            try
+            {
+                return HasAutomaticRetrieval &&
+                       TryGetCapabilities(out var capabilities, out _) &&
+                       capabilities!.Capabilities.Contains(ShortageSourceRetainersCapability, StringComparer.Ordinal);
             }
             catch
             {
