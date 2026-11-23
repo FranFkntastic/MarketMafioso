@@ -14,6 +14,7 @@ public sealed class TradeQueueRunner : IDisposable
     private static readonly TimeSpan OfferItemsTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PartnerTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ClosingTradeTimeout = TimeSpan.FromSeconds(60);
 
     private readonly IList<TradeQueueItem> queue;
     private readonly TradeQueueTimingOptions timing;
@@ -33,6 +34,7 @@ public sealed class TradeQueueRunner : IDisposable
     private (TradeQueueExecutionState State, string Message)? pendingFinish;
     private bool cancellationCheckpointSaved;
     private DateTimeOffset batchRecoveryDeadline;
+    private DateTimeOffset closingDeadline;
     private TradeQueueOfferLineOperation? offerLineOperation;
     private TradeQueueOfferGilOperation? offerGilOperation;
     private bool readyClicked;
@@ -86,6 +88,7 @@ public sealed class TradeQueueRunner : IDisposable
             cancellationCheckpointSaved = true;
             externalAutomation.SuppressTradeAutoConfirm();
             pendingFinish = (TradeQueueExecutionState.Stopped, "Recovering the previous trade cancellation.");
+            closingDeadline = clock() + ClosingTradeTimeout;
             SetActive(TradeQueueExecutionState.ClosingTrade, pendingFinish.Value.Message, null);
         }
     }
@@ -95,6 +98,7 @@ public sealed class TradeQueueRunner : IDisposable
 
     internal ExternalTradeHold? ExternalHold { get; set; }
     internal string? HoldReason => ExternalHold?.Reason;
+    internal void ReleaseHold() => ExternalHold?.Clear();
     public bool IsActive => Snapshot.IsActive;
 
     /// <summary>
@@ -382,6 +386,31 @@ public sealed class TradeQueueRunner : IDisposable
             return;
 
         Finish(TradeQueueExecutionState.Stopped, message);
+    }
+
+    /// <summary>Stops waiting for a trade window to close: drops the pending cancellation and finishes the run.</summary>
+    public void ForgetClosingTrade() =>
+        ReleaseClosingTrade(TradeQueueExecutionState.Stopped, "Stopped waiting for the trade window to close.");
+
+    private void ReleaseClosingTrade(TradeQueueExecutionState state, string message)
+    {
+        if (Snapshot.State != TradeQueueExecutionState.ClosingTrade && !recovery.CancellationPending)
+            return;
+        log.Warning(
+            "[MarketMafioso] Trade Queue released trade closure ownership run={RunId} recipient={Recipient} tradeOpen={TradeOpen} pending={Pending} reason={Reason}",
+            runId ?? "none", partner?.Name ?? "unselected", io.IsTradeOpen, pendingFinish?.Message ?? "none", message);
+        recovery.CancellationPending = false;
+        cancellationCheckpointSaved = false;
+        pendingFinish = null;
+        try
+        {
+            save();
+        }
+        catch (Exception exception)
+        {
+            log.Warning(exception, "[MarketMafioso] Could not persist the released trade closure; continuing.");
+        }
+        CompleteFinish(state, message);
     }
 
     public void Dispose()
@@ -820,6 +849,8 @@ public sealed class TradeQueueRunner : IDisposable
         pendingFinish = (state, message);
         if (!recovery.CancellationPending)
             cancellationCheckpointSaved = false;
+        if (Snapshot.State != TradeQueueExecutionState.ClosingTrade)
+            closingDeadline = clock() + ClosingTradeTimeout;
         recovery.CancellationPending = true;
         recovery.PartnerEntityId = partner == null ? recovery.PartnerEntityId : (uint)partner.GameObjectId;
         externalAutomation.SuppressTradeAutoConfirm();
@@ -832,6 +863,13 @@ public sealed class TradeQueueRunner : IDisposable
     {
         if (pendingFinish is not { } terminal)
             throw new InvalidOperationException("Trade closure has no terminal result.");
+        if (clock() > closingDeadline)
+        {
+            ReleaseClosingTrade(
+                TradeQueueExecutionState.Failed,
+                $"{terminal.Message} The trade window did not close within {ClosingTradeTimeout.TotalSeconds:N0}s; released it as is.");
+            return;
+        }
         if (clock() < nextActionAt)
             return;
         nextActionAt = clock() + timing.TradeRetryDelay;

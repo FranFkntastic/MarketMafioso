@@ -392,7 +392,10 @@ public partial class MainWindow : Window, IDisposable
             marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary,
             DrawMarketBoardProbeStatus,
             marketAcquisitionDiagnosticsPanel.OpenDiagnosticsFolder,
-            AgentReviewRegistry);
+            AgentReviewRegistry,
+            () => _ = routeEngine.ForgetShardLedger(),
+            () => _ = routeEngine.DiscardManualRecoveryBlock(),
+            () => _ = routeEngine.ForgetTravelLease());
         settingsTab = new SettingsTabPanel(
             config,
             reporter,

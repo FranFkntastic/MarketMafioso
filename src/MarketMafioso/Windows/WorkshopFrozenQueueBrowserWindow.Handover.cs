@@ -589,7 +589,7 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         ImGui.SameLine();
 
         var give = view.Give;
-        var blocked = UnverifiedBlock(queue) ?? RestockBlock();
+        var blocked = RestockBlock();
         var enabled = give > 0 && blocked == null;
         var label = give > 0 ? $"Hand over {give:N0}##workshopHandOver" : "Hand over##workshopHandOver";
         if (ImGuiUi.PrimaryButton(label, enabled))
@@ -634,7 +634,7 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
         if (WorkshopSavedJobHandoff.Target(queue) is not { } target || !IsSender(queue) ||
             actions.CurrentCharacter() is not { } sender)
             return (false, $"{queue.Name} is not a share this character sent.");
-        if ((UnverifiedBlock(queue) ?? RestockBlock()) is { } blocked)
+        if (RestockBlock() is { } blocked)
             return (false, blocked);
 
         var view = BuildHandoverView(queue, refreshBags: true);
@@ -730,20 +730,10 @@ public sealed partial class WorkshopFrozenQueueBrowserWindow
     private static string DueSignature(IEnumerable<WorkshopMaterialLedgerEntry> due) =>
         string.Join(',', due.OrderBy(entry => entry.ItemId).Select(entry => $"{entry.ItemId}:{entry.Quantity}"));
 
-    /// <summary>Why Hand over is blocked by an unresolved or still-trading batch, or null.</summary>
-    private string? UnverifiedBlock(WorkshopFrozenQueue queue)
-    {
-        if (queue.HandoverInFlight is not { } inFlight)
-            return null;
-        return actions.Handover.TradeActive
-            ? $"The Trade Queue is trading {inFlight.Units:N0} unit(s) to {inFlight.Recipient}; wait for it to verify."
-            : $"{WorkshopHandoverTracker.UnverifiedTradeText(inFlight)}; count it as handed over or discard it first.";
-    }
-
     /// <summary>A bound batch that started but was never verified (reload, failure or stop mid-batch).</summary>
     private void DrawUnverifiedTrade(WorkshopFrozenQueue queue)
     {
-        if (queue.HandoverInFlight is not { } inFlight || actions.Handover.TradeActive)
+        if (queue.HandoverInFlight is not { } inFlight)
             return;
 
         var names = Requirements(queue).ToDictionary(requirement => requirement.ItemId, requirement => requirement.ItemName);

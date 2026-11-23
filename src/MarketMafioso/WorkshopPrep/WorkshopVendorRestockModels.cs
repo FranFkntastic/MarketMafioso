@@ -255,6 +255,12 @@ public interface IWorkshopQuartermasterRestockService
         IReadOnlyList<WorkshopMaterialAvailability> availability);
     string LastStatus { get; }
     WorkshopQuartermasterProgress GetProgress(MarketMafioso.Quartermaster.QuartermasterOwnerScope owner);
+
+    /// <summary>The owner's persisted operation that has not reached a terminal status, or null.</summary>
+    string? OpenOperationId(MarketMafioso.Quartermaster.QuartermasterOwnerScope owner);
+
+    /// <summary>Drops the owner's persisted operation record. Quartermaster itself is left as it is.</summary>
+    bool ForgetOperation(MarketMafioso.Quartermaster.QuartermasterOwnerScope owner);
 }
 
 public static class WorkshopVendorRestockPresentation

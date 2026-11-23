@@ -5,21 +5,29 @@ using Dalamud.Plugin.Ipc;
 
 namespace MarketMafioso.TradeQueue;
 
-internal sealed class ExternalTradeHold(Func<string?> busy, Action<string> info, Func<long> milliseconds)
+internal sealed class ExternalTradeHold(Func<string?> busy, Action<string> info, Func<long> milliseconds, Action<string>? warn = null)
 {
+    private const long MaximumHoldMilliseconds = 10 * 60 * 1000L;
     private readonly object gate = new();
     private string? holder;
+    private long acquired;
     private long expires;
     private void Expire()
     {
-        if (holder == null || milliseconds() < expires) return;
+        if (holder == null || milliseconds() < Math.Min(expires, acquired + MaximumHoldMilliseconds)) return;
         info($"Trade hold expired: {holder}");
         holder = null;
     }
     internal string? Reason
     {
-        get { lock (gate) { Expire(); return holder == null ? null : $"Trading is held by {holder}."; } }
+        get { lock (gate) { Expire(); return holder == null ? null : $"Trading is held by {holder} ({RemainingSeconds()}s)."; } }
     }
+    internal string? Holder
+    {
+        get { lock (gate) { Expire(); return holder; } }
+    }
+    private long RemainingSeconds() =>
+        Math.Max(0L, (Math.Min(expires, acquired + MaximumHoldMilliseconds) - milliseconds() + 999L) / 1000L);
     internal (bool Acknowledged, string Reason) Acquire(string name, int seconds)
     {
         lock (gate)
@@ -29,6 +37,7 @@ internal sealed class ExternalTradeHold(Func<string?> busy, Action<string> info,
                 return (false, "Provide a holder and a lease of 1-300 seconds.");
             if (holder != null && name != holder) return (false, Reason!);
             if (busy() is {} reason) return (false, reason);
+            if (holder == null) acquired = milliseconds();
             holder = name;
             expires = milliseconds() + seconds * 1000L;
             info($"Trade hold acquired: {name}");
@@ -57,7 +66,15 @@ internal sealed class ExternalTradeHold(Func<string?> busy, Action<string> info,
             return true;
         }
     }
-    internal void Clear() { lock (gate) { if (holder != null) Release(holder); } }
+    internal void Clear()
+    {
+        lock (gate)
+        {
+            if (holder == null) return;
+            (warn ?? info)($"Trade hold force-released: dropped the hold held by {holder}.");
+            holder = null;
+        }
+    }
 }
 
 internal sealed class TradeHoldProvider : IDisposable

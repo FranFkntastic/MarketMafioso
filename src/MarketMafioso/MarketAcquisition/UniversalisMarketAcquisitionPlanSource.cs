@@ -28,6 +28,9 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
         this.bulkClient = bulkClient ?? throw new ArgumentNullException(nameof(bulkClient));
     }
 
+    /// <summary>Receives a warning for each malformed listing that was skipped.</summary>
+    public Action<string>? Warn { get; init; }
+
     public async Task<IReadOnlyDictionary<uint, IReadOnlyList<MarketAcquisitionListing>>> FetchListingsAsync(
         string worldDataCenterOrRegion,
         IReadOnlyCollection<uint> itemIds,
@@ -59,13 +62,30 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
             pair => MapListings(pair.Key, pair.Value));
     }
 
-    private static IReadOnlyList<MarketAcquisitionListing> MapListings(
+    private IReadOnlyList<MarketAcquisitionListing> MapListings(
         uint itemId,
         UniversalisItemResponse item)
     {
         if (item.Listings is null)
             throw new InvalidOperationException($"Universalis response for item {itemId} had no listings array.");
-        return item.Listings.Select(listing => MapListing(itemId, listing)).ToArray();
+        var mapped = new List<MarketAcquisitionListing>(item.Listings.Count);
+        string? lastProblem = null;
+        foreach (var listing in item.Listings)
+        {
+            try
+            {
+                mapped.Add(MapListing(itemId, listing));
+            }
+            catch (InvalidOperationException exception)
+            {
+                lastProblem = exception.Message;
+                Warn?.Invoke($"[MarketMafioso] Skipped a malformed Universalis listing: {exception.Message}");
+            }
+        }
+        // Fail only when listings were returned and none of them is usable.
+        if (mapped.Count == 0 && lastProblem is not null)
+            throw new InvalidOperationException($"Every Universalis listing for item {itemId} was malformed. Last problem: {lastProblem}");
+        return mapped;
     }
 
     private static MarketAcquisitionListing MapListing(uint itemId, UniversalisListingResponse listing)

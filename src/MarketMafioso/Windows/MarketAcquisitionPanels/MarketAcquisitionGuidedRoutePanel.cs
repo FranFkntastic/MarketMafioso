@@ -31,6 +31,9 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus;
     private readonly Action openLogsFolder;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
+    private readonly Action? forgetShardLedger;
+    private readonly Action? discardRecoveryBlock;
+    private readonly Action? forgetTravelLease;
     private readonly DalamudExpandableRows expandedStops = new();
     private Action? confirmedEvidenceRefresh;
     private string evidenceRefreshWorlds = string.Empty;
@@ -56,8 +59,14 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus,
         Action openLogsFolder,
-        AgentBridgeUiReviewRegistry reviewRegistry)
+        AgentBridgeUiReviewRegistry reviewRegistry,
+        Action? forgetShardLedger = null,
+        Action? discardRecoveryBlock = null,
+        Action? forgetTravelLease = null)
     {
+        this.forgetShardLedger = forgetShardLedger;
+        this.discardRecoveryBlock = discardRecoveryBlock;
+        this.forgetTravelLease = forgetTravelLease;
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.startRoute = startRoute ?? throw new ArgumentNullException(nameof(startRoute));
         this.createEvidenceRefreshConfirmation = createEvidenceRefreshConfirmation ?? throw new ArgumentNullException(nameof(createEvidenceRefreshConfirmation));
@@ -108,7 +117,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         var canReprepare = canStart &&
                             snapshot.CanRestart &&
                             snapshot.CompletedOrProbedStopCount > 0;
-        DrawExactAcquisitionExecution(snapshot);
+        DrawExactAcquisitionExecution(snapshot, inlineRetry: drawPipelineActions is not null);
         DrawShardStorageCheckpoint(snapshot);
         if (!DrawTerminalPurchaseRecovery(snapshot))
         {
@@ -123,7 +132,28 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         if (!pipelineOwnsIdleView)
             ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
         if (snapshot.RecoveryBlockedReason is { } recoveryBlockedReason)
+        {
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, recoveryBlockedReason);
+            // Human-only, like the restock purchase clear: not registered with the agent bridge.
+            if (discardRecoveryBlock is not null && snapshot.PurchaseEvidenceState is null)
+            {
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Discard \u2014 I'll handle it##MarketAcquisitionDiscardRecoveryBlock"))
+                    discardRecoveryBlock();
+            }
+        }
+        if (snapshot.UnresolvedTravelTarget is { } travelTarget && forgetTravelLease is not null)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"Lifestream travel to {travelTarget} unresolved");
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Forget travel lease##MarketAcquisitionForgetTravelLease"))
+                forgetTravelLease();
+            RegisterLastControl(
+                "acquisition.route.forget-travel-lease",
+                "Forget the unresolved Lifestream travel lease",
+                true,
+                forgetTravelLease);
+        }
         if (isPlanStale && !pipelineOwnsIdleView)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Request changed after this plan was prepared. Prepare a fresh plan before starting.");
         drawPostRunDiagnosticSummary(snapshot);
@@ -370,7 +400,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         confirmedAction?.Invoke();
     }
 
-    private static void DrawExactAcquisitionExecution(MarketAcquisitionRouteEngineSnapshot snapshot)
+    private void DrawExactAcquisitionExecution(MarketAcquisitionRouteEngineSnapshot snapshot, bool inlineRetry)
     {
         if (snapshot.ExactAcquisitionExecution is not { } execution)
             return;
@@ -379,24 +409,49 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         ImGui.TextColored(
             execution.Phase is ExactAcquisitionRouteAuthorityPhase.Paused ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
             $"External plan {execution.Phase} · {remaining:N0} remaining · {execution.TotalSpentGil:N0} gil spent");
+        // The ordinary action row carries the retry; a pipeline-owned row does not, so offer it here.
+        if (inlineRetry &&
+            MarketAcquisitionGuidedRouteActionPresenter.Resolve(snapshot) == MarketAcquisitionGuidedRoutePrimaryAction.RetryExactAcquisitionRecovery)
+        {
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Retry recovery##ExactAcquisitionRetryRecoveryInline"))
+                retryExactAcquisitionRecovery();
+            RegisterLastControl(
+                "acquisition.route.exactAcquisition.retry-recovery-inline",
+                "Refresh and optimize the remaining exact-quality External plan route",
+                true,
+                retryExactAcquisitionRecovery);
+        }
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, execution.Message);
     }
 
-    private static void DrawShardStorageCheckpoint(MarketAcquisitionRouteEngineSnapshot snapshot)
+    private void DrawShardStorageCheckpoint(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
         if (snapshot.ShardCheckpoint is not { IsEnabled: true } checkpoint)
             return;
         var outstanding = checkpoint.OutstandingByItem.Values.Sum();
-        if (!checkpoint.IsActive && outstanding == 0)
+        var failed = checkpoint.Phase == ShardAcquisitionCheckpointPhase.Failed;
+        if (!checkpoint.IsActive && !failed && outstanding == 0)
             return;
-        var color = checkpoint.Phase == ShardAcquisitionCheckpointPhase.Failed
+        var color = failed
             ? MarketMafiosoUiTheme.Error
             : checkpoint.IsActive
                 ? MarketMafiosoUiTheme.Warning
                 : MarketMafiosoUiTheme.Muted;
-        ImGui.TextColored(color, checkpoint.IsActive
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(color, checkpoint.IsActive || failed
             ? $"Storing {outstanding:N0} purchased shards: {checkpoint.Message}"
             : $"{outstanding:N0} purchased shards awaiting the final storage run.");
+        if (forgetShardLedger is null)
+            return;
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Forget shard ledger##MarketAcquisitionForgetShardLedger"))
+            forgetShardLedger();
+        RegisterLastControl(
+            "acquisition.route.forget-shard-ledger",
+            "Forget the purchased-shard storage ledger",
+            true,
+            forgetShardLedger);
     }
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)

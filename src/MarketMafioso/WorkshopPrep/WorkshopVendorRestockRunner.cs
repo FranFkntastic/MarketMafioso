@@ -20,6 +20,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
     private bool disposed;
     private readonly Func<string?> persistenceError;
     private readonly Func<string?> retainerAccessBlock;
+    private string? warnedQueueSignature;
 
     public WorkshopVendorRestockRunner(
         Configuration config,
@@ -83,36 +84,22 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         }
     }
 
-    public bool CanAcknowledgeUnresolvedPurchase =>
-        HasUnresolvedPurchase(config.ActiveWorkshopVendorBuyRun) &&
-        (!coordinator.IsRunning || config.ActiveWorkshopVendorBuyRun!.Phase == GilVendorBuyPhase.ReconcileReceipt);
+    public bool CanAcknowledgeUnresolvedPurchase => HasUnresolvedPurchase(config.ActiveWorkshopVendorBuyRun);
 
-    public bool AcknowledgeUnresolvedPurchase(string expectedRunId, out string message)
+    /// <summary>Stops the run and clears the current purchase record. Always allowed.</summary>
+    public bool AcknowledgeUnresolvedPurchase(out string message)
     {
-        if (config.ActiveWorkshopVendorBuyRun?.RunId != expectedRunId)
-        {
-            message = "The saved purchase changed. Check the current purchase before clearing it.";
-            return false;
-        }
-        if (!CanAcknowledgeUnresolvedPurchase)
-        {
-            message = "Pause the restock before clearing an unverified purchase.";
-            return false;
-        }
-        if (diagnosticLog is null)
-        {
-            message = "The purchase cannot be cleared because its evidence cannot be logged.";
-            return false;
-        }
-
-        // Production routes this callback to Warning. Log before disposing or clearing anything.
-        diagnosticLog("[MarketMafioso] User acknowledged checking the unresolved vendor purchase in game; " +
-                      "clearing its duplicate-purchase protection. Preserved evidence: " +
-                      JsonSerializer.Serialize(new
-                      {
-                          Run = config.ActiveWorkshopVendorBuyRun,
-                          Policy = config.ActiveWorkshopVendorRestockState,
-                      }));
+        // Production routes this callback to Warning. Log before disposing or clearing anything; with no log
+        // attached the clear still proceeds.
+        diagnosticLog?.Invoke("[MarketMafioso] User acknowledged checking the unresolved vendor purchase in game; " +
+                              "stopping the run and clearing its duplicate-purchase protection. Dropped record: " +
+                              JsonSerializer.Serialize(new
+                              {
+                                  Run = config.ActiveWorkshopVendorBuyRun,
+                                  Policy = config.ActiveWorkshopVendorRestockState,
+                              }));
+        // Disposing the coordinator ends its automation ownership; the policy stage holds its own.
+        runtime.EndAutomation();
         coordinator.Dispose();
         config.ActiveWorkshopVendorBuyRun = null;
         config.ActiveWorkshopVendorRestockState = null;
@@ -162,11 +149,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             WorkshopShareRestockDemand.Signature(demand.FrozenRequirements) is var frozenSignature &&
             !string.Equals(frozenSignature, review.QueueSignature, StringComparison.Ordinal))
         {
-            // Tick would pause this run on its first frame; refuse instead of starting a run that cannot advance.
-            error = $"Restock for {demand.ShareName} was not started: its reviewed demand ({review.Materials.Count:N0} line(s)) " +
-                    $"does not match the frozen demand ({demand.FrozenRequirements.Count:N0} line(s)).";
-            diagnosticLog?.Invoke($"[MarketMafioso] Share restock refused: review signature {review.QueueSignature} != frozen signature {frozenSignature} for share {demand.ShareJobId}.");
-            return false;
+            diagnosticLog?.Invoke($"[MarketMafioso] Share restock started from a review that differs from the frozen demand: review signature {review.QueueSignature} != frozen signature {frozenSignature} for share {demand.ShareJobId}; continuing with the reviewed lines.");
         }
         if (!owner.IsAvailable || string.IsNullOrWhiteSpace(owner.CharacterName))
         {
@@ -312,15 +295,16 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             Pause("The active character changed. Return to the reviewed owner to resume.");
             return;
         }
-        if (!string.Equals(state.QueueSignature, currentQueueSignature, StringComparison.Ordinal))
+        if (!string.Equals(state.QueueSignature, currentQueueSignature, StringComparison.Ordinal) &&
+            !string.Equals(warnedQueueSignature, currentQueueSignature, StringComparison.Ordinal))
         {
-            Pause("The workshop queue changed. Restore the reviewed queue or stop this run.");
-            return;
+            warnedQueueSignature = currentQueueSignature;
+            diagnosticLog?.Invoke($"[MarketMafioso] Workshop queue changed during restock ({state.QueueSignature} -> {currentQueueSignature}); continuing with the reviewed lines.");
         }
 
         if (config.ActiveWorkshopVendorBuyRun is not null)
         {
-            coordinator.Tick(ComposeContextSignature(currentOwner, currentQueueSignature));
+            coordinator.Tick(ComposeContextSignature(currentOwner, state.QueueSignature));
             return;
         }
         if (state.Phase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster)
@@ -351,14 +335,16 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             error = "No paused workshop restock run is available.";
             return false;
         }
-        if (!OwnerMatches(state, owner) || !string.Equals(state.QueueSignature, queueSignature, StringComparison.Ordinal))
+        if (!OwnerMatches(state, owner))
         {
-            error = "The active owner or workshop queue does not match the frozen restock review.";
+            error = "Return to the character that started this restock to resume it.";
             return false;
         }
+        if (!string.Equals(state.QueueSignature, queueSignature, StringComparison.Ordinal))
+            diagnosticLog?.Invoke($"[MarketMafioso] Resuming workshop restock although the workshop queue changed ({state.QueueSignature} -> {queueSignature}); continuing with the reviewed lines.");
         if (config.ActiveWorkshopVendorBuyRun is not null)
         {
-            var resumed = coordinator.Resume(ComposeContextSignature(owner, queueSignature), out error);
+            var resumed = coordinator.Resume(ComposeContextSignature(owner, state.QueueSignature), out error);
             if (!resumed) return false;
             error = string.Empty;
             return true;
@@ -379,7 +365,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
     {
         if (config.ActiveWorkshopVendorRestockState is not { } state || ActiveRun?.Phase is
             WorkshopVendorRestockPhase.Completed or WorkshopVendorRestockPhase.Stopped or
-            WorkshopVendorRestockPhase.Failed or WorkshopVendorRestockPhase.Indeterminate)
+            WorkshopVendorRestockPhase.Failed)
             return false;
         if (config.ActiveWorkshopVendorBuyRun is not null)
             return coordinator.Stop(message);
@@ -387,6 +373,44 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         state.Message = message;
         runtime.EndAutomation();
         PersistPolicy();
+        return true;
+    }
+
+    public string? OpenQuartermasterOperation(QuartermasterOwnerScope owner) => quartermaster.OpenOperationId(owner);
+
+    /// <summary>Drops the owner's Quartermaster operation record, stopping a run that is waiting on it.</summary>
+    public bool ForgetQuartermasterOperation(QuartermasterOwnerScope owner)
+    {
+        if (config.ActiveWorkshopVendorBuyRun is null &&
+            config.ActiveWorkshopVendorRestockState?.Phase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster)
+            Stop("Quartermaster operation forgotten; restock stopped.");
+        return quartermaster.ForgetOperation(owner);
+    }
+
+    /// <summary>True when retainer retrieval ended indeterminate before any vendor purchase started.</summary>
+    public bool CanRetryRetrieval =>
+        config.ActiveWorkshopVendorBuyRun is null &&
+        config.ActiveWorkshopVendorRestockState is { Phase: WorkshopVendorRestockPhase.Indeterminate } state &&
+        state.Lines.Any(line => line.ReviewedRetainerQuantity > 0);
+
+    /// <summary>Submits the reviewed retainer retrieval again with a fresh deadline.</summary>
+    public bool RetryRetrieval(out string message)
+    {
+        if (!CanRetryRetrieval)
+        {
+            message = "No indeterminate retrieval to retry.";
+            return false;
+        }
+        var state = config.ActiveWorkshopVendorRestockState!;
+        diagnosticLog?.Invoke($"[MarketMafioso] Retrying indeterminate workshop retainer retrieval. Previous result: {state.Message}");
+        state.Phase = WorkshopVendorRestockPhase.RetrieveFromQuartermaster;
+        state.QuartermasterSubmitted = false;
+        state.RetrievalReconcileStartedAtUtc = null;
+        state.StartedAtUtc = utcNow().UtcDateTime;
+        state.Message = "Retrying retainer retrieval.";
+        runtime.BeginAutomation();
+        PersistPolicy();
+        message = state.Message;
         return true;
     }
 

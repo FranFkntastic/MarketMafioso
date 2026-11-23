@@ -15,6 +15,7 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public bool CanRestart { get; init; }
     public bool CanRecover { get; init; }
     public string? RecoveryBlockedReason { get; init; }
+    public string? UnresolvedTravelTarget { get; init; }
     public bool CanFinalizeInputCaptureLog { get; init; }
     public int CompletedOrProbedStopCount { get; init; }
     public string RouteState { get; init; } = string.Empty;

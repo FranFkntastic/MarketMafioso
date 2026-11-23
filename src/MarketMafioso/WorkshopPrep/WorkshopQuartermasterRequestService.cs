@@ -12,6 +12,8 @@ namespace MarketMafioso.WorkshopPrep;
 
 public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermasterRestockService, IDisposable
 {
+    private static readonly TimeSpan OperationReleaseAge = TimeSpan.FromMinutes(15);
+    private const string ReleasedStatus = "released";
     private readonly Configuration config;
     private readonly QuartermasterIpcClient client;
     private readonly Action saveConfiguration;
@@ -147,8 +149,9 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             var operationStatus = string.IsNullOrWhiteSpace(persisted.Status)
                 ? "in an uncertain state"
                 : $"still {persisted.Status}";
-            LastStatus = $"Quartermaster operation {persisted.OperationId} is {operationStatus}; wait for terminal status before replacing its shortages.";
-            return false;
+            DiagnosticLog?.Invoke(
+                $"[MarketMafioso] Quartermaster operation {persisted.OperationId} is {operationStatus} " +
+                $"(submitted {persisted.SubmittedAtUtc:O}); starting a new retrieval request without waiting for it.");
         }
         var needsIdentity = !hasPersistedIdentity || !replayingPersistedRequest || IsTerminalStatus(persisted!.Status);
         if (needsIdentity)
@@ -251,7 +254,8 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             return new(WorkshopQuartermasterProgressState.Completed, state.Message ?? "Quartermaster retrieval completed.");
         if (status.Equals("partially_succeeded", StringComparison.OrdinalIgnoreCase))
             return new(WorkshopQuartermasterProgressState.PartiallySucceeded, detail);
-        if (status.Equals("indeterminate", StringComparison.OrdinalIgnoreCase))
+        if (status.Equals("indeterminate", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals(ReleasedStatus, StringComparison.OrdinalIgnoreCase))
             return new(WorkshopQuartermasterProgressState.Indeterminate, state.Message ?? "Quartermaster retrieval outcome is indeterminate.");
         if (status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
             status.Equals("cancelled", StringComparison.OrdinalIgnoreCase) ||
@@ -280,6 +284,12 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             string.IsNullOrWhiteSpace(persisted.OperationId) ||
             IsTerminalStatus(persisted.Status))
             return;
+        if (persisted.SubmittedAtUtc != default &&
+            utcNow().UtcDateTime - persisted.SubmittedAtUtc > OperationReleaseAge)
+        {
+            ReleaseStaleOperation(key, persisted);
+            return;
+        }
 
         ProgressLog?.Invoke($"[MarketMafioso] RQ restock wake={wakeReason} operation={persisted.OperationId}");
         if (!client.TryGetOperation(persisted.OperationId, ownerScope, out var operation, out var error))
@@ -356,6 +366,60 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         }
         LastOperation = operation;
         LastStatus = operationStatus;
+    }
+
+    public string? OpenOperationId(QuartermasterOwnerScope owner)
+    {
+        if (owner is null || !owner.IsAvailable)
+            return null;
+        return config.QuartermasterWorkshopRequests.TryGetValue(ScopeKey(owner), out var persisted) &&
+               !string.IsNullOrWhiteSpace(persisted.OperationId) &&
+               !IsTerminalStatus(persisted.Status)
+            ? persisted.OperationId
+            : null;
+    }
+
+    public bool ForgetOperation(QuartermasterOwnerScope owner)
+    {
+        if (owner is null || !owner.IsAvailable)
+            return false;
+        var key = ScopeKey(owner);
+        if (!config.QuartermasterWorkshopRequests.Remove(key, out var persisted))
+            return false;
+        DiagnosticLog?.Invoke(
+            $"[MarketMafioso] Forgot Quartermaster operation {persisted.OperationId} status={persisted.Status} " +
+            $"submitted={persisted.SubmittedAtUtc:O} request={persisted.RequestId}; Quartermaster itself was not changed.");
+        LastOperation = null;
+        LastStatus = "Quartermaster operation forgotten.";
+        try
+        {
+            saveConfiguration();
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog?.Invoke($"[MarketMafioso] Could not persist the forgotten Quartermaster operation; continuing. {ex.Message}");
+        }
+        return true;
+    }
+
+    private void ReleaseStaleOperation(string key, QuartermasterWorkshopRequestState persisted)
+    {
+        var released = Clone(persisted);
+        released.Status = ReleasedStatus;
+        released.Message = $"Released after {OperationReleaseAge.TotalMinutes:N0} minutes without a terminal status (last status {persisted.Status}).";
+        config.QuartermasterWorkshopRequests[key] = released;
+        DiagnosticLog?.Invoke(
+            $"[MarketMafioso] Quartermaster operation {persisted.OperationId} released: no terminal status " +
+            $"{OperationReleaseAge.TotalMinutes:N0} minutes after {persisted.SubmittedAtUtc:O} (last status {persisted.Status}).");
+        LastStatus = released.Message;
+        try
+        {
+            saveConfiguration();
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog?.Invoke($"[MarketMafioso] Could not persist the released Quartermaster operation; continuing. {ex.Message}");
+        }
     }
 
     public void Dispose()
@@ -475,6 +539,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         status.Equals("succeeded", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("partially_succeeded", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("indeterminate", StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(ReleasedStatus, StringComparison.OrdinalIgnoreCase) ||
         status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("cancelled", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("rejected", StringComparison.OrdinalIgnoreCase) ||

@@ -183,7 +183,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     public bool CanPause => session.Phase == CrossRegionAcquisitionPhase.Shopping;
 
-    public bool CanClear => session.IsTerminal;
+    /// <summary>Clear is an escape hatch: available in every phase; it stops an active run itself.</summary>
+    public bool CanClear => session.Phase != CrossRegionAcquisitionPhase.Idle;
 
     // ---- Status cache (UI and readiness) ---------------------------------------------------
 
@@ -355,8 +356,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 return new(false, "Another courier run is active in Quartermaster.", status) { ShopperEntry = entry };
             // Only genuinely unsettled custody or an unverified pending trade blocks starting a new run;
             // zero-custody failed/interrupted runs are auto-archived by Quartermaster on submit.
-            if (run.IsFailure && (run.CustodyUnits > 0 || run.CustodyGil > 0 || !run.CanClear))
+            // Only courier custody that still holds items or gil blocks starting a new run.
+            if (run.IsFailure && (run.CustodyUnits > 0 || run.CustodyGil > 0))
                 return new(false, $"Quartermaster has unsettled courier custody ({run.State}); resolve it in Quartermaster first.", status) { ShopperEntry = entry };
+            if (run.IsFailure && !run.CanClear)
+                log($"Quartermaster reports a failed courier run ({run.State}) that it cannot clear yet, with no custody units or gil; starting anyway.", null);
         }
         if (fundGil < 0)
             return new(false, "Transfer gil cannot be negative.", status) { ShopperEntry = entry };
@@ -557,8 +561,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     public CrossRegionActionResult Clear()
     {
-        if (!session.IsTerminal)
-            return CrossRegionActionResult.Fail("Only a completed, failed, or stopped session can be cleared.");
+        var dropped = $"phase={session.Phase} shopper={session.Shopper?.Label} purchasedUnits={session.PurchasedUnits} message={session.LastMessage}";
+        if (session.IsActive)
+        {
+            var stopped = Stop();
+            dropped += $" stop={(stopped.Success ? "ok" : "failed")}: {stopped.Message}";
+        }
+        log($"Cross-regional session cleared from MarketMafioso; dropped {dropped}. The game and Quartermaster are left as they are.", null);
         CancelOpenCustodyOperations("Cleared from MarketMafioso.");
         // An open forward is not the session's: it stays watched and its outcome shows with the next status.
         DropSettledForwards();

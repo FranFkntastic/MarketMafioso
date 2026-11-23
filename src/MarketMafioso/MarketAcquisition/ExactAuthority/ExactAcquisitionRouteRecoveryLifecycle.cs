@@ -8,7 +8,8 @@ public static class ExactAcquisitionRouteRecoveryLifecycle
         bool isRouteActive,
         ExactAcquisitionRouteExecutionState? persisted,
         ExactAcquisitionExecutionContract? finalizedContract,
-        IExactAcquisitionRouteExecutionStateStore store)
+        IExactAcquisitionRouteExecutionStateStore store,
+        Action<ExactAcquisitionRouteExecutionState>? archive = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         if (isRouteActive || persisted is null ||
@@ -17,6 +18,8 @@ public static class ExactAcquisitionRouteRecoveryLifecycle
              finalizedContract.CanonicalIntentHash == persisted.CanonicalIntentHash))
             return false;
 
+        // Archive first so the sunk purchase receipts survive the clear.
+        archive?.Invoke(persisted);
         store.Clear();
         return true;
     }

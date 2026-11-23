@@ -20,6 +20,9 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
     private const string ItemSearchResultAddon = "ItemSearchResult";
     private static readonly TimeSpan PurchaseVerificationDeadline = TimeSpan.FromSeconds(15);
 
+    public const string RejectedTerritoryBlockReason = "Purchases have been rejected in this area before.";
+    private static readonly TimeSpan RejectedTerritoryExpiry = TimeSpan.FromMinutes(30);
+    private readonly Dictionary<uint, DateTimeOffset> rejectedTerritorySeenUtc = new();
     private static readonly ConditionFlag[] PurchaseBlockingConditions =
     [
         ConditionFlag.Emoting,
@@ -100,6 +103,7 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
     {
         this.configuration = configuration;
         this.clientState = clientState;
+        clientState.Login += OnLoginClearRejectedTerritories;
         this.framework = framework;
         this.gameGui = gameGui;
         this.condition = condition;
@@ -185,6 +189,7 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
         cmbContext.ContextChanged -= OnMarketContextChanged;
         cmbContext.Dispose();
         condition.ConditionChange -= OnConditionChange;
+        clientState.Login -= OnLoginClearRejectedTerritories;
         openListingProvider.UnregisterFunc();
         listingAvailabilityProvider.UnregisterFunc();
     }
@@ -339,16 +344,54 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
             if (condition[flag])
                 return $"Cannot purchase while {flag}.";
         }
-        if (configuration.MarketListingRejectedTerritories.Contains(clientState.TerritoryType))
-            return "Purchases have been rejected in this area before.";
+        if (IsRejectedTerritory(clientState.TerritoryType))
+            return RejectedTerritoryBlockReason;
         return null;
     }
 
     public void ClearRejectedTerritories()
     {
+        if (configuration.MarketListingRejectedTerritories.Count > 0)
+        {
+            log.Warning(
+                "[MarketMafioso] Cleared rejected-purchase areas: {Territories}.",
+                string.Join(", ", configuration.MarketListingRejectedTerritories));
+        }
         configuration.MarketListingRejectedTerritories.Clear();
+        rejectedTerritorySeenUtc.Clear();
         configuration.Save();
         RebuildView();
+    }
+
+    /// <summary>A rejected-area mark lasts 30 minutes from when this session first sees it, or until the next login.</summary>
+    private bool IsRejectedTerritory(uint territory)
+    {
+        if (!configuration.MarketListingRejectedTerritories.Contains(territory))
+            return false;
+        var now = DateTimeOffset.UtcNow;
+        if (!rejectedTerritorySeenUtc.TryGetValue(territory, out var since))
+        {
+            rejectedTerritorySeenUtc[territory] = now;
+            return true;
+        }
+        if (now - since < RejectedTerritoryExpiry)
+            return true;
+        configuration.MarketListingRejectedTerritories.Remove(territory);
+        rejectedTerritorySeenUtc.Remove(territory);
+        configuration.Save();
+        log.Warning(
+            "[MarketMafioso] Rejected-purchase mark for territory {Territory} expired after {Minutes} minutes.",
+            territory,
+            RejectedTerritoryExpiry.TotalMinutes);
+        return false;
+    }
+
+    private void OnLoginClearRejectedTerritories()
+    {
+        if (configuration.MarketListingRejectedTerritories.Count == 0)
+            return;
+        log.Warning("[MarketMafioso] Login observed; releasing rejected-purchase areas.");
+        ClearRejectedTerritories();
     }
 
     public void SetDebugOutcome(string message)

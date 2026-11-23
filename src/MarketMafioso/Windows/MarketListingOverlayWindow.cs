@@ -375,7 +375,22 @@ public sealed class MarketListingOverlayWindow : Window
                 () => confirmArmed = true,
                 FormatSelectionReviewValue());
             if (view.ContextBlockReason is not null)
+            {
+                ImGui.AlignTextToFramePadding();
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, view.ContextBlockReason);
+                if (view.ContextBlockReason == MarketBoardAcquisitionController.RejectedTerritoryBlockReason)
+                {
+                    ImGui.SameLine();
+                    if (ImGui.SmallButton("Clear rejected areas##marketListingsClearRejectedAreas"))
+                        controller.ClearRejectedTerritories();
+                    RegisterLastReviewedAction(
+                        "market-listings.clear-rejected-areas",
+                        "Clear rejected areas",
+                        true,
+                        controller.ClearRejectedTerritories,
+                        null);
+                }
+            }
             return;
         }
 

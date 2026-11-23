@@ -98,15 +98,18 @@ public sealed class ExactAcquisitionRouteAuthoritySession
 {
     private readonly ExactAcquisitionExecutionContract contract;
     private readonly IExactAcquisitionRouteExecutionStateStore? store;
+    private readonly Action<string>? warn;
 
     private ExactAcquisitionRouteAuthoritySession(
         ExactAcquisitionExecutionContract contract,
         ExactAcquisitionRouteExecutionState state,
-        IExactAcquisitionRouteExecutionStateStore? store)
+        IExactAcquisitionRouteExecutionStateStore? store,
+        Action<string>? warn)
     {
         this.contract = contract;
         State = state;
         this.store = store;
+        this.warn = warn;
     }
 
     public ExactAcquisitionRouteExecutionState State { get; private set; }
@@ -117,13 +120,14 @@ public sealed class ExactAcquisitionRouteAuthoritySession
         MarketAcquisitionRequestDocument document,
         MarketAcquisitionPlan plan,
         MarketAcquisitionClaimView claim,
-        IExactAcquisitionRouteExecutionStateStore? store = null)
+        IExactAcquisitionRouteExecutionStateStore? store = null,
+        Action<string>? warn = null)
     {
         ArgumentNullException.ThrowIfNull(contract);
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claim);
-        ValidateContractBinding(contract, document, claim);
+        ValidateContractBinding(contract, document, claim, warn);
         var bindings = BindLines(contract, claim);
         var restored = store?.Restore();
         var state = restored is not null &&
@@ -162,7 +166,7 @@ public sealed class ExactAcquisitionRouteAuthoritySession
             });
             throw;
         }
-        var session = new ExactAcquisitionRouteAuthoritySession(contract, state, store);
+        var session = new ExactAcquisitionRouteAuthoritySession(contract, state, store, warn);
         session.Persist();
         return session;
     }
@@ -181,10 +185,8 @@ public sealed class ExactAcquisitionRouteAuthoritySession
     public void ValidateCurrentDocument(MarketAcquisitionRequestDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        if (document.LocalRequestId != contract.WorkbenchDocumentId ||
-            document.LocalRevision != contract.WorkbenchRevision ||
-            ExactAcquisitionWorkbenchAuthorityService.ComputeCanonicalIntentHash(document) != contract.CanonicalIntentHash)
-            throw new InvalidOperationException("Workbench changed after External plan confirmation; return through Advisor and finalize a new contract.");
+        ValidateDocumentIntent(contract, document, warn,
+            "Workbench changed after External plan confirmation; return through Advisor and finalize a new contract.");
     }
 
     internal bool IsSunkListing(MarketBoardLiveListing listing)
@@ -397,15 +399,14 @@ public sealed class ExactAcquisitionRouteAuthoritySession
     private static void ValidateContractBinding(
         ExactAcquisitionExecutionContract contract,
         MarketAcquisitionRequestDocument document,
-        MarketAcquisitionClaimView claim)
+        MarketAcquisitionClaimView claim,
+        Action<string>? warn)
     {
         if (contract.SchemaVersion != ExactAcquisitionExecutionContract.CurrentSchemaVersion ||
             contract.RecoveryPolicyId != ExactAcquisitionWorkbenchAuthority.CrossWorldExactQualityV1)
             throw new InvalidOperationException("Route cannot consume an unknown External plan contract or recovery policy version.");
-        if (document.LocalRequestId != contract.WorkbenchDocumentId ||
-            document.LocalRevision != contract.WorkbenchRevision ||
-            ExactAcquisitionWorkbenchAuthorityService.ComputeCanonicalIntentHash(document) != contract.CanonicalIntentHash)
-            throw new InvalidOperationException("The Workbench no longer matches the finalized External plan contract.");
+        ValidateDocumentIntent(contract, document, warn,
+            "The Workbench no longer matches the finalized External plan contract.");
         if (!string.Equals(claim.TargetCharacterName, contract.TargetCharacterName, StringComparison.Ordinal) ||
             !string.Equals(claim.TargetWorld, contract.TargetWorld, StringComparison.Ordinal))
             throw new InvalidOperationException("The accepted work order targets a different character or world than the External plan contract.");
@@ -497,6 +498,41 @@ public sealed class ExactAcquisitionRouteAuthoritySession
         state.ContractId == contract.ContractId &&
         state.CanonicalIntentHash == contract.CanonicalIntentHash &&
         IsRestoredStateSane(state, BindLines(contract, claim), contract.PlanCapGil);
+
+    /// <summary>
+    /// Revision or hash drift on a Workbench whose exact-quality lines still match the contract is logged and the
+    /// route stays bound to the finalized contract (its caps, identity and targets). Any real intent change throws.
+    /// </summary>
+    private static void ValidateDocumentIntent(
+        ExactAcquisitionExecutionContract contract,
+        MarketAcquisitionRequestDocument document,
+        Action<string>? warn,
+        string changedMessage)
+    {
+        if (document.LocalRequestId != contract.WorkbenchDocumentId)
+            throw new InvalidOperationException(changedMessage);
+        var revisionDrift = document.LocalRevision != contract.WorkbenchRevision;
+        var hashDrift = ExactAcquisitionWorkbenchAuthorityService.ComputeCanonicalIntentHash(document) != contract.CanonicalIntentHash;
+        if (!revisionDrift && !hashDrift)
+            return;
+        if (!IntentMatchesContract(contract, document))
+            throw new InvalidOperationException(changedMessage);
+        warn?.Invoke(
+            $"[MarketMafioso] Workbench {document.LocalRequestId} drifted from External plan contract {contract.ContractId} " +
+            $"(revision {contract.WorkbenchRevision} -> {document.LocalRevision}, intent hash {(hashDrift ? "changed" : "unchanged")}) " +
+            "but its target and exact-quality lines still match; continuing under the finalized contract.");
+    }
+
+    private static bool IntentMatchesContract(
+        ExactAcquisitionExecutionContract contract,
+        MarketAcquisitionRequestDocument document) =>
+        string.Equals(document.TargetCharacterName.Trim(), contract.TargetCharacterName.Trim(), StringComparison.Ordinal) &&
+        string.Equals(document.TargetWorld.Trim(), contract.TargetWorld.Trim(), StringComparison.Ordinal) &&
+        contract.Lines.All(envelope => document.Lines.Count(line =>
+            line.ItemId == envelope.ItemId &&
+            PolicyMatches(envelope.Quality, line.HqPolicy) &&
+            line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase) &&
+            line.TargetQuantity == envelope.RequiredQuantity) == 1);
 
     private static bool PolicyMatches(EquipmentQuality quality, string policy) =>
         MarketAcquisitionPolicy.NormalizeHqPolicy(policy) ==
