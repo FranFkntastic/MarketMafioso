@@ -125,9 +125,12 @@
                                         {
                                             <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
                                         }
-                                        @if (context.Item.Status == "PendingPickup")
+                                        @if (IsActiveRequest(context.Item))
                                         {
                                             <MudMenuItem OnClick="@(() => ShelfRequested.InvokeAsync(context.Item))">Shelf</MudMenuItem>
+                                        }
+                                        @if (context.Item.Status == "PendingPickup")
+                                        {
                                             <MudMenuItem OnClick="@(() => SetMergeTarget(context.Item))">Merge others into this</MudMenuItem>
                                         }
                                         @if (context.Item.Status == "Shelved")
@@ -229,7 +232,7 @@
         request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired" or "Archived";
 
     private static bool CanArchive(MarketAcquisitionRequestView request) =>
-        request.Status is "PendingPickup" or "Shelved" or "Complete" or "Failed" or "Cancelled" or "Rejected";
+        request.Status != "Archived";
 
     private bool CanMergeIntoSelected(MarketAcquisitionRequestView source) =>
         MergeTarget is { Status: "PendingPickup" } target &&

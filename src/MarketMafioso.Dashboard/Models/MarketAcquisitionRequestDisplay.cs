@@ -62,10 +62,9 @@ public static class MarketAcquisitionRequestDisplay
 
     public static bool IsEditable(MarketAcquisitionRequestView request)
     {
-        if (request.Status is "Running" or "Complete" or "Failed" or "Rejected" or "Expired" or "Cancelled")
+        if (request.Status is "AcceptedInPlugin" or "Running" or "RecoveryRequired")
             return false;
 
-        return string.IsNullOrWhiteSpace(request.LatestAttemptEventType) &&
-            LinesFor(request).All(line => line.PurchasedQuantity == 0 && line.SpentGil == 0);
+        return LinesFor(request).All(line => line.PurchasedQuantity == 0 && line.SpentGil == 0);
     }
 }

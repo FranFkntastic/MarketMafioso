@@ -170,7 +170,16 @@
                 {
                     <MudButton Variant="Variant.Outlined" OnClick="@(() => CancelRequested.InvokeAsync(Request.Id))">Cancel</MudButton>
                 }
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ResendRequested.InvokeAsync(Request.Id))">Resend</MudButton>
+                @if (Request.Status == "Running")
+                {
+                    <MudTooltip Text="The plugin is running this order. Cancel it first to resend.">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="true">Resend</MudButton>
+                    </MudTooltip>
+                }
+                else if (Request.Status is not ("Complete" or "Shelved" or "Archived"))
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ResendRequested.InvokeAsync(Request.Id))">Resend</MudButton>
+                }
                 <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => BuilderActionRequestedAsync(Request))">@BuilderActionText(Request)</MudButton>
             </MudStack>
         </MudStack>

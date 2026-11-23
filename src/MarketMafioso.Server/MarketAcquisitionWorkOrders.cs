@@ -60,6 +60,8 @@ public sealed partial class MarketAcquisitionRequestStore
                 MarketAcquisitionStatuses.PendingPickup,
                 MarketAcquisitionStatuses.Claimed,
                 MarketAcquisitionStatuses.AcceptedInPlugin,
+                MarketAcquisitionStatuses.Running,
+                MarketAcquisitionStatuses.RecoveryRequired,
             ],
             "shelved",
             cancellationToken);
@@ -86,10 +88,15 @@ public sealed partial class MarketAcquisitionRequestStore
             MarketAcquisitionStatuses.Archived,
             [
                 MarketAcquisitionStatuses.PendingPickup,
+                MarketAcquisitionStatuses.Claimed,
+                MarketAcquisitionStatuses.AcceptedInPlugin,
+                MarketAcquisitionStatuses.Running,
+                MarketAcquisitionStatuses.RecoveryRequired,
                 MarketAcquisitionStatuses.Shelved,
                 MarketAcquisitionStatuses.Complete,
                 MarketAcquisitionStatuses.Failed,
                 MarketAcquisitionStatuses.Rejected,
+                MarketAcquisitionStatuses.Expired,
                 MarketAcquisitionStatuses.Cancelled,
             ],
             "archived",
@@ -229,7 +236,9 @@ public sealed partial class MarketAcquisitionRequestStore
         await reader.DisposeAsync().ConfigureAwait(false);
 
         if (!MarketAcquisitionWorkOrderPolicy.IsLeaseRenewableStatus(status) ||
-            !MatchesSecret(request.ClaimToken, token) ||
+            string.IsNullOrWhiteSpace(token))
+            throw new MarketAcquisitionClaimReleasedException(id, status);
+        if (!MatchesSecret(request.ClaimToken, token) ||
             !string.Equals(request.PluginInstanceId, claimedBy, StringComparison.Ordinal))
             throw new UnauthorizedAccessException("The execution lease is not owned by this plugin instance.");
 
@@ -264,9 +273,11 @@ public sealed partial class MarketAcquisitionRequestStore
         };
     }
 
+    // Shelf, restore and archive are dashboard escape hatches: they ignore the caller's
+    // expected revision (last write wins) and are idempotent when the order is already there.
     private async Task<MarketAcquisitionWorkOrderView?> ChangeWorkOrderStateAsync(
         string id,
-        int expectedRevision,
+        int _,
         string targetStatus,
         IReadOnlyCollection<string> allowedStatuses,
         string changeKind,
@@ -279,8 +290,12 @@ public sealed partial class MarketAcquisitionRequestStore
         var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         if (current == null)
             return null;
-        if (current.Revision != expectedRevision)
-            throw new MarketAcquisitionRevisionConflictException(expectedRevision, current.Revision);
+        if (string.Equals(current.Status, targetStatus, StringComparison.Ordinal))
+        {
+            await EnsureWorkOrderRecordsAsync(connection, (SqliteTransaction)transaction, current, "migrated", cancellationToken).ConfigureAwait(false);
+            return await BuildWorkOrderViewAsync(connection, (SqliteTransaction)transaction, current, cancellationToken).ConfigureAwait(false);
+        }
+        var expectedRevision = current.Revision;
         if (!allowedStatuses.Contains(current.Status))
             throw new MarketAcquisitionInvalidTransitionException(current.Status, targetStatus);
 

@@ -392,6 +392,12 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             return ReportFailureResolution.Unresolved;
         }
 
+        if (exception is MarketAcquisitionLifecycleHttpException { IsClaimReleased: true })
+        {
+            QuarantineTerminalRequest(requestId, "claim_released", exception);
+            return ReportFailureResolution.Quarantined;
+        }
+
         MarketAcquisitionRequestView remote;
         try
         {

@@ -26,6 +26,21 @@ public sealed class MarketAcquisitionInvalidTransitionException : Exception
     }
 }
 
+public sealed class MarketAcquisitionClaimReleasedException : Exception
+{
+    public const string Code = "claim_released";
+
+    public MarketAcquisitionClaimReleasedException(string requestId, string status)
+        : base($"Acquisition request {requestId} no longer holds a live claim (status {status}).")
+    {
+        RequestId = requestId;
+        Status = status;
+    }
+
+    public string RequestId { get; }
+    public string Status { get; }
+}
+
 public sealed class MarketAcquisitionRevisionConflictException : Exception
 {
     public MarketAcquisitionRevisionConflictException(int expectedRevision, int actualRevision)

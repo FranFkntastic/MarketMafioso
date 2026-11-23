@@ -15,6 +15,7 @@ namespace MarketMafioso.Server;
 public sealed partial class MarketAcquisitionRequestStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const string ZeroGilPurchaseFlag = "[flagged: zero gil value reported]";
     private readonly SqliteConnectionFactory connectionFactory;
     private readonly int minimumExpirySeconds;
     private readonly int maximumExpirySeconds;
@@ -726,9 +727,7 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
-        if (!MatchesSecret(request.ClaimToken, storedClaimToken))
-            throw new UnauthorizedAccessException("Claim token does not match.");
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
 
         await EnsureLineBelongsToRequestAsync(connection, transaction, requestId, lineId, cancellationToken).ConfigureAwait(false);
 
@@ -844,9 +843,7 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
-        if (!MatchesSecret(request.ClaimToken, storedClaimToken))
-            throw new UnauthorizedAccessException("Claim token does not match.");
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
 
         await EnsureLineBelongsToRequestAsync(connection, transaction, requestId, request.LineId, cancellationToken).ConfigureAwait(false);
 
@@ -933,7 +930,16 @@ public sealed partial class MarketAcquisitionRequestStore
                     $createdAtUtc
                 );
                 """;
-            AddPurchaseAuditParameters(command, auditId, requestId, request, payloadJson, payloadHash, createdAtUtc);
+            // A real purchase is never dropped: zero gil values are stored and flagged for review.
+            var auditRequest = request.UnitPrice == 0 || request.TotalGil == 0
+                ? request with
+                {
+                    Message = string.IsNullOrWhiteSpace(request.Message)
+                        ? ZeroGilPurchaseFlag
+                        : $"{ZeroGilPurchaseFlag} {request.Message}",
+                }
+                : request;
+            AddPurchaseAuditParameters(command, auditId, requestId, auditRequest, payloadJson, payloadHash, createdAtUtc);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -962,9 +968,7 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
-        if (!MatchesSecret(request.ClaimToken, storedClaimToken))
-            throw new UnauthorizedAccessException("Claim token does not match.");
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
 
         await EnsureLineBelongsToRequestAsync(connection, transaction, requestId, request.LineId, cancellationToken).ConfigureAwait(false);
 
@@ -1266,6 +1270,28 @@ public sealed partial class MarketAcquisitionRequestStore
         };
     }
 
+    // A request whose claim was already released (cancelled, reset for resend, expired, or
+    // otherwise terminal) answers with a distinct conflict so the plugin can drop its local
+    // claim instead of treating the stale token as an authentication failure. A live claim
+    // still requires the matching token.
+    private static async Task EnsureLiveClaimAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        MarketAcquisitionRequestView current,
+        string? suppliedClaimToken,
+        CancellationToken cancellationToken)
+    {
+        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, current.Id, cancellationToken).ConfigureAwait(false);
+        if (MatchesSecret(suppliedClaimToken ?? string.Empty, storedClaimToken))
+            return;
+
+        if (string.IsNullOrWhiteSpace(storedClaimToken) || !MarketAcquisitionWorkOrderPolicy.IsLeaseRenewableStatus(current.Status))
+            throw new MarketAcquisitionClaimReleasedException(current.Id, current.Status);
+
+        throw new UnauthorizedAccessException("Claim token does not match.");
+    }
+
+
     private int ClampPickupExpirySeconds(int expiresInSeconds) =>
         Math.Clamp(expiresInSeconds, minimumExpirySeconds, maximumExpirySeconds);
 
@@ -1294,9 +1320,7 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
-        if (!MatchesSecret(request.ClaimToken, storedClaimToken))
-            throw new UnauthorizedAccessException("Claim token does not match.");
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
 
         var existingEvent = await GetEventByIdempotencyKeyAsync(
             connection,
@@ -1398,9 +1422,7 @@ public sealed partial class MarketAcquisitionRequestStore
         if (current == null)
             return null;
 
-        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
-        if (!MatchesSecret(request.ClaimToken, storedClaimToken))
-            throw new UnauthorizedAccessException("Claim token does not match.");
+        await EnsureLiveClaimAsync(connection, transaction, current, request.ClaimToken, cancellationToken).ConfigureAwait(false);
 
         var existingByKey = await GetAttemptEventByIdempotencyKeyAsync(
             connection,
