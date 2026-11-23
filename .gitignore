@@ -54,3 +54,6 @@ MarketMafioso/dev-plugin.local.json
 
 # Logs
 *.log
+
+# Local agent state (worktrees, deployed payloads)
+.claude/
