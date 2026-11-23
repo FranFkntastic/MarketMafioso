@@ -71,7 +71,7 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
     private DateTimeOffset lastVisibleUtc = DateTimeOffset.MinValue;
     private DateTimeOffset fetchedAtUtc = DateTimeOffset.MinValue;
     private DateTimeOffset capabilityCheckedAtUtc = DateTimeOffset.MinValue;
-    private bool dirty = true, disposed;
+    private bool dirty = true, capabilityDirty = true, disposed;
     private int planShape;
     private long version;
     private string? lastLogged;
@@ -168,9 +168,10 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
         if (disposed)
             return;
         var now = DateTimeOffset.UtcNow;
-        if (now - capabilityCheckedAtUtc >= CapabilityInterval || dirty)
+        if (now - capabilityCheckedAtUtc >= CapabilityInterval || capabilityDirty)
         {
             capabilityCheckedAtUtc = now;
+            capabilityDirty = false;
             HasPlacementEdit = quartermaster.TryGetCapabilities(out var advertised, out _) && advertised is not null &&
                                advertised.Capabilities.Contains(QuartermasterPlacementClient.PlacementEditCapability) &&
                                placement.CanEdit;
@@ -344,7 +345,7 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
 
     // ---- Refresh ----------------------------------------------------------------------------------
 
-    private void OnQuartermasterChanged(QuartermasterChanged change) => dirty = true;
+    private void OnQuartermasterChanged(QuartermasterChanged change) => dirty = capabilityDirty = true;
 
     private void Refresh(DateTimeOffset now)
     {
