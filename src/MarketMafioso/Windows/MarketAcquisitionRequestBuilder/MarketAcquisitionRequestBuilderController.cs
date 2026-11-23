@@ -604,10 +604,10 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
         else
         {
-            var present = previous.Lines.Select(line => line.ItemId).ToHashSet();
+            var present = previous.Lines.Select(line => (line.ItemId, line.HqPolicy)).ToHashSet();
             var lines = previous.Lines.ToList();
             foreach (var (index, line) in removal.Removed.OrderBy(entry => entry.Index))
-                if (!present.Contains(line.ItemId))
+                if (!present.Contains((line.ItemId, line.HqPolicy)))
                     lines.Insert(Math.Min(index, lines.Count), line);
             Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(
                 previous,

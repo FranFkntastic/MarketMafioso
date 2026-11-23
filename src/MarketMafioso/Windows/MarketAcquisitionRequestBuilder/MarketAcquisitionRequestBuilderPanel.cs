@@ -53,6 +53,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     // Numeric cell text being typed, by line and field; written to the line on blur (or, if the cell stops
     // being drawn mid-edit, at the start of the next Draw), dropped on Escape.
     private readonly Dictionary<(WorkbenchLineKey Line, CellField Field), PendingCellEdit> pendingCellEdits = new();
+    private string? pendingCellEditsRequestId;
     private BulkField bulkField = BulkField.UnitCeiling;
     private string bulkValueBuffer = string.Empty;
     // "Stock up to" chosen in the bulk editor and waiting for a target on hand.
@@ -1039,6 +1040,12 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     /// </summary>
     private void CommitOrphanedCellEdits(MarketAcquisitionRequestBuilderContext context)
     {
+        // A typed value belongs to the Workbench it was typed in; a loaded or new one starts clean.
+        if (!string.Equals(pendingCellEditsRequestId, document.LocalRequestId, StringComparison.Ordinal))
+        {
+            pendingCellEdits.Clear();
+            pendingCellEditsRequestId = document.LocalRequestId;
+        }
         if (pendingCellEdits.Count == 0)
             return;
         var frame = ImGui.GetFrameCount();
