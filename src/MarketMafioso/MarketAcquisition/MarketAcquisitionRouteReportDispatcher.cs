@@ -30,6 +30,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     private readonly IMarketAcquisitionReportOutbox deadLetterOutbox;
     private readonly CancellationTokenSource lifetimeCancellation = new();
     private readonly Func<DateTimeOffset> utcNow;
+    private readonly Action<string> warn;
     private readonly Dictionary<string, Queue<MarketAcquisitionReportOutboxEntry>> pendingEntriesByRequest = new(StringComparer.Ordinal);
     private readonly HashSet<string> pendingEntryIds = new(StringComparer.Ordinal);
     private readonly HashSet<string> inFlightRequestIds = new(StringComparer.Ordinal);
@@ -54,8 +55,10 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
         IMarketAcquisitionReportOutbox? outbox = null,
         Func<DateTimeOffset>? utcNow = null,
-        IMarketAcquisitionReportOutbox? deadLetterOutbox = null)
+        IMarketAcquisitionReportOutbox? deadLetterOutbox = null,
+        Action<string>? warn = null)
     {
+        this.warn = warn ?? WarnToPluginLog;
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         this.claimLifecycle = claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle));
         this.callbackDispatcher = callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher));
@@ -344,6 +347,10 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
                 AcknowledgeDeliveredEntry(entry, requestId);
                 acknowledged = true;
             }
+            else if (resolution == ReportFailureResolution.Quarantined)
+            {
+                acknowledged = true;
+            }
             else if (resolution == ReportFailureResolution.Unresolved)
             {
                 RegisterFailure(requestId, failure);
@@ -392,9 +399,11 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             return ReportFailureResolution.Unresolved;
         }
 
+        // Only the failing report is dead-lettered; the rest of the request's queue keeps going.
+        // A released claim can never accept this report, whatever its type.
         if (exception is MarketAcquisitionLifecycleHttpException { IsClaimReleased: true })
         {
-            QuarantineTerminalRequest(requestId, "claim_released", exception);
+            QuarantineEntry(entry, requestId, "claim_released", exception);
             return ReportFailureResolution.Quarantined;
         }
 
@@ -408,9 +417,12 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             return ReportFailureResolution.Unresolved;
         }
 
-        if (IsTerminalStatus(remote.Status))
+        // The server accepts purchase audits from the claim holder in any status, so an audit is
+        // retained for retry rather than dead-lettered just because the order is finished.
+        if (IsTerminalStatus(remote.Status) &&
+            !entry.ReportType.Equals(PurchaseAuditType, StringComparison.Ordinal))
         {
-            QuarantineTerminalRequest(requestId, remote.Status, exception);
+            QuarantineEntry(entry, requestId, remote.Status, exception);
             return ReportFailureResolution.Quarantined;
         }
 
@@ -458,49 +470,47 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             candidate.EventType.Equals(expectedEventType, StringComparison.OrdinalIgnoreCase));
     }
 
-    private void QuarantineTerminalRequest(
+    private void QuarantineEntry(
+        MarketAcquisitionReportOutboxEntry entry,
         string requestId,
         string remoteStatus,
         Exception exception)
     {
-        MarketAcquisitionReportOutboxEntry[] entries;
-        lock (sync)
-        {
-            if (!pendingEntriesByRequest.TryGetValue(requestId, out var pending) || pending.Count == 0)
-                return;
-            entries = pending.ToArray();
-        }
-
         var quarantinedAtUtc = utcNow();
         var failureKind = exception is HttpRequestException { StatusCode: { } statusCode }
             ? $"HTTP {(int)statusCode}"
             : exception.GetType().Name;
-        foreach (var entry in entries)
-        {
-            deadLetterOutbox.Put(
-                entry.Id,
-                entry.ReportType,
-                requestId,
-                new DeadLetteredReport(entry, remoteStatus, failureKind, quarantinedAtUtc));
-        }
-
-        var ids = entries.Select(candidate => candidate.Id).ToArray();
-        outbox.RemoveMany(ids);
-        volatileFallback.RemoveMany(ids);
+        deadLetterOutbox.Put(
+            entry.Id,
+            entry.ReportType,
+            requestId,
+            new DeadLetteredReport(entry, remoteStatus, failureKind, quarantinedAtUtc));
+        outbox.Remove(entry.Id);
+        volatileFallback.Remove(entry.Id);
         lock (sync)
         {
-            foreach (var entry in entries)
-            {
-                entrySessionVersions.Remove(entry.Id);
-                ForgetPendingRouteEntry(entry);
-                pendingEntryIds.Remove(entry.Id);
-                legacyRequestIdsByEntryId.Remove(entry.Id);
-            }
-            pendingEntriesByRequest.Remove(requestId);
+            entrySessionVersions.Remove(entry.Id);
+            ForgetPendingRouteEntry(entry);
+            AcknowledgePendingEntry(entry, requestId);
             retryStatesByRequest.Remove(requestId);
             quarantinedEntryCount = deadLetterOutbox.Snapshot().Count;
             lastQuarantineStatus = remoteStatus;
             lastQuarantineAtUtc = quarantinedAtUtc;
+        }
+
+        warn($"[MarketMafioso] Dead-lettered {entry.ReportType} report {entry.Id} for acquisition request {requestId} " +
+             $"(server status {remoteStatus}, {failureKind}): {exception.Message}");
+    }
+
+    private static void WarnToPluginLog(string message)
+    {
+        try
+        {
+            Plugin.Log?.Warning(message);
+        }
+        catch
+        {
+            // Logging must never break report delivery (e.g. outside Dalamud).
         }
     }
 
