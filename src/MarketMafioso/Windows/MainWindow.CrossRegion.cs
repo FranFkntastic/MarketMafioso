@@ -302,6 +302,7 @@ public partial class MainWindow
         CrossRegionAcquisitionCoordinator.CodeCountedRetrievalIncomplete => "retainers: retrieval incomplete",
         CrossRegionAcquisitionCoordinator.CodeCountedRetrievalTimedOut => "retainers: retrieval timed out",
         CrossRegionAcquisitionCoordinator.CodeCountedRetrievalCancelled => "retainers: retrieval cancelled",
+        CrossRegionAcquisitionCoordinator.CodeCountedRetrievalScopeNarrowed => "chosen retainers: not retrieved",
         CrossRegionAcquisitionCoordinator.CodeCollectRunFailed => "transfer failed",
         CrossRegionAcquisitionCoordinator.CodeCarrierStockShort => "carrier holds too few",
         CrossRegionAcquisitionCoordinator.CodeCarrierGilShort => "carrier gil short",

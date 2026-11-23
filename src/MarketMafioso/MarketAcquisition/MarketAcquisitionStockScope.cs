@@ -19,11 +19,15 @@ public sealed record MarketAcquisitionRetainerScope(bool All, ImmutableHashSet<u
 /// <summary>
 /// Reads and edits the "Count stock from" scope a Workbench document holds. The current character's
 /// retainers live in <see cref="MarketAcquisitionRequestDocument.CountRetainerStock"/>, narrowed by
-/// per-retainer keys naming that character; other characters live only in keys.
+/// <see cref="MarketAcquisitionRequestDocument.OwnRetainerSelection"/> while its owner is logged in;
+/// other characters live only in <see cref="MarketAcquisitionRequestDocument.AdditionalStockSources"/>.
 /// </summary>
 public static class MarketAcquisitionStockScope
 {
-    /// <summary>The current character's counted retainers.</summary>
+    /// <summary>
+    /// The logged-in character's counted retainers. A narrowing saved for another character does not apply:
+    /// then every retainer of the logged-in character counts, as retainer stock always has.
+    /// </summary>
     public static MarketAcquisitionRetainerScope OwnRetainers(
         MarketAcquisitionRequestDocument document,
         ulong localContentId,
@@ -32,11 +36,32 @@ public static class MarketAcquisitionStockScope
         ArgumentNullException.ThrowIfNull(document);
         if (!document.CountRetainerStock)
             return MarketAcquisitionRetainerScope.None;
-        var ids = document.AdditionalStockSources
+        var ids = document.OwnRetainerSelection
             .Where(key => key.IsSingleRetainer && key.IsCharacter(localContentId, homeWorldId))
             .Select(key => key.RetainerId)
             .ToImmutableHashSet();
         return ids.IsEmpty ? MarketAcquisitionRetainerScope.Every : new(false, ids);
+    }
+
+    /// <summary>
+    /// The retainers whose units a plan counted for this character: the own-retainer narrowing when it names
+    /// the character, else its keys among the other sources, else every retainer (the logged-in character's
+    /// retainer stock).
+    /// </summary>
+    public static MarketAcquisitionRetainerScope CountedRetainers(
+        MarketAcquisitionRequestDocument document,
+        ulong localContentId,
+        uint homeWorldId)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var own = document.OwnRetainerSelection
+            .Where(key => key.IsSingleRetainer && key.IsCharacter(localContentId, homeWorldId))
+            .Select(key => key.RetainerId)
+            .ToImmutableHashSet();
+        if (document.CountRetainerStock && !own.IsEmpty)
+            return new(false, own);
+        var other = CharacterRetainers(document, localContentId, homeWorldId);
+        return other.IsNone ? MarketAcquisitionRetainerScope.Every : other;
     }
 
     /// <summary>Another character's counted retainers.</summary>
@@ -98,20 +123,31 @@ public static class MarketAcquisitionStockScope
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(character);
+        var whole = character with { Container = MarketAcquisitionStockSourceKey.Retainers, RetainerId = 0, RetainerName = string.Empty };
+        if (isCurrentCharacter)
+        {
+            // One owner's narrowing at a time; another character's is kept until this one narrows its own.
+            var own = scope.All || scope.IsNone
+                ? document.OwnRetainerSelection
+                    .Where(key => !key.IsCharacter(character.LocalContentId, character.HomeWorldId))
+                    .ToList()
+                : scope.Ids.Order().Select(id => whole.ForRetainer(id, retainerName(id))).ToList();
+            return document with
+            {
+                CountRetainerStock = !scope.IsNone,
+                OwnRetainerSelection = own,
+            };
+        }
+
         var sources = document.AdditionalStockSources
             .Where(key => !(key.Container == MarketAcquisitionStockSourceKey.Retainers &&
                             key.IsCharacter(character.LocalContentId, character.HomeWorldId)))
             .ToList();
-        var whole = character with { Container = MarketAcquisitionStockSourceKey.Retainers, RetainerId = 0, RetainerName = string.Empty };
         if (!scope.All)
             sources.AddRange(scope.Ids.Order().Select(id => whole.ForRetainer(id, retainerName(id))));
-        else if (!isCurrentCharacter)
+        else
             sources.Add(whole);
-        return document with
-        {
-            CountRetainerStock = isCurrentCharacter ? !scope.IsNone : document.CountRetainerStock,
-            AdditionalStockSources = sources,
-        };
+        return document with { AdditionalStockSources = sources };
     }
 
     /// <summary>Adds or removes another character's bags.</summary>
@@ -147,6 +183,13 @@ public static class MarketAcquisitionStockScope
                 source.Container == MarketAcquisitionStockSourceKey.Retainers ? source.RetainerId : 0,
                 source.Container == MarketAcquisitionStockSourceKey.Retainers ? source.RetainerName ?? string.Empty : string.Empty))
             .ToList();
+
+    internal static List<MarketAcquisitionStockSourceKey> RestoreOwnRetainers(IEnumerable<PersistedMarketAcquisitionStockSource>? stored) =>
+        Restore(stored).Where(key => key.IsSingleRetainer).ToList();
+
+    /// <summary>Null when nothing is narrowed, so documents without a narrowing save as before.</summary>
+    internal static List<PersistedMarketAcquisitionStockSource>? PersistOwnRetainers(IReadOnlyCollection<MarketAcquisitionStockSourceKey> selection) =>
+        selection.Count == 0 ? null : Persist(selection);
 
     internal static List<PersistedMarketAcquisitionStockSource> Persist(IEnumerable<MarketAcquisitionStockSourceKey> sources) =>
         sources

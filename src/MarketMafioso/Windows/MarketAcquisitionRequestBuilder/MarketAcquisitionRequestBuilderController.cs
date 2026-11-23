@@ -62,12 +62,33 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     public MarketAcquisitionRequestDocument Document { get; private set; }
 
-    /// <summary>Selected buy-list lines, keyed by item (a Workbench holds one line per item).</summary>
-    public TableSelectionModel<uint> Selection { get; } = new();
+    /// <summary>Selected buy-list lines, keyed by <see cref="WorkbenchLineKey"/>.</summary>
+    public TableSelectionModel<WorkbenchLineKey> Selection { get; } = new();
 
     /// <summary>The only selected line's index, or -1 when none or several are selected.</summary>
-    public int SingleSelectedLineIndex =>
-        Selection.Count == 1 ? Document.Lines.FindIndex(line => Selection.IsSelected(line.ItemId)) : -1;
+    public int SingleSelectedLineIndex
+    {
+        get
+        {
+            if (Selection.Count != 1)
+                return -1;
+            var keys = WorkbenchLineKey.For(Document.Lines);
+            for (var index = 0; index < keys.Count; index++)
+                if (Selection.IsSelected(keys[index]))
+                    return index;
+            return -1;
+        }
+    }
+
+    /// <summary>The index of the line with this key, or -1.</summary>
+    public int LineIndex(WorkbenchLineKey key)
+    {
+        var keys = WorkbenchLineKey.For(Document.Lines);
+        for (var index = 0; index < keys.Count; index++)
+            if (keys[index] == key)
+                return index;
+        return -1;
+    }
 
     public string Status { get; private set; } = "Request builder ready.";
 
@@ -361,6 +382,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         if (retainers is not null)
             updated = MarketAcquisitionStockScope.WithRetainers(updated, character, isCurrentCharacter, retainers, retainerName);
         if (updated.CountRetainerStock == Document.CountRetainerStock &&
+            updated.OwnRetainerSelection.SequenceEqual(Document.OwnRetainerSelection) &&
             updated.AdditionalStockSources.SequenceEqual(Document.AdditionalStockSources))
             return;
         Document = updated;
@@ -459,7 +481,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         var duplicateIndex = Document.Lines.FindIndex(existing => existing.ItemId == line.ItemId);
         if (duplicateIndex >= 0)
         {
-            Selection.SelectOnly(line.ItemId);
+            Selection.SelectOnly(WorkbenchLineKey.For(Document.Lines)[duplicateIndex]);
             Status = $"{line.ItemName} is already in the Workbench; selected the existing line.";
             return;
         }
@@ -536,14 +558,15 @@ public sealed class MarketAcquisitionRequestBuilderController
     public static string LineName(MarketAcquisitionRequestLineDocument line) =>
         string.IsNullOrWhiteSpace(line.ItemName) ? $"Item {line.ItemId}" : line.ItemName;
 
-    /// <summary>Removes these items' lines as one edit; null when none of them is on the buy list.</summary>
-    public LineRemoval? RemoveLines(IEnumerable<uint> itemIds)
+    /// <summary>Removes these lines as one edit; null when none of them is on the buy list.</summary>
+    public LineRemoval? RemoveLines(IEnumerable<WorkbenchLineKey> lineKeys)
     {
-        ArgumentNullException.ThrowIfNull(itemIds);
-        var ids = itemIds.ToHashSet();
+        ArgumentNullException.ThrowIfNull(lineKeys);
+        var removedKeys = lineKeys.ToHashSet();
+        var keys = WorkbenchLineKey.For(Document.Lines);
         var removed = Document.Lines
             .Select((line, index) => (Index: index, Line: line))
-            .Where(entry => ids.Contains(entry.Line.ItemId))
+            .Where(entry => removedKeys.Contains(keys[entry.Index]))
             .ToList();
         if (removed.Count == 0)
             return null;
@@ -551,18 +574,18 @@ public sealed class MarketAcquisitionRequestBuilderController
         var previous = Document;
         var updated = (previous with
         {
-            Lines = previous.Lines.Where(line => !ids.Contains(line.ItemId)).ToList(),
+            Lines = previous.Lines.Where((_, index) => !removedKeys.Contains(keys[index])).ToList(),
         }).WithNextRevision(string.IsNullOrWhiteSpace(previous.RemoteRequestId) ? "NewDraft" : "LocalEdits");
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, updated);
-        foreach (var id in ids)
-            Selection.SetSelected(id, false);
+        KeepSelectionAcross(previous.Lines, Document.Lines);
         FinishLocalEdit(removed.Count == 1 ? "Line removed." : $"Removed {removed.Count:N0} lines.");
         return new LineRemoval(previous, Document, removed);
     }
 
     /// <summary>
     /// Puts removed lines back. Straight after the removal this restores the earlier document, exact-acquisition
-    /// lineage included; after other edits the lines return at their old positions, skipping items re-added since.
+    /// lineage included but never its finalized contract (finalizing again checks the plan as it stands); after
+    /// other edits the lines return at their old positions, skipping items re-added since.
     /// </summary>
     public void UndoRemoval(LineRemoval removal)
     {
@@ -571,19 +594,44 @@ public sealed class MarketAcquisitionRequestBuilderController
         var syncStatus = string.IsNullOrWhiteSpace(previous.RemoteRequestId) ? "NewDraft" : "LocalEdits";
         if (ReferenceEquals(previous, removal.After))
         {
-            Document = (removal.Before with { LocalRevision = previous.LocalRevision }).WithNextRevision(syncStatus);
+            Document = (removal.Before with
+            {
+                LocalRevision = previous.LocalRevision,
+                ExactAcquisitionAuthority = removal.Before.ExactAcquisitionAuthority is { } authority
+                    ? authority with { FinalizedContract = null }
+                    : null,
+            }).WithNextRevision(syncStatus);
         }
         else
         {
+            var present = previous.Lines.Select(line => line.ItemId).ToHashSet();
             var lines = previous.Lines.ToList();
             foreach (var (index, line) in removal.Removed.OrderBy(entry => entry.Index))
-                if (lines.All(existing => existing.ItemId != line.ItemId))
+                if (!present.Contains(line.ItemId))
                     lines.Insert(Math.Min(index, lines.Count), line);
             Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(
                 previous,
                 (previous with { Lines = lines }).WithNextRevision(syncStatus));
         }
+        KeepSelectionAcross(previous.Lines, Document.Lines);
         FinishLocalEdit(removal.Removed.Count == 1 ? "Line restored." : $"Restored {removal.Removed.Count:N0} lines.");
+    }
+
+    /// <summary>Keeps the same line objects selected after lines are added or removed around them.</summary>
+    private void KeepSelectionAcross(
+        IReadOnlyList<MarketAcquisitionRequestLineDocument> before,
+        IReadOnlyList<MarketAcquisitionRequestLineDocument> after)
+    {
+        var beforeKeys = WorkbenchLineKey.For(before);
+        var selected = new HashSet<MarketAcquisitionRequestLineDocument>(ReferenceEqualityComparer.Instance);
+        for (var index = 0; index < before.Count; index++)
+            if (Selection.IsSelected(beforeKeys[index]))
+                selected.Add(before[index]);
+        Selection.Clear();
+        var afterKeys = WorkbenchLineKey.For(after);
+        for (var index = 0; index < after.Count; index++)
+            if (selected.Contains(after[index]))
+                Selection.SetSelected(afterKeys[index], true);
     }
 
     /// <summary>
@@ -591,17 +639,18 @@ public sealed class MarketAcquisitionRequestBuilderController
     /// not apply to (edit returns null) are skipped. Returns how many lines changed.
     /// </summary>
     public int ApplyBulkLineEdit(
-        IEnumerable<uint> itemIds,
+        IEnumerable<WorkbenchLineKey> lineKeys,
         Func<MarketAcquisitionRequestLineDocument, MarketAcquisitionRequestLineDocument?> edit,
         string message)
     {
-        ArgumentNullException.ThrowIfNull(itemIds);
+        ArgumentNullException.ThrowIfNull(lineKeys);
         ArgumentNullException.ThrowIfNull(edit);
-        var ids = itemIds.ToHashSet();
+        var editedKeys = lineKeys.ToHashSet();
+        var keys = WorkbenchLineKey.For(Document.Lines);
         var changed = 0;
         var lines = Document.Lines.Select((line, index) =>
         {
-            if (!ids.Contains(line.ItemId) || IsExactAcquisitionLine(index) || edit(line) is not { } updated || updated == line)
+            if (!editedKeys.Contains(keys[index]) || IsExactAcquisitionLine(index) || edit(line) is not { } updated || updated == line)
                 return line;
             changed++;
             return updated;
@@ -634,8 +683,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         Document = Document with { Lines = remaining };
         Document = Document.WithNextRevision(string.IsNullOrWhiteSpace(Document.RemoteRequestId) ? "NewDraft" : "LocalEdits");
         Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
-        foreach (var id in removedIds)
-            Selection.SetSelected(id, false);
+        KeepSelectionAcross(previous.Lines, Document.Lines);
         FinishLocalEdit($"Returned {removed:N0} item{(removed == 1 ? string.Empty : "s")} to the inbox selection.");
         return removed;
     }
@@ -862,6 +910,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         fresh with
         {
             CountRetainerStock = previous.CountRetainerStock,
+            OwnRetainerSelection = previous.OwnRetainerSelection.ToList(),
             AdditionalStockSources = previous.AdditionalStockSources.ToList(),
             StowAfterDelivery = previous.StowAfterDelivery,
         };
@@ -893,6 +942,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         {
             RunSpendCap = current.RunSpendCap,
             CountRetainerStock = current.CountRetainerStock,
+            OwnRetainerSelection = current.OwnRetainerSelection.ToList(),
             AdditionalStockSources = current.AdditionalStockSources.ToList(),
             StowAfterDelivery = current.StowAfterDelivery,
             Lines = refreshed.Lines.Select(line =>

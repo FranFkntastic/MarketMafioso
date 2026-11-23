@@ -480,6 +480,7 @@ public sealed class PersistedMarketAcquisitionRequestDocument
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
     // Null in documents saved before the plan-level choice existed; derived from the lines then.
     public bool? CountRetainerStock { get; set; }
+    public List<PersistedMarketAcquisitionStockSource>? OwnRetainerSelection { get; set; }
     public List<PersistedMarketAcquisitionStockSource>? AdditionalStockSources { get; set; }
     public bool StowAfterDelivery { get; set; }
     public string? ExactAcquisitionAuthorityJson { get; set; }
@@ -535,6 +536,7 @@ public sealed class PersistedMarketAcquisitionWorkbenchComposition
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
     // Null in a composition saved before stock scope was kept: loading it leaves the Workbench's scope as it is.
     public bool? CountRetainerStock { get; set; }
+    public List<PersistedMarketAcquisitionStockSource>? OwnRetainerSelection { get; set; }
     public List<PersistedMarketAcquisitionStockSource>? AdditionalStockSources { get; set; }
     public bool StowAfterDelivery { get; set; }
     public DateTime CreatedAtUtc { get; set; }

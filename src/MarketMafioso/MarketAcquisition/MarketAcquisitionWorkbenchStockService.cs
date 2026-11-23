@@ -159,6 +159,12 @@ public sealed class MarketAcquisitionWorkbenchStockService : IDisposable
             hash.Add(line.QuantityMode);
             hash.Add(line.TargetBasis);
         }
+        foreach (var source in document.OwnRetainerSelection)
+        {
+            hash.Add(source.LocalContentId);
+            hash.Add(source.HomeWorldId);
+            hash.Add(source.RetainerId);
+        }
         foreach (var source in document.AdditionalStockSources)
         {
             hash.Add(source.LocalContentId);

@@ -36,7 +36,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private string targetQuantityBuffer = string.Empty;
     private string maximumOverageBuffer = string.Empty;
     private long syncedReserveVersion;
-    private uint? editingReserveItemId;
     private string maxUnitPriceBuffer = string.Empty;
     private string gilCapBuffer = string.Empty;
     private string hqPolicy = "Either";
@@ -51,10 +50,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private readonly DalamudTimedUndoStrip<MarketAcquisitionRequestBuilderController.LineRemoval> removalUndo = new();
     // "Count stock from" tree expansion, by character; kept for the session only.
     private readonly Dictionary<(ulong LocalContentId, uint HomeWorldId), bool> scopeExpanded = new();
-    // Numeric cell text being typed; written to the line on blur, dropped on Escape.
-    private readonly Dictionary<uint, PendingCellEdit> pendingCellEdits = new();
+    // Numeric cell text being typed, by line and field; written to the line on blur (or, if the cell stops
+    // being drawn mid-edit, at the start of the next Draw), dropped on Escape.
+    private readonly Dictionary<(WorkbenchLineKey Line, CellField Field), PendingCellEdit> pendingCellEdits = new();
     private BulkField bulkField = BulkField.UnitCeiling;
     private string bulkValueBuffer = string.Empty;
+    // "Stock up to" chosen in the bulk editor and waiting for a target on hand.
+    private bool bulkStockUpPending;
 
     private const float StockScopeRailWidth = 184f;
     // Quartermaster's rail colours: the logged-in character, and characters on other service accounts.
@@ -71,6 +73,14 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ExtraUnits,
         Quality,
         BuyingRule,
+    }
+
+    private enum CellField
+    {
+        Quantity,
+        Unit,
+        Overage,
+        Spend,
     }
 
     private readonly record struct PendingCellEdit(long Value, int Frame);
@@ -194,6 +204,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             !string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config)));
 
         workbenchStock?.MarkVisible();
+        CommitOrphanedCellEdits(context);
         SyncRestockReserveTargets(context);
         DrawExactAcquisitionAuthority(context);
         DrawRouteScope(context);
@@ -431,7 +442,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         // Edits made by a row land on the next frame's rows; this frame keeps drawing the lines it started with.
         var lines = document.Lines.ToArray();
-        var orderedKeys = lines.Select(line => line.ItemId).ToArray();
+        var orderedKeys = WorkbenchLineKey.For(lines);
         controller.Selection.Retain(orderedKeys);
         for (var index = 0; index < lines.Length; index++)
             DrawCompactLineRow(context, lines[index], index, showHomes, orderedKeys);
@@ -447,16 +458,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         MarketAcquisitionRequestLineDocument line,
         int index,
         bool showHomes,
-        IReadOnlyList<uint> orderedKeys)
+        IReadOnlyList<WorkbenchLineKey> orderedKeys)
     {
         var canEdit = CanEdit(context);
         var isExactAcquisitionLine = controller.IsExactAcquisitionLine(index);
         var itemName = FormatLineItemName(line);
-        ImGui.PushID($"AcquisitionWorkbenchLine{line.ItemId}");
+        var key = orderedKeys[index];
+        ImGui.PushID($"AcquisitionWorkbenchLine{key.Id}");
         ImGui.TableNextRow();
 
         ImGui.TableNextColumn();
-        var isSelected = controller.Selection.IsSelected(line.ItemId);
+        var isSelected = controller.Selection.IsSelected(key);
         var selectionCursor = ImGui.GetCursorPos();
         if (DalamudTableSelectionRenderer.DrawRow(
                 controller.Selection,
@@ -467,14 +479,14 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             selectedLineInspectorRequested = false;
         var rowHovered = DalamudRowRemoveButton.IsLastItemRowHovered();
         RegisterLastControl(
-            $"acquisition.workbench.line.{line.ItemId}.select",
+            $"acquisition.workbench.line.{key.Id}.select",
             $"Select {itemName} in the Workbench",
             enabled: true,
             selected: isSelected,
             value: line.ItemId.ToString(),
             () =>
             {
-                controller.Selection.SelectOnly(line.ItemId);
+                controller.Selection.SelectOnly(key);
                 selectedLineInspectorRequested = false;
             });
         ImGui.SetCursorPos(selectionCursor);
@@ -488,10 +500,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         DrawCompactModeCell(line, index);
 
         ImGui.TableNextColumn();
-        DrawCompactQuantityCell(line, index);
+        DrawCompactQuantityCell(line, index, key);
 
         ImGui.TableNextColumn();
-        DrawCompactOverageCell(line, index);
+        DrawCompactOverageCell(line, index, key);
 
         var stockUp = line.QuantityMode == "TargetQuantity" && !isExactAcquisitionLine;
         var counted = stockUp ? workbenchStock?.View.Lines.GetValueOrDefault(line.ItemId) : null;
@@ -506,11 +518,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGui.TextColored(MainWindow.ColMuted, "—");
 
         ImGui.TableNextColumn();
-        DrawCompactUnitCell(line, index);
-        DrawUnitPriceContextMenu(line, index, canEdit);
+        DrawCompactUnitCell(line, index, key);
+        DrawUnitPriceContextMenu(line, index, key, canEdit);
 
         ImGui.TableNextColumn();
-        DrawCompactSpendCell(line, index);
+        DrawCompactSpendCell(line, index, key);
 
         ImGui.TableNextColumn();
         DrawCompactHqCell(line, index);
@@ -529,22 +541,22 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         if (DalamudRowRemoveButton.Draw("RemoveLine", rowHovered, canEdit))
-            RemoveLinesWithUndo([line.ItemId]);
+            RemoveLinesWithUndo([key]);
         if (rowHovered && ImGui.IsItemHovered())
             ImGui.SetTooltip($"Remove {itemName}");
         RegisterLastControl(
-            $"acquisition.workbench.line.{line.ItemId}.remove",
+            $"acquisition.workbench.line.{key.Id}.remove",
             $"Remove {itemName}",
             canEdit,
             selected: false,
             line.ItemId.ToString(),
-            () => RemoveLinesWithUndo([line.ItemId]));
+            () => RemoveLinesWithUndo([key]));
 
         ImGui.PopID();
     }
 
     /// <summary>Ctrl+A selects every line while the buy list has focus and no text is being typed.</summary>
-    private void SelectAllOnShortcut(IReadOnlyList<uint> orderedKeys)
+    private void SelectAllOnShortcut(IReadOnlyList<WorkbenchLineKey> orderedKeys)
     {
         var io = ImGui.GetIO();
         if (orderedKeys.Count == 0 || !io.KeyCtrl || io.WantTextInput || !ImGui.IsWindowFocused() ||
@@ -765,7 +777,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (ageText is not null)
         {
             ImGui.SameLine(rightEdge - ImGui.CalcTextSize(ageText).X);
-            ImGui.TextColored(MainWindow.ColWarning, ageText);
+            ImGui.TextColored(MainWindow.ColMuted, ageText);
         }
 
         if (open)
@@ -819,7 +831,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (ageText is not null)
         {
             ImGui.SameLine(rightEdge - ImGui.CalcTextSize(ageText).X);
-            ImGui.TextColored(MainWindow.ColWarning, ageText);
+            ImGui.TextColored(MainWindow.ColMuted, ageText);
         }
         ImGui.PopID();
     }
@@ -911,7 +923,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private void SyncRestockReserveTargets(MarketAcquisitionRequestBuilderContext context)
     {
         if (workbenchStock?.View is not { HasReserveLevels: true } view || view.Version == syncedReserveVersion ||
-            !CanEdit(context) || editingReserveItemId is not null)
+            !CanEdit(context) || pendingCellEdits.Keys.Any(key => key.Field == CellField.Quantity))
             return;
         syncedReserveVersion = view.Version;
         if (document.ExactAcquisitionAuthority is null && document.Lines.Any(line => line.RestockReserve))
@@ -967,7 +979,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.EndCombo();
     }
 
-    private void DrawCompactQuantityCell(MarketAcquisitionRequestLineDocument line, int index)
+    private void DrawCompactQuantityCell(MarketAcquisitionRequestLineDocument line, int index, WorkbenchLineKey key)
     {
         if (!line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
         {
@@ -986,36 +998,20 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
 
         ImGui.SetNextItemWidth(-1);
-        var restock = IsRestockReserveLine(line);
-        var current = restock ? Math.Min((long)line.TargetQuantity, MaxReserveLevel) : line.TargetQuantity;
-        var committed = DrawDeferredNumberCell("##Quantity", current, out var quantity);
-        // A Quartermaster reserve level is never rewritten while its target is being typed.
-        if (restock && ImGui.IsItemActive())
-            editingReserveItemId = line.ItemId;
-        else if (editingReserveItemId == line.ItemId)
-            editingReserveItemId = null;
-        if (!committed)
-            return;
-        var target = restock ? (uint)Math.Clamp(quantity, 1, MaxReserveLevel) : Math.Max(1u, ClampToUInt(quantity));
-        ApplyLineEdit(
-            index,
-            line,
-            targetQuantity: target,
-            maxQuantity: 0,
-            message: restock ? "Reserve level updated." : "Target quantity updated.");
-        if (restock)
-            workbenchStock!.RequestReserveLevel(line, target);
+        // While a reserve level's target is typed, Quartermaster's level is not synced over it (see the pending edit).
+        if (DrawDeferredNumberCell(key, CellField.Quantity, "##Quantity", CellValue(line, CellField.Quantity), out var quantity))
+            ApplyCellValue(index, line, CellField.Quantity, quantity);
     }
 
     /// <summary>
     /// A grouped integer cell that keeps typed text to itself until the cell loses focus (Tab and click away
     /// commit, Escape cancels). Returns true on the frame a changed value should be written.
     /// </summary>
-    private bool DrawDeferredNumberCell(string id, long current, out long value)
+    private bool DrawDeferredNumberCell(WorkbenchLineKey line, CellField field, string id, long current, out long value)
     {
-        var key = ImGui.GetID(id);
+        var key = (line, field);
         var frame = ImGui.GetFrameCount();
-        value = pendingCellEdits.TryGetValue(key, out var pending) && pending.Frame >= frame - 1 ? pending.Value : current;
+        value = pendingCellEdits.TryGetValue(key, out var pending) ? pending.Value : current;
         DalamudGroupedIntegerInput.InputGroupedInt(id, ref value, 0, 0);
         if (ImGui.IsItemActive())
         {
@@ -1037,17 +1033,83 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         return value != current;
     }
 
+    /// <summary>
+    /// Writes typed cell values whose cell stopped being drawn while it was being edited (the line moved, the
+    /// layout changed, or the Workbench was hidden), so leaving a cell never loses what was typed.
+    /// </summary>
+    private void CommitOrphanedCellEdits(MarketAcquisitionRequestBuilderContext context)
+    {
+        if (pendingCellEdits.Count == 0)
+            return;
+        var frame = ImGui.GetFrameCount();
+        var orphaned = pendingCellEdits.Where(entry => entry.Value.Frame < frame - 1).ToArray();
+        if (orphaned.Length == 0)
+            return;
+        var canEdit = CanEdit(context);
+        foreach (var ((lineKey, field), pending) in orphaned)
+        {
+            pendingCellEdits.Remove((lineKey, field));
+            var index = controller.LineIndex(lineKey);
+            if (!canEdit || index < 0 || controller.IsExactAcquisitionLine(index))
+                continue;
+            var line = document.Lines[index];
+            var stockUp = IsStockUpLine(line);
+            if (field is CellField.Quantity or CellField.Overage && !stockUp)
+                continue;
+            if (pending.Value != CellValue(line, field))
+                ApplyCellValue(index, line, field, pending.Value);
+        }
+    }
+
+    private long CellValue(MarketAcquisitionRequestLineDocument line, CellField field) =>
+        field switch
+        {
+            CellField.Quantity => IsRestockReserveLine(line) ? Math.Min((long)line.TargetQuantity, MaxReserveLevel) : line.TargetQuantity,
+            CellField.Unit => line.MaxUnitPrice,
+            CellField.Overage => line.MaximumOverage,
+            CellField.Spend => line.GilCap,
+            _ => 0,
+        };
+
+    private void ApplyCellValue(int index, MarketAcquisitionRequestLineDocument line, CellField field, long value)
+    {
+        switch (field)
+        {
+            case CellField.Quantity:
+                var restock = IsRestockReserveLine(line);
+                var target = restock ? (uint)Math.Clamp(value, 1, MaxReserveLevel) : Math.Max(1u, ClampToUInt(value));
+                ApplyLineEdit(
+                    index,
+                    line,
+                    targetQuantity: target,
+                    maxQuantity: 0,
+                    message: restock ? "Reserve level updated." : "Target quantity updated.");
+                if (restock)
+                    workbenchStock!.RequestReserveLevel(line, target);
+                break;
+            case CellField.Unit:
+                ApplyLineEdit(index, line, maxUnitPrice: ClampToUInt(value), message: "Unit ceiling updated.");
+                break;
+            case CellField.Overage:
+                ApplyLineEdit(index, line, maximumOverage: ClampToUInt(value), message: "Maximum target overage updated.");
+                break;
+            case CellField.Spend:
+                ApplyLineEdit(index, line, gilCap: ClampToUInt(value), message: "Spend ceiling updated.");
+                break;
+        }
+    }
+
     // Quartermaster's reserve level ceiling (ListingReserveRule.MaxReserveUnits).
     private const long MaxReserveLevel = 999_999;
 
-    private void DrawCompactUnitCell(MarketAcquisitionRequestLineDocument line, int index)
+    private void DrawCompactUnitCell(MarketAcquisitionRequestLineDocument line, int index, WorkbenchLineKey key)
     {
         ImGui.SetNextItemWidth(-1);
-        if (DrawDeferredNumberCell("##Unit", line.MaxUnitPrice, out var maxUnit))
-            ApplyLineEdit(index, line, maxUnitPrice: ClampToUInt(maxUnit), message: "Unit ceiling updated.");
+        if (DrawDeferredNumberCell(key, CellField.Unit, "##Unit", CellValue(line, CellField.Unit), out var maxUnit))
+            ApplyCellValue(index, line, CellField.Unit, maxUnit);
     }
 
-    private void DrawCompactOverageCell(MarketAcquisitionRequestLineDocument line, int index)
+    private void DrawCompactOverageCell(MarketAcquisitionRequestLineDocument line, int index, WorkbenchLineKey key)
     {
         if (!line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
         {
@@ -1057,13 +1119,14 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
 
         ImGui.SetNextItemWidth(-1);
-        if (DrawDeferredNumberCell("##MaximumOverage", line.MaximumOverage, out var maximumOverage))
-            ApplyLineEdit(index, line, maximumOverage: ClampToUInt(maximumOverage), message: "Maximum target overage updated.");
+        if (DrawDeferredNumberCell(key, CellField.Overage, "##MaximumOverage", CellValue(line, CellField.Overage), out var maximumOverage))
+            ApplyCellValue(index, line, CellField.Overage, maximumOverage);
     }
 
     private void DrawUnitPriceContextMenu(
         MarketAcquisitionRequestLineDocument line,
         int index,
+        WorkbenchLineKey key,
         bool canEdit)
     {
         if (!ImGui.BeginPopupContextItem("##UnitQuoteActions"))
@@ -1078,7 +1141,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 threshold is > 0 ? "Refresh Craft Architect quote" : "Get Craft Architect quote",
                 canFetch))
         {
-            _ = FetchCraftQuotesAsync([line.ItemId]);
+            _ = FetchCraftQuotesAsync([key]);
         }
 
         if (threshold is > 0 &&
@@ -1097,11 +1160,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.EndPopup();
     }
 
-    private void DrawCompactSpendCell(MarketAcquisitionRequestLineDocument line, int index)
+    private void DrawCompactSpendCell(MarketAcquisitionRequestLineDocument line, int index, WorkbenchLineKey key)
     {
         ImGui.SetNextItemWidth(-1);
-        if (DrawDeferredNumberCell("##Spend", line.GilCap, out var gilCap))
-            ApplyLineEdit(index, line, gilCap: ClampToUInt(gilCap), message: "Spend ceiling updated.");
+        if (DrawDeferredNumberCell(key, CellField.Spend, "##Spend", CellValue(line, CellField.Spend), out var gilCap))
+            ApplyCellValue(index, line, CellField.Spend, gilCap);
     }
 
     public void DrawRunBudgetInput()
@@ -1221,9 +1284,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 removalUndo.Clear);
     }
 
-    private void RemoveLinesWithUndo(IReadOnlyCollection<uint> itemIds)
+    private void RemoveLinesWithUndo(IReadOnlyCollection<WorkbenchLineKey> lineKeys)
     {
-        if (controller.RemoveLines(itemIds) is not { } removal)
+        if (controller.RemoveLines(lineKeys) is not { } removal)
             return;
         removalUndo.Offer(removal);
         if (controller.Selection.Count != 1)
@@ -1246,16 +1309,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         MarketAcquisitionSelectedLinePresentation? single)
     {
         var canEdit = CanEdit(context);
+        var lineKeys = WorkbenchLineKey.For(document.Lines);
         var selected = document.Lines
-            .Select((line, index) => (Line: line, Index: index))
-            .Where(entry => controller.Selection.IsSelected(entry.Line.ItemId))
+            .Select((line, index) => (Line: line, Index: index, Key: lineKeys[index]))
+            .Where(entry => controller.Selection.IsSelected(entry.Key))
             .ToList();
-        var ids = selected.Select(entry => entry.Line.ItemId).ToArray();
-        var editable = selected.Where(entry => !controller.IsExactAcquisitionLine(entry.Index)).Select(entry => entry.Line).ToList();
+        var ids = selected.Select(entry => entry.Key).ToArray();
+        var editable = selected.Where(entry => !controller.IsExactAcquisitionLine(entry.Index)).ToList();
         var fields = new List<BulkField>();
         if (editable.Count > 0)
             fields.AddRange([BulkField.UnitCeiling, BulkField.SpendCeiling]);
-        if (editable.Any(IsStockUpLine))
+        if (editable.Any(entry => IsStockUpLine(entry.Line)))
             fields.AddRange([BulkField.TargetOnHand, BulkField.ExtraUnits]);
         if (editable.Count > 0)
             fields.AddRange([BulkField.Quality, BulkField.BuyingRule]);
@@ -1265,7 +1329,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.BeginDisabled(!canEdit);
         if (fields.Count > 0)
-            DrawBulkFieldEditor(fields, ids, canEdit);
+            DrawBulkFieldEditor(fields, ids, editable.Select(entry => entry.Line).ToList(), canEdit);
 
         var quoteLabel = selected.Count == 1 && single is not null
             ? single.Actions.First(action => action.Kind == MarketAcquisitionSelectedLineActionKind.RefreshQuote).Label
@@ -1282,9 +1346,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             () => _ = FetchCraftQuotesAsync(ids));
 
         var quoted = editable
-            .Select(line => (Line: line, Threshold: QuoteThreshold(line)))
+            .Select(entry => (entry.Line, entry.Key, Threshold: QuoteThreshold(entry.Line)))
             .Where(entry => entry.Threshold is > 0 && entry.Threshold.Value != entry.Line.MaxUnitPrice)
-            .ToDictionary(entry => entry.Line.ItemId, entry => entry.Threshold!.Value);
+            .ToDictionary(entry => entry.Key, entry => entry.Threshold!.Value);
         if (quoted.Count > 0)
         {
             DalamudUiLayout.SameLineIfFits("Use quote");
@@ -1370,7 +1434,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     }
 
     /// <summary>Picks one field, then sets it on every selected line it applies to as a single edit.</summary>
-    private void DrawBulkFieldEditor(IReadOnlyList<BulkField> fields, IReadOnlyCollection<uint> ids, bool canEdit)
+    private void DrawBulkFieldEditor(
+        IReadOnlyList<BulkField> fields,
+        IReadOnlyCollection<WorkbenchLineKey> ids,
+        IReadOnlyList<MarketAcquisitionRequestLineDocument> editable,
+        bool canEdit)
     {
         if (!fields.Contains(bulkField))
             SelectBulkField(fields[0]);
@@ -1404,18 +1472,21 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 return AgentBridgeUiActionResult.Ok($"{BulkFieldLabel(match)} selected.");
             });
 
+        // Lines "Stock up to" would switch that have no target yet; they need one typed before it applies.
+        var needTarget = editable.Count(line => !IsStockUpLine(line) && line.TargetQuantity == 0);
         if (bulkField is BulkField.Quality or BulkField.BuyingRule)
         {
             var options = bulkField == BulkField.Quality
                 ? new[] { "Either", "HQOnly", "NQOnly" }
                 : new[] { "TargetQuantity", "AllBelowThreshold" };
+            var stockUpPending = bulkField == BulkField.BuyingRule && bulkStockUpPending;
             DalamudUiLayout.SameLineIfFits(valueWidth);
             ImGui.SetNextItemWidth(valueWidth);
-            if (ImGui.BeginCombo("##BulkChoice", string.Empty, ImGuiComboFlags.HeightRegular))
+            if (ImGui.BeginCombo("##BulkChoice", stockUpPending ? FormatEditorOption("TargetQuantity") : string.Empty, ImGuiComboFlags.HeightRegular))
             {
                 foreach (var option in options)
                     if (ImGui.Selectable(FormatEditorOption(option)))
-                        ApplyBulkChoice(ids, option);
+                        ChooseBulkOption(ids, option, needTarget);
                 ImGui.EndCombo();
             }
             RegisterLastArgumentControl(
@@ -1430,19 +1501,22 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                         string.Equals(FormatEditorOption(candidate), value, StringComparison.OrdinalIgnoreCase));
                     if (option is null)
                         return AgentBridgeUiActionResult.Fail($"Choose one of: {string.Join(", ", options.Select(FormatEditorOption))}.");
-                    ApplyBulkChoice(ids, option);
+                    if (!ChooseBulkOption(ids, option, needTarget))
+                        return AgentBridgeUiActionResult.Ok($"Stock up to chosen; {needTarget:N0} line{(needTarget == 1 ? " has" : "s have")} no target on hand. Enter one in acquisition.workbench.bulk.value, then acquisition.workbench.bulk.apply.");
                     return AgentBridgeUiActionResult.Ok($"{BulkFieldLabel(bulkField)} set.");
                 });
-            return;
+            if (!stockUpPending)
+                return;
         }
 
+        var stockingUp = bulkField == BulkField.BuyingRule;
         DalamudUiLayout.SameLineIfFits(valueWidth);
         ImGui.SetNextItemWidth(valueWidth);
-        var submitted = ImGui.InputText("##BulkValue", ref bulkValueBuffer, 16,
+        var submitted = ImGui.InputTextWithHint("##BulkValue", stockingUp ? "Target on hand" : string.Empty, ref bulkValueBuffer, 16,
             ImGuiInputTextFlags.CharsDecimal | ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll);
         RegisterLastArgumentControl(
             "acquisition.workbench.bulk.value",
-            $"{BulkFieldLabel(bulkField)} for the selected lines",
+            stockingUp ? "Target on hand for the lines switched to Stock up to" : $"{BulkFieldLabel(bulkField)} for the selected lines",
             AgentBridgeUiControlKind.Input,
             canEdit,
             bulkValueBuffer,
@@ -1451,14 +1525,16 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 bulkValueBuffer = value.Trim();
                 return AgentBridgeUiActionResult.Ok("Value entered.");
             });
-        var typed = TryParseBulkValue(out _);
+        var typed = TryParseBulkValue(out var typedValue);
+        // A switched line's target is at least 1; lines that already have one keep it unless a value is typed.
+        var canApply = stockingUp ? needTarget == 0 || (typed && typedValue > 0) : typed;
         DalamudUiLayout.SameLineIfFits("Apply");
-        if ((ImGuiUi.Button("Apply##BulkApply", typed) || submitted) && typed)
+        if ((ImGuiUi.Button("Apply##BulkApply", canApply) || submitted) && canApply)
             ApplyBulkValue(ids);
         RegisterLastControl(
             "acquisition.workbench.bulk.apply",
-            $"Set {BulkFieldLabel(bulkField)} on the selected lines",
-            canEdit && typed,
+            stockingUp ? "Switch the selected lines to Stock up to" : $"Set {BulkFieldLabel(bulkField)} on the selected lines",
+            canEdit && canApply,
             selected: false,
             value: bulkValueBuffer,
             () => ApplyBulkValue(ids));
@@ -1468,13 +1544,45 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         bulkField = field;
         bulkValueBuffer = string.Empty;
+        bulkStockUpPending = false;
+    }
+
+    /// <summary>
+    /// Applies a Quality or Buying rule choice. "Stock up to" waits for a typed target when any line it would
+    /// switch has none; returns false then.
+    /// </summary>
+    private bool ChooseBulkOption(IReadOnlyCollection<WorkbenchLineKey> ids, string option, int needTarget)
+    {
+        if (bulkField == BulkField.BuyingRule && option == "TargetQuantity" && needTarget > 0)
+        {
+            bulkStockUpPending = true;
+            bulkValueBuffer = string.Empty;
+            return false;
+        }
+        bulkStockUpPending = false;
+        ApplyBulkChoice(ids, option);
+        return true;
     }
 
     private bool TryParseBulkValue(out long value) =>
         GroupedIntegerParser.TryParse(bulkValueBuffer, out value) && value >= 0;
 
-    private void ApplyBulkValue(IReadOnlyCollection<uint> ids)
+    private void ApplyBulkValue(IReadOnlyCollection<WorkbenchLineKey> ids)
     {
+        if (bulkField == BulkField.BuyingRule)
+        {
+            uint? target = TryParseBulkValue(out var typedTarget) && typedTarget > 0 ? ClampToUInt(typedTarget) : null;
+            if (controller.ApplyBulkLineEdit(ids, line =>
+                    IsStockUpLine(line) || (target is null && line.TargetQuantity == 0)
+                        ? null
+                        : EditLine(line, quantityMode: "TargetQuantity", targetQuantity: target ?? line.TargetQuantity, maxQuantity: 0),
+                    "Buying rule updated.") > 0)
+            {
+                bulkStockUpPending = false;
+                bulkValueBuffer = string.Empty;
+            }
+            return;
+        }
         if (!TryParseBulkValue(out var typed))
             return;
         var amount = ClampToUInt(typed);
@@ -1506,7 +1614,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             bulkValueBuffer = string.Empty;
     }
 
-    private void ApplyBulkChoice(IReadOnlyCollection<uint> ids, string option)
+    /// <summary>Applies a choice that needs no value: a quality, Buy below ceiling, or Stock up to on lines that all have a target.</summary>
+    private void ApplyBulkChoice(IReadOnlyCollection<WorkbenchLineKey> ids, string option)
     {
         if (bulkField == BulkField.Quality)
         {
@@ -1515,16 +1624,24 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
         controller.ApplyBulkLineEdit(ids, line =>
             option == "TargetQuantity"
-                ? IsStockUpLine(line) ? null : EditLine(line, quantityMode: option, targetQuantity: Math.Max(1u, line.TargetQuantity), maxQuantity: 0)
+                ? IsStockUpLine(line) || line.TargetQuantity == 0 ? null : EditLine(line, quantityMode: option, maxQuantity: 0)
                 : IsStockUpLine(line) ? EditLine(line, quantityMode: option, targetQuantity: 0, maxQuantity: 0) : null,
             "Buying rule updated.");
     }
 
-    private void UseQuotes(IReadOnlyDictionary<uint, uint> thresholds) =>
+    private void UseQuotes(IReadOnlyDictionary<WorkbenchLineKey, uint> thresholds)
+    {
+        // Thresholds belong to the lines as they were drawn; match each line by its key at edit time.
+        var keys = WorkbenchLineKey.For(document.Lines);
+        var byLine = new Dictionary<MarketAcquisitionRequestLineDocument, uint>(ReferenceEqualityComparer.Instance);
+        for (var index = 0; index < keys.Count; index++)
+            if (thresholds.TryGetValue(keys[index], out var threshold))
+                byLine[document.Lines[index]] = threshold;
         controller.ApplyBulkLineEdit(
             thresholds.Keys,
-            line => thresholds.TryGetValue(line.ItemId, out var threshold) ? EditLine(line, maxUnitPrice: threshold) : null,
+            line => byLine.TryGetValue(line, out var threshold) ? EditLine(line, maxUnitPrice: threshold) : null,
             "Unit ceiling set from Craft Architect quote.");
+    }
 
     private uint? QuoteThreshold(MarketAcquisitionRequestLineDocument line) =>
         craftAppraisal.State.TryGetLineQuoteThreshold(CraftAppraisalRequestMapper.BuildLineIdentity(document, line));
@@ -1667,7 +1784,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         switch (kind)
         {
             case MarketAcquisitionSelectedLineActionKind.RefreshQuote:
-                _ = FetchCraftQuotesAsync([selection.ItemId]);
+                if (selection.LineIndex >= 0 && selection.LineIndex < document.Lines.Count)
+                    _ = FetchCraftQuotesAsync([WorkbenchLineKey.For(document.Lines)[selection.LineIndex]]);
                 break;
             case MarketAcquisitionSelectedLineActionKind.UseQuote:
                 if (selection.QuoteUnitPrice is > 0)
@@ -1914,10 +2032,27 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             message);
     }
 
-    /// <summary>Fetches a Craft Architect quote for each of these lines in turn; quotes are evidence, never applied.</summary>
-    private async Task FetchCraftQuotesAsync(IReadOnlyList<uint> itemIds)
+    /// <summary>
+    /// Fetches a Craft Architect quote for each of these lines in turn; quotes are evidence, never applied.
+    /// Requests are built from the document as it is now; quote state and status are updated on the framework
+    /// thread, where the Workbench reads them.
+    /// </summary>
+    private async Task FetchCraftQuotesAsync(IReadOnlyList<WorkbenchLineKey> lineKeys)
     {
-        if (isAppraising || itemIds.Count == 0)
+        if (isAppraising || lineKeys.Count == 0)
+            return;
+
+        var snapshot = document;
+        var keys = WorkbenchLineKey.For(snapshot.Lines);
+        var requests = lineKeys
+            .Select(key => keys.ToList().IndexOf(key))
+            .Where(index => index >= 0)
+            .Select(index => snapshot.Lines[index])
+            .Select(line => (
+                Identity: CraftAppraisalRequestMapper.BuildLineIdentity(snapshot, line),
+                Request: CraftAppraisalRequestMapper.Build(snapshot, line)))
+            .ToList();
+        if (requests.Count == 0)
             return;
 
         isAppraising = true;
@@ -1925,36 +2060,35 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         {
             var ready = 0;
             string? readyName = null;
-            foreach (var itemId in itemIds)
+            foreach (var (identity, request) in requests)
             {
-                if (document.Lines.FirstOrDefault(line => line.ItemId == itemId) is not { } line)
-                    continue;
-                var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
-                craftAppraisal.State.UpdateSelectedLine(identity);
-                var quote = await craftAppraisal.FetchQuoteAsync(
-                    CraftAppraisalRequestMapper.Build(document, line)).ConfigureAwait(false);
-                craftAppraisal.State.RecordLineQuote(
-                    identity,
-                    quote,
-                    craftAppraisal.State.LastCraftQuoteDiagnosticFilePath);
-                if (craftAppraisal.State.TryGetLineQuoteThreshold(identity) is > 0 &&
-                    CraftAppraisalRequestMapper.FindMatchingLineIndex(document, identity) is var currentIndex and >= 0)
+                await Plugin.Framework.RunOnTick(() => craftAppraisal.State.UpdateSelectedLine(identity)).ConfigureAwait(false);
+                var quote = await craftAppraisal.FetchQuoteAsync(request).ConfigureAwait(false);
+                await Plugin.Framework.RunOnTick(() =>
                 {
-                    ready++;
-                    readyName = FormatLineItemName(document.Lines[currentIndex]);
-                }
+                    craftAppraisal.State.RecordLineQuote(
+                        identity,
+                        quote,
+                        craftAppraisal.State.LastCraftQuoteDiagnosticFilePath);
+                    if (craftAppraisal.State.TryGetLineQuoteThreshold(identity) is > 0 &&
+                        CraftAppraisalRequestMapper.FindMatchingLineIndex(document, identity) is var currentIndex and >= 0)
+                    {
+                        ready++;
+                        readyName = FormatLineItemName(document.Lines[currentIndex]);
+                    }
+                }).ConfigureAwait(false);
             }
 
-            if (itemIds.Count == 1)
-                controller.SetStatus(ready == 1
+            var count = requests.Count;
+            await Plugin.Framework.RunOnTick(() => controller.SetStatus(count == 1
+                ? ready == 1
                     ? $"Craft Architect quote ready for {readyName}. Review the evidence, then use the quote to change the unit ceiling."
-                    : "Craft Architect did not return a usable unit cost ceiling for this line.");
-            else
-                controller.SetStatus($"Craft Architect quotes ready for {ready:N0} of {itemIds.Count:N0} lines.");
+                    : "Craft Architect did not return a usable unit cost ceiling for this line."
+                : $"Craft Architect quotes ready for {ready:N0} of {count:N0} lines.")).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            controller.SetStatus($"Craft Architect quote failed: {ex.Message}");
+            _ = Plugin.Framework.RunOnTick(() => controller.SetStatus($"Craft Architect quote failed: {ex.Message}"));
         }
         finally
         {

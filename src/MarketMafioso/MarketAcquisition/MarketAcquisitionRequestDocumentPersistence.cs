@@ -42,6 +42,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
             CountRetainerStock = stored.CountRetainerStock ?? stored.Lines.Any(line =>
                 line.QuantityMode == "TargetQuantity" &&
                 MarketAcquisitionTargetBases.Normalize(line.TargetBasis) == MarketAcquisitionTargetBases.OnHandIncludingRetainers),
+            OwnRetainerSelection = MarketAcquisitionStockScope.RestoreOwnRetainers(stored.OwnRetainerSelection),
             AdditionalStockSources = MarketAcquisitionStockScope.Restore(stored.AdditionalStockSources),
             StowAfterDelivery = stored.StowAfterDelivery,
             LocalRevision = Math.Max(1, stored.LocalRevision),
@@ -99,6 +100,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
             LocalRequestId = document.LocalRequestId,
             RunSpendCap = document.RunSpendCap,
             CountRetainerStock = document.CountRetainerStock,
+            OwnRetainerSelection = MarketAcquisitionStockScope.PersistOwnRetainers(document.OwnRetainerSelection),
             AdditionalStockSources = MarketAcquisitionStockScope.Persist(document.AdditionalStockSources),
             StowAfterDelivery = document.StowAfterDelivery,
             LocalRevision = document.LocalRevision,

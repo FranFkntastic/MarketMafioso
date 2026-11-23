@@ -21,6 +21,9 @@ public sealed record MarketAcquisitionRequestDocument
     // Local stock policy: whether the current character's retainer stock counts toward target lines.
     // Mirrored onto each target line's TargetBasis when the document is saved.
     public bool CountRetainerStock { get; init; }
+    // Local stock policy: narrows CountRetainerStock to these retainers (single-retainer keys of one owner)
+    // while that owner is the logged-in character. Empty, or another character logged in: every retainer counts.
+    public List<MarketAcquisitionStockSourceKey> OwnRetainerSelection { get; init; } = [];
     // Local stock policy: other characters' bags/retainers counted toward target lines.
     public List<MarketAcquisitionStockSourceKey> AdditionalStockSources { get; init; } = [];
     public bool StowAfterDelivery { get; init; }

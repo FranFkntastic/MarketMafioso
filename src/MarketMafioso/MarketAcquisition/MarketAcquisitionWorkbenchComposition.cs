@@ -58,6 +58,7 @@ public sealed record MarketAcquisitionWorkbenchComposition
             SweepDataCenters = SweepDataCenters.ToList(),
             Lines = CloneLines(Lines),
             CountRetainerStock = StockScope?.CountRetainerStock ?? false,
+            OwnRetainerSelection = StockScope?.OwnRetainerSelection.ToList() ?? [],
             AdditionalStockSources = StockScope?.AdditionalStockSources.ToList() ?? [],
             StowAfterDelivery = StockScope?.StowAfterDelivery ?? false,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
@@ -71,8 +72,15 @@ public sealed record MarketAcquisitionWorkbenchComposition
 public sealed record MarketAcquisitionCompositionStockScope(
     bool CountRetainerStock,
     IReadOnlyList<MarketAcquisitionStockSourceKey> AdditionalStockSources,
-    bool StowAfterDelivery)
+    bool StowAfterDelivery,
+    IReadOnlyList<MarketAcquisitionStockSourceKey>? OwnRetainers = null)
 {
+    public IReadOnlyList<MarketAcquisitionStockSourceKey> OwnRetainerSelection => OwnRetainers ?? [];
+
     public static MarketAcquisitionCompositionStockScope Of(MarketAcquisitionRequestDocument document) =>
-        new(document.CountRetainerStock, document.AdditionalStockSources.ToList(), document.StowAfterDelivery);
+        new(
+            document.CountRetainerStock,
+            document.AdditionalStockSources.ToList(),
+            document.StowAfterDelivery,
+            document.OwnRetainerSelection.ToList());
 }

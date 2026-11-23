@@ -85,7 +85,8 @@ public sealed class ConfigurationMarketAcquisitionWorkbenchCompositionStore : IM
                 ? new(
                     countRetainers,
                     MarketAcquisitionStockScope.Restore(stored.AdditionalStockSources),
-                    stored.StowAfterDelivery)
+                    stored.StowAfterDelivery,
+                    MarketAcquisitionStockScope.RestoreOwnRetainers(stored.OwnRetainerSelection))
                 : null,
             CreatedAtUtc = ToUtc(stored.CreatedAtUtc),
             UpdatedAtUtc = ToUtc(stored.UpdatedAtUtc),
@@ -103,6 +104,9 @@ public sealed class ConfigurationMarketAcquisitionWorkbenchCompositionStore : IM
             SweepDataCenters = composition.SweepDataCenters.ToList(),
             Lines = composition.Lines.Select(ToPersistedLine).ToList(),
             CountRetainerStock = composition.StockScope?.CountRetainerStock,
+            OwnRetainerSelection = composition.StockScope is { } ownScope
+                ? MarketAcquisitionStockScope.PersistOwnRetainers(ownScope.OwnRetainerSelection)
+                : null,
             AdditionalStockSources = composition.StockScope is { } scope
                 ? MarketAcquisitionStockScope.Persist(scope.AdditionalStockSources)
                 : null,
