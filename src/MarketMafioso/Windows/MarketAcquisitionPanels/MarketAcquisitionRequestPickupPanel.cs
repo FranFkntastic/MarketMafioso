@@ -34,16 +34,22 @@ internal sealed class MarketAcquisitionRequestPickupPanel
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
-    // Human-only escape hatch beside the status line; deliberately not registered with the agent bridge.
-    private static void DrawStatus(MarketAcquisitionRequestPickupContext context)
+    // Escape hatch beside the status line: always enabled while an order's head report is failing.
+    private void DrawStatus(MarketAcquisitionRequestPickupContext context)
     {
         ImGui.TextColored(context.VisibleStatusColor, context.VisibleStatus);
-        if (context.StuckReportRequestId is not { } stuckRequestId || context.DropStuckReport is null)
+        if (context.StuckReportRequestId is not { } stuckRequestId || context.DropStuckReport is not { } dropStuckReport)
             return;
 
         ImGui.SameLine();
         if (ImGui.SmallButton("Drop stuck report##MarketAcquisitionDropStuckReport"))
-            context.DropStuckReport(stuckRequestId);
+            dropStuckReport(stuckRequestId);
+        RegisterLastControl(
+            "acquisition.report.drop-stuck",
+            "Drop the stuck Market Acquisition report so the order's other reports can send",
+            true,
+            stuckRequestId,
+            () => dropStuckReport(stuckRequestId));
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Move the report that keeps failing to the dead-letter store so this order's other reports can send.");
     }
