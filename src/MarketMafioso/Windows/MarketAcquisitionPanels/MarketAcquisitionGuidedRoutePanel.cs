@@ -134,12 +134,17 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         if (snapshot.RecoveryBlockedReason is { } recoveryBlockedReason)
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, recoveryBlockedReason);
-            // Human-only, like the restock purchase clear: not registered with the agent bridge.
+            // Shown only when no purchase evidence is unresolved; pending evidence keeps its own block.
             if (discardRecoveryBlock is not null && snapshot.PurchaseEvidenceState is null)
             {
                 ImGui.SameLine();
                 if (ImGui.SmallButton("Discard \u2014 I'll handle it##MarketAcquisitionDiscardRecoveryBlock"))
                     discardRecoveryBlock();
+                RegisterLastControl(
+                    "acquisition.route.discard-recovery-block",
+                    "Discard the route recovery block and handle it in game",
+                    true,
+                    discardRecoveryBlock);
             }
         }
         if (snapshot.UnresolvedTravelTarget is { } travelTarget && forgetTravelLease is not null)

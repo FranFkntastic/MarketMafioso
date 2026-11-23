@@ -291,16 +291,30 @@ internal sealed class TradeQueuePanel
     {
         if (ImGui.Button("...##TradeQueueActions"))
             ImGui.OpenPopup("TradeQueueActions");
+        RegisterLastAction(
+            "trade-queue.clear-queue",
+            "Clear the entire Trade Queue, stopping any active run",
+            true,
+            null,
+            arguments: null,
+            _ =>
+            {
+                ClearEntireQueue();
+                return AgentBridgeUiActionResult.Ok("Trade Queue cleared.");
+            });
         if (!ImGui.BeginPopup("TradeQueueActions"))
             return;
         if (ImGui.Selectable("Clear entire queue"))
-        {
-            runner.Stop("Trade Queue stopped because the queue was cleared.");
-            config.TradeQueueItems.Clear();
-            config.TradeQueueBinding = null;
-            config.Save();
-        }
+            ClearEntireQueue();
         ImGui.EndPopup();
+    }
+
+    private void ClearEntireQueue()
+    {
+        runner.Stop("Trade Queue stopped because the queue was cleared.");
+        config.TradeQueueItems.Clear();
+        config.TradeQueueBinding = null;
+        config.Save();
     }
 
     /// <summary>The lock row shown while the queue is bound to a workshop share's assembler.</summary>

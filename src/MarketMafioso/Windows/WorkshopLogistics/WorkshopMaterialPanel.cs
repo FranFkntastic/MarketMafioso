@@ -120,11 +120,21 @@ internal sealed class WorkshopMaterialPanel
         if (runner.UnresolvedPurchaseMessage is { } unresolved)
         {
             ImGui.TextWrapped(unresolved);
-            // Human-only: deliberately not registered with the agent bridge, so an agent can never clear purchase protection.
+            // The method itself refuses during a live receipt check, for agent presses too.
             if (runner.IsVerifyingPurchase)
+            {
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Verifying purchase…");
-            else if (ImGui.SmallButton("I checked in game - clear this"))
-                runner.AcknowledgeUnresolvedPurchase(out actionStatus);
+            }
+            else
+            {
+                if (ImGui.SmallButton("I checked in game - clear this"))
+                    runner.AcknowledgeUnresolvedPurchase(out actionStatus);
+                RegisterSimpleAction(
+                    "workshop-logistics.vendor-restock.clear-unresolved-purchase",
+                    "Clear the unresolved vendor purchase after checking it in game",
+                    true,
+                    () => runner.AcknowledgeUnresolvedPurchase(out actionStatus));
+            }
         }
 
         var automatic = run is not null && (runner.IsRunning || run.Phase == WorkshopVendorRestockPhase.Paused)
