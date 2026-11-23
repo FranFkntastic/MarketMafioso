@@ -121,7 +121,9 @@ internal sealed class WorkshopMaterialPanel
         {
             ImGui.TextWrapped(unresolved);
             // Human-only: deliberately not registered with the agent bridge, so an agent can never clear purchase protection.
-            if (ImGui.SmallButton("I checked in game - clear this"))
+            if (runner.IsVerifyingPurchase)
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Verifying purchase…");
+            else if (ImGui.SmallButton("I checked in game - clear this"))
                 runner.AcknowledgeUnresolvedPurchase(out actionStatus);
         }
 

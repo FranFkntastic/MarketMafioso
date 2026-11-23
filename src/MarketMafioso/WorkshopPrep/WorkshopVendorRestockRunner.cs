@@ -84,11 +84,25 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         }
     }
 
-    public bool CanAcknowledgeUnresolvedPurchase => HasUnresolvedPurchase(config.ActiveWorkshopVendorBuyRun);
+    /// <summary>
+    /// True for the few seconds a live run is buying or reading its receipt. Clearing then would forget a purchase
+    /// that is about to be recorded, so the next restock could buy the same item again.
+    /// </summary>
+    public bool IsVerifyingPurchase =>
+        coordinator.IsRunning &&
+        config.ActiveWorkshopVendorBuyRun?.Phase is GilVendorBuyPhase.PurchaseLine or GilVendorBuyPhase.VerifyReceipt;
 
-    /// <summary>Stops the run and clears the current purchase record. Always allowed.</summary>
+    public bool CanAcknowledgeUnresolvedPurchase =>
+        HasUnresolvedPurchase(config.ActiveWorkshopVendorBuyRun) && !IsVerifyingPurchase;
+
+    /// <summary>Stops the run and clears the current purchase record. Allowed in every state except a live receipt check.</summary>
     public bool AcknowledgeUnresolvedPurchase(out string message)
     {
+        if (IsVerifyingPurchase)
+        {
+            message = "Verifying the purchase; it can be cleared once the receipt check finishes.";
+            return false;
+        }
         // Production routes this callback to Warning. Log before disposing or clearing anything; with no log
         // attached the clear still proceeds.
         diagnosticLog?.Invoke("[MarketMafioso] User acknowledged checking the unresolved vendor purchase in game; " +

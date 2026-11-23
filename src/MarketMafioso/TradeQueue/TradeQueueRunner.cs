@@ -24,6 +24,7 @@ public sealed class TradeQueueRunner : IDisposable
     private readonly ITradeQueueIo io;
     private readonly IItemQualityLoweringAutomation qualityLowering;
     private readonly ExternalAutomationCoordinator externalAutomation;
+    private bool restoreAutoConfirmWhenTradeCloses;
     private readonly IPluginLog log;
     private readonly Func<DateTimeOffset> clock;
 
@@ -86,6 +87,7 @@ public sealed class TradeQueueRunner : IDisposable
         if (this.recovery.CancellationPending)
         {
             cancellationCheckpointSaved = true;
+            restoreAutoConfirmWhenTradeCloses = false;
             externalAutomation.SuppressTradeAutoConfirm();
             pendingFinish = (TradeQueueExecutionState.Stopped, "Recovering the previous trade cancellation.");
             closingDeadline = clock() + ClosingTradeTimeout;
@@ -256,6 +258,7 @@ public sealed class TradeQueueRunner : IDisposable
 
         batchNumber = completedBatchCount + 1;
         checkpointQueueSignature = ComputeQueueSignature(queue);
+        restoreAutoConfirmWhenTradeCloses = false;
         externalAutomation.SuppressTradeAutoConfirm();
         if (!normalizeHighQualityItemsForRun)
         {
@@ -300,6 +303,12 @@ public sealed class TradeQueueRunner : IDisposable
     {
         try
         {
+            if (restoreAutoConfirmWhenTradeCloses && !io.IsTradeOpen)
+            {
+                restoreAutoConfirmWhenTradeCloses = false;
+                externalAutomation.RestoreTradeAutoConfirm();
+                log.Information("[MarketMafioso] Trade window closed; restored trade auto-confirm after a released trade closure.");
+            }
             if (Snapshot.State == TradeQueueExecutionState.ClosingTrade)
             {
                 TickClosingTrade();
@@ -410,14 +419,15 @@ public sealed class TradeQueueRunner : IDisposable
         {
             log.Warning(exception, "[MarketMafioso] Could not persist the released trade closure; continuing.");
         }
-        CompleteFinish(state, message);
+        // Ownership is released now, but auto-confirm must not come back while the window is still open.
+        CompleteFinish(state, message, deferAutoConfirmWhileTradeOpen: true);
     }
 
     public void Dispose()
     {
         if (IsActive)
             Stop("Trade Queue stopped because MarketMafioso is unloading.");
-        if (recovery.CancellationPending)
+        if (recovery.CancellationPending || (restoreAutoConfirmWhenTradeCloses && io.IsTradeOpen))
             externalAutomation.RetainTradeSuppressionOnDispose();
         else
             externalAutomation.RestoreTradeAutoConfirm();
@@ -853,6 +863,7 @@ public sealed class TradeQueueRunner : IDisposable
             closingDeadline = clock() + ClosingTradeTimeout;
         recovery.CancellationPending = true;
         recovery.PartnerEntityId = partner == null ? recovery.PartnerEntityId : (uint)partner.GameObjectId;
+        restoreAutoConfirmWhenTradeCloses = false;
         externalAutomation.SuppressTradeAutoConfirm();
         nextActionAt = default;
         SetActive(TradeQueueExecutionState.ClosingTrade, $"{message} Waiting for trade closure.", null);
@@ -949,7 +960,7 @@ public sealed class TradeQueueRunner : IDisposable
         }
     }
 
-    private void CompleteFinish(TradeQueueExecutionState state, string message)
+    private void CompleteFinish(TradeQueueExecutionState state, string message, bool deferAutoConfirmWhileTradeOpen = false)
     {
         var previousState = Snapshot.State;
         pendingFinish = (state, message);
@@ -959,7 +970,10 @@ public sealed class TradeQueueRunner : IDisposable
 
         if (qualityLowering.Snapshot.IsActive)
             qualityLowering.Stop("Trade Queue released quality-lowering ownership.");
-        externalAutomation.RestoreTradeAutoConfirm();
+        if (deferAutoConfirmWhileTradeOpen && io.IsTradeOpen)
+            restoreAutoConfirmWhenTradeCloses = true;
+        else
+            externalAutomation.RestoreTradeAutoConfirm();
         deadline = default;
         nextActionAt = default;
         if (batch != null && state is TradeQueueExecutionState.Failed or TradeQueueExecutionState.Stopped)
