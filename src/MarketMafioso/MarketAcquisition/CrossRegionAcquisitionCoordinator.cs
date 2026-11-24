@@ -87,6 +87,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private static readonly TimeSpan BagReadTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AcceptedRunAppearanceTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ResumeTransitionTimeout = TimeSpan.FromSeconds(10);
+    // A failed or stopped courier leg re-reads its Quartermaster run this often so Resume follows the live run.
+    private static readonly TimeSpan InterruptedCourierRefreshInterval = TimeSpan.FromSeconds(3);
     private const int MaxCharacterSwitchAttempts = 3;
     private const int MaxSubmitAttempts = 5;
     private const string CodeCourierHistoryIndexing = "CourierHistoryIndexing";
@@ -105,6 +107,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private readonly IQuartermasterDirectDeliveryClient? directDelivery;
     private CrossRegionAcquisitionSession session;
     private DateTimeOffset nextPollUtc;
+    private DateTimeOffset nextInterruptedCourierRefreshUtc;
     private DateTimeOffset? lastSwitchRequestUtc;
     private DateTimeOffset? fundArrivalWaitStartedUtc;
     private DateTimeOffset? closeStartedUtc;
@@ -592,6 +595,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         catch (Exception ex) { log("Following open stow forwards failed.", ex); }
         try { TickCourierRelease(); }
         catch (Exception ex) { log("Clearing the cleared session's Quartermaster courier run failed.", ex); }
+        try { TickInterruptedCourier(); }
+        catch (Exception ex) { log("Refreshing the interrupted Quartermaster courier run failed.", ex); }
         if (!session.IsActive)
             return;
         try { shopping.Tick(); }
@@ -640,6 +645,39 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         {
             log($"Cross-regional {Describe(session.Phase)} tick failed.", ex);
             session.LastMessage = $"{Describe(session.Phase)}: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Keeps a failed or stopped courier leg in step with its live Quartermaster run: the cached resumability
+    /// follows the run, and a failed leg whose run has since completed advances through the normal completion path.
+    /// An unknown run or unavailable status leaves the session untouched.
+    /// </summary>
+    private void TickInterruptedCourier()
+    {
+        if (session.Phase is not (CrossRegionAcquisitionPhase.Failed or CrossRegionAcquisitionPhase.Stopped) ||
+            session.InterruptedPhase is not { } target ||
+            InterruptedCourierLeg() is not { } leg ||
+            RunIdOf(leg) is null ||
+            leg == CourierLeg.Fund && session.FundCompleted)
+            return;
+        var now = utcNow();
+        if (now < nextInterruptedCourierRefreshUtc)
+            return;
+        nextInterruptedCourierRefreshUtc = now + InterruptedCourierRefreshInterval;
+        if (!courier.TryGetCourierStatus(out var status, out _) || MatchOwnRun(status!, leg) is not { } run)
+            return;
+        if (run.IsCompleted && session.Phase == CrossRegionAcquisitionPhase.Failed)
+        {
+            // Resume treats a completed run as finished and re-enters the leg; its next tick advances the route.
+            ResumeCourier(target);
+            return;
+        }
+        var canResume = run.CanResume || run.IsCompleted;
+        if (session.CanResumeCourier != canResume)
+        {
+            session.CanResumeCourier = canResume;
+            Save();
         }
     }
 
