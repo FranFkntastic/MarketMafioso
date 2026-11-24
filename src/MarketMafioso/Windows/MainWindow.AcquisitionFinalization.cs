@@ -17,6 +17,11 @@ public partial class MainWindow
     private readonly List<(string[] Cells, string? Warning)> acquisitionFinalizationRows = [];
     private string acquisitionFinalizationFooter = "No data";
 
+    // The one stamp for "has the plan changed since review": every intent field except the run budget,
+    // which stays editable in the modal. Review and Confirm must hash identically or Confirm loops back here.
+    private static string ReviewedIntentHash(MarketAcquisitionRequestDocument document) =>
+        MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document with { RunSpendCap = 0 });
+
     private async Task OpenAcquisitionFinalizationAsync()
     {
         if (acquisitionFinalizationLoading || routeEngine.IsRouteActive || acquisitionWorkspace.IsBusy) return;
@@ -28,7 +33,7 @@ public partial class MainWindow
             var result = await acquisitionWorkspace.PreviewPlanAsync(document, acquisitionServices.GetCurrentWorldName(),
                 acquisitionServices.GetMarketAcquisitionRecentWorldTtl(), config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep);
             acquisitionFinalizationPlan = result.Plan;
-            acquisitionFinalizationHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document with { RunSpendCap = 0 });
+            acquisitionFinalizationHash = ReviewedIntentHash(document);
             acquisitionFinalizationOpen = true;
         }
         catch (Exception ex) { acquisitionRequestBuilder.SetStatus($"Cannot review plan: {ex.Message}"); }
@@ -130,7 +135,7 @@ public partial class MainWindow
         }
         ImGui.TextUnformatted(acquisitionFinalizationFooter);
         acquisitionRequestBuilder.DrawRunBudgetInput();
-        var unchanged = acquisitionFinalizationHash == MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(acquisitionRequestBuilder.CurrentDocument with { RunSpendCap = 0 });
+        var unchanged = acquisitionFinalizationHash == ReviewedIntentHash(acquisitionRequestBuilder.CurrentDocument);
         ImGui.BeginDisabled(!unchanged || routeEngine.IsRouteActive || acquisitionWorkspace.IsBusy);
         if (ImGui.Button("Confirm")) { ImGui.CloseCurrentPopup(); _ = FinalizeMarketAcquisitionPlanAsync(); }
         ImGui.EndDisabled();
