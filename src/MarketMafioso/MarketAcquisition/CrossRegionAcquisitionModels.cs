@@ -85,6 +85,8 @@ public sealed class CrossRegionAcquisitionSession
     public bool FundCompleted { get; set; }
     public string? HaulRequestId { get; set; }
     public Guid? HaulRunId { get; set; }
+    /// <summary>An earlier, different courier run Quartermaster said blocks this session's requests; Clear releases it.</summary>
+    public Guid? BlockingCourierRunId { get; set; }
     public int HaulAttempt { get; set; }
     public List<CrossRegionManifestLine> HaulManifest { get; set; } = [];
     public Dictionary<string, uint> PrimaryStockBaselines { get; set; } = new(StringComparer.Ordinal);

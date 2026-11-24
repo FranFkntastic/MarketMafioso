@@ -4,11 +4,11 @@
     "net10.0": {
       "Franthropy.FFXIV": {
         "type": "Direct",
-        "requested": "[0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba, 0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba]",
-        "resolved": "0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba",
-        "contentHash": "E+BJZbI98mg4fLFW6m2g6GWiApWOP5m1p1WWRRm3QvAedbDG3UKWj4o//2JYoWAmnol6tU6VO6Mfl6bTclgDjQ==",
+        "requested": "[0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464, 0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464]",
+        "resolved": "0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464",
+        "contentHash": "laPjRnNRYv13/WV+kiM1vVf4ba4QXm/Ta+MJZr6IVHOzr2Tm0Qf89y+i+Q7oeWCbPXFjJeDSC6wFUrVOG9GBvA==",
         "dependencies": {
-          "Franthropy.Filtering": "0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba"
+          "Franthropy.Filtering": "0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464"
         }
       },
       "Microsoft.AspNetCore.Components.WebAssembly.Server": {
@@ -43,16 +43,16 @@
       },
       "Franthropy.Filtering": {
         "type": "Transitive",
-        "resolved": "0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba",
-        "contentHash": "zFx+4La3/yqKBjp/DwM3Sl7OUjWfHSdjJGZoOACS3P/zl60yaIPaT6bZ7Ja1tMs0ZKoKsjP9rjZUGJtGhg8hZQ=="
+        "resolved": "0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464",
+        "contentHash": "quciuxTzHrOg5Y9oHFo9ouZNFWy8x/2wwvlNdgcN5l3vDYIMhsD++8Qcp+cD0DVOM24xiaLrUVYl4X9dwGieUw=="
       },
       "Franthropy.Web": {
         "type": "Transitive",
-        "resolved": "0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba",
-        "contentHash": "r/RQuTQ1QgOFAkqDFRxa2bPE98nmsz90PduhYlf3s4stdIKy6LYebjRcb3GJyCH3WSWLcv4GX3h0Wmusl+JCCQ==",
+        "resolved": "0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464",
+        "contentHash": "AJR7m/TaUrS8J9yicHyEI0keZFioBNEpXZsQitDEg0OoCoAmqbvE/P+sqYWInzPjlgsp0YVNHglJ1EsxoYRgXQ==",
         "dependencies": {
-          "Franthropy.FFXIV": "0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba",
-          "Franthropy.Filtering": "0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba"
+          "Franthropy.FFXIV": "0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464",
+          "Franthropy.Filtering": "0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464"
         }
       },
       "Microsoft.AspNetCore.Components.WebAssembly": {
@@ -110,14 +110,14 @@
       "marketmafioso.contracts": {
         "type": "Project",
         "dependencies": {
-          "Franthropy.Filtering": "[0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba, 0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba]"
+          "Franthropy.Filtering": "[0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464, 0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464]"
         }
       },
       "marketmafioso.dashboard": {
         "type": "Project",
         "dependencies": {
-          "Franthropy.FFXIV": "[0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba, 0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba]",
-          "Franthropy.Web": "[0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba, 0.1.0-commit.298b9b4f28920200f8ee25ee177ce260517d97ba]",
+          "Franthropy.FFXIV": "[0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464, 0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464]",
+          "Franthropy.Web": "[0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464, 0.1.0-commit.a62d7eb3d7c14af1c404b4debe0dacbe974f0464]",
           "MarketMafioso.Contracts": "[1.0.0, )",
           "Microsoft.AspNetCore.Components.WebAssembly": "[10.0.8, )",
           "MudBlazor": "[8.14.0, )"

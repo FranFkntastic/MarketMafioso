@@ -263,6 +263,8 @@ public partial class MainWindow
         DrawCrossRegionActions();
         if (!string.IsNullOrWhiteSpace(crossRegionActionMessage))
             ImGui.TextColored(ColWarning, crossRegionActionMessage);
+        if (!CrossRegion.HasSession && CrossRegion.CourierReleaseNote is { Length: > 0 } releaseNote)
+            ImGui.TextColored(CrossRegion.CourierReleaseNeedsAttention ? ColWarning : ColMuted, releaseNote);
         if (CrossRegion.HasSession && session.PurchasedManifest.Count > 0)
             DrawCrossRegionPurchasedTable(session);
         if (session.IsTerminal)

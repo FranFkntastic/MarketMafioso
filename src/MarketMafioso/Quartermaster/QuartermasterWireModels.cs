@@ -560,6 +560,8 @@ public static class QuartermasterCourierAckStatuses
     public const string Rejected = "rejected";
     public const string Stopping = "stopping";
     public const string Idle = "idle";
+    /// <summary>ClearCourierRun accepted: Quartermaster is forgetting the run.</summary>
+    public const string Clearing = "clearing";
 }
 
 public sealed record QuartermasterCourierAcknowledgement(
