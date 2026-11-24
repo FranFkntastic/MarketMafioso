@@ -1597,7 +1597,7 @@ public partial class MainWindow : Window, IDisposable
     {
         var reviewed = acquisitionFinalizationPlan;
         await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
-        if (reviewed is null || acquisitionFinalizationHash != MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(acquisitionRequestBuilder.CurrentDocument))
+        if (reviewed is null || acquisitionFinalizationHash != ReviewedIntentHash(acquisitionRequestBuilder.CurrentDocument))
         {
             await OpenAcquisitionFinalizationAsync().ConfigureAwait(false);
             return;
@@ -1617,7 +1617,7 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
-        if (acquisitionFinalizationHash != MarketAcquisitionRequestDocumentHasher.ComputeHostedIntentHash(acquisitionRequestBuilder.CurrentDocument))
+        if (acquisitionFinalizationHash != ReviewedIntentHash(acquisitionRequestBuilder.CurrentDocument))
         {
             await OpenAcquisitionFinalizationAsync().ConfigureAwait(false);
             return;
