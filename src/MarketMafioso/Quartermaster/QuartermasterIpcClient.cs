@@ -26,10 +26,12 @@ public interface IQuartermasterIpcAdapter
     bool HasSubmitCourierTransfer { get; }
     bool HasStopCourierRun { get; }
     bool HasResumeCourierRun { get; }
+    bool HasClearCourierRun { get; }
     string GetCourierStatus();
     string SubmitCourierTransfer(string requestJson);
     string StopCourierRun(string runId);
     string ResumeCourierRun(string runId);
+    string ClearCourierRun(string requestJson);
     bool HasPairCourierOwner { get; }
     string PairCourierOwner(string ownerJson);
     void SubscribeChanged(Action<string> handler);
@@ -48,6 +50,7 @@ public sealed partial class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAd
     private readonly ICallGateSubscriber<string, string> submitCourierTransfer;
     private readonly ICallGateSubscriber<string, string> stopCourierRun;
     private readonly ICallGateSubscriber<string, string> resumeCourierRun;
+    private readonly ICallGateSubscriber<string, string> clearCourierRun;
     private readonly ICallGateSubscriber<string, string> pairCourierOwner;
 
     public DalamudQuartermasterIpcAdapter(IDalamudPluginInterface pluginInterface)
@@ -63,6 +66,7 @@ public sealed partial class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAd
         submitCourierTransfer = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.SubmitCourierTransferChannel);
         stopCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.StopCourierRunChannel);
         resumeCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.ResumeCourierRunChannel);
+        clearCourierRun = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.ClearCourierRunChannel);
         pairCourierOwner = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.PairCourierOwnerChannel);
         InitializeDeliveredStow(pluginInterface);
         InitializeDirectDelivery(pluginInterface);
@@ -82,10 +86,12 @@ public sealed partial class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAd
     public bool HasSubmitCourierTransfer => submitCourierTransfer.HasFunction;
     public bool HasStopCourierRun => stopCourierRun.HasFunction;
     public bool HasResumeCourierRun => resumeCourierRun.HasFunction;
+    public bool HasClearCourierRun => clearCourierRun.HasFunction;
     public string GetCourierStatus() => courierStatus.InvokeFunc();
     public string SubmitCourierTransfer(string requestJson) => submitCourierTransfer.InvokeFunc(requestJson);
     public string StopCourierRun(string runId) => stopCourierRun.InvokeFunc(runId);
     public string ResumeCourierRun(string runId) => resumeCourierRun.InvokeFunc(runId);
+    public string ClearCourierRun(string requestJson) => clearCourierRun.InvokeFunc(requestJson);
     public bool HasPairCourierOwner => pairCourierOwner.HasFunction;
     public string PairCourierOwner(string ownerJson) => pairCourierOwner.InvokeFunc(ownerJson);
     public void SubscribeChanged(Action<string> handler) => changed.Subscribe(handler);

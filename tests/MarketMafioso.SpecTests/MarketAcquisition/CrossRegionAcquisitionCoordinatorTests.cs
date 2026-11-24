@@ -295,6 +295,13 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
             return true;
         }
 
+        public bool TryClearCourierRun(string runId, string requestId, out QuartermasterCourierAcknowledgement? acknowledgement, out string error)
+        {
+            acknowledgement = new("qm", requestId, Guid.Parse(runId), QuartermasterCourierAckStatuses.Clearing, null, null);
+            error = string.Empty;
+            return true;
+        }
+
         public bool TryPairCourierOwner(QuartermasterCourierCharacter owner, out QuartermasterCourierAcknowledgement? acknowledgement, out string error)
         {
             acknowledgement = new("qm", null, null, QuartermasterCourierAckStatuses.Accepted, null, null);

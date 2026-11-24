@@ -14,6 +14,12 @@ public interface IQuartermasterCourierClient
     bool TrySubmitCourierTransfer(QuartermasterCourierTransferRequest request, out QuartermasterCourierAcknowledgement? acknowledgement, out string error);
     bool TryStopCourierRun(string runId, out QuartermasterCourierAcknowledgement? acknowledgement, out string error);
     bool TryResumeCourierRun(string runId, out QuartermasterCourierAcknowledgement? acknowledgement, out string error);
+    /// <summary>
+    /// Asks Quartermaster to clear (abandon) the named run. Status "clearing" means it was accepted; refusals name
+    /// RunNotCurrent, CourierAlreadyRunning or CourierNotLoaded. False when Quartermaster cannot be asked at all
+    /// (not loaded, or a build without the clear channel).
+    /// </summary>
+    bool TryClearCourierRun(string runId, string requestId, out QuartermasterCourierAcknowledgement? acknowledgement, out string error);
     /// <summary>Pairs <paramref name="owner"/> on the configured carrier. Blocks for the carrier round trip; call off the framework thread.</summary>
     bool TryPairCourierOwner(QuartermasterCourierCharacter owner, out QuartermasterCourierAcknowledgement? acknowledgement, out string error);
 }
@@ -25,6 +31,7 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
     public const string SubmitCourierTransferChannel = "Quartermaster.v1.SubmitCourierTransfer";
     public const string StopCourierRunChannel = "Quartermaster.v1.StopCourierRun";
     public const string ResumeCourierRunChannel = "Quartermaster.v1.ResumeCourierRun";
+    public const string ClearCourierRunChannel = "Quartermaster.v1.ClearCourierRun";
     public const string PairCourierOwnerChannel = "Quartermaster.v1.PairCourierOwner";
     public const string CourierStatusSchema = "gooseworks-quartermaster-courier-status/v1";
     public const string CourierTransferSchema = "gooseworks-quartermaster-courier-transfer/v1";
@@ -121,6 +128,35 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
 
     public bool TryResumeCourierRun(string runId, out QuartermasterCourierAcknowledgement? acknowledgement, out string error) =>
         TryCourierRunCommand(runId, stop: false, out acknowledgement, out error);
+
+    public bool TryClearCourierRun(string runId, string requestId, out QuartermasterCourierAcknowledgement? acknowledgement, out string error)
+    {
+        acknowledgement = null;
+        if (string.IsNullOrWhiteSpace(runId))
+        {
+            error = "A courier run id is required to clear it.";
+            return false;
+        }
+        if (!EnsureUsable(out error))
+            return false;
+        bool available;
+        try { available = adapter.HasClearCourierRun; }
+        catch (Exception ex) { error = $"Quartermaster courier availability check failed: {ex.Message}"; return false; }
+        if (!available)
+        {
+            error = "this Quartermaster build cannot clear courier runs for other plugins";
+            return false;
+        }
+        string json;
+        var payload = JsonSerializer.Serialize(new { runId, requestId }, JsonOptions);
+        try { json = adapter.ClearCourierRun(payload); }
+        catch (Exception ex)
+        {
+            error = $"Quartermaster courier clear failed; outcome is unknown: {ex.Message}";
+            return false;
+        }
+        return TryParseCourierAcknowledgement(json, out acknowledgement, out error);
+    }
 
     public bool TryPairCourierOwner(QuartermasterCourierCharacter owner, out QuartermasterCourierAcknowledgement? acknowledgement, out string error)
     {

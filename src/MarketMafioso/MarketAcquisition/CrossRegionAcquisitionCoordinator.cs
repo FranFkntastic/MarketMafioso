@@ -421,6 +421,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 log("StowBaselineUnavailable: the primary's bags could not be read at Start; delivered items will stay in the bags.", null);
         }
         ResetTransientState();
+        if (pendingCourierRelease is null)
+            SetReleaseNote(null, attention: false);
         if (request.FundGil > 0)
         {
             // I1: the deterministic request id is durable before anything is submitted.
@@ -562,12 +564,16 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public CrossRegionActionResult Clear()
     {
         var dropped = $"phase={session.Phase} shopper={session.Shopper?.Label} purchasedUnits={session.PurchasedUnits} message={session.LastMessage}";
+        var knownRuns = KnownCourierRuns();
+        var clearRequestId = $"mmf-clear-{session.SessionId:N}";
         if (session.IsActive)
         {
             var stopped = Stop();
             dropped += $" stop={(stopped.Success ? "ok" : "failed")}: {stopped.Message}";
         }
-        log($"Cross-regional session cleared from MarketMafioso; dropped {dropped}. The game and Quartermaster are left as they are.", null);
+        // Unconditional: the session is dropped below whatever Quartermaster answers.
+        var courierOutcome = ReleaseCourierRun(knownRuns, clearRequestId);
+        log($"Cross-regional session cleared from MarketMafioso; dropped {dropped}. {courierOutcome}", null);
         CancelOpenCustodyOperations("Cleared from MarketMafioso.");
         // An open forward is not the session's: it stays watched and its outcome shows with the next status.
         DropSettledForwards();
@@ -575,7 +581,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         catch (Exception ex) { log("Cross-regional session file could not be removed.", ex); }
         session = new CrossRegionAcquisitionSession { Phase = CrossRegionAcquisitionPhase.Idle };
         ResetTransientState();
-        return CrossRegionActionResult.Ok("Cross-regional session cleared.");
+        return CrossRegionActionResult.Ok(CourierReleaseNote is { } note ? $"Cross-regional session cleared. {note}" : "Cross-regional session cleared.");
     }
 
     // ---- Tick -------------------------------------------------------------------------------
@@ -584,6 +590,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     {
         try { TickForwardWatches(); }
         catch (Exception ex) { log("Following open stow forwards failed.", ex); }
+        try { TickCourierRelease(); }
+        catch (Exception ex) { log("Clearing the cleared session's Quartermaster courier run failed.", ex); }
         if (!session.IsActive)
             return;
         try { shopping.Tick(); }
@@ -1136,7 +1144,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             }
             // Any other refusal keeps its own handling. A direct leg's earlier run under this request id may have
             // delivered part of it to the destination, so it is reported there and never resent.
-            var note = RejectionNote(leg, ack.ErrorCode);
+            var note = RejectionNote(leg, ack.ErrorCode) + NoteBlockingRun(leg, ack);
             if (leg == CourierLeg.Collect)
             {
                 // Rejected before any custody: this source is not collected and the run moves on.
