@@ -618,7 +618,12 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
         state is { Phase: ShardAcquisitionCheckpointPhase.WaitingForDeposit, OperationId: not null } current &&
         runtime.UtcNow <= current.DeadlineUtc - DepositTimeout + DepositObserveLimit;
 
-    /// <summary>Withdraws the persisted deposit in Quartermaster; what is not confirmed is retried by the cancel outbox.</summary>
+    /// <summary>
+    /// Withdraws the persisted deposit in Quartermaster; what is not confirmed is retried by the cancel outbox.
+    /// Quartermaster finds a requested operation by its request id across every owner, so this works whichever
+    /// character is logged in (including after the owner-mismatch stop); an id it does not hold answers cancel_queued,
+    /// never not_found, and stays queued.
+    /// </summary>
     private void CancelDeposit(string reason)
     {
         if (state?.OperationId is not { } operationId)

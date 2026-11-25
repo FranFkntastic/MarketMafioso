@@ -24,6 +24,20 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private DateTimeOffset nextCourierReleasePollUtc = DateTimeOffset.MinValue;
     /// <summary>The courier run the last release acted on (stopped or cleared); null when it touched none.</summary>
     private Guid? releasedCourierRun;
+    /// <summary>What the last release saw of the foreign run that blocked the session.</summary>
+    private BlockingRunState blockingRunState;
+
+    private enum BlockingRunState
+    {
+        /// <summary>No foreign blocking run, or its state could not be read.</summary>
+        Unknown,
+        /// <summary>Quartermaster holds it, not running (unresolved, stopped or parked), or no longer holds it at all.</summary>
+        NotRunning,
+        /// <summary>Running, and not this session's own: Clear left it running.</summary>
+        LeftRunning,
+        /// <summary>Running, and this session's own delivered-stow forward or request: Clear may stop it.</summary>
+        RunningOwn,
+    }
 
     /// <summary>What happened to the cleared session's Quartermaster run, shown while no session is open; null when nothing to say.</summary>
     public string? CourierReleaseNote { get; private set; }
@@ -61,6 +75,61 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private static bool IsOwnCourierRequest(string? requestId, string? prefix) =>
         prefix is not null && requestId is not null && requestId.StartsWith(prefix, StringComparison.Ordinal);
 
+    /// <summary>Quartermaster's courier request id for a delivered stow's forward run.</summary>
+    private const string DeliveredStowCourierPrefix = "delivered-stow:";
+
+    /// <summary>The run is the foreign run that blocked this session: neither one of its own legs nor sent under its request ids.</summary>
+    private bool IsForeignBlockingRun(Guid run, string? courierRequestId) =>
+        session.BlockingCourierRunId == run && !OwnCourierRuns().Contains(run) &&
+        !IsOwnCourierRequest(courierRequestId, CourierRequestPrefix());
+
+    /// <summary>
+    /// A foreign run Clear may stop while it is running: this session's own delivered-stow forward (or a request under
+    /// its id prefix). Anything else running is someone's live work and is never stopped by Clear.
+    /// </summary>
+    private bool ForeignRunIsOwnForward(string? courierRequestId)
+    {
+        var prefix = CourierRequestPrefix();
+        if (prefix is null)
+            return false;
+        var blockingRequest = session.BlockingCourierRequestId;
+        if (IsOwnCourierRequest(blockingRequest, prefix))
+            return true;
+        return courierRequestId is not null &&
+               courierRequestId.StartsWith(DeliveredStowCourierPrefix, StringComparison.Ordinal) &&
+               IsOwnCourierRequest(courierRequestId[DeliveredStowCourierPrefix.Length..], prefix);
+    }
+
+    /// <summary>Who started the foreign blocking run, as Quartermaster named it.</summary>
+    private string BlockingSourceLabel()
+    {
+        var requestId = session.BlockingCourierRequestId;
+        return session.BlockingCourierSource switch
+        {
+            BlockingSourceDeliveredStow when requestId is not null => $"delivered-stow forward {requestId}",
+            BlockingSourceDeliveredStow => "a delivered-stow forward",
+            "ipc" when requestId is not null => $"IPC request {requestId}",
+            "ipc" => "an IPC request",
+            "manual" => "started in Quartermaster",
+            { Length: > 0 } other when requestId is not null => $"{other} request {requestId}",
+            { Length: > 0 } other => other,
+            _ when requestId is not null => $"request {requestId}",
+            _ => "not started by this session",
+        };
+    }
+
+    /// <summary>A running foreign run is named and left alone; the result says so.</summary>
+    private string LeaveForeignRunRunning(Guid run)
+    {
+        blockingRunState = BlockingRunState.LeftRunning;
+        releasedCourierRun = null;
+        pendingCourierRelease = null;
+        var note = $"Quartermaster is running courier run {run:D} ({BlockingSourceLabel()}); it was left running.";
+        SetReleaseNote(note, attention: false);
+        log($"Cross-regional clear: {note}", null);
+        return note;
+    }
+
     /// <summary>
     /// Clears this session's run in Quartermaster. Returns the log text; sets <see cref="CourierReleaseNote"/>.
     /// Never throws and never blocks Clear: a run still stopping is cleared from <see cref="Tick"/> and, when the
@@ -70,6 +139,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     {
         pendingCourierRelease = null;
         releasedCourierRun = null;
+        blockingRunState = BlockingRunState.Unknown;
         SetReleaseNote(null, attention: false);
         var prefix = CourierRequestPrefix();
         if (known.Count == 0 && prefix is null)
@@ -83,11 +153,22 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 var current = status!.Run;
                 if (current?.RunId is not { } currentId ||
                     !known.Contains(currentId) && !IsOwnCourierRequest(current.RequestId, prefix))
+                {
+                    // Quartermaster's only current run is someone else's (or none): a foreign blocking run is not running.
+                    if (session.BlockingCourierRunId is not null)
+                        blockingRunState = BlockingRunState.NotRunning;
                     return known.Count == 0
                         ? "No Quartermaster courier run was started for this session."
                         : $"Quartermaster holds none of this session's courier runs ({Runs(known)}).";
+                }
                 if (!known.Contains(currentId))
                     log($"Quartermaster courier run {currentId:D} carries this session's request {current.RequestId} without a recorded run id; clearing it too.", null);
+                if (IsForeignBlockingRun(currentId, current.RequestId))
+                {
+                    if (current.IsRunning && !ForeignRunIsOwnForward(current.RequestId))
+                        return LeaveForeignRunRunning(currentId);
+                    blockingRunState = current.IsRunning ? BlockingRunState.RunningOwn : BlockingRunState.NotRunning;
+                }
                 targets = [currentId];
                 running = current.IsRunning;
             }
@@ -116,7 +197,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                     continue;
                 }
                 if (ack.ErrorCode == CodeCourierAlreadyRunning)
-                    return StopThenRelease(run, requestId, owner);
+                    return IsForeignBlockingRun(run, null) && !ForeignRunIsOwnForward(null)
+                        ? LeaveForeignRunRunning(run)
+                        : StopThenRelease(run, requestId, owner);
                 return Unreleased(run, $"{ack.ErrorCode ?? ack.Status}: {ack.Message}", certain: true, requestId, owner);
             }
             return $"Quartermaster holds none of this session's courier runs ({Runs(known)}).";
@@ -148,7 +231,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     {
         pendingCourierRelease = null;
         var holds = certain ? "still holds" : "may still hold";
-        if (requestId is not null && owner is not null && Mirror(run, requestId, owner, stopSent: false, clearAccepted: false))
+        if (requestId is not null && owner is not null &&
+            Mirror(run, requestId, owner, stopSent: false, clearAccepted: false,
+                neverStop: IsForeignBlockingRun(run, null) && !ForeignRunIsOwnForward(null)))
         {
             // The outbox retries the clear; the note stays until it settles.
             if (cancels!.IsPending(QuartermasterCancelKind.CourierRun, run.ToString("D")))
@@ -165,13 +250,16 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         return CourierReleaseNote!;
     }
 
-    /// <summary>Hands the run to the durable cancel outbox; false when there is none (the in-memory release then drives it).</summary>
-    private bool Mirror(Guid run, string requestId, string owner, bool stopSent, bool clearAccepted)
+    /// <summary>
+    /// Hands the run to the durable cancel outbox; false when there is none (the in-memory release then drives it).
+    /// A foreign run is handed over with <paramref name="neverStop"/>: it is cleared while parked, never stopped.
+    /// </summary>
+    private bool Mirror(Guid run, string requestId, string owner, bool stopSent, bool clearAccepted, bool neverStop = false)
     {
         if (cancels is null)
             return false;
         var outcome = cancels.Cancel(QuartermasterCancelKind.CourierRun, run.ToString("D"), "Cleared from MarketMafioso.", owner,
-            clearRequestId: requestId, stopSent: stopSent, clearAccepted: clearAccepted);
+            clearRequestId: requestId, stopSent: stopSent, clearAccepted: clearAccepted, neverStop: neverStop);
         log($"Courier run {run:D} handed to the cancel outbox: {outcome.Status}. {outcome.Message}", null);
         return true;
     }
@@ -261,7 +349,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return null;
         RecordBlockingRun(blocking, ack);
         var what = ack.ErrorCode == CodeCourierRunUnresolved ? "held by unresolved courier run" : "busy with courier run";
-        return $" Quartermaster is {what} {blocking:D}{(ack.DescribeBlocking() is { } owner ? $" ({owner})" : string.Empty)}; Clear abandons it.";
+        var clear = ack.ErrorCode == CodeCourierRunUnresolved
+            ? "Clear abandons it"
+            : "Clear abandons it once it is not running (a running run that this session did not start is left running)";
+        return $" Quartermaster is {what} {blocking:D}{(ack.DescribeBlocking() is { } owner ? $" ({owner})" : string.Empty)}; {clear}.";
     }
 
     private void RecordBlockingRun(Guid blocking, QuartermasterCourierAcknowledgement ack)
@@ -297,17 +388,23 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     }
 
     /// <summary>
-    /// Clear abandons a foreign run that blocked this session: a delivered-stow forward is cancelled in Quartermaster
-    /// (its run is then stopped and cleared there), any other run is released with this session's. Returns the
-    /// sentence naming what was abandoned, or null when nothing foreign was.
+    /// Clear abandons a foreign run that blocked this session only while it is not running (unresolved or parked), or
+    /// when it is this session's own delivered-stow forward: a delivered-stow forward is cancelled in Quartermaster
+    /// (its run is then cleared there), any other run is released with this session's. A running foreign run is left
+    /// running and named by the release. Returns the sentence naming what was abandoned, or null when nothing was.
     /// </summary>
     private string? AbandonBlockingRun(string owner)
     {
         if (session.BlockingCourierRunId is not { } blocking || OwnCourierRuns().Contains(blocking))
             return null;
+        if (blockingRunState == BlockingRunState.LeftRunning)
+            return null;
         var description = DescribeBlockingRun();
+        // Cancelling a forward stops its run when it is running, so it is cancelled only when the run is known not to
+        // run, or is this session's own forward. Otherwise the parked-only clear handed to the outbox covers it.
         if (string.Equals(session.BlockingCourierSource, BlockingSourceDeliveredStow, StringComparison.Ordinal) &&
-            session.BlockingCourierRequestId is { } forwardRequest)
+            session.BlockingCourierRequestId is { } forwardRequest &&
+            (blockingRunState is BlockingRunState.NotRunning or BlockingRunState.RunningOwn || ForeignRunIsOwnForward(null)))
         {
             var outcome = CancelForward(forwardRequest, "Cleared from MarketMafioso: the forward blocked this session's courier request.", owner);
             if (outcome is { Status: "cancelled" or "stopping" })

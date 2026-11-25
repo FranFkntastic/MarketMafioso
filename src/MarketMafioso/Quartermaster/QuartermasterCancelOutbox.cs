@@ -39,6 +39,19 @@ public sealed record QuartermasterPendingCancel
     public bool StopSent { get; set; }
     /// <summary>Courier runs: Quartermaster accepted the clear; kept until the run is gone from its status.</summary>
     public bool ClearAccepted { get; set; }
+    /// <summary>
+    /// Courier runs this plugin did not start (a foreign run Clear abandons while it is parked): never stopped. Found
+    /// running (someone resumed it), the entry is dropped and the run left alone.
+    /// </summary>
+    public bool NeverStop { get; set; }
+    /// <summary>Quartermaster's last answer (cancelled, stopping, cancel_queued, rejected, ...); null until one arrives.</summary>
+    public string? LastStatus { get; set; }
+    /// <summary>Consecutive cancel_queued answers, and when the first and the latest of them arrived.</summary>
+    public int QueuedAnswers { get; set; }
+    public DateTimeOffset? FirstQueuedUtc { get; set; }
+    public DateTimeOffset? LastQueuedUtc { get; set; }
+    /// <summary>A rejected answer was logged once at Warning; later rejections of this entry are not.</summary>
+    public bool RejectedWarned { get; set; }
 }
 
 /// <summary>The answer to a cancel attempt. Settled: nothing more to do. Queued: kept in the outbox and retried.</summary>
@@ -58,6 +71,13 @@ public sealed class QuartermasterCancelOutbox
     private static readonly TimeSpan FirstRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan StoppingPollInterval = TimeSpan.FromSeconds(5);
+    /// <summary>
+    /// Two cancel_queued answers at least this far apart mean Quartermaster neither holds nor is still persisting
+    /// anything under the id: its persistence queue drains on the framework thread, and an operation persisted after
+    /// the first answer is cancelled by that queued cancel and then answers already_terminal, not cancel_queued.
+    /// </summary>
+    private static readonly TimeSpan QueuedConfirmSpacing = TimeSpan.FromSeconds(5);
+    private const string StatusCancelQueued = "cancel_queued";
     private const string CodeRunNotCurrent = "RunNotCurrent";
     private const string CodeCourierAlreadyRunning = "CourierAlreadyRunning";
 
@@ -75,6 +95,10 @@ public sealed class QuartermasterCancelOutbox
     private readonly Func<DateTimeOffset> utcNow;
     private readonly object sync = new();
     private readonly HashSet<string> warnedMissing = new(StringComparer.Ordinal);
+    /// <summary>How the latest entries settled (this load only), so a run waiting on a cancel learns how it ended.</summary>
+    private readonly Dictionary<(QuartermasterCancelKind Kind, string Id), string> settledStatuses = new();
+    private readonly Queue<(QuartermasterCancelKind Kind, string Id)> settledOrder = new();
+    private const int SettledMemory = 64;
     private List<QuartermasterPendingCancel> entries = [];
     private DateTimeOffset nextDueUtc = DateTimeOffset.MaxValue;
     private bool ticking;
@@ -113,11 +137,61 @@ public sealed class QuartermasterCancelOutbox
     }
 
     /// <summary>
+    /// True when nothing can run in Quartermaster under this id any more as far as this outbox knows: no cancel is
+    /// pending for it, or Quartermaster has answered cancel_queued at least twice <see cref="QueuedConfirmSpacing"/>
+    /// apart (it holds no operation under the id and is not persisting one). The queued cancel is still re-sent.
+    /// </summary>
+    public bool IsWithdrawn(QuartermasterCancelKind kind, string id)
+    {
+        lock (sync)
+            return entries.FirstOrDefault(entry => entry.Kind == kind && string.Equals(entry.Id, id, StringComparison.Ordinal)) is not { } entry ||
+                   QueuedConfirmed(entry);
+    }
+
+    /// <summary>
+    /// How Quartermaster settled the latest cancel of this kind and id during this load (cancelled, already_terminal,
+    /// not_found, unsupported, ...); null when none settled or it is pending again.
+    /// </summary>
+    public string? SettledStatus(QuartermasterCancelKind kind, string id)
+    {
+        lock (sync)
+            return settledStatuses.TryGetValue((kind, id), out var status) ? status : null;
+    }
+
+    /// <summary>The pending entry for this kind and id, as a copy; null when none is pending.</summary>
+    public QuartermasterPendingCancel? Find(QuartermasterCancelKind kind, string id)
+    {
+        lock (sync)
+            return entries.FirstOrDefault(entry => entry.Kind == kind && string.Equals(entry.Id, id, StringComparison.Ordinal)) is { } entry
+                ? entry with { }
+                : null;
+    }
+
+    /// <summary>Retries a pending entry within <see cref="FirstRetryDelay"/> instead of its backoff: something now waits on it.</summary>
+    public void Expedite(QuartermasterCancelKind kind, string id)
+    {
+        var soon = utcNow() + FirstRetryDelay;
+        lock (sync)
+        {
+            if (entries.FirstOrDefault(entry => entry.Kind == kind && string.Equals(entry.Id, id, StringComparison.Ordinal)) is not { } entry ||
+                entry.NextAttemptUtc <= soon)
+                return;
+            entry.NextAttemptUtc = soon;
+            if (soon < nextDueUtc)
+                nextDueUtc = soon;
+        }
+    }
+
+    private static bool QueuedConfirmed(QuartermasterPendingCancel entry) =>
+        entry.LastStatus == StatusCancelQueued && entry.QueuedAnswers >= 2 &&
+        entry is { FirstQueuedUtc: { } first, LastQueuedUtc: { } last } && last - first >= QueuedConfirmSpacing;
+
+    /// <summary>
     /// Withdraws <paramref name="id"/> in Quartermaster now and keeps retrying it unless Quartermaster settled it.
     /// Never throws. A courier run the caller already asked to stop passes <paramref name="stopSent"/>.
     /// </summary>
     public QuartermasterCancelOutcome Cancel(QuartermasterCancelKind kind, string id, string reason, string owner,
-        string? clearRequestId = null, bool stopSent = false, bool clearAccepted = false)
+        string? clearRequestId = null, bool stopSent = false, bool clearAccepted = false, bool neverStop = false)
     {
         if (string.IsNullOrWhiteSpace(id))
             return new("skipped", "Nothing to cancel: no id.", Settled: true, Queued: false);
@@ -137,9 +211,11 @@ public sealed class QuartermasterCancelOutbox
                         NextAttemptUtc = now,
                         StopSent = stopSent,
                         ClearAccepted = clearAccepted,
+                        NeverStop = neverStop,
                     };
             if (!entries.Contains(entry))
                 entries.Add(entry);
+            settledStatuses.Remove((kind, id));
         }
         var outcome = Attempt(entry, now);
         Settle(entry, outcome);
@@ -167,10 +243,12 @@ public sealed class QuartermasterCancelOutbox
                 {
                     Remove(entry);
                     warn($"[MarketMafioso] QuartermasterCancelExpired: gave up withdrawing {Describe(entry)} after {EntryLifetime.TotalHours:N0} hours " +
-                         $"({entry.Attempts} attempt(s)); last error: {entry.LastError ?? "none"}." +
-                         (entry.Kind == QuartermasterCancelKind.CourierRun
-                             ? " Clear it in Quartermaster's Courier pane if it is still there."
-                             : " Quartermaster expires a requested operation that never starts."));
+                         $"({entry.Attempts} attempt(s)); last answer: {entry.LastStatus ?? "none"}; last error: {entry.LastError ?? "none"}." +
+                         (entry.LastStatus == StatusCancelQueued
+                             ? " Quartermaster never held an operation under this id."
+                             : entry.Kind == QuartermasterCancelKind.CourierRun
+                                 ? " Clear it in Quartermaster's Courier pane if it is still there."
+                                 : " Quartermaster expires a requested operation that never starts."));
                     continue;
                 }
                 QuartermasterCancelOutcome outcome;
@@ -188,8 +266,33 @@ public sealed class QuartermasterCancelOutbox
 
     private void Settle(QuartermasterPendingCancel entry, QuartermasterCancelOutcome outcome)
     {
+        var now = utcNow();
+        entry.LastStatus = outcome.Status;
+        if (outcome.Status == StatusCancelQueued)
+        {
+            entry.QueuedAnswers++;
+            entry.FirstQueuedUtc ??= now;
+            entry.LastQueuedUtc = now;
+        }
+        else
+        {
+            entry.QueuedAnswers = 0;
+            entry.FirstQueuedUtc = null;
+            entry.LastQueuedUtc = null;
+        }
         if (outcome.Settled)
         {
+            lock (sync)
+            {
+                var key = (entry.Kind, entry.Id);
+                if (!settledStatuses.ContainsKey(key))
+                {
+                    settledOrder.Enqueue(key);
+                    if (settledOrder.Count > SettledMemory)
+                        settledStatuses.Remove(settledOrder.Dequeue());
+                }
+                settledStatuses[key] = outcome.Status;
+            }
             if (Remove(entry) && entry.Attempts > 1)
                 info($"[MarketMafioso] Quartermaster settled the queued cancel of {Describe(entry)}: {outcome.Status}. {outcome.Message}");
             return;
@@ -198,7 +301,7 @@ public sealed class QuartermasterCancelOutbox
         var delay = entry.Stopping || entry.ClearAccepted || entry.StopSent && entry.Kind == QuartermasterCancelKind.CourierRun
             ? StoppingPollInterval
             : TimeSpan.FromTicks(Math.Min(MaxRetryDelay.Ticks, FirstRetryDelay.Ticks << Math.Min(entry.Attempts - 1, 10)));
-        entry.NextAttemptUtc = utcNow() + delay;
+        entry.NextAttemptUtc = now + delay;
     }
 
     private QuartermasterCancelOutcome Attempt(QuartermasterPendingCancel entry, DateTimeOffset now) => entry.Kind switch
@@ -212,7 +315,9 @@ public sealed class QuartermasterCancelOutbox
     {
         // Re-asking is idempotent: a running operation answers stopping until it ends, then already_terminal.
         if (!custody.TryCancelRequestedOperation(entry.Id, entry.Reason, out var ack, out var error))
-            return Failed(entry, error, QuartermasterIpcClient.RequestedOperationCancelCapability);
+            return ack is { IsRejected: true }
+                ? Rejected(entry, ack)
+                : Failed(entry, error, QuartermasterIpcClient.RequestedOperationCancelCapability);
         entry.LastError = null;
         var status = ack!.Status.ToLowerInvariant();
         if (status == "stopping")
@@ -220,16 +325,47 @@ public sealed class QuartermasterCancelOutbox
             entry.Stopping = true;
             return new(status, ack.Message ?? "Stopping after the current retainer.", Settled: false, Queued: true);
         }
-        // cancelled, already_terminal, not_found; cancel_queued is Quartermaster's answer for an id it holds no operation for.
+        if (status == StatusCancelQueued)
+            return Queued(entry, ack);
+        // cancelled, already_terminal, not_found.
         return new(status, ack.Message ?? status, Settled: true, Queued: false);
+    }
+
+    /// <summary>
+    /// cancel_queued: Quartermaster holds no persisted operation under the id and keeps the cancel in memory only (it
+    /// is lost on a Quartermaster reload), so it is not settled: the cancel is re-sent on backoff until a settled answer
+    /// or the entry's expiry.
+    /// </summary>
+    private static QuartermasterCancelOutcome Queued(QuartermasterPendingCancel entry, QuartermasterCancelAcknowledgement ack)
+    {
+        entry.LastError = null;
+        return new(StatusCancelQueued, ack.Message ?? "Quartermaster queued the cancel; it is re-sent until Quartermaster settles it.",
+            Settled: false, Queued: true);
+    }
+
+    /// <summary>rejected: kept with Quartermaster's reason, logged once at Warning, retried on backoff until the entry expires.</summary>
+    private QuartermasterCancelOutcome Rejected(QuartermasterPendingCancel entry, QuartermasterCancelAcknowledgement ack)
+    {
+        entry.LastError = $"rejected ({ack.ErrorCode ?? "no code"}): {ack.Message}";
+        if (!entry.RejectedWarned)
+        {
+            entry.RejectedWarned = true;
+            warn($"[MarketMafioso] QuartermasterCancelRejected: Quartermaster rejected withdrawing {Describe(entry)} ({ack.ErrorCode ?? "no code"}): " +
+                 $"{ack.Message} It is retried until it settles or expires after {EntryLifetime.TotalHours:N0} hours; further rejections are not logged.");
+        }
+        return new("rejected", entry.LastError, Settled: false, Queued: true);
     }
 
     private QuartermasterCancelOutcome AttemptForward(QuartermasterPendingCancel entry)
     {
         if (!custody.TryCancelDeliveredStowForward(entry.Id, entry.Reason, out var ack, out var error))
-            return Failed(entry, error, QuartermasterIpcClient.DeliveredStowForwardCancelCapability);
+            return ack is { IsRejected: true }
+                ? Rejected(entry, ack)
+                : Failed(entry, error, QuartermasterIpcClient.DeliveredStowForwardCancelCapability);
         entry.LastError = null;
         var status = ack!.Status.ToLowerInvariant();
+        if (status == StatusCancelQueued)
+            return Queued(entry, ack);
         if (status == "stopping")
         {
             // Quartermaster stops the forward's run itself; the run is then cleared through the courier channel.
@@ -256,6 +392,12 @@ public sealed class QuartermasterCancelOutbox
             return new("gone", $"Quartermaster no longer holds courier run {runId:D}.", Settled: true, Queued: false);
         if (run.IsRunning)
         {
+            if (entry.NeverStop)
+            {
+                // Not this plugin's run, and someone resumed it: it is left running and nothing more is done.
+                info($"[MarketMafioso] Courier run {runId:D} ({entry.Owner}) is running again; it was not started by MarketMafioso, so it was left running.");
+                return new("left_running", $"Courier run {runId:D} is running; it was not started by MarketMafioso and was left running.", Settled: true, Queued: false);
+            }
             if (entry.StopSent)
             {
                 entry.LastError = "the run is still running";
@@ -279,6 +421,8 @@ public sealed class QuartermasterCancelOutbox
         }
         if (ack.ErrorCode == CodeRunNotCurrent)
             return new("gone", $"Courier run {runId:D} is no longer current in Quartermaster.", Settled: true, Queued: false);
+        if (entry.NeverStop && ack.ErrorCode == CodeCourierAlreadyRunning)
+            return new("left_running", $"Courier run {runId:D} is running; it was not started by MarketMafioso and was left running.", Settled: true, Queued: false);
         entry.LastError = $"{ack.ErrorCode ?? ack.Status}: {ack.Message}" +
                           (ack.DescribeBlocking() is { } blocking ? $" (blocked by {blocking})" : string.Empty);
         return new(ack.ErrorCode == CodeCourierAlreadyRunning ? "running" : "refused", entry.LastError, Settled: false, Queued: true);

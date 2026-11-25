@@ -700,6 +700,19 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 session.LastMessage = "Waiting for Quartermaster to report the retainer retrieval.";
             return;
         }
+        // The deadline's own stop is followed by TimeOutRetrieval below, not held here.
+        switch (retrievalStoppingRequestId == collection.RetrievalRequestId
+                    ? WithdrawnRequestGate.Proceed
+                    : GateWithdrawnRequest(collection.RetrievalRequestId!, "retrieval"))
+        {
+            case WithdrawnRequestGate.Wait:
+                if (overdue)
+                    TimeOutRetrieval(collection, "its earlier cancel was not confirmed by Quartermaster");
+                return;
+            case WithdrawnRequestGate.Retire:
+                RetireRetrieval(collection, index, now);
+                return;
+        }
         var owner = new QuartermasterOwnerScope(collection.Source.LocalContentId, collection.Source.HomeWorldId,
             collection.Source.CharacterName, collection.Source.HomeWorldName);
         if (custody.TryGetOperation(collection.RetrievalOperationId!, owner, out var operation, out var error) &&
@@ -1006,6 +1019,16 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             else
                 session.LastMessage = "Waiting for Quartermaster to report the stow.";
             return;
+        }
+        switch (GateWithdrawnRequest(stow.RequestId!, "stow"))
+        {
+            case WithdrawnRequestGate.Wait:
+                if (overdue)
+                    TimeOutStow(stow, "its earlier cancel was not confirmed by Quartermaster");
+                return;
+            case WithdrawnRequestGate.Retire:
+                RetireStow(stow, now);
+                return;
         }
         if (!stow.Submitted)
         {
@@ -1340,6 +1363,97 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     private string CancelOwner => $"cross-regional session {session.SessionId:N}";
 
+    /// <summary>What a cancel this session sent for a request id (Stop) allows a resumed run to do with that id.</summary>
+    private enum WithdrawnRequestGate
+    {
+        /// <summary>No cancel of it is pending: follow, adopt or replay it as usual.</summary>
+        Proceed,
+        /// <summary>The cancel may still land, or Quartermaster may still run it: nothing is sent or adopted under it.</summary>
+        Wait,
+        /// <summary>Nothing of it ran or can run: the request continues under a new attempt-suffixed id.</summary>
+        Retire,
+    }
+
+    /// <summary>
+    /// A resumed run never reuses a request id while a cancel of it is pending: replaying or adopting it would hand
+    /// the resumed work to a cancel that later lands on it. It waits, with a status naming the request, until the
+    /// cancel settles. A request Quartermaster cancelled before it started, or never held (cancel_queued confirmed
+    /// twice), is then sent under a new id; one that ran is settled from its own status, as before. So one shortage
+    /// never has two live requests. Clear abandons it at any time.
+    /// </summary>
+    private WithdrawnRequestGate GateWithdrawnRequest(string requestId, string what)
+    {
+        if (cancels is null)
+            return WithdrawnRequestGate.Proceed;
+        const QuartermasterCancelKind kind = QuartermasterCancelKind.RequestedOperation;
+        if (!cancels.IsPending(kind, requestId))
+            return cancels.SettledStatus(kind, requestId) is "cancelled" or "not_found"
+                ? WithdrawnRequestGate.Retire
+                : WithdrawnRequestGate.Proceed;
+        if (cancels.IsWithdrawn(kind, requestId))
+            return WithdrawnRequestGate.Retire;
+        cancels.Expedite(kind, requestId);
+        var entry = cancels.Find(kind, requestId);
+        session.LastMessage = $"Waiting for Quartermaster to confirm withdrawing {what} {requestId} before it is sent again" +
+                              (entry?.LastStatus is { } last ? $" (last answer: {last}{(entry.LastError is { } error ? $": {error}" : string.Empty)})" : string.Empty) +
+                              ". Clear abandons it.";
+        return WithdrawnRequestGate.Wait;
+    }
+
+    /// <summary>The withdrawn retrieval never ran: it is sent again under a new attempt-suffixed identity with a fresh deadline.</summary>
+    private void RetireRetrieval(CrossRegionCollection collection, int index, DateTimeOffset now)
+    {
+        var previous = collection.RetrievalRequestId;
+        collection.RetrievalAttempt++;
+        collection.RetrievalRequestId = $"{CrossRegionAcquisitionSession.RetrievalRequestIdFor(session.SessionId, index)}-{collection.RetrievalAttempt + 1}";
+        collection.RetrievalOperationId = collection.RetrievalRequestId + "-op";
+        collection.RetrievalSubmittedAtUtc = now;
+        ResetCustodySubmitWindow();
+        custodyWaitReason = null;
+        nextCustodyPollUtc = now;
+        log($"Retrieval {previous} on {collection.Source.Label} was withdrawn in Quartermaster before it ran; " +
+            $"the resumed run sends it as {collection.RetrievalRequestId}.", null);
+        session.LastMessage = $"Retrieving counted stock from {collection.Source.CharacterName}'s retainers under a new request.";
+        Save();
+    }
+
+    /// <summary>
+    /// The withdrawn stow never ran: it is sent again under a new attempt-suffixed id, re-capped from the bags now,
+    /// with a fresh deadline.
+    /// </summary>
+    private void RetireStow(CrossRegionStow stow, DateTimeOffset now)
+    {
+        var previous = stow.RequestId;
+        if (session.PrimaryBagBaseline is { } baseline && stow.Claimed.Count > 0)
+        {
+            if (game.ReadCarriedBags() is not { } bags)
+            {
+                session.LastMessage = "Waiting for bags to load before stowing again.";
+                return;
+            }
+            stow.Items = CapToDelivered(stow.Claimed, baseline, bags);
+            stow.AllowForward = StowNeedsForward(stow.Items);
+        }
+        stow.Attempt++;
+        stow.RequestId = $"{CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId)}-{stow.Attempt + 1}";
+        stow.Submitted = false;
+        stow.OperationId = null;
+        stow.Lines = [];
+        stow.Status = null;
+        stow.SubmittedAtUtc = now;
+        ResetCustodySubmitWindow();
+        custodyWaitReason = null;
+        nextCustodyPollUtc = now;
+        log($"Stow {previous} was withdrawn in Quartermaster before it ran; the resumed run sends it as {stow.RequestId}.", null);
+        if (stow.Items.Count == 0 && stow.SentDirect.Count == 0)
+        {
+            SettleStow(stow, CodeStowNotCarried, "None of the delivered units are still in the primary's bags beyond what they held at Start.");
+            return;
+        }
+        session.LastMessage = "Stowing delivered items under a new request.";
+        Save();
+    }
+
     /// <summary>
     /// Withdraws a retrieval or stow in Quartermaster. With the cancel outbox, what Quartermaster does not confirm
     /// (unreachable, or stopping a running operation) is retried after this session is cleared or deleted.
@@ -1361,7 +1475,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         if (custody.TryCancelRequestedOperation(requestId, reason, out var ack, out var error))
         {
             log($"Quartermaster request {requestId}: {ack!.Status}. {ack.Message}", null);
-            return new(ack.Status, ack.Message ?? ack.Status, Settled: ack.Status != "stopping", Queued: false);
+            return new(ack.Status, ack.Message ?? ack.Status, Settled: ack.IsSettled, Queued: false);
         }
         log($"Quartermaster request {requestId} could not be cancelled: {error} It expires there if it never starts.", null);
         return null;
@@ -1386,7 +1500,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         if (custody.TryCancelDeliveredStowForward(requestId, reason, out var ack, out var error))
         {
             log($"Forward of stow {requestId}: {ack!.Status}. {ack.Message}", null);
-            return new(ack.Status, ack.Message ?? ack.Status, Settled: true, Queued: false, ack.ParsedRunId);
+            return new(ack.Status, ack.Message ?? ack.Status, Settled: ack.IsSettled, Queued: false, ack.ParsedRunId);
         }
         log($"Forward of stow {requestId} could not be cancelled: {error}", null);
         return null;

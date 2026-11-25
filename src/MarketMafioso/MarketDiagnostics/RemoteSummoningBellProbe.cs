@@ -602,6 +602,8 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         };
         if (suppression.RestoreError is not null)
             log.Error("[MarketMafioso] AutoRetainer suppression restoration failed after remote bell probe: {Error}", suppression.RestoreError);
+        else if (suppression.LeftToHolders is { } holders)
+            log.Information("[MarketMafioso] AutoRetainer stays suppressed after the remote bell probe: {Holders} still hold(s) it.", holders);
     }
 
     public void Dispose()

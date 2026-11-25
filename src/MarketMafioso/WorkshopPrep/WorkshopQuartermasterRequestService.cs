@@ -130,6 +130,29 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
                                    !string.IsNullOrWhiteSpace(persisted.RequestId) &&
                                    !string.IsNullOrWhiteSpace(persisted.OperationId) &&
                                    persisted.SubmittedAtUtc != default;
+        // A cancel sent for the recorded id (Stop, the deadline, a release) may still land in Quartermaster, so the id
+        // is never replayed or adopted while that cancel is pending: replaying it would hand the new run to a cancel
+        // that later withdraws it. The cancel is re-sent now; only once nothing of the old request can run does a new
+        // identity start, so two live requests for one shortage never exist.
+        if (hasPersistedIdentity && cancels is not null &&
+            (!IsTerminalStatus(persisted!.Status) || string.Equals(persisted.Status, ReleasedStatus, StringComparison.OrdinalIgnoreCase)) &&
+            cancels.IsPending(QuartermasterCancelKind.RequestedOperation, persisted.RequestId))
+        {
+            var pendingCancel = Cancel(ownerScope, "Re-sent before MarketMafioso starts the workshop retrieval again.");
+            if (!pendingCancel.AllowsNewRetrieval)
+            {
+                LastStatus = pendingCancel.State == WorkshopQuartermasterCancelState.Stopping
+                    ? $"Quartermaster is stopping the withdrawn retrieval {persisted.RequestId}; a new retrieval starts once it ends."
+                    : $"Waiting for Quartermaster to confirm withdrawing retrieval {persisted.RequestId} before a new retrieval starts. {pendingCancel.Message}";
+                LastFailureTransient = true;
+                return false;
+            }
+            DiagnosticLog?.Invoke(
+                $"[MarketMafioso] Withdrawn retrieval {persisted.RequestId} is not reused ({pendingCancel.Message}); a new retrieval request starts.");
+            // Terminal here, so the identity below is new and nothing adopts or replays the withdrawn one.
+            persisted = Clone(persisted);
+            persisted.Status = "cancelled";
+        }
         // A previous submit of this identity may have been taken. If Quartermaster knows it, follow it as submitted;
         // otherwise replay the same identity even though the live shortage has drifted, so it is never doubled.
         var acceptanceUnknown = hasPersistedIdentity && persisted!.AcceptanceUnknown && !IsTerminalStatus(persisted.Status);
@@ -522,7 +545,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             outcome = cancels.Cancel(QuartermasterCancelKind.RequestedOperation, persisted.RequestId, reason,
                 $"workshop restock for {persisted.CharacterName}");
         else if (client.TryCancelRequestedOperation(persisted.RequestId, reason, out var ack, out var error))
-            outcome = new(ack!.Status, ack.Message ?? ack.Status, Settled: ack.Status != "stopping", Queued: false);
+            outcome = new(ack!.Status, ack.Message ?? ack.Status, Settled: ack.IsSettled, Queued: false);
         else if (QuartermasterIpcClient.IsCapabilityMissing(error))
         {
             if (!warnedCancelUnsupported)
@@ -545,6 +568,10 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         if (status == "unsupported")
             return new(WorkshopQuartermasterCancelState.Unsupported,
                 $"Quartermaster retrieval {persisted.RequestId} was not withdrawn: Quartermaster cannot cancel requests (update Quartermaster).");
+        if (status == "cancel_queued" && cancels is not null &&
+            cancels.IsWithdrawn(QuartermasterCancelKind.RequestedOperation, persisted.RequestId))
+            return new(WorkshopQuartermasterCancelState.Settled,
+                $"Quartermaster holds no operation under retrieval {persisted.RequestId}; its queued cancel is still re-sent.");
         if (!outcome.Settled)
             return new(WorkshopQuartermasterCancelState.Unconfirmed,
                 $"Quartermaster did not confirm withdrawing retrieval {persisted.RequestId} ({outcome.Message})" +

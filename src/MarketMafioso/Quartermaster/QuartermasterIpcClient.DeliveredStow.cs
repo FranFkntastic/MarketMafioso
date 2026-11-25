@@ -60,7 +60,8 @@ public interface IQuartermasterDeliveredStowAdapter
 
 /// <summary>
 /// Status: cancelled, stopping, already_terminal, cancel_queued, not_found or rejected (ErrorCode names why). A
-/// forward cancel's stopping ack carries the courier RunId Quartermaster is stopping.
+/// forward cancel's stopping ack carries the courier RunId Quartermaster is stopping. cancel_queued is not settled:
+/// Quartermaster holds no persisted operation for the id and keeps the cancel only in memory, so it is re-sent.
 /// </summary>
 public sealed record QuartermasterCancelAcknowledgement
 {
@@ -76,6 +77,12 @@ public sealed record QuartermasterCancelAcknowledgement
     public string? RunId { get; init; }
 
     public bool IsRejected => string.Equals(Status, "rejected", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// cancelled, already_terminal or not_found: nothing more to do. stopping is re-checked until terminal;
+    /// cancel_queued is re-sent (Quartermaster keeps it in memory only); rejected is retried.
+    /// </summary>
+    public bool IsSettled => Status.ToLowerInvariant() is "cancelled" or "already_terminal" or "not_found";
 
     public Guid? ParsedRunId => Guid.TryParse(RunId, out var run) && run != Guid.Empty ? run : null;
 }
@@ -256,7 +263,11 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
     public const string CancelAckSchema = "gooseworks-quartermaster-cancel-request-ack/v1";
     public const string DeliveredStowForwardCancelCapability = "deliveredStowForwardCancel.v1";
     public const string CancelDeliveredStowForwardChannel = "Quartermaster.v1.CancelDeliveredStowForward";
-    /// <summary>A forward-specific ack schema, accepted alongside <see cref="CancelAckSchema"/>.</summary>
+    /// <summary>The forward cancel's request schema (Quartermaster rejects any other schema it is given).</summary>
+    public const string ForwardCancelRequestSchema = "gooseworks-quartermaster-delivered-stow-forward-cancel/v1";
+    /// <summary>The forward cancel's acknowledgement schema.</summary>
+    public const string ForwardCancelAckSchema = "gooseworks-quartermaster-delivered-stow-forward-cancel-ack/v1";
+    /// <summary>A generic forward ack schema, still accepted alongside <see cref="ForwardCancelAckSchema"/> and <see cref="CancelAckSchema"/>.</summary>
     public const string CancelForwardAckSchema = "gooseworks-quartermaster-cancel-forward-ack/v1";
 
     /// <summary>True when a failed call's error says Quartermaster is loaded but lacks the capability.</summary>
@@ -279,10 +290,9 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
             error = $"Quartermaster does not advertise {DeliveredStowForwardCancelCapability}.";
             return false;
         }
-        // The requested-operation cancel envelope: same schema, provider instance, request id and reason.
         var requestJson = JsonSerializer.Serialize(new
         {
-            schema = CancelRequestSchema,
+            schema = ForwardCancelRequestSchema,
             providerInstanceId = capabilities.ProviderInstanceId,
             requestId,
             reason,
@@ -301,7 +311,8 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
             return false;
         }
         if (acknowledgement is null || string.IsNullOrWhiteSpace(acknowledgement.Status) ||
-            !(string.Equals(acknowledgement.Schema, CancelAckSchema, StringComparison.Ordinal) ||
+            !(string.Equals(acknowledgement.Schema, ForwardCancelAckSchema, StringComparison.Ordinal) ||
+              string.Equals(acknowledgement.Schema, CancelAckSchema, StringComparison.Ordinal) ||
               string.Equals(acknowledgement.Schema, CancelForwardAckSchema, StringComparison.Ordinal)))
         {
             acknowledgement = null;
@@ -310,6 +321,7 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
         }
         if (acknowledgement.IsRejected)
         {
+            // The acknowledgement is kept: a caller tells a rejection (retried, warned once) from an unreachable Quartermaster.
             error = $"Quartermaster rejected the forward cancel ({acknowledgement.ErrorCode ?? acknowledgement.Status}): {acknowledgement.Message}";
             return false;
         }
@@ -361,6 +373,7 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
         }
         if (acknowledgement.IsRejected)
         {
+            // The acknowledgement is kept: a caller tells a rejection (retried, warned once) from an unreachable Quartermaster.
             error = $"Quartermaster rejected the cancel ({acknowledgement.ErrorCode ?? acknowledgement.Status}): {acknowledgement.Message}";
             return false;
         }

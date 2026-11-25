@@ -566,7 +566,7 @@ public static class QuartermasterCourierAckStatuses
 
 /// <summary>
 /// BlockingRequestId and BlockingSource (optional; older Quartermaster builds omit them): for a refusal caused by
-/// another run, the request that started it and a short label such as delivered-stow, ipc:&lt;caller&gt; or manual.
+/// another run, the request that started it and its source: delivered-stow, ipc or manual.
 /// </summary>
 public sealed record QuartermasterCourierAcknowledgement(
     string? ProviderInstanceId,
@@ -578,7 +578,7 @@ public sealed record QuartermasterCourierAcknowledgement(
     string? BlockingRequestId = null,
     string? BlockingSource = null)
 {
-    /// <summary>"delivered-stow forward X", "ipc:caller request X", ...; null when Quartermaster named neither.</summary>
+    /// <summary>"delivered-stow forward X", "ipc request X", "manual", ...; null when Quartermaster named neither.</summary>
     public string? DescribeBlocking() => (BlockingSource, BlockingRequestId) switch
     {
         (null or "", null or "") => null,

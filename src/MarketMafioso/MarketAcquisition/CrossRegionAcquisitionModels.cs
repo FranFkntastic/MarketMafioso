@@ -89,7 +89,7 @@ public sealed class CrossRegionAcquisitionSession
     public Guid? BlockingCourierRunId { get; set; }
     /// <summary>The request that owns <see cref="BlockingCourierRunId"/>, when Quartermaster named it.</summary>
     public string? BlockingCourierRequestId { get; set; }
-    /// <summary>What submitted the blocking run (delivered-stow, ipc:&lt;caller&gt;, manual), when Quartermaster named it.</summary>
+    /// <summary>What submitted the blocking run (delivered-stow, ipc or manual), when Quartermaster named it.</summary>
     public string? BlockingCourierSource { get; set; }
     public int HaulAttempt { get; set; }
     public List<CrossRegionManifestLine> HaulManifest { get; set; } = [];

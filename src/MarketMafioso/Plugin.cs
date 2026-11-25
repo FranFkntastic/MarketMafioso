@@ -128,6 +128,11 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.ReducedLogging = true;
         ECommonsMain.Init(PluginInterface, this);
 
+        // Shared with Quartermaster: no plugin unsuppresses AutoRetainer while another still holds it. A name an earlier
+        // load of this plugin left there is dropped now, since this load holds nothing yet.
+        AutoRetainerHolderRegistry.Attach(
+            PluginInterface.GetOrCreateData(AutoRetainerHolderRegistry.Key, () => new HashSet<string>(StringComparer.Ordinal)),
+            message => Log.Warning("{Message}", message));
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Configuration.LoadRuntimeState(PluginInterface.GetPluginConfigDirectory());
         AcquisitionHostCheck = new(Configuration, Framework, Log);
@@ -1076,6 +1081,11 @@ public sealed class Plugin : IDalamudPlugin
         DisposeStep("trade automation coordinator", tradeAutomationCoordinator.Dispose);
         // The AutoRetainer suppression lease held by the remote summoning-bell probe.
         DisposeStep("remote summoning bell probe", remoteSummoningBellProbe.Dispose);
+        DisposeStep("AutoRetainer holder registry", () =>
+        {
+            AutoRetainerHolderRegistry.Detach();
+            PluginInterface.RelinquishData(AutoRetainerHolderRegistry.Key);
+        });
 
         DisposeStep("acquisition host check", AcquisitionHostCheck.Dispose);
         DisposeStep("auto-send timer", StopTimer);
