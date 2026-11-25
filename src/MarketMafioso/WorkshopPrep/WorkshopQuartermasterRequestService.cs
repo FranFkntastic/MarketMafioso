@@ -124,9 +124,37 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
                                    !string.IsNullOrWhiteSpace(persisted.RequestId) &&
                                    !string.IsNullOrWhiteSpace(persisted.OperationId) &&
                                    persisted.SubmittedAtUtc != default;
+        // A previous submit of this identity may have been taken. If Quartermaster knows it, follow it as submitted;
+        // otherwise replay the same identity even though the live shortage has drifted, so it is never doubled.
+        var acceptanceUnknown = hasPersistedIdentity && persisted!.AcceptanceUnknown && !IsTerminalStatus(persisted.Status);
+        if (acceptanceUnknown &&
+            client.TryGetOperation(persisted!.OperationId, ownerScope, out var knownOperation, out _) &&
+            !string.Equals(knownOperation!.Status, "not_found", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(knownOperation.RequestId, persisted.RequestId, StringComparison.Ordinal))
+        {
+            var adopted = Clone(persisted);
+            adopted.Status = knownOperation.Status;
+            adopted.Message = knownOperation.Message ?? persisted.Message;
+            config.QuartermasterWorkshopRequests[key] = adopted;
+            try
+            {
+                saveConfiguration();
+            }
+            catch (Exception ex)
+            {
+                DiagnosticLog?.Invoke($"[MarketMafioso] Could not persist adopted Quartermaster operation {persisted.OperationId}: {ex.Message}");
+            }
+            LastAcknowledgement = null;
+            LastOperation = null;
+            activeScopeKey = key;
+            nextOperationPollAtUtc = DateTimeOffset.MinValue;
+            LastStatus = $"Quartermaster already holds retrieval request {persisted.RequestId}; following it.";
+            return true;
+        }
         var replayingPersistedRequest = hasPersistedIdentity &&
                                          !IsTerminalStatus(persisted!.Status) &&
-                                         (string.Equals(persisted.Signature, signature, StringComparison.Ordinal) ||
+                                         (acceptanceUnknown ||
+                                          string.Equals(persisted.Signature, signature, StringComparison.Ordinal) ||
                                           (!automaticRetrievalAvailable && string.Equals(persisted.Signature, legacySignature, StringComparison.Ordinal)));
         var persistedOperationIsReviewOnly = false;
         if (hasPersistedIdentity &&
@@ -201,9 +229,24 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             items);
         if (!client.TrySubmitShortages(request, capabilities, out var acknowledgement, out var error))
         {
-            // The identity stays persisted and non-terminal, so the next Submit replays this same request id.
+            // The identity stays persisted and non-terminal, so the next Submit replays this same request id. Only a
+            // submit that may have landed, or an IPC that is not answering yet, is worth waiting out.
             LastStatus = error;
-            LastFailureTransient = true;
+            var unknown = QuartermasterIpcClient.IsAcceptanceUnknown(error);
+            LastFailureTransient = unknown ||
+                error.StartsWith("Quartermaster shortage availability check failed", StringComparison.Ordinal);
+            if (unknown && !persisted!.AcceptanceUnknown)
+            {
+                persisted.AcceptanceUnknown = true;
+                try
+                {
+                    saveConfiguration();
+                }
+                catch (Exception ex)
+                {
+                    DiagnosticLog?.Invoke($"[MarketMafioso] Could not persist unknown acceptance for Quartermaster request {persisted.RequestId}: {ex.Message}");
+                }
+            }
             return false;
         }
 

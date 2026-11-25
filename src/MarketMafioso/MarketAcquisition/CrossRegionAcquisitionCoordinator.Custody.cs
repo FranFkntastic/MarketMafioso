@@ -87,7 +87,15 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private DateTimeOffset nextCustodyPollUtc;
     // A retrieval or stow submit that did not reach Quartermaster: when it first failed, and why the step last waited.
     private DateTimeOffset? custodySubmitFailingSinceUtc;
+    // Some attempt in the current submit window may have reached Quartermaster, so giving up must withdraw it there.
+    private bool custodySubmitMayHaveLanded;
     private string? custodyWaitReason;
+
+    private void ResetCustodySubmitWindow()
+    {
+        custodySubmitFailingSinceUtc = null;
+        custodySubmitMayHaveLanded = false;
+    }
     /// <summary>Quartermaster's code for an execution that stopped before any item moved.</summary>
     private const string QuartermasterExecutionFailedBeforeMovement = "ExecutionFailed";
 
@@ -336,7 +344,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         submitFailingSinceUtc = null;
         historyIndexingRetries = 0;
         nextSubmitRetryUtc = DateTimeOffset.MinValue;
-        custodySubmitFailingSinceUtc = null;
+        ResetCustodySubmitWindow();
         custodyWaitReason = null;
         nextSwitchPollUtc = DateTimeOffset.MinValue;
         lastSwitchRefusal = null;
@@ -662,7 +670,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             collection.RetrievalRequestId = CrossRegionAcquisitionSession.RetrievalRequestIdFor(session.SessionId, index);
             collection.RetrievalOperationId = collection.RetrievalRequestId + "-op";
             collection.RetrievalSubmittedAtUtc = now;
-            custodySubmitFailingSinceUtc = null;
+            ResetCustodySubmitWindow();
             custodyWaitReason = null;
             session.LastMessage = $"Retrieving counted stock from {collection.Source.CharacterName}'s retainers.";
             Save();
@@ -739,12 +747,14 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         {
             // The same persisted identity is replayed; Quartermaster returns the existing operation if it took the first.
             var unknown = QuartermasterIpcClient.IsAcceptanceUnknown(error);
+            custodySubmitMayHaveLanded |= unknown;
             custodySubmitFailingSinceUtc ??= now;
             custodyWaitReason = $"last submit error: {error}";
             if (now - custodySubmitFailingSinceUtc.Value >= SubmitWindow)
             {
-                custodySubmitFailingSinceUtc = null;
-                if (unknown)
+                var mayHaveLanded = custodySubmitMayHaveLanded;
+                ResetCustodySubmitWindow();
+                if (mayHaveLanded)
                 {
                     // It may have been taken: withdraw it, then continue with whatever reached the bags.
                     CancelCustodyRequest(collection.RetrievalRequestId!, $"MarketMafioso could not confirm the retrieval within {SubmitWindow.TotalMinutes:N0} minutes.");
@@ -763,7 +773,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 : $"Retrieval submission pending; nothing was submitted yet: {error}";
             return;
         }
-        custodySubmitFailingSinceUtc = null;
+        ResetCustodySubmitWindow();
         custodyWaitReason = null;
         if (!ack!.Accepted)
         {
@@ -850,7 +860,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         collection.RetrievalAttempt++;
         collection.RetrievalRequestId = $"{CrossRegionAcquisitionSession.RetrievalRequestIdFor(session.SessionId, index)}-{collection.RetrievalAttempt + 1}";
         collection.RetrievalOperationId = collection.RetrievalRequestId + "-op";
-        custodySubmitFailingSinceUtc = null;
+        ResetCustodySubmitWindow();
         custodyWaitReason = null;
         nextCustodyPollUtc = now + CustodyPollInterval;
         log($"Retrieval {previous} on {collection.Source.Label} stopped before any item moved ({operation.Code}: {operation.Message}); " +
@@ -933,7 +943,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             stow.AllowForward = StowNeedsForward(items);
             stow.RequestId = CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId);
             stow.SubmittedAtUtc = now;
-            custodySubmitFailingSinceUtc = null;
+            ResetCustodySubmitWindow();
             custodyWaitReason = null;
             Save();
         }
@@ -975,6 +985,21 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 session.LastMessage = $"Waiting to stow delivered items: {blocker}.";
                 return;
             }
+            // A first submit whose acknowledgement was lost may already be held by Quartermaster: adopt it rather
+            // than resubmitting or settling it as never submitted.
+            if (custody.TryGetDeliveredStow(stow.RequestId!, out var known, out _) && known is { IsNotFound: false })
+            {
+                ResetCustodySubmitWindow();
+                custodyWaitReason = null;
+                stow.Submitted = true;
+                stow.OperationId = known.OperationId;
+                stow.Status = known.Status;
+                stow.Lines = known.Lines.ToList();
+                nextCustodyPollUtc = now;
+                session.LastMessage = $"Quartermaster already holds stow {stow.RequestId}; following it.";
+                Save();
+                return;
+            }
             var request = new QuartermasterDeliveredStowRequest(
                 stow.RequestId!,
                 new QuartermasterOwner(primary.LocalContentId, primary.HomeWorldId, primary.CharacterName, primary.HomeWorldName),
@@ -984,16 +1009,18 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             {
                 // The same request id is replayed; Quartermaster answers a replay with the request it already holds.
                 var unknown = QuartermasterIpcClient.IsAcceptanceUnknown(error);
+                custodySubmitMayHaveLanded |= unknown;
                 custodySubmitFailingSinceUtc ??= now;
                 custodyWaitReason = $"last submit error: {error}";
                 if (now - custodySubmitFailingSinceUtc.Value >= SubmitWindow)
                 {
-                    custodySubmitFailingSinceUtc = null;
-                    if (unknown)
+                    var mayHaveLanded = custodySubmitMayHaveLanded;
+                    ResetCustodySubmitWindow();
+                    if (mayHaveLanded)
                         CancelCustodyRequest(stow.RequestId!, $"MarketMafioso could not confirm the stow within {SubmitWindow.TotalMinutes:N0} minutes.");
                     SettleStow(stow, CodeStowSubmitFailed,
                         $"Stow {stow.RequestId} did not reach Quartermaster within {SubmitWindow.TotalMinutes:N0} minutes" +
-                        (unknown ? "; acceptance is unknown, so it was cancelled there" : "; nothing was submitted") +
+                        (mayHaveLanded ? "; acceptance is unknown, so it was cancelled there" : "; nothing was submitted") +
                         $". What was not stowed stays in the bags. Last error: {error}");
                     return;
                 }
@@ -1003,7 +1030,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                     : $"Stow submission pending; nothing was submitted yet: {error}";
                 return;
             }
-            custodySubmitFailingSinceUtc = null;
+            ResetCustodySubmitWindow();
             custodyWaitReason = null;
             stow.Status = ack!.Status;
             stow.Lines = ack.Lines.ToList();
@@ -1111,7 +1138,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         stow.OperationId = null;
         stow.Lines = [];
         stow.Status = null;
-        custodySubmitFailingSinceUtc = null;
+        ResetCustodySubmitWindow();
         custodyWaitReason = null;
         nextCustodyPollUtc = now + CustodyPollInterval;
         log($"Stow {previous} failed with every unit still in the bags ({failed}); " +
@@ -1322,7 +1349,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 .Where(forward => !forward.IsNeutral && forward.Code != "NoRoom").ToList();
             var names = string.Join(", ", forwards.Select(forward => forward.Character?.CharacterName).Distinct());
             if (stow.ForwardOpen && forwards.Count > 0)
-                parts.Add($"Forwarding {forwards.Sum(forward => (long)forward.Wanted):N0} to {names}.");
+                parts.Add($"Forwarding {forwards.Sum(forward => (long)forward.Wanted):N0} to {names}" +
+                          (forwardWatches.Any(watch => watch.RequestId == stow.RequestId && !watch.Settled && watch.ParkedSinceUtc is not null)
+                              ? "; parked in Quartermaster awaiting resume." : "."));
             else if (forwards.Sum(forward => (long)(forward.Delivered ?? 0)) is var forwarded and > 0)
                 parts.Add($"Forwarded {forwarded:N0} to {names}.");
             if (stow.OutcomeCode == CodeStowUnavailable)

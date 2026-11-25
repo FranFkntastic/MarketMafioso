@@ -14,6 +14,7 @@ internal static class PlayerActionReadiness
     [
         ([ConditionFlag.LoggingOut], "the character is logging out"),
         ([ConditionFlag.BetweenAreas, ConditionFlag.BetweenAreas51], "the character is between areas"),
+        ([ConditionFlag.ReadyingVisitOtherWorld, ConditionFlag.WaitingToVisitOtherWorld], "the character is travelling to another world"),
         ([ConditionFlag.OccupiedInCutSceneEvent, ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78], "a cutscene is playing"),
         ([ConditionFlag.OccupiedInEvent, ConditionFlag.OccupiedInQuestEvent], "the character is occupied in an event"),
     ];

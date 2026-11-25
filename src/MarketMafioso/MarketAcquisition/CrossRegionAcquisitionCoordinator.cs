@@ -19,6 +19,8 @@ public interface ICrossRegionGameState
     /// <summary>Live Inventory1..4 carried bags (matching Quartermaster courier scope), or null when not loaded.</summary>
     IReadOnlyList<CrossRegionBagStack>? ReadCarriedBags();
     bool TrySwitchCharacter(CrossRegionCharacter target, out string message);
+    /// <summary>True when the last refused switch was final (invalid world, switching unavailable): retrying cannot help.</summary>
+    bool LastSwitchRefusalIsFinal => false;
 
     /// <summary>
     /// Why the logged-in character cannot be handed an action yet (zoning, a cutscene, just logged in, Lifestream
@@ -891,6 +893,18 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         }
         if (!game.TrySwitchCharacter(target, out var message))
         {
+            // Only a busy, not-ready or IPC-failing Lifestream is waited out; a final rejection fails now.
+            if (game.LastSwitchRefusalIsFinal)
+            {
+                var detail = $"Could not switch to {target.Label}; last refusal: {message}.";
+                switchWaitStartedUtc = null;
+                lastSwitchRefusal = null;
+                if (onExhausted is not null)
+                    onExhausted(detail);
+                else
+                    Fail(phase, failureCode, detail, canResumeCourier: false);
+                return;
+            }
             if (!string.Equals(lastSwitchRefusal, message, StringComparison.Ordinal))
                 log($"Character switch to {target.Label} was not accepted ({message}); retrying until the {SwitchRefusalWindow.TotalMinutes:N0}-minute switch window passes.", null);
             lastSwitchRefusal = message;

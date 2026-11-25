@@ -593,12 +593,16 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         {
             watch.ParkedSinceUtc = now;
             changed = true;
+            if (SessionStowFor(watch) is not null)
+                session.LastMessage = $"The forward of stow {watch.RequestId} is parked in Quartermaster awaiting resume.";
         }
         else if (!parked && watch.ParkedSinceUtc is { } parkedSince)
         {
             watch.ParkedFor += now - parkedSince;
             watch.ParkedSinceUtc = null;
             changed = true;
+            if (SessionStowFor(watch) is not null)
+                session.LastMessage = $"The forward of stow {watch.RequestId} resumed in Quartermaster.";
         }
         if (WatchedFor(watch, now) < ForwardWatchDeadline)
             return changed;
@@ -700,7 +704,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     /// <summary>One status line for a watched forward: its outcome once settled, else what is still on the way.</summary>
     public static string DescribeForward(CrossRegionForwardWatch watch) =>
         watch.Settled && watch.Summary is { } summary ? summary
-            : $"Forwarding {watch.Owner}'s stow: " + string.Join("; ", ForwardNotes(watch.Lines, open: true).DefaultIfEmpty("waiting for Quartermaster"));
+            : $"Forwarding {watch.Owner}'s stow{(watch.ParkedSinceUtc is not null ? " (parked in Quartermaster awaiting resume)" : string.Empty)}: " + string.Join("; ", ForwardNotes(watch.Lines, open: true).DefaultIfEmpty("waiting for Quartermaster"));
 
     /// <summary>One note per character each forwarded line is bound for, skipping parts nothing was meant to move for.</summary>
     private static IEnumerable<string> ForwardNotes(IEnumerable<QuartermasterDeliveredStowLine> lines, bool open) =>

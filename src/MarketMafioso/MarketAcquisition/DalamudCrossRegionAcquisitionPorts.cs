@@ -130,13 +130,18 @@ internal sealed class DalamudCrossRegionGameState : ICrossRegionGameState, IDisp
     {
         if (loginDriver is null)
         {
+            LastSwitchRefusalIsFinal = true;
             message = "Character switching is unavailable (no Lifestream login driver).";
             return false;
         }
         var result = loginDriver.TryBegin(target.CharacterName, target.HomeWorldName, changeCharacter: true);
         message = string.IsNullOrWhiteSpace(result.Message) ? result.Code : result.Message;
+        // NotReady (busy, mid-login) and IpcFailure (Lifestream reloading) can clear; Rejected and InvalidRequest cannot.
+        LastSwitchRefusalIsFinal = !result.Success && result.Code is not ("NotReady" or "IpcFailure");
         return result.Success;
     }
+
+    public bool LastSwitchRefusalIsFinal { get; private set; }
 }
 
 /// <summary>

@@ -38,6 +38,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
     // before the route is parked as unavailable.
     private const int MaxExactAutoResumePreparationFailures = 5;
     private int exactAutoResumePreparationFailures;
+    // The route those failures belong to; a different persisted route starts its own count.
+    private string? exactAutoResumePreparationRouteKey;
     private readonly Dictionary<ulong, string> marketActorResolvedNames = [];
     private int marketActorNameRequestedCount;
     private readonly Func<bool> otherAutomationActive;
@@ -431,6 +433,12 @@ internal sealed class MarketAcquisitionServices : IDisposable
         ExactAcquisitionRouteExecutionState persisted,
         ExactAcquisitionExecutionContract contract)
     {
+        var routeKey = $"{persisted.ContractId}|{persisted.CanonicalIntentHash}";
+        if (!string.Equals(exactAutoResumePreparationRouteKey, routeKey, StringComparison.Ordinal))
+        {
+            exactAutoResumePreparationRouteKey = routeKey;
+            exactAutoResumePreparationFailures = 0;
+        }
         return Workspace.RunWithExecutionRequestAsync(currentDocument(), async (request, token) =>
         {
             var remainingClaim = ExactAcquisitionRouteAuthoritySession.CreateRecoveryClaim(request, persisted);
