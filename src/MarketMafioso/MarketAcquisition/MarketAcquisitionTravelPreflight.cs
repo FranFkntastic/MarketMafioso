@@ -10,6 +10,7 @@ public enum MarketAcquisitionTravelPreflightState
     UiBlocked,
     LifestreamBusy,
     LifestreamStateUnavailable,
+    PlayerNotReady,
 }
 
 public sealed record MarketAcquisitionTravelPreflightResult
@@ -30,13 +31,26 @@ public static class MarketAcquisitionTravelPreflight
         AutomationTravelPreflightResult uiPreflight,
         bool lifestreamStateAvailable,
         bool lifestreamBusy,
-        string operation)
+        string operation,
+        string? playerBlocker = null)
     {
         ArgumentNullException.ThrowIfNull(uiPreflight);
         if (string.IsNullOrWhiteSpace(operation))
             throw new ArgumentException("Travel operation is required.", nameof(operation));
 
         var normalizedOperation = operation.Trim();
+        // A travel command sent while the character is zoning or held by a cutscene or event is swallowed.
+        if (!string.IsNullOrWhiteSpace(playerBlocker))
+        {
+            return new MarketAcquisitionTravelPreflightResult
+            {
+                State = MarketAcquisitionTravelPreflightState.PlayerNotReady,
+                Operation = normalizedOperation,
+                Message = $"Waiting before {normalizedOperation}: {playerBlocker}.",
+                BusyStateAvailable = lifestreamStateAvailable,
+                LifestreamBusy = lifestreamBusy,
+            };
+        }
         if (!uiPreflight.CanSendCommand)
         {
             return new MarketAcquisitionTravelPreflightResult

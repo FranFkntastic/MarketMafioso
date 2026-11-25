@@ -407,7 +407,8 @@ public sealed partial class QuartermasterIpcClient : IDisposable
 
         if (!TryParseAcknowledgement(acknowledgementJson, request.RequestId, request.OperationId, out acknowledgement, out error))
         {
-            SetStatus($"Quartermaster returned an invalid shortage acknowledgement; acceptance is unknown. {error}");
+            error = $"Quartermaster returned an invalid shortage acknowledgement; acceptance is unknown. {error}";
+            SetStatus(error);
             return false;
         }
         if (!string.IsNullOrWhiteSpace(acknowledgement!.ProviderInstanceId) &&

@@ -431,15 +431,25 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
     public static string ComposeContextSignature(QuartermasterOwnerScope owner, string queueSignature) =>
         $"{owner.LocalContentId!.Value.ToString(CultureInfo.InvariantCulture)}|{owner.HomeWorldId!.Value.ToString(CultureInfo.InvariantCulture)}|{queueSignature}";
 
+    private static readonly TimeSpan QuartermasterSubmitRetryInterval = TimeSpan.FromSeconds(5);
+    private DateTime? nextQuartermasterSubmitUtc;
+
     private void TickQuartermaster(WorkshopVendorRestockState state, QuartermasterOwnerScope owner)
     {
         if (utcNow().UtcDateTime - state.StartedAtUtc > TimeSpan.FromMinutes(15))
         {
-            FinishPolicy(WorkshopVendorRestockPhase.Indeterminate, "Quartermaster retrieval deadline expired; no further retrieval was submitted.");
+            nextQuartermasterSubmitUtc = null;
+            FinishPolicy(
+                WorkshopVendorRestockPhase.Indeterminate,
+                state.QuartermasterSubmitted
+                    ? "Quartermaster retrieval deadline expired; no further retrieval was submitted."
+                    : $"Quartermaster retrieval deadline expired before Quartermaster accepted the request; last error: {quartermaster.LastStatus}");
             return;
         }
         if (!state.QuartermasterSubmitted)
         {
+            if (nextQuartermasterSubmitUtc is { } retryAt && utcNow().UtcDateTime < retryAt)
+                return;
             var availability = state.Lines.Where(line => line.ReviewedRetainerQuantity > 0)
                 .Select(line => new WorkshopMaterialAvailability(
                     line.ItemId, line.ItemName, 0, line.RequiredQuantity, line.LivePlayerQuantity,
@@ -447,9 +457,20 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 .ToArray();
             if (!quartermaster.Submit(owner, availability))
             {
-                FinishPolicy(WorkshopVendorRestockPhase.Failed, quartermaster.LastStatus);
+                if (!quartermaster.LastFailureTransient)
+                {
+                    nextQuartermasterSubmitUtc = null;
+                    FinishPolicy(WorkshopVendorRestockPhase.Failed, quartermaster.LastStatus);
+                    return;
+                }
+                // Nothing new is minted: a transport failure replays the persisted request id next time.
+                if (nextQuartermasterSubmitUtc is null)
+                    diagnosticLog?.Invoke($"[MarketMafioso] Workshop retainer retrieval not accepted yet; retrying until the retrieval deadline. {quartermaster.LastStatus}");
+                nextQuartermasterSubmitUtc = utcNow().UtcDateTime + QuartermasterSubmitRetryInterval;
+                state.Message = $"Waiting for Quartermaster to accept the retrieval: {quartermaster.LastStatus}";
                 return;
             }
+            nextQuartermasterSubmitUtc = null;
             state.QuartermasterSubmitted = true;
             state.Message = "Retrieving reviewed workshop materials from retainers.";
             PersistPolicy();

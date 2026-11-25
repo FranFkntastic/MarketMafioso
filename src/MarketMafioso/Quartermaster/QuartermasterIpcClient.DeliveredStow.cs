@@ -388,7 +388,8 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
         }
         if (!TryParseDeliveredStow(json, request.RequestId, capabilities.ProviderInstanceId, out acknowledgement, out error))
         {
-            SetStatus($"Quartermaster returned an invalid delivered-stow acknowledgement; acceptance is unknown. {error}");
+            error = $"Quartermaster returned an invalid delivered-stow acknowledgement; acceptance is unknown. {error}";
+            SetStatus(error);
             return false;
         }
         SetStatus($"Quartermaster delivered stow {request.RequestId}: {acknowledgement!.Status}.");

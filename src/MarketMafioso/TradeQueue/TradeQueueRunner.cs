@@ -46,6 +46,10 @@ public sealed class TradeQueueRunner : IDisposable
     private int completedBatchCount;
     private string checkpointQueueSignature = string.Empty;
     private string? runId;
+    // A partner can drop out of targeting for a moment (zoning in, a cutscene, a step out of range); with no trade
+    // open nothing is in flight, so the run waits this long before stopping.
+    private static readonly TimeSpan PartnerMissingGrace = TimeSpan.FromSeconds(12);
+    private DateTimeOffset? partnerMissingSinceUtc;
     private bool normalizeHighQualityItemsForRun = true;
 
     public TradeQueueRunner(
@@ -406,11 +410,8 @@ public sealed class TradeQueueRunner : IDisposable
 
     private void TickPreparingInventory()
     {
-        if (partner == null || !io.PartnerIsAvailable(partner))
-        {
-            Fail("The selected trade partner is no longer available while checking current inventory.");
+        if (!PartnerAvailableOrWaiting("The selected trade partner is no longer available while checking current inventory."))
             return;
-        }
 
         var observation = io.ObserveTradeableInventory();
         if (!observation.IsAuthoritative)
@@ -473,11 +474,8 @@ public sealed class TradeQueueRunner : IDisposable
 
     private void TickOpeningTrade(DateTimeOffset now)
     {
-        if (partner == null || !io.PartnerIsAvailable(partner))
-        {
-            Fail("The selected trade partner is no longer available. Queue execution stopped before opening another trade.");
+        if (!PartnerAvailableOrWaiting("The selected trade partner is no longer available. Queue execution stopped before opening another trade."))
             return;
-        }
 
         if (io.IsTradeOpen)
         {
@@ -504,11 +502,8 @@ public sealed class TradeQueueRunner : IDisposable
 
     private void TickNormalizingQuality()
     {
-        if (partner == null || !io.PartnerIsAvailable(partner))
-        {
-            Fail("The selected trade partner is no longer available before inventory quality normalization completed.");
+        if (!PartnerAvailableOrWaiting("The selected trade partner is no longer available before inventory quality normalization completed."))
             return;
-        }
 
         var result = qualityLowering.Advance(
             () => IsActive &&
@@ -858,6 +853,7 @@ public sealed class TradeQueueRunner : IDisposable
     private void SetActive(TradeQueueExecutionState state, string message, TimeSpan? timeout)
     {
         var previousState = Snapshot.State;
+        partnerMissingSinceUtc = null;
         deadline = timeout is { } bounded && bounded > TimeSpan.Zero
             ? clock() + bounded
             : default;
@@ -876,6 +872,33 @@ public sealed class TradeQueueRunner : IDisposable
             true);
         if (previousState != state)
             LogTransition(previousState, state, message);
+    }
+
+    /// <summary>
+    /// True when the partner is available. While no trade is open a missing partner is waited on for
+    /// <see cref="PartnerMissingGrace"/>; after that, or with a trade open, the run fails with <paramref name="failure"/>.
+    /// </summary>
+    private bool PartnerAvailableOrWaiting(string failure)
+    {
+        if (partner != null && io.PartnerIsAvailable(partner))
+        {
+            partnerMissingSinceUtc = null;
+            return true;
+        }
+        if (partner != null && !io.IsTradeOpen)
+        {
+            var now = clock();
+            partnerMissingSinceUtc ??= now;
+            if (now - partnerMissingSinceUtc.Value < PartnerMissingGrace)
+            {
+                Snapshot = Snapshot with { Message = $"Waiting for {partner.Name} to be targetable again." };
+                return false;
+            }
+            failure += $" ({partner.Name} was not targetable for {PartnerMissingGrace.TotalSeconds:N0} s.)";
+        }
+        partnerMissingSinceUtc = null;
+        Fail(failure);
+        return false;
     }
 
     private void Fail(string message) => Finish(TradeQueueExecutionState.Failed, message);

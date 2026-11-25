@@ -45,6 +45,9 @@ public interface IShardAcquisitionCheckpointRuntime
     bool TryIsLifestreamBusy(out bool busy);
     PrivateEstateTravelResult TryTravelToPrivateEstate();
     bool TryOpenSummoningBell();
+
+    /// <summary>Why the character cannot be handed a travel command yet (zoning, a cutscene, an event), or null when it can.</summary>
+    string? ActionBlocker => null;
 }
 
 public interface IShardAcquisitionCheckpointStateStore
@@ -134,6 +137,15 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
     private static readonly TimeSpan TravelTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan BellTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan DepositTimeout = TimeSpan.FromMinutes(2);
+    // A home-world `/li` Lifestream never started (never busy, world unchanged) is resent this many times after the
+    // grace, inside the phase's own deadline.
+    private static readonly TimeSpan TravelStartGrace = TimeSpan.FromSeconds(10);
+    private const int MaxUnstartedTravelResends = 2;
+    private DateTimeOffset? homeTravelSentAtUtc;
+    private string? homeTravelSourceWorld;
+    private bool homeTravelStarted;
+    private int homeTravelResends;
+    private bool homeTravelResendPending;
     private readonly QuartermasterIpcClient quartermaster;
     private readonly IShardAcquisitionCheckpointRuntime runtime;
     private readonly IShardAcquisitionCheckpointStateStore store;
@@ -313,7 +325,7 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
         if (state.Phase == ShardAcquisitionCheckpointPhase.Failed)
             return new(false, false, true, false, state.Message);
         if (runtime.UtcNow > state.DeadlineUtc)
-            return Fail($"Shard storage checkpoint timed out during {state.Phase}.");
+            return Fail($"Shard storage checkpoint timed out during {state.Phase}; last state: {state.Message}");
         if (!runtime.TryGetOwner(out var owner) || owner.LocalContentId != state.Owner.LocalContentId || owner.HomeWorldId != state.Owner.HomeWorldId)
             return Fail("Shard storage checkpoint stopped because the current character no longer matches its owner.");
 
@@ -321,6 +333,9 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
         {
             case ShardAcquisitionCheckpointPhase.ClosingMarketBoard:
                 runtime.TryCloseMarketBoardWindows();
+                homeTravelSentAtUtc = null;
+                homeTravelResends = 0;
+                homeTravelResendPending = false;
                 return MoveTo(
                     CurrentWorldIsHome()
                         ? ShardAcquisitionCheckpointPhase.TravelingToEstate
@@ -331,30 +346,53 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
             case ShardAcquisitionCheckpointPhase.ReturningHome:
                 if (CurrentWorldIsHome())
                     return MoveTo(ShardAcquisitionCheckpointPhase.TravelingToEstate, TravelTimeout, "Home world reached; traveling to the private estate.");
+                // Nothing is sent while the character cannot act or Lifestream is busy; the phase deadline bounds the wait.
+                if (runtime.ActionBlocker is { } blocker)
+                    return Waiting($"Waiting before home-world travel: {blocker}.");
+                if (runtime.TryIsLifestreamBusy(out var busyBeforeHome) && busyBeforeHome)
+                    return Waiting("Waiting for Lifestream to finish before home-world travel.");
                 if (!runtime.ProcessCommand($"/li {state.Owner.HomeWorldName}"))
-                    return Fail("Lifestream rejected home-world travel.");
+                    return Waiting("Lifestream did not take the home-world travel command; retrying.");
+                homeTravelSentAtUtc = runtime.UtcNow;
+                homeTravelSourceWorld = runtime.CurrentWorldName;
+                homeTravelStarted = false;
+                // A resend keeps the deadline the first command started.
+                if (homeTravelResendPending)
+                {
+                    homeTravelResendPending = false;
+                    state = state with { Phase = ShardAcquisitionCheckpointPhase.WaitingForHomeWorld, Message = $"Resent home-world travel; waiting to arrive on {state.Owner.HomeWorldName}." };
+                    Persist();
+                    return new(true, false, false, false, state.Message);
+                }
                 return MoveTo(ShardAcquisitionCheckpointPhase.WaitingForHomeWorld, TravelTimeout, $"Waiting to arrive on {state.Owner.HomeWorldName}.");
 
             case ShardAcquisitionCheckpointPhase.WaitingForHomeWorld:
                 if (CurrentWorldIsHome())
+                {
+                    homeTravelResends = 0;
+                    homeTravelSentAtUtc = null;
                     return MoveTo(ShardAcquisitionCheckpointPhase.TravelingToEstate, TravelTimeout, "Home world reached; traveling to the private estate.");
-                return Waiting($"Waiting to arrive on {state.Owner.HomeWorldName}.");
+                }
+                return WaitForHomeWorld();
 
             case ShardAcquisitionCheckpointPhase.TravelingToEstate:
                 if (!runtime.TryIsLifestreamBusy(out var traveling))
-                    return Fail("Lifestream busy state is unavailable.");
+                    return Waiting("Lifestream busy state is unavailable; waiting.");
                 if (traveling)
                     return Waiting("Waiting for Lifestream travel to finish.");
+                if (runtime.ActionBlocker is { } estateBlocker)
+                    return Waiting($"Waiting before private-estate travel: {estateBlocker}.");
                 var travel = runtime.TryTravelToPrivateEstate();
-                if (travel.State == PrivateEstateTravelState.Busy)
-                    return Waiting(travel.Message);
-                if (!travel.Submitted)
+                if (travel.State == PrivateEstateTravelState.NoPrivateEstate)
                     return Fail($"Private-estate travel failed: {travel.Message}");
+                // Busy, an unknown answer or a refused teleport moved nothing: ask again until the travel deadline.
+                if (!travel.Submitted)
+                    return Waiting($"Private-estate travel not accepted yet ({travel.State}): {travel.Message}");
                 return MoveTo(ShardAcquisitionCheckpointPhase.OpeningBell, BellTimeout, "Private-estate travel accepted; waiting to approach the summoning bell.");
 
             case ShardAcquisitionCheckpointPhase.OpeningBell:
                 if (!runtime.TryIsLifestreamBusy(out var busy))
-                    return Fail("Lifestream busy state is unavailable.");
+                    return Waiting("Lifestream busy state is unavailable; waiting.");
                 if (busy)
                     return Waiting("Waiting for private-estate travel to finish.");
                 if (!runtime.TryOpenSummoningBell())
@@ -363,7 +401,7 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
 
             case ShardAcquisitionCheckpointPhase.SubmittingDeposit:
                 if (!runtime.TryIsLifestreamBusy(out var approachingBell))
-                    return Fail("Lifestream busy state is unavailable.");
+                    return Waiting("Lifestream busy state is unavailable; waiting.");
                 if (approachingBell)
                     return Waiting("Waiting for the summoning-bell approach to finish.");
                 try
@@ -494,6 +532,33 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
         state = state! with { Phase = phase, DeadlineUtc = runtime.UtcNow.Add(timeout), Message = message };
         Persist();
         return new(true, false, false, false, message);
+    }
+
+    /// <summary>
+    /// Waits for the home world. A command Lifestream never started (never busy, world unchanged after the grace) goes
+    /// back through ReturningHome to be resent, a bounded number of times, keeping the phase deadline.
+    /// </summary>
+    private ShardAcquisitionCheckpointTickResult WaitForHomeWorld()
+    {
+        var arriving = $"Waiting to arrive on {state!.Owner.HomeWorldName}.";
+        if (homeTravelSentAtUtc is not { } sentAt || homeTravelStarted)
+            return Waiting(arriving);
+        if (runtime.TryIsLifestreamBusy(out var busy) && busy ||
+            !string.Equals(runtime.CurrentWorldName, homeTravelSourceWorld, StringComparison.OrdinalIgnoreCase))
+        {
+            homeTravelStarted = true;
+            return Waiting(arriving);
+        }
+        if (runtime.UtcNow - sentAt < TravelStartGrace)
+            return Waiting(arriving);
+        if (homeTravelResends >= MaxUnstartedTravelResends)
+            return Waiting($"Lifestream never started travel to {state.Owner.HomeWorldName} ({homeTravelResends} resend(s)).");
+        homeTravelResends++;
+        homeTravelResendPending = true;
+        warn($"[MarketMafioso] Lifestream never started home-world travel to {state.Owner.HomeWorldName}; resending ({homeTravelResends}/{MaxUnstartedTravelResends}).");
+        state = state with { Phase = ShardAcquisitionCheckpointPhase.ReturningHome, Message = $"Lifestream never started travel to {state.Owner.HomeWorldName}; resending." };
+        Persist();
+        return new(true, false, false, false, state.Message);
     }
 
     private ShardAcquisitionCheckpointTickResult Waiting(string message)

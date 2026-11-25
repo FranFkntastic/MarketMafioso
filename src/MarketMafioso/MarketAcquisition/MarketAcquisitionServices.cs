@@ -34,6 +34,12 @@ internal sealed class MarketAcquisitionServices : IDisposable
     private Task? exactAcquisitionRecoveryTask;
     private Task? exactAcquisitionAutoResumeTask;
     private DateTimeOffset nextExactAcquisitionAutoResumeAtUtc;
+    // A failed recovery preparation (e.g. a market-data network blip) is retried on the 30 s cadence this many times
+    // before the route is parked as unavailable.
+    private const int MaxExactAutoResumePreparationFailures = 5;
+    private int exactAutoResumePreparationFailures;
+    // The route those failures belong to; a different persisted route starts its own count.
+    private string? exactAutoResumePreparationRouteKey;
     private readonly Dictionary<ulong, string> marketActorResolvedNames = [];
     private int marketActorNameRequestedCount;
     private readonly Func<bool> otherAutomationActive;
@@ -56,6 +62,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
     internal MarketAcquisitionPlacementService Placement { get; }
     internal CrossRegionAcquisitionCoordinator CrossRegion { get; }
     private readonly MarketAcquisitionCrossRegionShoppingRoute crossRegionShopping;
+    private readonly DalamudCrossRegionGameState crossRegionGameState;
 
     internal MarketAcquisitionServices(
         Configuration config,
@@ -186,7 +193,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
             scanner,
             routeUiAutomation,
             new Franthropy.Dalamud.Travel.DalamudLifestreamPropertyTravel(Plugin.PluginInterface),
-            lifestream);
+            lifestream,
+            Plugin.Condition);
         var shardCheckpoints = new ShardAcquisitionCheckpointCoordinator(
             quartermaster,
             shardCheckpointRuntime,
@@ -206,7 +214,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
             config, () => config.SaveRequired("ExactAcquisitionRouteAuthority"));
         RouteEngine = new MarketAcquisitionRouteEngine(
             marketAcquisitionRouteRunner,
-            new DalamudMarketAcquisitionRouteContext(playerState, lifestream),
+            new DalamudMarketAcquisitionRouteContext(playerState, lifestream, Plugin.Condition),
             routeUiAutomation,
             new UnsupportedMarketAcquisitionRouteTravelCleanup(),
             new DalamudMarketAcquisitionMarketBoardIo(
@@ -249,7 +257,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
                 lifestream,
                 () => config.MarketAcquisitionAethernetDeparture),
             message => log.Warning("{Message}", message));
-        var crossRegionGame = new DalamudCrossRegionGameState(playerState, characterLoginDriver, () => otherAutomationActive() || RouteEngine.IsRouteActive);
+        var crossRegionGame = crossRegionGameState = new DalamudCrossRegionGameState(
+            playerState, characterLoginDriver, () => otherAutomationActive() || RouteEngine.IsRouteActive, Plugin.Condition, Plugin.ClientState, lifestream);
         crossRegionShopping = new MarketAcquisitionCrossRegionShoppingRoute(
             RouteEngine,
             Workspace,
@@ -397,6 +406,9 @@ internal sealed class MarketAcquisitionServices : IDisposable
         if (Workspace.IsBusy || DateTimeOffset.UtcNow < nextExactAcquisitionAutoResumeAtUtc ||
             exactAcquisitionAutoResumeTask is { IsCompleted: false })
             return;
+        // Recovery plans from the current world; never from a login or zone that has not settled yet.
+        if (playerState.ContentId == 0 || !playerState.CurrentWorld.IsValid || crossRegionGameState.ActionBlocker is not null)
+            return;
         var live = RouteEngine.CreateSnapshot();
         if (live.ExactAcquisitionExecution?.Phase == ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded &&
             !live.IsRunning && !live.IsPaused)
@@ -421,6 +433,12 @@ internal sealed class MarketAcquisitionServices : IDisposable
         ExactAcquisitionRouteExecutionState persisted,
         ExactAcquisitionExecutionContract contract)
     {
+        var routeKey = $"{persisted.ContractId}|{persisted.CanonicalIntentHash}";
+        if (!string.Equals(exactAutoResumePreparationRouteKey, routeKey, StringComparison.Ordinal))
+        {
+            exactAutoResumePreparationRouteKey = routeKey;
+            exactAutoResumePreparationFailures = 0;
+        }
         return Workspace.RunWithExecutionRequestAsync(currentDocument(), async (request, token) =>
         {
             var remainingClaim = ExactAcquisitionRouteAuthoritySession.CreateRecoveryClaim(request, persisted);
@@ -446,11 +464,21 @@ internal sealed class MarketAcquisitionServices : IDisposable
             }
             catch (Exception exception)
             {
+                // Nothing was bought or started; keep the phase and try again on the next auto-resume pass.
+                if (!token.IsCancellationRequested &&
+                    ++exactAutoResumePreparationFailures < MaxExactAutoResumePreparationFailures)
+                {
+                    log.Warning(exception, "[MarketMafioso] Exact-acquisition recovery preparation failed ({Attempt}/{Max}); retrying.",
+                        exactAutoResumePreparationFailures, MaxExactAutoResumePreparationFailures);
+                    return;
+                }
+                exactAutoResumePreparationFailures = 0;
                 ExactStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
                     persisted,
                     $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor."));
                 return;
             }
+            exactAutoResumePreparationFailures = 0;
             if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
             {
                 ExactStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
@@ -723,6 +751,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
         WorkbenchStock.Dispose();
         Placement.Dispose();
         crossRegionShopping.Dispose();
+        crossRegionGameState.Dispose();
         Workspace.Dispose();
         RouteEngine.Dispose();
         WorldVisitCatalog.Dispose();

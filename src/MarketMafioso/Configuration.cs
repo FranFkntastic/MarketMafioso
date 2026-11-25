@@ -354,6 +354,8 @@ public sealed class QuartermasterWorkshopRequestState
     public string RequestId { get; set; } = string.Empty;
     public string OperationId { get; set; } = string.Empty;
     public DateTime SubmittedAtUtc { get; set; }
+    /// <summary>The last submit of this identity may have reached Quartermaster; it is adopted or replayed, never replaced.</summary>
+    public bool AcceptanceUnknown { get; set; }
     public string? ProviderInstanceId { get; set; }
     public long? Revision { get; set; }
     public string Status { get; set; } = string.Empty;
