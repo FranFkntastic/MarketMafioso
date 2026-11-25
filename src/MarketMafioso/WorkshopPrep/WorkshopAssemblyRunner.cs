@@ -82,6 +82,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         and not WorkshopAssemblyRunnerState.Failed;
     public bool IsPaused => Progress.State == WorkshopAssemblyRunnerState.Paused;
     public bool HasActiveRun => IsRunning || IsPaused;
+    /// <summary>Another MMF run that drives the character (the workshop vendor restock); non-null refuses a start with that reason.</summary>
+    public Func<string?>? StartBlocker { get; set; }
 
     public WorkshopAssemblyActionResult Start(WorkshopAssemblyPlan plan, bool enableDiagnostics = false)
     {
@@ -103,6 +105,11 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         if (HasActiveRun)
             return new(false, "Workshop assembly is already running.");
+        if (StartBlocker?.Invoke() is { } otherRun)
+        {
+            log.Information("[MarketMafioso] WorkshopAssemblyStartRefused: {Reason}", otherRun);
+            return new(false, otherRun);
+        }
 
         CancelPostMortem();
         CloseDiagnostics();
@@ -191,6 +198,11 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         if (!IsPaused)
             return new(false, "Workshop assembly is not paused.");
+        if (StartBlocker?.Invoke() is { } otherRun)
+        {
+            log.Information("[MarketMafioso] WorkshopAssemblyResumeRefused: {Reason}", otherRun);
+            return new(false, otherRun);
+        }
 
         var blocker = uiAutomation.BeginRun(requireCutsceneSkip: !inspectOnly);
         if (blocker != null)

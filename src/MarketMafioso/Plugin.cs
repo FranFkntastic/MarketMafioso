@@ -16,6 +16,7 @@ using ECommons;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Franthropy.Dalamud.Automation.Retainers;
 using Franthropy.Dalamud.Observations;
+using Franthropy.Dalamud.Runtime;
 using Franthropy.Dalamud.Travel;
 using Franthropy.Observations.V1;
 using Dalamud.Interface.Windowing;
@@ -69,6 +70,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TickTimings frameTimings = new(13);
     private long nextSlowFrameLog;
     private int suppressedSlowFrames;
+    private static readonly TimeSpan AutoRetainerReclaimRetryInterval = TimeSpan.FromSeconds(5);
+    private bool autoRetainerOrphanSettled;
+    private DateTimeOffset nextAutoRetainerReclaimUtc;
 
     public Configuration Configuration { get; init; }
 
@@ -140,6 +144,22 @@ public sealed class Plugin : IDalamudPlugin
         {
             Log.Warning("[MarketMafioso] AutoRetainerHolderRegistryUnavailable: {Key}: {Error}; AutoRetainer suppression works without it, " +
                         "but may lift another plugin's suppression.", AutoRetainerHolderRegistry.Key, ex.Message);
+        }
+        // Marks a suppression this plugin owns on disk, so one a crashed load left is lifted on the next load (after the
+        // stale registry name above is gone, and never while another registry holder still needs it).
+        try
+        {
+            AutoRetainerSuppressionLease.AttachMarker(
+                PluginInterface.GetPluginConfigDirectory(),
+                new DalamudAutoRetainerIpc(PluginInterface),
+                message => Log.Warning("{Message}", message),
+                message => Log.Information("{Message}", message));
+            autoRetainerOrphanSettled = AutoRetainerSuppressionLease.ReclaimOrphaned();
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[MarketMafioso] AutoRetainerSuppressionMarkerUnavailable: a suppression left by a crashed load is not lifted automatically this session.");
+            autoRetainerOrphanSettled = true;
         }
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Configuration.LoadRuntimeState(PluginInterface.GetPluginConfigDirectory());
@@ -346,6 +366,14 @@ public sealed class Plugin : IDalamudPlugin
         tradeAutoAcceptController.ExternalHold = tradeHold;
         tradeHoldProvider = new(PluginInterface, tradeHold);
         workshopRestock = new WorkshopRestockService(Configuration, quartermaster, workshopCatalog, DataManager, PlayerState, Log, quartermasterCancels);
+        // Both runs drive the character, and the restock's TextAdvance pause would stop the assembly's cutscene skip,
+        // so neither starts while the other runs. Stopping the other run is always available, to users and agents alike.
+        workshopAssemblyRunner.StartBlocker = () => workshopRestock.Runner.IsRunning
+            ? "A workshop vendor restock is running; stop it in Workshop Logistics > Materials first."
+            : null;
+        workshopRestock.Runner.StartBlocker = () => workshopAssemblyRunner.IsRunning
+            ? "A workshop assembly run is in progress; stop it in Workshop Logistics > Assembly first."
+            : null;
         remoteSummoningBellProbe = new RemoteSummoningBellProbe(
             Configuration,
             ClientState,
@@ -907,6 +935,12 @@ public sealed class Plugin : IDalamudPlugin
         quartermasterCancels.Tick();
         frameTimings.Mark("quartermasterCancels");
         var nowUtc = DateTimeOffset.UtcNow;
+        if (!autoRetainerOrphanSettled && nowUtc >= nextAutoRetainerReclaimUtc)
+        {
+            // AutoRetainer may load after MMF, so a suppression a dead load left is lifted once it answers.
+            nextAutoRetainerReclaimUtc = nowUtc + AutoRetainerReclaimRetryInterval;
+            autoRetainerOrphanSettled = AutoRetainerSuppressionLease.ReclaimOrphaned();
+        }
         var retainerSessionActive = IsRetainerSessionActive();
         var (immediatelyReady, immediateDeferredReason) = GetImmediateRetainerListingRefreshReadiness(retainerSessionActive);
         var (refreshReady, refreshDeferredReason) = retainerListingRefreshReadiness.Observe(
@@ -1076,90 +1110,83 @@ public sealed class Plugin : IDalamudPlugin
     {
         // Every step runs whatever an earlier one threw, so one failing teardown can never leave another plugin
         // suppressed, paused or leased. Stop ticking first, then hand third-party state back before anything else.
-        DisposeStep("Framework.Update unsubscribe", () => Framework.Update -= OnFrameworkUpdate);
-        // TextAdvance external control, the TextAdvance pause and Pandora Auto-select Turn-ins. The coordinator is
-        // released directly too (idempotent), so a failure deeper in the runner's teardown cannot keep them held.
-        DisposeStep("workshop assembly runner", workshopAssemblyRunner.Dispose);
-        DisposeStep("workshop assembly automation coordinator", assemblyAutomationCoordinator.Dispose);
-        // The workshop restock's TextAdvance pause and trade auto-confirm suppression.
-        DisposeStep("workshop restock", workshopRestock.Dispose);
-        // Trade suppressions (YesAlready/Dropbox) and the external trade hold.
-        DisposeStep("trade hold provider", tradeHoldProvider.Dispose);
-        DisposeStep("trade queue runner", tradeQueueRunner.Dispose);
-        DisposeStep("trade automation coordinator", tradeAutomationCoordinator.Dispose);
-        // The AutoRetainer suppression lease held by the remote summoning-bell probe.
-        DisposeStep("remote summoning bell probe", remoteSummoningBellProbe.Dispose);
-        DisposeStep("AutoRetainer holder registry", () =>
-        {
-            AutoRetainerHolderRegistry.Detach();
-            PluginInterface.RelinquishData(AutoRetainerHolderRegistry.Key);
-        });
+        DisposalSteps.DisposeAll(
+            static (step, ex) => Log.Warning(ex, "[MarketMafioso] Unload step '{Step}' failed; continuing with the remaining steps.", step),
+            ("Framework.Update unsubscribe", () => Framework.Update -= OnFrameworkUpdate),
+            // TextAdvance external control, the TextAdvance pause and Pandora Auto-select Turn-ins. The coordinator is
+            // released directly too (idempotent), so a failure deeper in the runner's teardown cannot keep them held.
+            ("workshop assembly runner", () => workshopAssemblyRunner.Dispose()),
+            ("workshop assembly automation coordinator", () => assemblyAutomationCoordinator.Dispose()),
+            // The workshop restock's TextAdvance pause and trade auto-confirm suppression.
+            ("workshop restock", () => workshopRestock.Dispose()),
+            // Trade suppressions (YesAlready/Dropbox) and the external trade hold.
+            ("trade hold provider", () => tradeHoldProvider.Dispose()),
+            ("trade queue runner", () => tradeQueueRunner.Dispose()),
+            ("trade automation coordinator", () => tradeAutomationCoordinator.Dispose()),
+            // The AutoRetainer suppression lease held by the remote summoning-bell probe.
+            ("remote summoning bell probe", () => remoteSummoningBellProbe.Dispose()),
+            // A marker still held here (a failed restore) stays on disk, so the next load lifts the suppression. Its own
+            // step, so a throwing IPC dispose never keeps this plugin's name in the holder registry below.
+            ("AutoRetainer suppression marker", AutoRetainerSuppressionLease.DetachMarker),
+            ("AutoRetainer holder registry", () =>
+            {
+                AutoRetainerHolderRegistry.Detach();
+                PluginInterface.RelinquishData(AutoRetainerHolderRegistry.Key);
+            }),
 
-        DisposeStep("acquisition host check", AcquisitionHostCheck.Dispose);
-        DisposeStep("auto-send timer", StopTimer);
-        DisposeStep("item context menu", marketAcquisitionItemContextMenu.Dispose);
-        DisposeStep("exact acquisition IPC", exactAcquisitionIpc.Dispose);
-        DisposeStep("workshop saved-job IPC", workshopSavedJobIpc.Dispose);
-        DisposeStep("workshop handoff service", () => (WorkshopHandoffService as IDisposable)?.Dispose());
-        DisposeStep("agent bridge", agentBridge.Dispose);
+            ("acquisition host check", () => AcquisitionHostCheck.Dispose()),
+            ("auto-send timer", StopTimer),
+            ("item context menu", () => marketAcquisitionItemContextMenu.Dispose()),
+            ("exact acquisition IPC", () => exactAcquisitionIpc.Dispose()),
+            ("workshop saved-job IPC", () => workshopSavedJobIpc.Dispose()),
+            ("workshop handoff service", () => (WorkshopHandoffService as IDisposable)?.Dispose()),
+            ("agent bridge", () => agentBridge.Dispose()),
 
-        DisposeStep("UI and event unsubscribe", () =>
-        {
-            PluginInterface.UiBuilder.Draw -= DrawUI;
-            PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
-            PluginInterface.UiBuilder.OpenMainUi -= OpenConfigUi;
-            quartermaster.Changed -= OnQuartermasterChanged;
-            sharedObservationClient.RetainersChanged -= OnSharedRetainersChanged;
-            GameInventory.InventoryChanged -= OnInventoryChanged;
-        });
-        DisposeStep("inventory delivery", inventoryDelivery.Dispose);
-        DisposeStep("command handler", () => CommandManager.RemoveHandler(CmdMain));
+            ("UI and event unsubscribe", () =>
+            {
+                PluginInterface.UiBuilder.Draw -= DrawUI;
+                PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
+                PluginInterface.UiBuilder.OpenMainUi -= OpenConfigUi;
+                quartermaster.Changed -= OnQuartermasterChanged;
+                sharedObservationClient.RetainersChanged -= OnSharedRetainersChanged;
+                GameInventory.InventoryChanged -= OnInventoryChanged;
+            }),
+            ("inventory delivery", () => inventoryDelivery.Dispose()),
+            ("command handler", () => CommandManager.RemoveHandler(CmdMain)),
 
-        DisposeStep("window system", windowSystem.RemoveAllWindows);
-        DisposeStep("project browser", mainWindow.ProjectBrowser.Dispose);
-        DisposeStep("acquisition composition window", mainWindow.AcquisitionCompositionWindow.Dispose);
-        DisposeStep("main window", () =>
-        {
-            mainWindow.AcquisitionFeedbackTransition -= OnAcquisitionFeedbackTransition;
-            mainWindow.Dispose();
-        });
-        DisposeStep("handover tracker", () =>
-        {
-            tradeQueueRunner.BatchVerified -= handoverTracker.OnBatchVerified;
-            tradeQueueRunner.BatchStarting -= handoverTracker.OnBatchStarting;
-            tradeQueueRunner.BatchLocking -= handoverTracker.OnBatchLocking;
-            tradeQueueRunner.BatchAbandoned -= handoverTracker.OnBatchAbandoned;
-            tradeQueueRunner.RecipientGuard = null;
-            handoverTracker.Dispose();
-        });
-        DisposeStep("acquisition services", acquisitionServices.Dispose);
-        DisposeStep("reporter", reporter.Dispose);
-        DisposeStep("remote market access probe", remoteMarketAccessProbe.Dispose);
-        DisposeStep("market lockout attention", marketLockoutAttention.Dispose);
-        DisposeStep("market board browse observer", marketBoardBrowseObserver.Dispose);
-        DisposeStep("retainer history observer", retainerHistoryObserver.Dispose);
-        DisposeStep("retainer sale chat observer", retainerSaleChatObserver.Dispose);
-        DisposeStep("shared observation listings", () =>
-        {
-            sharedObservationListings.Changed -= retainerListingRefresh.NotifyListingCaptureChanged;
-            sharedObservationListings.Dispose();
-        });
-        DisposeStep("shared observation client", () => sharedObservationClient.DisposeAsync().AsTask().GetAwaiter().GetResult());
-        DisposeStep("shared observation host", () => sharedObservationHost?.Dispose());
-        DisposeStep("Quartermaster client", quartermaster.Dispose);
-        DisposeStep("ECommons", ECommonsMain.Dispose);
-    }
-
-    private static void DisposeStep(string step, Action dispose)
-    {
-        try
-        {
-            dispose();
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "[MarketMafioso] Unload step '{Step}' failed; continuing with the remaining steps.", step);
-        }
+            ("window system", () => windowSystem.RemoveAllWindows()),
+            ("project browser", () => mainWindow.ProjectBrowser.Dispose()),
+            ("acquisition composition window", () => mainWindow.AcquisitionCompositionWindow.Dispose()),
+            ("main window", () =>
+            {
+                mainWindow.AcquisitionFeedbackTransition -= OnAcquisitionFeedbackTransition;
+                mainWindow.Dispose();
+            }),
+            ("handover tracker", () =>
+            {
+                tradeQueueRunner.BatchVerified -= handoverTracker.OnBatchVerified;
+                tradeQueueRunner.BatchStarting -= handoverTracker.OnBatchStarting;
+                tradeQueueRunner.BatchLocking -= handoverTracker.OnBatchLocking;
+                tradeQueueRunner.BatchAbandoned -= handoverTracker.OnBatchAbandoned;
+                tradeQueueRunner.RecipientGuard = null;
+                handoverTracker.Dispose();
+            }),
+            ("acquisition services", () => acquisitionServices.Dispose()),
+            ("reporter", () => reporter.Dispose()),
+            ("remote market access probe", () => remoteMarketAccessProbe.Dispose()),
+            ("market lockout attention", () => marketLockoutAttention.Dispose()),
+            ("market board browse observer", () => marketBoardBrowseObserver.Dispose()),
+            ("retainer history observer", () => retainerHistoryObserver.Dispose()),
+            ("retainer sale chat observer", () => retainerSaleChatObserver.Dispose()),
+            ("shared observation listings", () =>
+            {
+                sharedObservationListings.Changed -= retainerListingRefresh.NotifyListingCaptureChanged;
+                sharedObservationListings.Dispose();
+            }),
+            ("shared observation client", () => sharedObservationClient.DisposeAsync().AsTask().GetAwaiter().GetResult()),
+            ("shared observation host", () => sharedObservationHost?.Dispose()),
+            ("Quartermaster client", () => quartermaster.Dispose()),
+            ("ECommons", () => ECommonsMain.Dispose()));
     }
 
     public void RestartTimer() => StartTimer();
