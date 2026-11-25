@@ -8,6 +8,8 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
 {
     private static readonly CrossRegionCharacter Primary = new(0x1111, 73, "Primary Char", "Adamantoise");
     private static readonly CrossRegionCharacter Shopper = new(0x2222, 49, "Shopper Char", "Atomos");
+    private static readonly CrossRegionCharacter FirstAlt = new(0x5555, 73, "First Alt", "Adamantoise");
+    private static readonly CrossRegionCharacter SecondAlt = new(0x6666, 73, "Second Alt", "Adamantoise");
 
     // Why this test exists: a client crash or relog in the I1 window (request id persisted, ack lost)
     // must never hand Quartermaster a second gil transfer. A duplicate silently moves real gil twice
@@ -192,6 +194,64 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         Assert.All(fixture.Store.Load()!.Collections, collection => Assert.Equal(CrossRegionCollectionState.Completed, collection.State));
     }
 
+    // Why this test exists: where a haul lands is decided from Quartermaster's arrival plan over the item's global,
+    // capped home chain. Routing the whole consignment straight to an alt when the primary's first home is already at
+    // its cap, yet never when the units split across two characters (a courier transfer has one destination), is easy
+    // to break silently: a wrong call ships goods to the wrong character in another region, and the only evidence is
+    // a later inventory audit across characters, which the user must untangle by hand.
+    [Fact]
+    public void ReturnHaulGoesStraightToTheOnlyCharacterThePlanFillsAndToThePrimaryWhenItSplits()
+    {
+        // Primary's #1 home is at its cap and takes nothing; every unit is planned for First Alt's retainer.
+        using var atCap = new Fixture();
+        atCap.Direct.Plan = quantity =>
+        [
+            Destination(Primary, isOwner: true, 0),
+            Destination(FirstAlt, isOwner: false, quantity, (9001, quantity)),
+        ];
+        var straight = HaulDarksteel(atCap);
+        Assert.Equal(FirstAlt.LocalContentId, straight.Destination.LocalContentId);
+        Assert.Equal([(5057u, 12, (ulong?)9001)], straight.Items.Select(item => (item.ItemId, item.Quantity, item.RetainerId)).ToArray());
+
+        // The same units split across two alts: one trip to the primary, whose stow forwards both shares.
+        using var split = new Fixture();
+        split.Direct.Plan = quantity =>
+        [
+            Destination(Primary, isOwner: true, 0),
+            Destination(FirstAlt, isOwner: false, 5, (9001, 5)),
+            Destination(SecondAlt, isOwner: false, quantity - 5, (9002, quantity - 5)),
+        ];
+        var primary = HaulDarksteel(split);
+        Assert.Equal(Primary.LocalContentId, primary.Destination.LocalContentId);
+        Assert.All(primary.Items, item => Assert.Null(item.RetainerId));
+    }
+
+    /// <summary>Shops 12 Darksteel Ore with Stow after delivery on and returns the haul the coordinator submits.</summary>
+    private static QuartermasterCourierTransferRequest HaulDarksteel(Fixture fixture)
+    {
+        fixture.Game.LoggedIn = Shopper;
+        var session = ShoppingSession();
+        session.RequestDocumentSnapshot = new MarketAcquisitionRequestDocument { Region = "Japan", StowAfterDelivery = true };
+        fixture.Store.Save(session);
+        var coordinator = fixture.CreateCoordinator();
+        fixture.Shopping.Raise(new(5057, "Darksteel Ore", false, 12, 24_000, "Atomos", "a"));
+        fixture.Game.Bags = [new(5057, false, 12)];
+        fixture.Shopping.State = CrossRegionShoppingState.Completed;
+        fixture.TickAfter(coordinator);
+        fixture.TickAfter(coordinator);
+        Assert.Equal(CrossRegionAcquisitionPhase.HaulingToPrimary, coordinator.Phase);
+        return Assert.Single(fixture.Courier.Submitted);
+    }
+
+    private static QuartermasterArrivalDestination Destination(CrossRegionCharacter character, bool isOwner, int units, params (ulong RetainerId, int Units)[] retainers) =>
+        new()
+        {
+            Character = new() { LocalContentId = character.LocalContentId, HomeWorldId = character.HomeWorldId, CharacterName = character.CharacterName, HomeWorldName = character.HomeWorldName },
+            IsOwner = isOwner,
+            Units = units,
+            Retainers = retainers.Select(retainer => new QuartermasterArrivalRetainer { RetainerId = retainer.RetainerId, RetainerName = $"Retainer {retainer.RetainerId}", Units = retainer.Units }).ToArray(),
+        };
+
     private static CrossRegionAcquisitionSession ShoppingSession() => new()
     {
         SessionId = Guid.NewGuid(),
@@ -225,9 +285,10 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         public FakeCourier Courier { get; } = new();
         public FakeGame Game { get; } = new();
         public FakeShopping Shopping { get; } = new();
+        public FakeDirectDelivery Direct { get; } = new();
 
         public CrossRegionAcquisitionCoordinator CreateCoordinator() =>
-            new(Courier, Game, Shopping, Store, () => now);
+            new(Courier, Game, Shopping, Store, () => now, directDelivery: Direct);
 
         public CrossRegionStartRequest StartRequest(int fundGil) =>
             new(Shopper, "Japan", fundGil, new MarketAcquisitionRequestDocument { Region = "Japan" }, new Dictionary<string, uint>());
@@ -266,6 +327,8 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
                 new QuartermasterCourierBridge(21, "Ravana", 130, "Ul'dah"),
                 [
                     new(Shopper.LocalContentId, Shopper.HomeWorldId, Shopper.CharacterName, Shopper.HomeWorldName, "jp", "Japan", true, "Bell", false),
+                    new(FirstAlt.LocalContentId, FirstAlt.HomeWorldId, FirstAlt.CharacterName, FirstAlt.HomeWorldName, "na", "North America", true, "Bell", false),
+                    new(SecondAlt.LocalContentId, SecondAlt.HomeWorldId, SecondAlt.CharacterName, SecondAlt.HomeWorldName, "na", "North America", true, "Bell", false),
                 ],
                 Run);
             error = string.Empty;
@@ -305,6 +368,32 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         public bool TryPairCourierOwner(QuartermasterCourierCharacter owner, out QuartermasterCourierAcknowledgement? acknowledgement, out string error)
         {
             acknowledgement = new("qm", null, null, QuartermasterCourierAckStatuses.Accepted, null, null);
+            error = string.Empty;
+            return true;
+        }
+    }
+
+    /// <summary>Quartermaster's arrival planner: Plan maps the asked quantity to destinations; null means no direct delivery.</summary>
+    private sealed class FakeDirectDelivery : IQuartermasterDirectDeliveryClient
+    {
+        public Func<int, IReadOnlyList<QuartermasterArrivalDestination>>? Plan { get; set; }
+        public bool HasDirectDelivery => Plan is not null;
+        public bool HasDeliveredStowForward => Plan is not null;
+
+        public bool TryPlanArrival(QuartermasterOwner owner, IReadOnlyList<QuartermasterArrivalRequestItem> items, out QuartermasterArrivalPlan? plan, out string error)
+        {
+            plan = new QuartermasterArrivalPlan
+            {
+                Schema = QuartermasterIpcClient.ArrivalPlanSchema,
+                Status = "planned",
+                Items = items.Select(item => new QuartermasterArrivalItem
+                {
+                    ItemId = item.ItemId,
+                    IsHq = item.IsHq,
+                    Quantity = item.Quantity,
+                    Destinations = Plan!(item.Quantity),
+                }).ToArray(),
+            };
             error = string.Empty;
             return true;
         }

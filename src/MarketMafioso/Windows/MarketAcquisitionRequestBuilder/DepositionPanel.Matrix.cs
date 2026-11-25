@@ -40,8 +40,10 @@ public sealed partial class DepositionPanel
     }
 
     /// <summary>
-    /// One cell. Rank is the first rule's rank there (1 first home, 2+ fallbacks); Mixed when the row's rules disagree,
-    /// on membership or rank, and Badge then shows each ("1/2", "1/–"). Held is null when unknown or for Any space.
+    /// One cell. Rank is the first rule's global rank there (1 fills first across every character, 2+ after it); Mixed
+    /// when the row's rules disagree on membership, rank or cap, and Badge then shows each ("1/2", "1/–"). HeldText is
+    /// the plain held count of an uncapped home; a capped one shows held against cap instead (CapText, or CapCompact
+    /// where that does not fit).
     /// </summary>
     private sealed class Cell
     {
@@ -50,6 +52,17 @@ public sealed partial class DepositionPanel
         public bool FirstRank { get; init; }
         public string? Badge { get; init; }
         public string? HeldText { get; init; }
+        public string? CapText { get; init; }
+        public string? CapCompact { get; init; }
+        /// <summary>Every rule of the row has this home.</summary>
+        public bool AllAssigned { get; init; }
+        public bool AnyAssigned { get; init; }
+        /// <summary>Every rule of the row ranks this home first.</summary>
+        public bool AllFirst { get; init; }
+        public bool AnyCap { get; init; }
+        /// <summary>The cap every rule agrees on here; null when uncapped or the rules disagree.</summary>
+        public int? SharedCap { get; init; }
+        public required string Header { get; init; }
         public required string Tooltip { get; init; }
         public required string TooltipBase { get; init; }
         public required string AgentId { get; init; }
@@ -60,7 +73,7 @@ public sealed partial class DepositionPanel
 
     /// <summary>
     /// A matrix row. ArrivingText null: nothing arriving (blank). SubText is the slots line, amber when the arrival
-    /// cannot be absorbed by its destinations; ShortHome is then the first home to tint.
+    /// cannot be absorbed by its destinations (out of slots, or held back by caps); ShortHome is then the home to tint.
     /// </summary>
     private sealed record Row(
         RowKey Key,
@@ -94,8 +107,11 @@ public sealed partial class DepositionPanel
         string TargetAgentLabel,
         string OwnerNote);
 
-    /// <summary>What a shortfall check found: the home to tint, the slots still needed after partial stacks, and the free slots it had.</summary>
-    private readonly record struct Shortfall(Destination Home, int NeededSlots, int FreeSlots);
+    /// <summary>
+    /// What a shortfall check found: the home to tint, the slots still needed after partial stacks, the free slots it
+    /// had, and the units left in the bags. AtCap: the homes had the slots, their caps held the arrival back.
+    /// </summary>
+    private readonly record struct Shortfall(Destination Home, int NeededSlots, int FreeSlots, bool AtCap, ulong Left);
 
     // Row drawing state for the cached virtualised-row delegate.
     private readonly Action<Row, int> drawRow;
@@ -113,6 +129,7 @@ public sealed partial class DepositionPanel
         hash.Add(view.OwnerMatches);
         hash.Add(current);
         hash.Add(tickVersion);
+        hash.Add(placement.HasGlobalChain);
         hash.Add(search, StringComparer.OrdinalIgnoreCase);
         for (var index = 0; index < document.Lines.Count; index++)
         {
@@ -136,6 +153,7 @@ public sealed partial class DepositionPanel
         var cos = MathF.Cos(HeaderAngleDegrees * MathF.PI / 180f);
         var labelRoom = (MaxHeaderHeight - 8f - (lineHeight * cos)) / sin;
         var columns = BuildColumns(view, labelRoom);
+        var capHint = placement.HasGlobalChain;
         var widest = columns.Select(column => Math.Min(labelRoom, ImGui.CalcTextSize(column.Label).X)).DefaultIfEmpty(0f).Max();
         var headerHeight = Math.Clamp((widest * sin) + (lineHeight * cos) + 8f, 2f * lineHeight, MaxHeaderHeight);
 
@@ -166,13 +184,13 @@ public sealed partial class DepositionPanel
             foreach (var key in planOrder)
             {
                 var (name, rules, arriving) = plan[key];
-                rows.Add(BuildRow(view, columns, key, name, rules, arriving, showArriving: true));
+                rows.Add(BuildRow(view, columns, key, name, rules, arriving, showArriving: true, capHint));
             }
         }
         else
         {
             foreach (var rule in view.Rules)
-                rows.Add(BuildRow(view, columns, new RowKey(rule.ItemId, rule.Quality), string.Empty, [rule], null, showArriving: false));
+                rows.Add(BuildRow(view, columns, new RowKey(rule.ItemId, rule.Quality), string.Empty, [rule], null, showArriving: false, capHint));
         }
         if (needle.Length > 0)
             rows.RemoveAll(row => !row.ItemName.Contains(needle, StringComparison.OrdinalIgnoreCase));
@@ -200,11 +218,11 @@ public sealed partial class DepositionPanel
             headerHeight,
             $"This plan ({planOrder.Count:N0})###DepositionThisPlan",
             $"All items ({view.Rules.Length:N0})###DepositionAllItems",
-            $"Destination for Make first, Add as fallback and Remove: {options}",
+            $"Destination for Make first, Add as fallback, Remove and Set cap: {options}",
             $"Quartermaster's placement is for {ownerName}.");
     }
 
-    /// <summary>Ticked destinations per character in Quartermaster's order: retainers in game order, then Any space.</summary>
+    /// <summary>Ticked destinations per character in Quartermaster's order: retainers in game order.</summary>
     private ImmutableArray<Column> BuildColumns(PlacementView view, float labelRoom)
     {
         var set = Ticked();
@@ -218,9 +236,6 @@ public sealed partial class DepositionPanel
                 if (set.Contains(key))
                     mine.Add((key, RetainerLabel(retainer), retainer.FreeSlots, retainer.StockObserved));
             }
-            var any = new Destination(character.LocalContentId, 0);
-            if (character.OffersAnySpace && set.Contains(any))
-                mine.Add((any, "Any space", AnySpaceFree(character), false));
             for (var index = 0; index < mine.Count; index++)
                 columns.Add(new Column(mine[index].Key, character, mine[index].Label, mine[index].Free, mine[index].Observed, index == 0, mine.Count));
         }
@@ -229,7 +244,7 @@ public sealed partial class DepositionPanel
         var padding = ImGui.GetStyle().CellPadding.X * 2f;
         return [.. columns.Select(column =>
         {
-            var picker = column.Key.IsAnySpace ? "Any space" : banded ? $"{column.Character.CharacterName} · {column.Label}" : column.Label;
+            var picker = banded ? $"{column.Character.CharacterName} · {column.Label}" : column.Label;
             return column with
             {
                 PickerLabel = picker,
@@ -243,24 +258,6 @@ public sealed partial class DepositionPanel
         })];
     }
 
-    /// <summary>
-    /// Any space can use every retainer assigned to the character, so its room is theirs together; unknown only when an
-    /// assigned retainer's is.
-    /// </summary>
-    private static int? AnySpaceFree(QuartermasterPlacementCharacter character)
-    {
-        var total = 0;
-        foreach (var retainer in character.Retainers)
-        {
-            if (!retainer.Assigned)
-                continue;
-            if (retainer.FreeSlots is not { } free)
-                return null;
-            total += free;
-        }
-        return total;
-    }
-
     private Row BuildRow(
         PlacementView view,
         ImmutableArray<Column> columns,
@@ -268,7 +265,8 @@ public sealed partial class DepositionPanel
         string name,
         ImmutableArray<PlacementRuleKey> rules,
         ulong? arriving,
-        bool showArriving)
+        bool showArriving,
+        bool capHint)
     {
         var items = rules.Select(rule => view.Items.GetValueOrDefault(rule)).ToArray();
         var itemName = !string.IsNullOrWhiteSpace(name)
@@ -277,7 +275,7 @@ public sealed partial class DepositionPanel
         var id = $"{key.ItemId}.{key.Quality}";
         var cells = new Cell[columns.Length];
         for (var index = 0; index < columns.Length; index++)
-            cells[index] = BuildCell(id, itemName, rules, items, columns[index]);
+            cells[index] = BuildCell(id, itemName, rules, items, columns[index], capHint);
 
         string? arrivingText = null, subText = null;
         var muted = false;
@@ -299,7 +297,9 @@ public sealed partial class DepositionPanel
                 {
                     amber = true;
                     shortHome = shortfall.Home;
-                    subText = $"{shortfall.NeededSlots:N0} {Slots(shortfall.NeededSlots)} · {shortfall.FreeSlots:N0} free";
+                    subText = shortfall.AtCap
+                        ? $"At cap · {shortfall.Left:N0} left"
+                        : $"{shortfall.NeededSlots:N0} {Slots(shortfall.NeededSlots)} · {shortfall.FreeSlots:N0} free";
                 }
                 else
                 {
@@ -318,9 +318,10 @@ public sealed partial class DepositionPanel
         string itemName,
         ImmutableArray<PlacementRuleKey> rules,
         IReadOnlyList<QuartermasterPlacementItem?> items,
-        Column column)
+        Column column,
+        bool capHint)
     {
-        var ranks = new int?[items.Count];
+        var homes = new QuartermasterPlacementHome?[items.Count];
         var next = new int[items.Count];
         var members = 0;
         var held = 0;
@@ -333,33 +334,58 @@ public sealed partial class DepositionPanel
                 next[index] = 1;
                 continue;
             }
-            ranks[index] = Rank(item, column);
-            if (ranks[index] is not null)
+            homes[index] = Home(item, column.Key);
+            if (homes[index] is not null)
                 members++;
-            next[index] = HomesOn(item, column) + 1;
-            if (!column.Key.IsAnySpace)
-                held += HeldAt(item, column.Key);
+            // The chain is global: a new home on any character goes after every existing one.
+            next[index] = item.Homes.Length + 1;
+            held += HeldAt(item, column.Key);
         }
+        var ranks = homes.Select(home => home?.Rank).ToArray();
+        var caps = homes.Where(home => home is not null).Select(home => home!.MaxUnits).Distinct().ToArray();
         var shownRanks = ranks.Where(rank => rank is not null).Distinct().Count();
-        var mixed = members > 0 && (members < items.Count || shownRanks > 1);
+        var mixed = members > 0 && (members < items.Count || shownRanks > 1 || caps.Length > 1);
         var rank = ranks.FirstOrDefault(value => value is not null);
         var badge = mixed ? string.Join("/", ranks.Select(value => value?.ToString() ?? "–")) : rank?.ToString();
-        int? heldUnits = column.Key.IsAnySpace || !heldKnown ? null : held;
+        int? heldUnits = heldKnown ? held : null;
+        var anyCap = homes.Any(home => home?.MaxUnits is not null);
+        var sharedCap = caps.Length == 1 ? caps[0] : null;
 
-        var parts = new List<string> { itemName, column.PickerLabel };
-        if (!column.Key.IsAnySpace)
-            parts.Add(heldUnits is { } units ? $"holds {units:N0}" : "holds —");
+        var header = $"{itemName} · {column.Character.CharacterName} · {column.Label}";
+        var parts = new List<string> { header };
+        var holds = heldUnits is { } units ? $"holds {units:N0}" : "holds —";
+        if (sharedCap is { } shared)
+            holds += heldUnits is { } known
+                ? $" / cap {shared:N0} ({Math.Max(0L, (long)shared - known):N0} room)"
+                : $" / cap {shared:N0}";
+        parts.Add(holds);
         parts.Add(column.FreeSlots is { } free ? $"{free:N0} free slots" : "free slots unknown");
         if (mixed)
-            parts.Add(string.Join(" · ", rules.Select((rule, index) => $"{QualityName(rule.Quality)} {(ranks[index] is { } value ? $"#{value}" : "–")}")));
+            parts.Add(string.Join(" · ", rules.Select((rule, index) => $"{QualityName(rule.Quality)} {RuleState(homes[index])}")));
         else if (rank is { } shown)
             parts.Add($"#{shown}");
         var tooltipBase = string.Join(" · ", parts);
         var action = members > 0
-            ? "remove"
+            ? "click to remove"
             : next.Distinct().Count() == 1
-                ? $"add as #{next[0]}"
-                : $"add as {string.Join(" · ", rules.Select((rule, index) => $"{QualityName(rule.Quality)} #{next[index]}"))}";
+                ? $"click to add as #{next[0]}"
+                : $"click to add as {string.Join(" · ", rules.Select((rule, index) => $"{QualityName(rule.Quality)} #{next[index]}"))}";
+        if (capHint)
+            action += " · right-click to set cap";
+
+        string? heldText = null, capText = null, capCompact = null;
+        if (sharedCap is { } cap)
+        {
+            (capText, capCompact) = heldUnits switch
+            {
+                null => ($"—/{cap:N0}", $"—/{Compact(cap)}"),
+                { } count => ($"{count:N0}/{cap:N0}", $"{Compact(count)}/{Compact(cap)}"),
+            };
+        }
+        else
+        {
+            heldText = heldUnits is { } count ? count == 0 ? null : $"{count:N0}" : "—";
+        }
 
         return new Cell
         {
@@ -367,37 +393,50 @@ public sealed partial class DepositionPanel
             Mixed = mixed,
             FirstRank = ranks.Any(value => value == 1),
             Badge = badge,
-            HeldText = column.Key.IsAnySpace ? null : heldUnits is { } count ? count == 0 ? null : $"{count:N0}" : "—",
+            HeldText = heldText,
+            CapText = capText,
+            CapCompact = capCompact,
+            AllAssigned = members == items.Count,
+            AnyAssigned = members > 0,
+            AllFirst = members == items.Count && ranks.All(value => value == 1),
+            AnyCap = anyCap,
+            SharedCap = sharedCap,
+            Header = header,
             TooltipBase = tooltipBase,
             Tooltip = $"{tooltipBase} · {action}",
             AgentId = $"{AgentPrefix}.cell.{rowId}.{column.Key.Id}",
             AgentLabel = $"{itemName} · {column.PickerLabel}",
-            AgentValue = mixed ? badge! : rank is { } value ? $"#{value}" : "Not a destination",
+            AgentValue = mixed ? badge!
+                : rank is { } value ? sharedCap is { } limit ? $"#{value} · cap {limit:N0}" : $"#{value}"
+                : "Not a destination",
         };
+
+        static string RuleState(QuartermasterPlacementHome? home) =>
+            home is null ? "–" : home.MaxUnits is { } cap ? $"#{home.Rank} cap {cap:N0}" : $"#{home.Rank} uncapped";
     }
 
     private static string QualityName(string quality) => quality == "HqOnly" ? "HQ" : "NQ";
 
-    private static int? Rank(QuartermasterPlacementItem item, Column column)
+    /// <summary>A count in at most four characters, rounded down so a home short of its cap never reads as at it: 9.2k, 10k, 1.2M.</summary>
+    private static string Compact(long value)
     {
-        if (column.Character.IsOwner)
-        {
-            if (column.Key.IsAnySpace)
-                return item.AnySpace ? item.LocalHomes.Length + 1 : null;
-            var local = item.LocalHomes.IndexOf(column.Key.RetainerId);
-            return local >= 0 ? local + 1 : null;
-        }
-        if (item.Remote is not { } remote || remote.Character.LocalContentId != column.Key.LocalContentId)
-            return null;
-        var index = remote.Homes.IndexOf(column.Key.RetainerId);
-        return index >= 0 ? index + 1 : null;
+        if (value < 1_000)
+            return value.ToString("N0");
+        if (value < 10_000)
+            return $"{Math.Floor(value / 100d) / 10d:0.#}k";
+        if (value < 1_000_000)
+            return $"{value / 1_000:N0}k";
+        return value < 10_000_000 ? $"{Math.Floor(value / 100_000d) / 10d:0.#}M" : $"{value / 1_000_000:N0}M";
     }
 
-    /// <summary>Homes the rule has before a new one on this column's character would be added.</summary>
-    private static int HomesOn(QuartermasterPlacementItem item, Column column) =>
-        column.Character.IsOwner
-            ? item.LocalHomes.Length
-            : item.Remote is { } remote && remote.Character.LocalContentId == column.Key.LocalContentId ? remote.Homes.Length : 0;
+    /// <summary>The rule's home at this destination, matched by character and retainer; null when it is not one.</summary>
+    private static QuartermasterPlacementHome? Home(QuartermasterPlacementItem item, Destination destination)
+    {
+        foreach (var home in item.Homes)
+            if (home.Is(destination.LocalContentId, destination.RetainerId))
+                return home;
+        return null;
+    }
 
     private static int HeldAt(QuartermasterPlacementItem item, Destination destination)
     {
@@ -408,62 +447,63 @@ public sealed partial class DepositionPanel
     }
 
     /// <summary>
-    /// Whether the arrival cannot be absorbed where it would go: every rule's homes in rank order (first homes, then
-    /// fallbacks, other character's homes after the owner's), then Any space (the owner's other assigned retainers).
-    /// Each destination takes its free slots plus the room left in partial stacks of the item it already holds, which
-    /// Quartermaster fills first. Never short while a figure it needs is unknown: the walk stops at the first unknown.
+    /// Whether the arrival cannot be absorbed where it would go, with the math Quartermaster plans by: the global home
+    /// chain in rank order across characters (an either-quality row walks both rules' rank 1, then rank 2, ...), each
+    /// home taking min(physical room, cap room). Physical room is its free slots plus the room left in partial stacks
+    /// of the item it already holds; cap room is MaxUnits less what the rule holds there (unlimited when uncapped).
+    /// Never short while a figure it needs is unknown: the walk stops at the first unobserved home. Short with enough
+    /// slots overall means caps held the arrival back (AtCap, first binding cap tinted); otherwise it is out of slots.
     /// </summary>
     private static Shortfall? FindShortfall(PlacementView view, IReadOnlyList<QuartermasterPlacementItem?> items, ulong arriving, ulong stack)
     {
         if (items.Any(item => item is null))
             return null;
         var rules = items.Select(item => item!).ToArray();
-        var owner = view.Characters.FirstOrDefault(character => character.IsOwner);
         var homes = new List<Destination>();
-        if (owner is not null)
-            for (var rank = 0; rank < rules.Max(rule => rule.LocalHomes.Length); rank++)
-                foreach (var rule in rules)
-                    if (rank < rule.LocalHomes.Length)
-                        AddOnce(homes, new Destination(owner.LocalContentId, rule.LocalHomes[rank]));
-        for (var rank = 0; rank < rules.Max(rule => rule.Remote?.Homes.Length ?? 0); rank++)
+        for (var rank = 0; rank < rules.Max(rule => rule.Homes.Length); rank++)
             foreach (var rule in rules)
-                if (rule.Remote is { Character.LocalContentId: { } remote } && rank < rule.Remote.Homes.Length)
-                    AddOnce(homes, new Destination(remote, rule.Remote.Homes[rank]));
-        var anySpace = owner is not null && rules.Any(rule => rule.AnySpace);
-        if (anySpace)
-            foreach (var retainer in owner!.Retainers)
-                if (retainer.Assigned)
-                    AddOnce(homes, new Destination(owner.LocalContentId, retainer.RetainerId));
+                if (rank < rule.Homes.Length && rule.Homes[rank].Character.LocalContentId is { } character)
+                    AddOnce(homes, new Destination(character, rule.Homes[rank].RetainerId));
         if (homes.Count == 0)
             return null;
 
         var remaining = arriving;
-        ulong partialRoom = 0;
+        ulong partialRoom = 0, physicalTotal = 0;
         var free = 0;
+        Destination? capped = null;
         foreach (var home in homes)
         {
             var retainer = view.Character(home.LocalContentId)?.Retainers.FirstOrDefault(candidate => candidate.RetainerId == home.RetainerId);
             if (retainer is not { StockObserved: true, FreeSlots: { } slots })
                 return null;
-            ulong partial = 0;
+            ulong partial = 0, capRoom = 0;
+            var uncapped = false;
             foreach (var rule in rules)
             {
                 var held = (ulong)Math.Max(0, HeldAt(rule, home));
                 partial += (stack - (held % stack)) % stack;
+                if (Home(rule, home) is not { } entry)
+                    continue;
+                if (entry.MaxUnits is { } cap)
+                    capRoom += (ulong)Math.Max(0L, cap - (long)held);
+                else
+                    uncapped = true;
             }
-            var room = ((ulong)Math.Max(0, slots) * stack) + partial;
+            var physical = ((ulong)Math.Max(0, slots) * stack) + partial;
+            var room = uncapped ? physical : Math.Min(physical, capRoom);
             free += Math.Max(0, slots);
             partialRoom += partial;
+            physicalTotal += physical;
             if (room >= remaining)
                 return null;
+            if (room < physical)
+                capped ??= home;
             remaining -= room;
         }
+        if (capped is { } atCap && physicalTotal >= arriving)
+            return new Shortfall(atCap, 0, free, AtCap: true, remaining);
         var needed = (int)Math.Min(int.MaxValue, (arriving - Math.Min(arriving, partialRoom) + stack - 1) / stack);
-        var first = homes[0];
-        // With no ranked home, the arrival's only destination is Any space: tint that column.
-        if (rules.All(rule => rule.LocalHomes.IsDefaultOrEmpty && rule.Remote is not { Homes.IsDefaultOrEmpty: false }) && owner is not null)
-            first = new Destination(owner.LocalContentId, 0);
-        return new Shortfall(first, needed, free);
+        return new Shortfall(homes[0], needed, free, AtCap: false, remaining);
 
         static void AddOnce(List<Destination> list, Destination destination)
         {
@@ -486,7 +526,8 @@ public sealed partial class DepositionPanel
         var wide = ImGui.GetContentRegionAvail().X >= WideMatrixWidth;
         var nameWidth = wide ? 280f : 220f;
         var cellWidth = wide ? WideCellWidth : NarrowCellWidth;
-        var arrivingWidth = Math.Max(ImGui.CalcTextSize("Arriving").X, ImGui.CalcTextSize("999 slots · 99 free").X);
+        var arrivingWidth = Math.Max(ImGui.CalcTextSize("Arriving").X,
+            Math.Max(ImGui.CalcTextSize("999 slots · 99 free").X, ImGui.CalcTextSize("At cap · 99,999 left").X));
         var frozen = current.ThisPlan ? 2 : 1;
         var headerRows = current.Banded ? 3 : 2;
         var flags = ImGuiTableFlags.ScrollX | ImGuiTableFlags.ScrollY | ImGuiTableFlags.BordersInnerH |
@@ -536,7 +577,7 @@ public sealed partial class DepositionPanel
                 drawList.AddText(min, ImGui.GetColorU32(column.Character.IsOwner ? CurrentCharacterTint : ImGui.GetStyle().Colors[(int)ImGuiCol.Text]),
                     wide ? column.BandWide : column.BandNarrow);
                 drawList.AddLine(new Vector2(min.X, min.Y + lineHeight + 1f), new Vector2(min.X + span, min.Y + lineHeight + 1f),
-                    ImGui.GetColorU32(AnySeparatorColor));
+                    ImGui.GetColorU32(BandRuleColor));
                 drawList.PopClipRect();
             }
             ImGui.Dummy(new Vector2(1f, lineHeight));
@@ -570,8 +611,6 @@ public sealed partial class DepositionPanel
             ImGui.TableSetColumnIndex(frozen + index);
             var min = ImGui.GetCursorScreenPos();
             ImGui.Dummy(new Vector2(cellWidth, headerHeight - (padding.Y * 2f)));
-            if (column.Key.IsAnySpace)
-                DrawAnySeparator(min, headerHeight);
             // Angled labels run up and right over later columns, so they may leave their cell but never cover the frozen ones.
             drawList.PushClipRect(new Vector2(frozenRight, top - padding.Y), new Vector2(windowRight, top + headerHeight), false);
             DalamudDrawListPrimitives.AddRotatedText(drawList, new Vector2(min.X + (cellWidth * .5f) + (lineHeight * .35f), bottom), radians,
@@ -594,13 +633,10 @@ public sealed partial class DepositionPanel
         ImGui.TableNextRow(ImGuiTableRowFlags.Headers);
         ImGui.TableSetColumnIndex(0);
         ImGui.TextColored(MainWindow.ColMuted, "Free slots");
-        var rowHeight = ImGui.GetTextLineHeight() + (ImGui.GetStyle().CellPadding.Y * 2f);
         for (var index = 0; index < current.Columns.Length; index++)
         {
             var column = current.Columns[index];
             ImGui.TableSetColumnIndex(frozen + index);
-            if (column.Key.IsAnySpace)
-                DrawAnySeparator(ImGui.GetCursorScreenPos(), rowHeight);
             DrawRightAligned(column.FreeText, MainWindow.ColMuted);
         }
     }
@@ -644,7 +680,7 @@ public sealed partial class DepositionPanel
         {
             ImGui.TableSetColumnIndex(frameFrozen + column);
             ImGui.PushID(column);
-            DrawCell(row, current.Columns[column], row.Cells[column], blocked, pending);
+            DrawCell(row, current.Columns[column], row.Cells[column], blocked ?? GlobalChainBlocked(current.Columns[column]), pending);
             ImGui.PopID();
         }
         ImGui.PopID();
@@ -662,6 +698,7 @@ public sealed partial class DepositionPanel
         var min = ImGui.GetCursorScreenPos();
         var size = new Vector2(Math.Max(1f, ImGui.GetContentRegionAvail().X), frameContentHeight);
         var clicked = ImGui.InvisibleButton("##Cell", size);
+        var rightClicked = ImGui.IsItemClicked(ImGuiMouseButton.Right);
         var hovered = ImGui.IsItemHovered();
         var enabled = blocked is null;
         var drawList = ImGui.GetWindowDrawList();
@@ -672,15 +709,15 @@ public sealed partial class DepositionPanel
             drawList.AddRectFilled(cellMin, cellMax, ImGui.GetColorU32(AmberColor with { W = .22f }));
         if (hovered && enabled)
             drawList.AddRectFilled(cellMin, cellMax, ImGui.GetColorU32(HoverCellColor));
-        if (column.Key.IsAnySpace)
-            DrawAnySeparator(min, frameRowHeight);
 
         var lineHeight = ImGui.GetTextLineHeight();
+        var badgeWidth = 0f;
         if (cell.Badge is { } text)
         {
             var fontSize = ImGui.GetFontSize() * .85f;
             var textSize = ImGui.CalcTextSize(text) * .85f;
             var badge = new Vector2(Math.Max(textSize.X + 6f, fontSize + 2f), fontSize + 2f);
+            badgeWidth = badge.X + 3f;
             var position = new Vector2(min.X, min.Y + Math.Max(0f, (lineHeight - badge.Y) * .5f));
             var fill = !pending && cell.FirstRank ? FirstRankColor : RankColor;
             drawList.AddRectFilled(position, position + badge, ImGui.GetColorU32(fill), 3f);
@@ -694,21 +731,25 @@ public sealed partial class DepositionPanel
             var width = ImGui.CalcTextSize(heldText).X;
             drawList.AddText(new Vector2(min.X + size.X - width, min.Y), ImGui.GetColorU32(MainWindow.ColMuted), heldText);
         }
+        else if (cell.CapText is { } capText)
+        {
+            // Held against cap, right-aligned beside the badge: exact when it fits, else compact, else compact and smaller.
+            var room = size.X - badgeWidth;
+            var shown = ImGui.CalcTextSize(capText).X <= room ? capText : cell.CapCompact!;
+            var scale = ImGui.CalcTextSize(shown).X <= room ? 1f : .85f;
+            var width = ImGui.CalcTextSize(shown).X * scale;
+            drawList.AddText(ImGui.GetFont(), ImGui.GetFontSize() * scale,
+                new Vector2(min.X + size.X - width, min.Y + ((1f - scale) * lineHeight * .5f)),
+                ImGui.GetColorU32(pending ? MainWindow.ColMuted : CapColor), shown);
+        }
 
         if (hovered)
             ImGui.SetTooltip(enabled ? cell.Tooltip : $"{cell.TooltipBase} · {blocked}");
         if (clicked && enabled)
             cell.Invoke();
+        if (rightClicked && enabled && placement.HasGlobalChain)
+            OpenCapEditor(row, column, cell, cellMin + new Vector2(0f, cellMax.Y - cellMin.Y));
         reviewRegistry.RegisterLastItem(cell.AgentId, cell.AgentLabel, AgentBridgeUiControlKind.Toggle, enabled, cell.Rank is not null,
             cell.AgentValue, cell.Invoke);
-    }
-
-    /// <summary>The 2px rule that sets Any space apart from the retainer columns before it.</summary>
-    private static void DrawAnySeparator(Vector2 contentMin, float rowHeight)
-    {
-        var padding = ImGui.GetStyle().CellPadding;
-        var x = contentMin.X - padding.X - 1f;
-        ImGui.GetWindowDrawList().AddLine(new Vector2(x, contentMin.Y - padding.Y), new Vector2(x, contentMin.Y - padding.Y + rowHeight),
-            ImGui.GetColorU32(AnySeparatorColor), 2f);
     }
 }

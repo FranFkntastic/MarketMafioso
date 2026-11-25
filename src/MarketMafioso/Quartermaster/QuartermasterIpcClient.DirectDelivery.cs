@@ -52,16 +52,30 @@ public sealed record QuartermasterArrivalRemote
     public IReadOnlyList<QuartermasterArrivalRetainer> Retainers { get; init; } = [];
 }
 
-/// <summary>Local homes take what fits first, then Remote (null when the item has no homes on another character).</summary>
+/// <summary>What one character's homes take of an arrival (arrivalPlan.v2). Units may be 0 when its homes are full or at cap.</summary>
+public sealed record QuartermasterArrivalDestination
+{
+    public QuartermasterStowCharacter? Character { get; init; }
+    public bool IsOwner { get; init; }
+    public int Units { get; init; }
+    public IReadOnlyList<QuartermasterArrivalRetainer> Retainers { get; init; } = [];
+}
+
+/// <summary>
+/// Where an arrival goes: Destinations per character in the order its global home chain fills them. An older
+/// Quartermaster answers with Local (the owner) and Remote (one other character) instead; <see cref="QuartermasterIpcClient.TryPlanArrival"/>
+/// turns those into Destinations, so callers read Destinations only. Unplaced units stay in the owner's bags.
+/// </summary>
 public sealed record QuartermasterArrivalItem
 {
     public uint ItemId { get; init; }
     public bool IsHq { get; init; }
     public int Quantity { get; init; }
+    public IReadOnlyList<QuartermasterArrivalDestination>? Destinations { get; init; }
     public QuartermasterArrivalLocal? Local { get; init; }
     public QuartermasterArrivalRemote? Remote { get; init; }
     public int Unplaced { get; init; }
-    /// <summary>NoHome, NoRoom, or null.</summary>
+    /// <summary>NoHome, AtCap, NoRoom, or null.</summary>
     public string? UnplacedReason { get; init; }
 }
 
@@ -92,6 +106,8 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterDirectDeliver
 {
     public const string ReserveRemoteHomesCapability = "reserveRemoteHomes.v1";
     public const string ArrivalPlanCapability = "arrivalPlan.v1";
+    /// <summary>Cross-character destinations in global rank order, honouring per-home caps.</summary>
+    public const string ArrivalPlanV2Capability = "arrivalPlan.v2";
     public const string CourierTransferToRetainerCapability = "courierTransferToRetainer.v1";
     public const string PlanArrivalChannel = "Quartermaster.v1.PlanArrival";
     public const string ArrivalPlanRequestSchema = "gooseworks-quartermaster-arrival-plan-request/v1";
@@ -191,16 +207,22 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterDirectDeliver
             error = "Quartermaster planned the arrival for a different character.";
             return false;
         }
+        var self = parsed.Owner ?? new QuartermasterStowCharacter
+        {
+            LocalContentId = owner.LocalContentId,
+            HomeWorldId = owner.HomeWorldId,
+            CharacterName = owner.CharacterName,
+            HomeWorldName = owner.HomeWorldName ?? string.Empty,
+        };
+        parsed = parsed with { Items = parsed.Items.Select(item => WithDestinations(item, self)).ToArray() };
         // A plan that does not add up is no plan: the caller delivers to the owner as before.
         foreach (var asked in items)
         {
             var answers = parsed.Items.Where(item => item.ItemId == asked.ItemId && item.IsHq == asked.IsHq).ToArray();
-            if (answers.Length != 1 || answers[0] is not { } answer ||
-                answer.Local is { Units: < 0 } || answer.Unplaced < 0 ||
-                answer.Remote is { } remote && (remote.Units < 0 || remote.Character is not { LocalContentId: > 0, HomeWorldId: > 0 } ||
-                                                 remote.Retainers.Any(retainer => retainer.RetainerId == 0 || retainer.Units <= 0) ||
-                                                 remote.Retainers.Sum(retainer => retainer.Units) != remote.Units) ||
-                (answer.Local?.Units ?? 0) + (answer.Remote?.Units ?? 0) > asked.Quantity)
+            if (answers.Length != 1 || answers[0] is not { Destinations: { } destinations } answer || answer.Unplaced < 0 ||
+                destinations.Any(destination => !IsConsistent(destination, self)) ||
+                destinations.DistinctBy(destination => destination.Character!.LocalContentId).Count() != destinations.Count ||
+                destinations.Sum(destination => (long)destination.Units) > asked.Quantity)
             {
                 error = $"Quartermaster's arrival plan for item {asked.ItemId} is inconsistent.";
                 return false;
@@ -209,5 +231,35 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterDirectDeliver
         plan = parsed;
         error = string.Empty;
         return true;
+    }
+
+    /// <summary>
+    /// One destination adds up: a known character, the owner flag agreeing with it, and (on another character, where
+    /// the courier needs named retainers) positive retainer units summing to its units.
+    /// </summary>
+    private static bool IsConsistent(QuartermasterArrivalDestination destination, QuartermasterStowCharacter owner) =>
+        destination is { Units: >= 0, Character: { LocalContentId: > 0, HomeWorldId: > 0 } character } &&
+        destination.IsOwner == (character.LocalContentId == owner.LocalContentId) &&
+        (destination.IsOwner ||
+         destination.Retainers.All(retainer => retainer.RetainerId != 0 && retainer.Units > 0) &&
+         destination.Retainers.Sum(retainer => (long)retainer.Units) == destination.Units);
+
+    /// <summary>An older Quartermaster's Local (the owner) then Remote, as arrivalPlan.v2 destinations.</summary>
+    private static QuartermasterArrivalItem WithDestinations(QuartermasterArrivalItem item, QuartermasterStowCharacter owner)
+    {
+        if (item.Destinations is not null)
+            return item;
+        var destinations = new List<QuartermasterArrivalDestination>();
+        if (item.Local is { } local)
+            destinations.Add(new() { Character = owner, IsOwner = true, Units = local.Units, Retainers = local.Retainers });
+        if (item.Remote is { } remote)
+            destinations.Add(new()
+            {
+                Character = remote.Character,
+                IsOwner = remote.Character is { } character && character.LocalContentId == owner.LocalContentId,
+                Units = remote.Units,
+                Retainers = remote.Retainers,
+            });
+        return item with { Destinations = destinations };
     }
 }

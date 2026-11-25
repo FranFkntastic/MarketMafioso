@@ -3,13 +3,14 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 
 namespace MarketMafioso.Quartermaster;
 
-// Quartermaster's placement read/edit channels (placementEdit.v1). Every wire shape for them lives in this file.
+// Quartermaster's placement read/edit channels (placementEdit.v1, placementEdit.v2). Every wire shape for them lives in this file.
 
 public interface IQuartermasterPlacementIpcAdapter
 {
@@ -52,7 +53,7 @@ public sealed record QuartermasterPlacementRetainer(
 /// <summary>
 /// A character the placement editor can show: the owner first, then by name, once per content id (a character that
 /// changed worlds appears under its current world). Retainers are in game order, then any extra retainer an item
-/// names there. Only the owner offers Any space.
+/// names there.
 /// </summary>
 public sealed record QuartermasterPlacementCharacter(
     ulong LocalContentId,
@@ -60,7 +61,6 @@ public sealed record QuartermasterPlacementCharacter(
     string CharacterName,
     string HomeWorldName,
     bool IsOwner,
-    bool OffersAnySpace,
     int? BagFreeSlots,
     ImmutableArray<QuartermasterPlacementRetainer> Retainers)
 {
@@ -74,12 +74,18 @@ public sealed record QuartermasterPlacementHeld(
     int? Bags,
     ImmutableDictionary<ulong, int> Retainers);
 
-/// <summary>The item's ranked homes on another character (Quartermaster allows one such character per item).</summary>
-public sealed record QuartermasterPlacementRemote(QuartermasterOwnerScope Character, ImmutableArray<ulong> Homes);
+/// <summary>
+/// One home of an item: a retainer of any character of the account. Rank is the global priority across every
+/// character (1 fills first, then 2, ...). MaxUnits caps what the item may stock there (null: as much as fits).
+/// </summary>
+public sealed record QuartermasterPlacementHome(int Rank, QuartermasterOwnerScope Character, ulong RetainerId, int? MaxUnits)
+{
+    public bool Is(ulong localContentId, ulong retainerId) => Character.LocalContentId == localContentId && RetainerId == retainerId;
+}
 
 /// <summary>
 /// One reserve rule (or, requested by id, an item without one: HasRule false, no homes). Quality is NqOnly or HqOnly.
-/// LocalHomes are the owner's ranked retainers; Any space ranks after them.
+/// Homes are the item's ranked retainers across all characters, ranks 1..N.
 /// </summary>
 public sealed record QuartermasterPlacementItem(
     uint ItemId,
@@ -87,10 +93,8 @@ public sealed record QuartermasterPlacementItem(
     string Quality,
     bool HasRule,
     int ReserveUnits,
-    ImmutableArray<ulong> LocalHomes,
-    bool AnySpace,
+    ImmutableArray<QuartermasterPlacementHome> Homes,
     bool Consolidate,
-    QuartermasterPlacementRemote? Remote,
     ImmutableArray<QuartermasterPlacementHeld> Held);
 
 public sealed record QuartermasterPlacement(
@@ -108,26 +112,26 @@ public static class QuartermasterPlacementOperations
     public const string AddFallback = "addFallback";
     public const string Remove = "remove";
     public const string Toggle = "toggle";
+    /// <summary>placementEdit.v2: caps the item at a retainer (adding it as the last home if absent), or clears the cap.</summary>
+    public const string SetCap = "setCap";
     public const string UseCurrentHolders = "useCurrentHolders";
     public const string ClearDestinations = "clearDestinations";
 
     public static bool NeedsDestination(string operation) =>
-        operation is MakeFirst or AddFallback or Remove or Toggle;
+        operation is MakeFirst or AddFallback or Remove or Toggle or SetCap;
 }
 
 public sealed record QuartermasterPlacementEditItem(uint ItemId, string ItemName, string Quality);
 
-/// <summary>A retainer on the edited character, or Any space (the owner only).</summary>
-public sealed record QuartermasterPlacementDestination(ulong RetainerId, bool AnySpace)
+/// <summary>A retainer on the edited character. Deposition homes are always explicit retainers.</summary>
+public sealed record QuartermasterPlacementDestination(ulong RetainerId)
 {
-    public static QuartermasterPlacementDestination Any { get; } = new(0, true);
-
-    public static QuartermasterPlacementDestination Retainer(ulong retainerId) => new(retainerId, false);
+    public static QuartermasterPlacementDestination Retainer(ulong retainerId) => new(retainerId);
 }
 
 /// <summary>
 /// What happened to one item. Outcome: applied, unchanged, refused or not_applied. Code: Applied, Unchanged,
-/// RemoteHomesKeptOnOtherCharacter, InvalidItem, InvalidQuality, DuplicateItem, UnknownRetainer, RuleInvalid, NotApplied.
+/// InvalidItem, InvalidQuality, DuplicateItem, UnknownRetainer, RuleInvalid, NotApplied, or a newer refusal code.
 /// </summary>
 public sealed record QuartermasterPlacementEditOutcome(
     uint ItemId,
@@ -139,9 +143,7 @@ public sealed record QuartermasterPlacementEditOutcome(
     ulong? RetainerId,
     string? Field,
     bool RuleCreated,
-    bool RuleRemoved,
-    QuartermasterOwnerScope? RemoteHomesMovedFrom,
-    QuartermasterOwnerScope? RemoteHomesKeptOn)
+    bool RuleRemoved)
 {
     public bool IsRefused => string.Equals(Outcome, "refused", StringComparison.Ordinal);
 }
@@ -163,6 +165,8 @@ public sealed class QuartermasterPlacementClient
     public const string GetPlacementChannel = "Quartermaster.v1.GetPlacement";
     public const string EditPlacementChannel = "Quartermaster.v1.EditPlacement";
     public const string PlacementEditCapability = "placementEdit.v1";
+    /// <summary>Global cross-character home ranks, per-home caps (setCap) and no Any space.</summary>
+    public const string PlacementEditV2Capability = "placementEdit.v2";
     public const string PlacementRequestSchema = "gooseworks-quartermaster-placement-request/v1";
     public const string PlacementSchema = "gooseworks-quartermaster-placement/v1";
     public const string PlacementEditSchema = "gooseworks-quartermaster-placement-edit/v1";
@@ -230,11 +234,12 @@ public sealed class QuartermasterPlacementClient
             return false;
         }
 
+        var owner = Scope(wire.Owner) ?? new QuartermasterOwnerScope(null, null, null, null);
         placement = new QuartermasterPlacement(
             wire.ProviderInstanceId,
             wire.Revision,
             Utc(wire.GeneratedAtUtc) ?? DateTimeOffset.UtcNow,
-            Scope(wire.Owner) ?? new QuartermasterOwnerScope(null, null, null, null),
+            owner,
             (wire.Characters ?? [])
                 .Where(character => character.LocalContentId != 0 && character.HomeWorldId != 0)
                 .DistinctBy(character => character.LocalContentId)
@@ -244,7 +249,6 @@ public sealed class QuartermasterPlacementClient
                     character.CharacterName?.Trim() ?? string.Empty,
                     character.HomeWorldName?.Trim() ?? string.Empty,
                     character.IsOwner,
-                    character.OffersAnySpace,
                     character.Bags is { Observed: true } bags ? bags.FreeSlots : null,
                     (character.Retainers ?? [])
                         .Where(retainer => retainer.RetainerId != 0)
@@ -266,13 +270,8 @@ public sealed class QuartermasterPlacementClient
                     item.Quality!,
                     item.HasRule,
                     Math.Max(0, item.ReserveUnits),
-                    Ranked(item.Local?.Homes),
-                    item.Local?.AnySpace == true,
+                    HomesOf(item, owner),
                     item.Local?.Consolidate == true,
-                    item.Remote is { } remote && Scope(remote.Character) is { LocalContentId: > 0, HomeWorldId: > 0 } remoteCharacter &&
-                    Ranked(remote.Homes) is { Length: > 0 } remoteHomes
-                        ? new QuartermasterPlacementRemote(remoteCharacter, remoteHomes)
-                        : null,
                     (item.Held ?? [])
                         .Where(held => held.LocalContentId != 0)
                         .Select(held => new QuartermasterPlacementHeld(
@@ -288,9 +287,11 @@ public sealed class QuartermasterPlacementClient
     }
 
     /// <summary>
-    /// Applies one placement editor action to these items. <paramref name="character"/> null edits the owner's own
-    /// homes; another character edits the items' homes there. True whenever Quartermaster answered with an
-    /// acknowledgement, whatever its status; false only when the call or its answer failed.
+    /// Applies one placement editor action to these items. <paramref name="character"/> names whose retainer
+    /// <paramref name="destination"/> is (null: the owner's); the global operations (use current holders, clear
+    /// destinations) take neither. <paramref name="maxUnits"/> is sent only with setCap, where null clears the cap.
+    /// True whenever Quartermaster answered with an acknowledgement, whatever its status; false only when the call or
+    /// its answer failed.
     /// </summary>
     public bool TryEditPlacement(
         string providerInstanceId,
@@ -299,13 +300,14 @@ public sealed class QuartermasterPlacementClient
         IReadOnlyList<QuartermasterPlacementEditItem> items,
         (ulong LocalContentId, uint HomeWorldId)? character,
         QuartermasterPlacementDestination? destination,
+        int? maxUnits,
         bool allOrNothing,
         out QuartermasterPlacementEditAcknowledgement? acknowledgement,
         out string error)
     {
         acknowledgement = null;
         var requestId = Guid.NewGuid().ToString("N");
-        var body = JsonSerializer.Serialize(new PlacementEditWire
+        var request = JsonSerializer.SerializeToNode(new PlacementEditWire
         {
             Schema = PlacementEditSchema,
             ProviderInstanceId = providerInstanceId,
@@ -319,13 +321,13 @@ public sealed class QuartermasterPlacementClient
             Items = items.Select(item => new EditItemWire { ItemId = item.ItemId, ItemName = item.ItemName, Quality = item.Quality }).ToList(),
             Operation = operation,
             Character = character is { } shown ? new CharacterRefWire { LocalContentId = shown.LocalContentId, HomeWorldId = shown.HomeWorldId } : null,
-            Destination = destination is null
-                ? null
-                : destination.AnySpace
-                    ? new DestinationWire { AnySpace = true }
-                    : new DestinationWire { RetainerId = destination.RetainerId },
+            Destination = destination is null ? null : new DestinationWire { RetainerId = destination.RetainerId },
             AllOrNothing = allOrNothing,
-        }, JsonOptions);
+        }, JsonOptions)!.AsObject();
+        // setCap always names its cap, so a cleared cap is an explicit null rather than an absent field.
+        if (string.Equals(operation, QuartermasterPlacementOperations.SetCap, StringComparison.Ordinal))
+            request["maxUnits"] = maxUnits is { } cap ? JsonValue.Create(Math.Max(0, cap)) : null;
+        var body = request.ToJsonString(JsonOptions);
         if (!Invoke(() => adapter.HasEditPlacement, () => adapter.EditPlacement(body), "placement edit", out var json, out error))
             return false;
         EditAckWire? wire;
@@ -358,19 +360,30 @@ public sealed class QuartermasterPlacementClient
                 item.RetainerId,
                 item.Field,
                 item.RuleCreated,
-                item.RuleRemoved,
-                Scope(item.RemoteHomesMovedFrom),
-                Scope(item.RemoteHomesKeptOn))).ToImmutableArray());
+                item.RuleRemoved)).ToImmutableArray());
         return true;
     }
 
-    private static ImmutableArray<ulong> Ranked(List<RankedHomeWire>? homes) =>
-        (homes ?? [])
-            .Where(home => home.RetainerId != 0)
-            .OrderBy(home => home.Rank)
-            .Select(home => home.RetainerId)
-            .Distinct()
+    /// <summary>
+    /// The item's global home chain, ranked 1..N. placementEdit.v2 sends it as homes; an older Quartermaster's owner
+    /// homes followed by its other character's homes read the same way (its Any space is not a home and is dropped).
+    /// </summary>
+    private static ImmutableArray<QuartermasterPlacementHome> HomesOf(PlacementItemWire item, QuartermasterOwnerScope owner)
+    {
+        var homes = item.Homes is { } global
+            ? global.OrderBy(home => home.Rank).Select(home => (Character: Scope(home.Character), home.RetainerId, home.MaxUnits))
+            : Legacy(item.Local?.Homes, owner).Concat(Legacy(item.Remote?.Homes, Scope(item.Remote?.Character)));
+        return homes
+            .Where(home => home.RetainerId != 0 && home.Character is { LocalContentId: > 0 })
+            .DistinctBy(home => (home.Character!.LocalContentId, home.RetainerId))
+            .Select((home, index) => new QuartermasterPlacementHome(index + 1, home.Character!, home.RetainerId,
+                home.MaxUnits is { } cap ? Math.Max(0, cap) : null))
             .ToImmutableArray();
+
+        static IEnumerable<(QuartermasterOwnerScope? Character, ulong RetainerId, int? MaxUnits)> Legacy(
+            List<RankedHomeWire>? ranked, QuartermasterOwnerScope? character) =>
+            (ranked ?? []).OrderBy(home => home.Rank).Select(home => (character, home.RetainerId, (int?)null));
+    }
 
     private static QuartermasterOwnerScope? Scope(CharacterWire? wire) =>
         wire is null ? null : new QuartermasterOwnerScope(wire.LocalContentId, wire.HomeWorldId, wire.CharacterName?.Trim(), wire.HomeWorldName?.Trim());
@@ -438,7 +451,6 @@ public sealed class QuartermasterPlacementClient
         public string? CharacterName { get; init; }
         public string? HomeWorldName { get; init; }
         public bool IsOwner { get; init; }
-        public bool OffersAnySpace { get; init; }
         public BagsWire? Bags { get; init; }
         public List<PlacementRetainerWire>? Retainers { get; init; }
     }
@@ -466,6 +478,8 @@ public sealed class QuartermasterPlacementClient
         public string? Quality { get; init; }
         public bool HasRule { get; init; }
         public int ReserveUnits { get; init; }
+        /// <summary>placementEdit.v2's global home chain; absent from an older Quartermaster.</summary>
+        public List<GlobalHomeWire>? Homes { get; init; }
         public LocalWire? Local { get; init; }
         public RemoteWire? Remote { get; init; }
         public List<HeldWire>? Held { get; init; }
@@ -474,8 +488,15 @@ public sealed class QuartermasterPlacementClient
     private sealed class LocalWire
     {
         public List<RankedHomeWire>? Homes { get; init; }
-        public bool AnySpace { get; init; }
         public bool Consolidate { get; init; }
+    }
+
+    private sealed class GlobalHomeWire
+    {
+        public int Rank { get; init; }
+        public CharacterWire? Character { get; init; }
+        public ulong RetainerId { get; init; }
+        public int? MaxUnits { get; init; }
     }
 
     private sealed class RemoteWire
@@ -539,8 +560,6 @@ public sealed class QuartermasterPlacementClient
     private sealed class DestinationWire
     {
         public ulong? RetainerId { get; init; }
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-        public bool AnySpace { get; init; }
     }
 
     private sealed class EditAckWire
@@ -566,7 +585,5 @@ public sealed class QuartermasterPlacementClient
         public string? Field { get; init; }
         public bool RuleCreated { get; init; }
         public bool RuleRemoved { get; init; }
-        public CharacterWire? RemoteHomesMovedFrom { get; init; }
-        public CharacterWire? RemoteHomesKeptOn { get; init; }
     }
 }
