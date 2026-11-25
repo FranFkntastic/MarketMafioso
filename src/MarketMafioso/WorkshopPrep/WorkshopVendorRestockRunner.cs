@@ -363,6 +363,12 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             error = "Return to the character that started this restock to resume it.";
             return false;
         }
+        if (StartBlocker?.Invoke() is { } otherRun)
+        {
+            error = otherRun;
+            diagnosticLog?.Invoke($"[MarketMafioso] WorkshopRestockResumeRefused: {otherRun}");
+            return false;
+        }
         if (!string.Equals(state.QueueSignature, queueSignature, StringComparison.Ordinal))
             diagnosticLog?.Invoke($"[MarketMafioso] Resuming workshop restock although the workshop queue changed ({state.QueueSignature} -> {queueSignature}); continuing with the reviewed lines.");
         if (config.ActiveWorkshopVendorBuyRun is not null)

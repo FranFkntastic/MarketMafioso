@@ -198,6 +198,11 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         if (!IsPaused)
             return new(false, "Workshop assembly is not paused.");
+        if (StartBlocker?.Invoke() is { } otherRun)
+        {
+            log.Information("[MarketMafioso] WorkshopAssemblyResumeRefused: {Reason}", otherRun);
+            return new(false, otherRun);
+        }
 
         var blocker = uiAutomation.BeginRun(requireCutsceneSkip: !inspectOnly);
         if (blocker != null)
