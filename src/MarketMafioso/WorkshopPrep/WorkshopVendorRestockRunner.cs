@@ -51,6 +51,9 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
 
     public WorkshopVendorRestockRunView? ActiveRun => BuildView();
 
+    /// <summary>Another MMF run that drives the character (workshop assembly); non-null refuses a start with that reason.</summary>
+    public Func<string?>? StartBlocker { get; set; }
+
     public bool IsRunning => coordinator.IsRunning ||
                              (config.ActiveWorkshopVendorBuyRun is null &&
                               IsPolicyRunning(config.ActiveWorkshopVendorRestockState));
@@ -157,6 +160,12 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             error = active is null
                 ? "A workshop restock run is already active."
                 : $"A workshop restock run for {active} is already active.";
+            return false;
+        }
+        if (StartBlocker?.Invoke() is { } otherRun)
+        {
+            error = otherRun;
+            diagnosticLog?.Invoke($"[MarketMafioso] WorkshopRestockStartRefused: {otherRun}");
             return false;
         }
         if (demand is not null &&

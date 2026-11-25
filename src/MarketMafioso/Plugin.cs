@@ -366,6 +366,14 @@ public sealed class Plugin : IDalamudPlugin
         tradeAutoAcceptController.ExternalHold = tradeHold;
         tradeHoldProvider = new(PluginInterface, tradeHold);
         workshopRestock = new WorkshopRestockService(Configuration, quartermaster, workshopCatalog, DataManager, PlayerState, Log, quartermasterCancels);
+        // Both runs drive the character, and the restock's TextAdvance pause would stop the assembly's cutscene skip,
+        // so neither starts while the other runs. Stopping the other run is always available, to users and agents alike.
+        workshopAssemblyRunner.StartBlocker = () => workshopRestock.Runner.IsRunning
+            ? "A workshop vendor restock is running; stop it in Workshop Logistics > Materials first."
+            : null;
+        workshopRestock.Runner.StartBlocker = () => workshopAssemblyRunner.IsRunning
+            ? "A workshop assembly run is in progress; stop it in Workshop Logistics > Assembly first."
+            : null;
         remoteSummoningBellProbe = new RemoteSummoningBellProbe(
             Configuration,
             ClientState,
@@ -1117,10 +1125,11 @@ public sealed class Plugin : IDalamudPlugin
             ("trade automation coordinator", () => tradeAutomationCoordinator.Dispose()),
             // The AutoRetainer suppression lease held by the remote summoning-bell probe.
             ("remote summoning bell probe", () => remoteSummoningBellProbe.Dispose()),
+            // A marker still held here (a failed restore) stays on disk, so the next load lifts the suppression. Its own
+            // step, so a throwing IPC dispose never keeps this plugin's name in the holder registry below.
+            ("AutoRetainer suppression marker", AutoRetainerSuppressionLease.DetachMarker),
             ("AutoRetainer holder registry", () =>
             {
-                // A marker still held here (a failed restore) stays on disk, so the next load lifts the suppression.
-                AutoRetainerSuppressionLease.DetachMarker();
                 AutoRetainerHolderRegistry.Detach();
                 PluginInterface.RelinquishData(AutoRetainerHolderRegistry.Key);
             }),

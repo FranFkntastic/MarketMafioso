@@ -126,8 +126,10 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     private readonly string? legacyPandoraMarkerPath;
     /// <summary>Held while MMF keeps Pandora Auto-select Turn-ins off for a hand-in.</summary>
     private PersistedSuppressionMarker.Scope? pandoraSuppression;
-    /// <summary>A hand-in's restore failed: the marker stayed, and later restores (and unload) retry it.</summary>
+    /// <summary>A hand-in's restore failed: later restores (and unload) retry it, whether or not the marker was written.</summary>
     private bool pandoraRestorePending;
+    /// <summary>The marker's last restore action threw (the marker swallows and logs it).</summary>
+    private bool lastPandoraRestoreFailed;
 
     internal ExternalAutomationCoordinator(
         IPluginDataStore pluginDataStore,
@@ -146,7 +148,12 @@ public sealed class ExternalAutomationCoordinator : IDisposable
                 stateDirectory,
                 PandoraSuppressionMarkerName,
                 suppress: () => pandoraFeatureControl.SetEnabled(PandoraAutoSelectTurnin, false),
-                restore: () => pandoraFeatureControl.SetEnabled(PandoraAutoSelectTurnin, true),
+                restore: () =>
+                {
+                    lastPandoraRestoreFailed = true;
+                    pandoraFeatureControl.SetEnabled(PandoraAutoSelectTurnin, true);
+                    lastPandoraRestoreFailed = false;
+                },
                 warning: message => log.Warning("[MarketMafioso] Pandora Auto-select Turn-ins: {Message}", message),
                 diagnostic: message => log.Debug("[MarketMafioso] Pandora Auto-select Turn-ins: {Message}", message));
             legacyPandoraMarkerPath = Path.Combine(stateDirectory, LegacyPandoraSuppressionMarkerFile);
@@ -334,6 +341,9 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         }
 
         pandoraRestorePending = false;
+        // The shared marker covers this hold now; a legacy marker left from a failed load-time restore would otherwise
+        // make a later load force Pandora back on although the user may have changed it since.
+        DeleteLegacyPandoraMarker();
         log.Debug("[MarketMafioso] Temporarily paused Pandora Auto-select Turn-ins while MMF owns the workshop request window.");
     }
 
@@ -346,16 +356,40 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         {
             pandoraSuppression = null;
             // Restores and deletes the marker; a failed restore is logged (SuppressionRestoreFailed) and keeps it.
+            // Pending follows the restore itself, not the marker, which may never have been written.
+            lastPandoraRestoreFailed = false;
             suppression.Dispose();
-            pandoraRestorePending = marker.IsMarked;
+            pandoraRestorePending = lastPandoraRestoreFailed || marker.IsMarked;
             if (!pandoraRestorePending)
+            {
+                DeleteLegacyPandoraMarker();
                 log.Debug("[MarketMafioso] Restored Pandora Auto-select Turn-ins after MMF released the workshop request window.");
+            }
             return;
         }
 
-        // An earlier restore of this load failed: retry it.
-        if (pandoraRestorePending && marker.RestoreLeftovers())
-            pandoraRestorePending = false;
+        if (!pandoraRestorePending)
+            return;
+        // An earlier restore of this load failed: retry it, through the marker when it was written.
+        if (marker.IsMarked)
+        {
+            if (!marker.RestoreLeftovers())
+                return;
+        }
+        else
+        {
+            try
+            {
+                pandoraFeatureControl!.SetEnabled(PandoraAutoSelectTurnin, true);
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "[MarketMafioso] PandoraRestoreRetryFailed: Pandora Auto-select Turn-ins is still off after a workshop hand-in; retried on the next release or unload.");
+                return;
+            }
+        }
+        pandoraRestorePending = false;
+        DeleteLegacyPandoraMarker();
     }
 
     /// <summary>Pauses YesAlready and Dropbox while MMF confirms trades itself; <see cref="RestoreTradeAutoConfirm"/> releases both.</summary>

@@ -20,6 +20,9 @@ internal static class AutoRetainerHolderRegistry
 
     private static HashSet<string>? registry;
 
+    /// <summary>True while a shared registry is attached; without one, other holders are unknown.</summary>
+    public static bool IsAttached => registry is not null;
+
     /// <summary>
     /// Load: a new load holds nothing, so an entry under this plugin's name is a dead load's leftover and is removed.
     /// AutoRetainer itself is not touched here: <see cref="AutoRetainerSuppressionLease.ReclaimOrphaned"/> lifts a
@@ -77,7 +80,7 @@ internal static class AutoRetainerHolderRegistry
 /// suppression (or shared it with another registry holder) and no other holder remains. A suppression the user set
 /// with no holder registered is left as found.
 /// While this plugin owns the suppression, a marker file says so (<see cref="AttachMarker"/>), so a load that died
-/// owning it is lifted by the next load (<see cref="ReclaimOrphaned"/>) unless another registry holder still needs it.
+/// owning it is lifted by the next load (<see cref="ReclaimOrphaned"/>) once no other registry holder needs it.
 /// </summary>
 internal sealed class AutoRetainerSuppressionLease : IDisposable
 {
@@ -94,6 +97,11 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
     /// <summary>Held exactly while this plugin owns the suppression, so the marker file exists exactly then.</summary>
     private static PersistedSuppressionMarker.Scope? markerScope;
     private static bool orphanSettled;
+    /// <summary>Set while <see cref="ReclaimOrphaned"/> runs the marker's restore, so an unreachable AutoRetainer means retry-later.</summary>
+    private static bool reclaiming;
+    /// <summary>The reclaim already logged that it is waiting on another registry holder.</summary>
+    private static bool reclaimDeferralLogged;
+    private static Action<string>? markerWarn;
 
     private readonly IAutoRetainerIpc autoRetainer;
     private readonly bool counted;
@@ -259,7 +267,9 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
         {
             markerIpc = ipc;
             markerInfo = info;
+            markerWarn = warn;
             orphanSettled = false;
+            reclaimDeferralLogged = false;
             marker = new PersistedSuppressionMarker(
                 configDirectory,
                 MarkerName,
@@ -280,6 +290,7 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
             marker = null;
             markerScope = null;
             markerInfo = null;
+            markerWarn = null;
             var ipc = markerIpc;
             markerIpc = null;
             ipc?.Dispose();
@@ -288,9 +299,12 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
 
     /// <summary>
     /// Load-time reclaim: an earlier load died owning the suppression (its marker is still there). With no lease held
-    /// here, AutoRetainer is unsuppressed (Warning), unless another plugin's owner name is in the holder registry: then
-    /// the marker is dropped and AutoRetainer left suppressed for that holder (Info). Returns true once settled; false
-    /// while a lease is live or AutoRetainer is not reachable yet, so the caller retries.
+    /// here and no other plugin's owner name in the holder registry, AutoRetainer is unsuppressed if it still is (Warning)
+    /// and the marker deleted. While another holder is registered the marker is kept and this keeps returning false (Info
+    /// once): that holder may have found AutoRetainer already suppressed and so not taken ownership, leaving this load to
+    /// lift it once the registry empties. Without a registry (it failed to attach) other holders are unknown, so the
+    /// marker is kept and nothing lifted (Warning once). Returns true once settled; false while a lease is live, another
+    /// holder is registered, or AutoRetainer is not reachable yet, so the caller retries.
     /// </summary>
     public static bool ReclaimOrphaned()
     {
@@ -304,28 +318,40 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
                 orphanSettled = true;
                 return true;
             }
+            if (!AutoRetainerHolderRegistry.IsAttached)
+            {
+                orphanSettled = true;
+                markerWarn?.Invoke("[MarketMafioso] AutoRetainerSuppressionReclaimSkipped: an earlier MarketMafioso load suppressed " +
+                                   "AutoRetainer and never restored it, but the holder registry is unavailable, so other holders are " +
+                                   $"unknown; left as is and the marker kept for the next load ({current.MarkerPath}).");
+                return true;
+            }
             // A lease of this load keeps AutoRetainer suppressed anyway; reclaim once it is released.
             if (liveLeases > 0)
                 return false;
             if (AutoRetainerHolderRegistry.OtherHolders() is { Length: > 0 } others)
             {
-                try
+                if (!reclaimDeferralLogged)
                 {
-                    File.Delete(current.MarkerPath);
+                    reclaimDeferralLogged = true;
+                    markerInfo?.Invoke("[MarketMafioso] AutoRetainerSuppressionReclaimDeferred: an earlier MarketMafioso load suppressed " +
+                                       $"AutoRetainer and never restored it; {string.Join(", ", others)} hold(s) it now, so it is lifted " +
+                                       "once the holder registry is empty.");
                 }
-                catch (Exception ex)
-                {
-                    markerInfo?.Invoke($"[MarketMafioso] AutoRetainerSuppressionMarkerUndeleted: {current.MarkerPath}: {ex.Message}");
-                }
-                orphanSettled = true;
-                markerInfo?.Invoke("[MarketMafioso] AutoRetainerSuppressionLeftToHolder: an earlier MarketMafioso load suppressed " +
-                                   $"AutoRetainer and never restored it; left suppressed because {string.Join(", ", others)} still hold(s) it.");
-                return true;
+                return false;
             }
             if (!IsMarkerIpcAvailable())
                 return false;
             // Logs SuppressionLeftoverRestored at Warning, or SuppressionRestoreFailed and keeps the marker for a retry.
-            current.RestoreLeftovers();
+            reclaiming = true;
+            try
+            {
+                current.RestoreLeftovers();
+            }
+            finally
+            {
+                reclaiming = false;
+            }
             orphanSettled = !current.IsMarked;
             return orphanSettled;
         }
@@ -348,15 +374,20 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
 
     /// <summary>
     /// The marker's restore action, run under <see cref="Gate"/>. On an ordinary release the lease has already lifted
-    /// (or left) the suppression, so this finds nothing to do; for a dead load's marker it lifts it. Never lifts it
-    /// while a lease of this load or another registry holder still needs it.
+    /// (or left) the suppression, so this finds nothing to do, and an unreachable AutoRetainer is not an error; for a
+    /// dead load's marker (<see cref="reclaiming"/>) it lifts it, and an unreachable AutoRetainer throws so the marker
+    /// stays for a retry. Never lifts it while a lease of this load or another registry holder still needs it.
     /// </summary>
     private static void LiftUnlessHeld()
     {
         if (liveLeases > 0 || AutoRetainerHolderRegistry.OtherHolders().Length > 0 || markerIpc is not { } ipc)
             return;
         if (!ipc.IsAvailable)
+        {
+            if (!reclaiming)
+                return;
             throw new InvalidOperationException("AutoRetainer IPC is not reachable.");
+        }
         if (ipc.IsSuppressed)
             ipc.SetSuppressed(false);
     }
