@@ -982,15 +982,18 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             .GroupBy(line => (line.ItemId, line.IsHq))
             .ToDictionary(group => group.Key, group => group.First());
         stow.Lines = stow.Lines
-            .Select(line => observed.TryGetValue((line.ItemId, line.IsHq), out var current)
-                ? line with
+            .Select(line =>
+            {
+                if (!observed.TryGetValue((line.ItemId, line.IsHq), out var current))
+                    return line;
+                var merged = line with
                 {
                     Stowed = current.Stowed,
                     Code = current.Code,
                     Destinations = current.Destinations.Count > 0 ? current.Destinations : line.Destinations,
-                    Forward = current.Forward ?? line.Forward,
-                }
-                : line)
+                };
+                return current.HasForward ? merged.WithForwards(current.AllForwards) : merged;
+            })
             .ToList();
     }
 
@@ -1169,7 +1172,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             var stowed = stow.Lines.Sum(line => (long)line.Stowed);
             if (stowed > 0)
                 parts.Add($"Stowed {stowed:N0} into home retainers.");
-            var forwards = stow.Lines.Select(line => line.Forward).OfType<QuartermasterStowForwardLine>()
+            var forwards = stow.Lines.SelectMany(line => line.AllForwards)
                 .Where(forward => !forward.IsNeutral && forward.Code != "NoRoom").ToList();
             var names = string.Join(", ", forwards.Select(forward => forward.Character?.CharacterName).Distinct());
             if (stow.ForwardOpen && forwards.Count > 0)
@@ -1231,8 +1234,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             var sentDirect = direct.Sum(entry => (long)entry.Line.Quantity);
             // A forward still on its way is shown as such, not as a shortfall.
             var forwardOpen = session.Stow?.ForwardOpen == true;
-            var forwards = stowLines.Select(line => line.Forward)
-                .OfType<QuartermasterStowForwardLine>()
+            var forwards = stowLines.SelectMany(line => line.AllForwards)
                 .Where(forward => !forward.IsNeutral && forward.Code != "NoRoom")
                 .ToList();
             var settledForwards = forwardOpen ? forwards.Where(forward => forward.Code == "Delivered").ToList() : forwards;

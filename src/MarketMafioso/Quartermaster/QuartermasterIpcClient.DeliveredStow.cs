@@ -137,6 +137,23 @@ public sealed record QuartermasterDeliveredStowLine
     public IReadOnlyList<string> Destinations { get; init; } = [];
     /// <summary>Present only for an item with homes on another character (deliveredStowForward.v1).</summary>
     public QuartermasterStowForwardLine? Forward { get; init; }
+    /// <summary>
+    /// One part per character when the item's homes span several other characters (arrivalPlan.v2); null from older
+    /// Quartermaster builds, which send the single <see cref="Forward"/>.
+    /// </summary>
+    public IReadOnlyList<QuartermasterStowForwardLine>? Forwards { get; init; }
+
+    /// <summary>Every part of this line bound for another character: Forwards when sent, else Forward, else none.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<QuartermasterStowForwardLine> AllForwards =>
+        Forwards is { Count: > 0 } forwards ? forwards : Forward is { } forward ? [forward] : [];
+
+    [JsonIgnore]
+    public bool HasForward => AllForwards.Count > 0;
+
+    /// <summary>This line with these forward parts (the first also kept as Forward for single-forward readers).</summary>
+    public QuartermasterDeliveredStowLine WithForwards(IReadOnlyList<QuartermasterStowForwardLine> forwards) =>
+        this with { Forward = forwards.Count > 0 ? forwards[0] : null, Forwards = forwards.Count > 0 ? forwards : null };
 }
 
 public sealed record QuartermasterDeliveredStowStatus

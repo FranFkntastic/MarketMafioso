@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Numerics;
 using System.Text.Json;
@@ -16,9 +17,10 @@ namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 /// <summary>
 /// The Deposition tab: Quartermaster's placement matrix for the buy list (This plan) or every reserve rule (All
-/// items), with destinations chosen in the side rail. Reads come from <see cref="MarketAcquisitionPlacementService"/>'s
-/// cached view and edits are queued to it; nothing here calls IPC. Labels, ids and actions are built with the layout
-/// and rail model, not per frame.
+/// items), with destinations chosen in the side rail. An item's homes are one ranked chain across all characters, each
+/// an explicit retainer with an optional cap. Reads come from <see cref="MarketAcquisitionPlacementService"/>'s cached
+/// view and edits are queued to it; nothing here calls IPC. Labels, ids and actions are built with the layout and rail
+/// model, not per frame.
 /// </summary>
 public sealed partial class DepositionPanel
 {
@@ -29,10 +31,15 @@ public sealed partial class DepositionPanel
     private static readonly Vector4 RankColor = new(.18f, .18f, .18f, 1f);
     private static readonly Vector4 FirstRankColor = new(.18f, .36f, .47f, 1f);
     private static readonly Vector4 HoverCellColor = new(.14f, .19f, .23f, 1f);
-    private static readonly Vector4 AnySeparatorColor = new(.23f, .23f, .23f, 1f);
+    private static readonly Vector4 BandRuleColor = new(.23f, .23f, .23f, 1f);
+    private static readonly Vector4 CapColor = new(.55f, .72f, .90f, 1f);
+    private const string NeedsGlobalChain = "Needs a newer Quartermaster (placementEdit.v2)";
+    private const string CapEditorPopup = "DepositionCapEditor";
+    private const float CapInputWidth = 72f;
     private static readonly AgentBridgeActionArgumentSchema ValueSchema = new(
         [new("value", AgentBridgeActionArgumentKind.String)]);
 
+    /// <summary>A toolbar action; one without a target (use current holders, clear destinations) spans every character.</summary>
     private sealed record ToolbarButton(string Label, string Operation, bool NeedsTarget, bool Primary)
     {
         public string ImGuiLabel { get; } = $"{Label}##Deposition{Operation}";
@@ -76,6 +83,10 @@ public sealed partial class DepositionPanel
 
     // Why editing is off this frame (null: it is on); read by the cached toolbar and cell actions.
     private string? editBlocked;
+    // The toolbar's typed cap (digits only; blank clears caps) and the right-click cap editor, when open.
+    private string toolbarCap = string.Empty;
+    private CapEditor? capEditor;
+    private bool capEditorOpening;
 
     private readonly Action<bool> drawToolbar;
     private readonly Action selectVisible;
@@ -87,6 +98,9 @@ public sealed partial class DepositionPanel
     private readonly Action<bool> setRailCollapsed;
     private readonly Func<JsonElement?, AgentBridgeUiActionResult> searchControl;
     private readonly Func<JsonElement?, AgentBridgeUiActionResult> targetControl;
+    private readonly Func<JsonElement?, AgentBridgeUiActionResult> toolbarCapControl;
+    private readonly Func<JsonElement?, AgentBridgeUiActionResult> capEditorControl;
+    private readonly Action setToolbarCap;
 
     private enum Filter
     {
@@ -97,23 +111,32 @@ public sealed partial class DepositionPanel
     /// <summary>A matrix row: the item and NqOnly, HqOnly or Any (a buy-list line of either quality).</summary>
     private readonly record struct RowKey(uint ItemId, string Quality);
 
-    /// <summary>A destination column: a retainer of a character, or (retainer 0) the owner's Any space.</summary>
+    /// <summary>A destination column: a retainer of a character.</summary>
     private readonly record struct Destination(ulong LocalContentId, ulong RetainerId)
     {
-        public bool IsAnySpace => RetainerId == 0;
-
         public string Persisted => $"{LocalContentId}:{RetainerId}";
 
-        public string Id => $"{LocalContentId}.{(IsAnySpace ? "any" : RetainerId.ToString())}";
+        public string Id => $"{LocalContentId}.{RetainerId}";
 
+        /// <summary>A persisted destination; null for anything else, including a legacy Any space entry (retainer 0).</summary>
         public static Destination? Parse(string text)
         {
             var parts = text.Split(':');
             return parts.Length == 2 && ulong.TryParse(parts[0], out var character) && character != 0 &&
-                   ulong.TryParse(parts[1], out var retainer)
+                   ulong.TryParse(parts[1], out var retainer) && retainer != 0
                 ? new Destination(character, retainer)
                 : null;
         }
+    }
+
+    /// <summary>The right-click cap editor: the cell it was opened on (by key, so a relayout keeps it) and its typed cap.</summary>
+    private sealed class CapEditor
+    {
+        public required RowKey Row { get; init; }
+        public required Destination Column { get; init; }
+        public required Vector2 Anchor { get; init; }
+        public string Text { get; set; } = string.Empty;
+        public bool Focus { get; set; } = true;
     }
 
     public DepositionPanel(
@@ -143,6 +166,19 @@ public sealed partial class DepositionPanel
             return AgentBridgeUiActionResult.Ok("Search set.");
         });
         targetControl = arguments => WithValue(arguments, ChooseTarget);
+        toolbarCapControl = arguments => WithValue(arguments, value =>
+        {
+            toolbarCap = Digits(value);
+            return AgentBridgeUiActionResult.Ok(toolbarCap.Length == 0 ? "Cap cleared." : "Cap typed.");
+        });
+        capEditorControl = arguments => WithValue(arguments, value =>
+        {
+            if (capEditor is not { } editor)
+                return AgentBridgeUiActionResult.Fail("The cap editor is not open.");
+            editor.Text = Digits(value);
+            return AgentBridgeUiActionResult.Ok(editor.Text.Length == 0 ? "Cap cleared." : "Cap typed.");
+        });
+        setToolbarCap = QueueToolbarCap;
         drawRow = DrawRow;
     }
 
@@ -181,6 +217,7 @@ public sealed partial class DepositionPanel
             DrawMatrix(current);
         }
         ImGui.EndChild();
+        DrawCapEditor();
         DrawStatusLine(view);
     }
 
@@ -269,11 +306,17 @@ public sealed partial class DepositionPanel
         config.Save();
     }
 
-    private HashSet<Destination> Ticked() =>
-        ticked ??= (config.MarketAcquisitionDepositionDestinations ?? [])
-            .Select(Destination.Parse)
-            .OfType<Destination>()
-            .ToHashSet();
+    /// <summary>The ticked destinations; legacy entries that are no longer destinations (Any space) are dropped and saved away.</summary>
+    private HashSet<Destination> Ticked()
+    {
+        if (ticked is not null)
+            return ticked;
+        var persisted = config.MarketAcquisitionDepositionDestinations ?? [];
+        ticked = persisted.Select(Destination.Parse).OfType<Destination>().ToHashSet();
+        if (ticked.Count != persisted.Count)
+            SaveTicked(ticked);
+        return ticked;
+    }
 
     private void SetTicked(IEnumerable<Destination> destinations, bool on)
     {
@@ -308,15 +351,9 @@ public sealed partial class DepositionPanel
             if (retainer.Assigned)
                 set.Add(new Destination(owner.LocalContentId, retainer.RetainerId));
         foreach (var item in view.Items.Values)
-        {
-            foreach (var home in item.LocalHomes)
-                set.Add(new Destination(owner.LocalContentId, home));
-            if (item.AnySpace)
-                set.Add(new Destination(owner.LocalContentId, 0));
-            if (item.Remote is { Character.LocalContentId: { } remote })
-                foreach (var home in item.Remote.Homes)
-                    set.Add(new Destination(remote, home));
-        }
+            foreach (var home in item.Homes)
+                if (home.Character.LocalContentId is { } character)
+                    set.Add(new Destination(character, home.RetainerId));
         defaulted.Add(owner.LocalContentId);
         SaveTicked(set);
     }
@@ -358,14 +395,6 @@ public sealed partial class DepositionPanel
                     $"Show {name} · {label} as a destination column",
                     on ? "Shown" : "Hidden",
                     value => SetTicked([destination], value)));
-            }
-            if (character.OffersAnySpace)
-            {
-                var any = new Destination(character.LocalContentId, 0);
-                var on = set.Contains(any);
-                all.Add(any);
-                leaves.Add(new CharacterTreeLeaf("any", "Any space", on, true, true, null, null,
-                    $"Show {name} · Any space as a destination column", on ? "Shown" : "Hidden", value => SetTicked([any], value)));
             }
             var id = character.LocalContentId;
             groups.Add(new CharacterTreeGroup(
@@ -418,8 +447,9 @@ public sealed partial class DepositionPanel
             var button = ToolbarButtons[index];
             var blocked = editBlocked
                           ?? (!hasSelection ? "No rows selected"
-                              : button.NeedsTarget && chosen is null ? "No destination columns shown"
-                              : null);
+                              : !button.NeedsTarget ? null
+                              : chosen is null ? "No destination columns shown"
+                              : GlobalChainBlocked(chosen));
             DalamudUiLayout.SameLineIfFits(button.Label);
             var clicked = button.Primary ? ImGuiUi.PrimaryButton(button.ImGuiLabel, blocked is null) : ImGuiUi.Button(button.ImGuiLabel, blocked is null);
             if (blocked is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
@@ -427,6 +457,9 @@ public sealed partial class DepositionPanel
             if (clicked && blocked is null)
                 toolbarActions[index]();
             reviewRegistry.RegisterLastItem(button.AgentId, button.AgentLabel, AgentBridgeUiControlKind.Button, blocked is null, false, null, toolbarActions[index]);
+            // Set cap sits with the other target actions, before the global ones.
+            if (button.Operation == QuartermasterPlacementOperations.Remove)
+                DrawToolbarCap(hasSelection, chosen);
         }
 
         DalamudUiLayout.SameLineRight(DalamudUiLayout.ButtonWidth("Clear row selection"));
@@ -436,6 +469,35 @@ public sealed partial class DepositionPanel
         ImGui.EndDisabled();
         reviewRegistry.RegisterLastItem($"{AgentPrefix}.clearSelection", "Clear the Deposition row selection", AgentBridgeUiControlKind.Button,
             hasSelection, false, null, clearSelection);
+    }
+
+    /// <summary>The typed cap and Set cap: caps (or, blank, uncaps) the target destination for every selected row.</summary>
+    private void DrawToolbarCap(bool hasSelection, Column? chosen)
+    {
+        var buttonWidth = DalamudUiLayout.ButtonWidth("Set cap");
+        DalamudUiLayout.SameLineIfFits(CapInputWidth + ImGui.GetStyle().ItemSpacing.X + buttonWidth);
+        ImGui.SetNextItemWidth(CapInputWidth);
+        var text = toolbarCap;
+        if (ImGui.InputTextWithHint("##DepositionCap", "Cap", ref text, 10, ImGuiInputTextFlags.CharsDecimal | ImGuiInputTextFlags.AutoSelectAll))
+            toolbarCap = Digits(text);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Cap for Set cap; blank sets unlimited");
+        reviewRegistry.Register($"{AgentPrefix}.cap", "Cap for Set cap on the selected Deposition rows (blank: unlimited)",
+            AgentBridgeUiControlKind.Input, ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), true, false, toolbarCap, ValueSchema, toolbarCapControl);
+
+        var blocked = editBlocked
+                      ?? (!placement.HasGlobalChain ? NeedsGlobalChain
+                          : !hasSelection ? "No rows selected"
+                          : chosen is null ? "No destination columns shown"
+                          : null);
+        ImGui.SameLine();
+        var clicked = ImGuiUi.Button("Set cap##DepositionSetCap", blocked is null);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(blocked ?? (ParseCap(toolbarCap) is { } cap ? $"Cap at {cap:N0}: {chosen!.PickerLabel}" : $"Unlimited: {chosen!.PickerLabel}"));
+        if (clicked && blocked is null)
+            setToolbarCap();
+        reviewRegistry.RegisterLastItem($"{AgentPrefix}.{QuartermasterPlacementOperations.SetCap}", "Set cap for the selected Deposition rows",
+            AgentBridgeUiControlKind.Button, blocked is null, false, null, setToolbarCap);
     }
 
     private void SelectVisible()
@@ -505,31 +567,203 @@ public sealed partial class DepositionPanel
         var rows = current.Rows.Where(row => selection.IsSelected(row.Key)).ToList();
         if (rows.Count == 0)
             return;
-        var chosen = Target(current);
-        var character = chosen?.Character ?? current.Owner;
-        if (character is null)
+        var items = EditItems(rows);
+        // Use current holders and Clear destinations act on the whole chain, across every character.
+        if (!button.NeedsTarget)
+        {
+            placement.RequestEdit(new PlacementEditRequest(button.Operation, button.Label, null, null, items));
             return;
-        var destination = chosen is null
-            ? null
-            : chosen.Key.IsAnySpace ? QuartermasterPlacementDestination.Any : QuartermasterPlacementDestination.Retainer(chosen.Key.RetainerId);
-        if (button.NeedsTarget && destination is null)
+        }
+        if (Target(current) is not { } chosen || GlobalChainBlocked(chosen) is not null)
             return;
-        var shownLabel = chosen is null || !button.NeedsTarget
-            ? $"{button.Label} on {character.CharacterName}"
-            : $"{button.Label}: {chosen.PickerLabel}";
-        placement.RequestEdit(new PlacementEditRequest(button.Operation, shownLabel, character, destination,
-            rows.SelectMany(row => row.EditItems).DistinctBy(item => (item.ItemId, item.Quality)).ToList()));
+        placement.RequestEdit(new PlacementEditRequest(button.Operation, $"{button.Label}: {chosen.PickerLabel}", chosen.Character,
+            QuartermasterPlacementDestination.Retainer(chosen.Key.RetainerId), items));
     }
+
+    private void QueueToolbarCap()
+    {
+        if (editBlocked is not null || !placement.HasGlobalChain || layout is not { } current || Target(current) is not { } chosen)
+            return;
+        var rows = current.Rows.Where(row => selection.IsSelected(row.Key)).ToList();
+        if (rows.Count > 0)
+            QueueCapEdit(rows, chosen, ParseCap(toolbarCap));
+    }
+
+    /// <summary>Caps the item at the column's retainer for every rule of these rows (adding it as the last home where absent); null uncaps.</summary>
+    private void QueueCapEdit(IReadOnlyList<Row> rows, Column column, int? cap) =>
+        placement.RequestEdit(new PlacementEditRequest(
+            QuartermasterPlacementOperations.SetCap,
+            cap is { } value ? $"Cap {value:N0}: {column.PickerLabel}" : $"Unlimited: {column.PickerLabel}",
+            column.Character,
+            QuartermasterPlacementDestination.Retainer(column.Key.RetainerId),
+            EditItems(rows),
+            cap));
+
+    private static List<QuartermasterPlacementEditItem> EditItems(IEnumerable<Row> rows) =>
+        rows.SelectMany(row => row.EditItems).DistinctBy(item => (item.ItemId, item.Quality)).ToList();
 
     /// <summary>One cell click: adds or removes that destination for every rule the row maps to.</summary>
     private void QueueCellEdit(Row row, Column column, Cell cell)
     {
-        if (editBlocked is not null || IsPending(row))
+        if (editBlocked is not null || IsPending(row) || GlobalChainBlocked(column) is not null)
             return;
         // Rules of an either-quality row that disagree on this destination are made to agree by removing it.
-        var operation = cell.Mixed ? QuartermasterPlacementOperations.Remove : QuartermasterPlacementOperations.Toggle;
-        var destination = column.Key.IsAnySpace ? QuartermasterPlacementDestination.Any : QuartermasterPlacementDestination.Retainer(column.Key.RetainerId);
-        placement.RequestEdit(new PlacementEditRequest(operation, column.PickerLabel, column.Character, destination, row.EditItems));
+        var operation = cell.Mixed && cell.AnyAssigned && !cell.AllAssigned
+            ? QuartermasterPlacementOperations.Remove
+            : QuartermasterPlacementOperations.Toggle;
+        QueueCellOperation(row, column, operation, column.PickerLabel);
+    }
+
+    private void QueueCellOperation(Row row, Column column, string operation, string label) =>
+        placement.RequestEdit(new PlacementEditRequest(operation, label, column.Character,
+            QuartermasterPlacementDestination.Retainer(column.Key.RetainerId), row.EditItems));
+
+    /// <summary>
+    /// Another character's retainer belongs to the global chain, which only placementEdit.v2 edits; an older
+    /// Quartermaster keeps the owner's retainers editable.
+    /// </summary>
+    private string? GlobalChainBlocked(Column column) =>
+        column.Character.IsOwner || placement.HasGlobalChain ? null : NeedsGlobalChain;
+
+    // ---- Cap editor (right-click a cell) ------------------------------------------------------------
+
+    private void OpenCapEditor(Row row, Column column, Cell cell, Vector2 anchor)
+    {
+        if (editBlocked is not null || IsPending(row))
+            return;
+        capEditor = new CapEditor
+        {
+            Row = row.Key,
+            Column = column.Key,
+            Anchor = anchor,
+            Text = cell.SharedCap is { } cap ? cap.ToString(CultureInfo.InvariantCulture) : string.Empty,
+        };
+        capEditorOpening = true;
+    }
+
+    /// <summary>
+    /// A compact popover at the cell: its cap (Enter or Apply commits; blank is unlimited), Clear cap, Make #1 and
+    /// Remove. Every action here is also on the toolbar.
+    /// </summary>
+    private void DrawCapEditor()
+    {
+        if (capEditor is not { } editor)
+            return;
+        if (capEditorOpening)
+        {
+            capEditorOpening = false;
+            ImGui.SetNextWindowPos(editor.Anchor);
+            ImGui.OpenPopup(CapEditorPopup);
+        }
+        if (!ImGui.BeginPopup(CapEditorPopup))
+        {
+            capEditor = null;
+            return;
+        }
+        var row = layout?.Rows.FirstOrDefault(candidate => candidate.Key == editor.Row);
+        var index = layout is { } current ? current.Columns.IndexOf(current.Columns.FirstOrDefault(column => column.Key == editor.Column)!) : -1;
+        if (row is null || index < 0)
+        {
+            ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+            capEditor = null;
+            return;
+        }
+        var column = layout!.Columns[index];
+        var cell = row.Cells[index];
+        var blocked = editBlocked ?? (IsPending(row) ? "Updating" : !placement.HasGlobalChain ? NeedsGlobalChain : null);
+        var done = false;
+
+        ImGui.TextUnformatted(cell.Header);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted("Cap");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(CapInputWidth + 24f);
+        if (editor.Focus)
+        {
+            ImGui.SetKeyboardFocusHere();
+            editor.Focus = false;
+        }
+        var text = editor.Text;
+        var entered = ImGui.InputTextWithHint("##cell-cap", "Unlimited", ref text, 10,
+            ImGuiInputTextFlags.CharsDecimal | ImGuiInputTextFlags.AutoSelectAll | ImGuiInputTextFlags.EnterReturnsTrue);
+        editor.Text = Digits(text);
+        reviewRegistry.Register($"{AgentPrefix}.capEditor.cap", $"Cap for {cell.Header} (blank: unlimited)", AgentBridgeUiControlKind.Input,
+            ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), blocked is null, false, editor.Text, ValueSchema, capEditorControl);
+
+        var cap = ParseCap(editor.Text);
+        var applyBlocked = blocked ?? CapUnchanged(cell, cap);
+        void Apply()
+        {
+            QueueCapEdit([row], column, cap);
+            done = true;
+        }
+        ImGui.SameLine();
+        if ((ImGuiUi.PrimaryButton("Apply##DepositionCapApply", applyBlocked is null) || entered) && applyBlocked is null)
+            Apply();
+        if (applyBlocked is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(applyBlocked);
+        reviewRegistry.RegisterLastItem($"{AgentPrefix}.capEditor.apply", $"Apply the cap to {cell.Header}", AgentBridgeUiControlKind.Button,
+            applyBlocked is null, false, null, Apply);
+
+        var first = true;
+        void PopoverButton(string label, string id, string agentLabel, Action act)
+        {
+            if (!first)
+                ImGui.SameLine();
+            first = false;
+            if (ImGuiUi.Button($"{label}##DepositionCap{id}", blocked is null) && blocked is null)
+                act();
+            if (blocked is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(blocked);
+            reviewRegistry.RegisterLastItem($"{AgentPrefix}.capEditor.{id}", agentLabel, AgentBridgeUiControlKind.Button, blocked is null, false, null, act);
+        }
+        if (cell.AnyCap)
+            PopoverButton("Clear cap", "clear", $"Clear the cap on {cell.Header}", () =>
+            {
+                QueueCapEdit([row], column, null);
+                done = true;
+            });
+        if (!cell.AllFirst)
+            PopoverButton("Make #1", "makeFirst", $"Make {cell.Header} the first home", () =>
+            {
+                QueueCellOperation(row, column, QuartermasterPlacementOperations.MakeFirst, $"Make first: {column.PickerLabel}");
+                done = true;
+            });
+        if (cell.AnyAssigned)
+            PopoverButton("Remove", "remove", $"Remove {cell.Header} as a home", () =>
+            {
+                QueueCellOperation(row, column, QuartermasterPlacementOperations.Remove, $"Remove: {column.PickerLabel}");
+                done = true;
+            });
+
+        if (done || ImGui.IsKeyPressed(ImGuiKey.Escape))
+        {
+            ImGui.CloseCurrentPopup();
+            capEditor = null;
+        }
+        ImGui.EndPopup();
+    }
+
+    /// <summary>Why Apply would change nothing: the typed cap is what the home already has (or blank on an uncapped one).</summary>
+    private static string? CapUnchanged(Cell cell, int? cap) => cap switch
+    {
+        null when !cell.AnyCap => cell.AnyAssigned ? "Already unlimited" : "Type a cap",
+        { } value when cell.AllAssigned && cell.SharedCap == value => "Already at this cap",
+        _ => null,
+    };
+
+    private static string Digits(string text) => new(text.Where(char.IsAsciiDigit).ToArray());
+
+    /// <summary>Blank is unlimited; anything larger than a cap can be is clamped silently.</summary>
+    private static int? ParseCap(string text)
+    {
+        var digits = Digits(text);
+        if (digits.Length == 0)
+            return null;
+        return digits.Length > 10 || !long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value > int.MaxValue
+            ? int.MaxValue
+            : (int)value;
     }
 
     private bool IsPending(Row row)

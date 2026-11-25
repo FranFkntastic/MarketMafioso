@@ -11,11 +11,13 @@ namespace MarketMafioso.MarketAcquisition;
 /// plan arrivals, deliver into a named retainer and forward a delivered stow.
 ///
 /// Trip order: a courier transfer has one source and one destination, so a consignment goes straight to another
-/// character R only when every unit of it is bound for R's homes (the plan fills the primary's own homes first). Then
-/// the pickup that would have gone to the primary goes to R instead, and the later forward from the primary to R never
-/// happens. A consignment that is only partly bound for R still goes to the primary in one trip; Quartermaster's
-/// forward carries R's share on after the stow, which costs the same trades as splitting the pickup would. Counted
-/// stock already on its home character is not collected at all.
+/// character R only when every unit of it is bound for R's homes. The plan fills the item's global home chain in rank
+/// order across characters, each home up to its cap and room, so that happens when R ranks first or when every home
+/// ranked before R's is full or at its cap. Then the pickup that would have gone to the primary goes to R instead, and
+/// the later forward from the primary to R never happens. A consignment split between the primary and R, or across
+/// several other characters, still goes to the primary in one trip; the delivered stow fills the primary's homes and
+/// Quartermaster's forward carries every other character's share on in one courier run, which costs the same trades
+/// as splitting the pickup would. Counted stock already on its home character is not collected at all.
 ///
 /// Journaling: the route (destination and per-retainer units) is persisted with the leg's request id before the
 /// courier sees it, so a replay sends the identical request. A direct delivery refused for its destination (before
@@ -51,8 +53,19 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private static readonly TimeSpan ForwardPollInterval = TimeSpan.FromSeconds(5);
     private DateTimeOffset nextForwardPollUtc;
 
-    private sealed record ArrivalShare(uint ItemId, string ItemName, bool IsHq, uint Quantity, uint Local, uint Remote,
-        CrossRegionCharacter? Home, List<CrossRegionDirectItem> Retainers);
+    /// <summary>
+    /// One variant of a consignment as the plan places it: Local units on the primary's homes, Remotes per other
+    /// character in fill order, and RemoteHomes every other character the item has homes on (with room or not).
+    /// </summary>
+    private sealed record ArrivalShare(uint ItemId, string ItemName, bool IsHq, uint Quantity, uint Local,
+        IReadOnlyList<RemoteShare> Remotes, IReadOnlyList<CrossRegionCharacter> RemoteHomes)
+    {
+        public ulong RemoteUnits => Remotes.Aggregate(0UL, (total, remote) => total + remote.Units);
+
+        public string Variant => $"{ItemName}{(IsHq ? " HQ" : string.Empty)}";
+    }
+
+    private sealed record RemoteShare(CrossRegionCharacter Home, uint Units, List<CrossRegionDirectItem> Retainers);
 
     private bool DirectDeliveryEnabled
     {
@@ -90,9 +103,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     // ---- Planning ---------------------------------------------------------------------------
 
     /// <summary>
-    /// Where a consignment would go on arrival at the primary. Units this run already delivered there take the
-    /// primary's room (and then the remote room) first. Null when Quartermaster cannot plan; the consignment then
-    /// goes to the primary as before.
+    /// Where a consignment would go on arrival at the primary. Units this run already delivered there fill the home
+    /// chain first (destinations in the plan's fill order), then this consignment takes what room is left. Null when
+    /// Quartermaster cannot plan; the consignment then goes to the primary as before.
     /// </summary>
     private Dictionary<(uint ItemId, bool IsHq), ArrivalShare>? PlanArrival(
         IReadOnlyList<CrossRegionManifestLine> consignment,
@@ -121,32 +134,49 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         foreach (var ((itemId, isHq), (name, quantity)) in arriving)
         {
             var answer = plan!.Items.First(item => item.ItemId == itemId && item.IsHq == isHq);
-            var before = already.GetValueOrDefault((itemId, isHq)).Quantity;
-            var localUnits = (ulong)Math.Max(0, answer.Local?.Units ?? 0);
-            var local = Math.Min(quantity, localUnits - Math.Min(localUnits, before));
-            // Delivered units the primary's homes cannot take use the remote room before this consignment does.
-            var skip = before - Math.Min(before, localUnits);
-            var remoteRoom = (ulong)Math.Max(0, answer.Remote?.Units ?? 0);
-            var remote = Math.Min(quantity - local, remoteRoom - Math.Min(remoteRoom, skip));
-            var retainers = new List<CrossRegionDirectItem>();
-            var left = remote;
-            foreach (var retainer in answer.Remote?.Retainers ?? [])
+            var destinations = answer.Destinations ?? [];
+            // Delivered units take the chain's room before this consignment does.
+            var skip = already.GetValueOrDefault((itemId, isHq)).Quantity;
+            var left = quantity;
+            ulong local = 0;
+            var remotes = new List<RemoteShare>();
+            foreach (var destination in destinations)
             {
-                var units = (ulong)retainer.Units;
+                var units = (ulong)Math.Max(0, destination.Units);
                 var skipped = Math.Min(units, skip);
                 skip -= skipped;
                 var take = Math.Min(units - skipped, left);
                 if (take == 0)
                     continue;
                 left -= take;
-                retainers.Add(new(itemId, name, isHq, (uint)take, retainer.RetainerId, retainer.RetainerName));
+                if (destination.IsOwner)
+                {
+                    local += take;
+                    continue;
+                }
+                var retainers = new List<CrossRegionDirectItem>();
+                var retainerSkip = skipped;
+                var retainerLeft = take;
+                foreach (var retainer in destination.Retainers)
+                {
+                    var room = (ulong)Math.Max(0, retainer.Units);
+                    var passed = Math.Min(room, retainerSkip);
+                    retainerSkip -= passed;
+                    var share = Math.Min(room - passed, retainerLeft);
+                    if (share == 0)
+                        continue;
+                    retainerLeft -= share;
+                    retainers.Add(new(itemId, name, isHq, (uint)share, retainer.RetainerId, retainer.RetainerName));
+                }
+                remotes.Add(new(Character(destination.Character!), (uint)(take - retainerLeft), retainers));
             }
-            var home = answer.Remote?.Character is { } character
-                ? new CrossRegionCharacter(character.LocalContentId, character.HomeWorldId, character.CharacterName, character.HomeWorldName)
-                : null;
-            shares[(itemId, isHq)] = new(itemId, name, isHq, (uint)Math.Min(quantity, uint.MaxValue), (uint)local, (uint)(remote - left), home, retainers);
+            var remoteHomes = destinations.Where(destination => !destination.IsOwner).Select(destination => Character(destination.Character!)).ToList();
+            shares[(itemId, isHq)] = new(itemId, name, isHq, (uint)Math.Min(quantity, uint.MaxValue), (uint)local, remotes, remoteHomes);
         }
         return shares;
+
+        static CrossRegionCharacter Character(QuartermasterStowCharacter character) =>
+            new(character.LocalContentId, character.HomeWorldId, character.CharacterName, character.HomeWorldName);
     }
 
     /// <summary>
@@ -160,12 +190,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         bool canPlan;
         try { canPlan = directDelivery!.HasDirectDelivery; }
         catch { canPlan = false; }
-        return !canPlan || PlanArrival(items, [], "The stow") is not { } shares || shares.Values.Any(share => share.Home is not null);
+        return !canPlan || PlanArrival(items, [], "The stow") is not { } shares || shares.Values.Any(share => share.RemoteHomes.Count > 0);
     }
 
     /// <summary>
     /// A direct route for a consignment when every unit of it is bound for the homes of one other character in the
-    /// courier roster (not the primary, the source or the carrier); otherwise null and it goes to the primary.
+    /// courier roster (not the primary, the source or the carrier), whether that character ranks first or the homes
+    /// ranked before it take nothing (full or at cap); otherwise null and it goes to the primary.
     /// </summary>
     private CrossRegionDirectRoute? DirectRouteFor(
         IReadOnlyList<CrossRegionManifestLine> consignment,
@@ -175,15 +206,15 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     {
         if (!DirectDeliveryEnabled || consignment.Count == 0 || PlanArrival(consignment, delivered, what) is not { } shares)
             return null;
-        var remote = shares.Values.Where(share => share.Remote > 0).ToList();
+        var remote = shares.Values.SelectMany(share => share.Remotes.Select(part => (Share: share, Part: part))).ToList();
         if (remote.Count == 0)
             return null;
-        var homes = remote.Select(share => share.Home!).DistinctBy(home => (home.LocalContentId, home.HomeWorldId)).ToList();
+        var homes = remote.Select(entry => entry.Part.Home).DistinctBy(home => (home.LocalContentId, home.HomeWorldId)).ToList();
         var primary = session.Primary!;
-        if (homes.Count > 1 || shares.Values.Any(share => share.Remote < share.Quantity))
+        if (homes.Count > 1 || shares.Values.Any(share => share.RemoteUnits < share.Quantity))
         {
             log($"{CodeDirectMixedConsignment}: {what} goes to {primary.Label} in one trip; " +
-                string.Join(", ", remote.Select(share => $"{share.Remote} {share.ItemName}{(share.IsHq ? " HQ" : string.Empty)} for {share.Home!.Label}")) +
+                string.Join(", ", remote.Select(entry => $"{entry.Part.Units} {entry.Share.Variant} for {entry.Part.Home.Label}")) +
                 " follow from there after the stow.", null);
             return null;
         }
@@ -197,7 +228,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 (status is null ? $" (status unavailable: {error})." : "."), null);
             return null;
         }
-        return new CrossRegionDirectRoute { Destination = home, Items = remote.SelectMany(share => share.Retainers).ToList() };
+        return new CrossRegionDirectRoute { Destination = home, Items = remote.SelectMany(entry => entry.Part.Retainers).ToList() };
     }
 
     /// <summary>
@@ -231,10 +262,13 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             Save();
             return;
         }
-        // Per variant: the counted units beyond what the primary's homes take, when the variant's home is this source.
+        // Per variant whose homes include this source: the counted units beyond what homes on other characters (the
+        // primary's or another's) would take.
         var keep = consignment.ToDictionary(line => (line.ItemId, line.IsHq),
-            line => shares.TryGetValue((line.ItemId, line.IsHq), out var share) && share.Home?.Matches(collection.Source) == true
-                ? line.Quantity - Math.Min(line.Quantity, share.Local)
+            line => shares.TryGetValue((line.ItemId, line.IsHq), out var share) && share.RemoteHomes.Any(home => home.Matches(collection.Source))
+                ? line.Quantity - (uint)Math.Min(line.Quantity, share.Local + share.Remotes
+                    .Where(part => !part.Home.Matches(collection.Source))
+                    .Aggregate(0UL, (total, part) => total + part.Units))
                 : 0u);
         if (keep.Values.All(units => units == 0))
         {
@@ -455,7 +489,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             SessionId = session.SessionId,
             Owner = session.Primary?.Label ?? "the primary",
             OpenedAtUtc = openedAtUtc,
-            Lines = stow.Lines.Where(line => line.Forward is not null).ToList(),
+            Lines = stow.Lines.Where(line => line.HasForward).ToList(),
         });
         PruneForwardWatches(utcNow());
         SaveForwardWatches();
@@ -533,7 +567,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         }
         watch.FailedReads = 0;
         watch.LastError = null;
-        var observed = status.Lines.Where(line => line.Forward is not null).ToList();
+        var observed = status.Lines.Where(line => line.HasForward).ToList();
         var changed = observed.Count > 0 && !observed.Select(ForwardKey).SequenceEqual(watch.Lines.Select(ForwardKey));
         if (changed)
             watch.Lines = observed;
@@ -560,8 +594,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         return true;
     }
 
-    private static (uint ItemId, bool IsHq, string? Code, int? Delivered, int Planned) ForwardKey(QuartermasterDeliveredStowLine line) =>
-        (line.ItemId, line.IsHq, line.Forward?.Code, line.Forward?.Delivered, line.Forward?.Planned ?? 0);
+    private static string ForwardKey(QuartermasterDeliveredStowLine line) =>
+        $"{line.ItemId}:{line.IsHq}:" + string.Join("|", line.AllForwards.Select(forward =>
+            $"{forward.Character?.LocalContentId}/{forward.Code}/{forward.Delivered}/{forward.Planned}"));
 
     private CrossRegionStow? SessionStowFor(CrossRegionForwardWatch watch) =>
         session.Stow is { } stow && string.Equals(stow.RequestId, watch.RequestId, StringComparison.Ordinal) ? stow : null;
@@ -571,8 +606,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     {
         if (failure is not null)
             watch.Lines = watch.Lines
-                .Select(line => line.Forward is { IsOpen: true } or { Code: "RunFailed" or "RunInterrupted" or "RunIndeterminate" }
-                    ? line with { Forward = line.Forward with { Code = CodeForwardNotObserved } }
+                .Select(line => line.AllForwards.Any(Unobserved)
+                    ? line.WithForwards(line.AllForwards.Select(forward => Unobserved(forward) ? forward with { Code = CodeForwardNotObserved } : forward).ToList())
                     : line)
                 .ToList();
         watch.Settled = true;
@@ -580,10 +615,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         watch.SettledAtUtc = now;
         watch.Summary = failure is not null
             ? $"Forward of {watch.Owner}'s stow not observed: {failure}"
-            : $"Forward of {watch.Owner}'s stow: " + string.Join("; ", watch.Lines
-                .Where(line => line.Forward is { IsNeutral: false })
-                .Select(line => $"{line.ItemName}{(line.IsHq ? " HQ" : string.Empty)} {ForwardNote(line.Forward!, open: false)}")
-                .DefaultIfEmpty(code));
+            : $"Forward of {watch.Owner}'s stow: " + string.Join("; ", ForwardNotes(watch.Lines, open: false).DefaultIfEmpty(code));
         if (failure is not null)
             log($"{CodeForwardNotObserved}: stopped following the forward of stow {watch.RequestId}: {failure} " +
                 $"What it had not delivered is in {watch.Owner}'s bags or Quartermaster's courier custody.", null);
@@ -594,8 +626,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         stow.ForwardOpen = false;
         stow.ForwardCode = code;
         stow.Lines = stow.Lines
-            .Select(line => watch.Lines.FirstOrDefault(watched => watched.ItemId == line.ItemId && watched.IsHq == line.IsHq) is { Forward: { } forward }
-                ? line with { Forward = forward }
+            .Select(line => watch.Lines.FirstOrDefault(watched => watched.ItemId == line.ItemId && watched.IsHq == line.IsHq) is { HasForward: true } watched
+                ? line.WithForwards(watched.AllForwards)
                 : line)
             .ToList();
         if (session.IsTerminal)
@@ -631,10 +663,17 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     /// <summary>One status line for a watched forward: its outcome once settled, else what is still on the way.</summary>
     public static string DescribeForward(CrossRegionForwardWatch watch) =>
         watch.Settled && watch.Summary is { } summary ? summary
-            : $"Forwarding {watch.Owner}'s stow: " + string.Join("; ", watch.Lines
-                .Where(line => line.Forward is { IsNeutral: false })
-                .Select(line => $"{line.ItemName}{(line.IsHq ? " HQ" : string.Empty)} {ForwardNote(line.Forward!, open: true)}")
-                .DefaultIfEmpty("waiting for Quartermaster"));
+            : $"Forwarding {watch.Owner}'s stow: " + string.Join("; ", ForwardNotes(watch.Lines, open: true).DefaultIfEmpty("waiting for Quartermaster"));
+
+    /// <summary>One note per character each forwarded line is bound for, skipping parts nothing was meant to move for.</summary>
+    private static IEnumerable<string> ForwardNotes(IEnumerable<QuartermasterDeliveredStowLine> lines, bool open) =>
+        lines.SelectMany(line => line.AllForwards
+            .Where(forward => !forward.IsNeutral)
+            .Select(forward => $"{line.ItemName}{(line.IsHq ? " HQ" : string.Empty)} {ForwardNote(forward, open)}"));
+
+    /// <summary>A forward part whose outcome nobody will report any more once the watch gives up.</summary>
+    private static bool Unobserved(QuartermasterStowForwardLine forward) =>
+        forward is { IsOpen: true } or { Code: "RunFailed" or "RunInterrupted" or "RunIndeterminate" };
 
     /// <summary>A direct leg refused for a reason other than its destination: where its goods may already be.</summary>
     private string RejectionNote(CourierLeg leg, string? code) =>
@@ -642,9 +681,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     private static void MergeForwardLines(CrossRegionStow stow, QuartermasterDeliveredStowStatus status)
     {
-        var observed = status.Lines.GroupBy(line => (line.ItemId, line.IsHq)).ToDictionary(group => group.Key, group => group.First().Forward);
+        var observed = status.Lines.GroupBy(line => (line.ItemId, line.IsHq)).ToDictionary(group => group.Key, group => group.First());
         stow.Lines = stow.Lines
-            .Select(line => observed.TryGetValue((line.ItemId, line.IsHq), out var forward) && forward is not null ? line with { Forward = forward } : line)
+            .Select(line => observed.TryGetValue((line.ItemId, line.IsHq), out var current) && current.HasForward ? line.WithForwards(current.AllForwards) : line)
             .ToList();
     }
 
@@ -652,8 +691,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private void LogForwardOutcomes(IEnumerable<QuartermasterDeliveredStowLine> lines, string? owner)
     {
         foreach (var line in lines)
+        foreach (var forward in line.AllForwards)
         {
-            if (line.Forward is not { } forward || forward.IsOpen || forward.IsNeutral || forward.Code == "Delivered")
+            if (forward.IsOpen || forward.IsNeutral || forward.Code == "Delivered")
                 continue;
             var homes = string.Join(" → ", forward.Homes.Select(home => home.RetainerName ?? $"retainer {home.RetainerId}"));
             log($"{forward.Code}: {forward.Delivered ?? 0} of {forward.Wanted} {line.ItemName}{(line.IsHq ? " HQ" : string.Empty)} forwarded to " +
@@ -661,7 +701,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         }
     }
 
-    /// <summary>Units of a stow line meant for the owner's own homes: what Quartermaster's forward routed elsewhere is not.</summary>
+    /// <summary>Units of a stow line meant for the owner's own homes: what Quartermaster's forwards routed elsewhere is not.</summary>
     private static int LocalRequested(QuartermasterDeliveredStowLine line) =>
-        Math.Max(0, line.Requested - (line.Forward is { Code: not "NoRoom" } forward ? Math.Max(0, forward.Wanted) : 0));
+        Math.Max(0, line.Requested - line.AllForwards.Where(forward => forward.Code != "NoRoom").Sum(forward => Math.Max(0, forward.Wanted)));
 }

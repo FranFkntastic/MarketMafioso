@@ -29,13 +29,22 @@ public sealed record PlacementView(
         Characters.FirstOrDefault(character => character.Is(localContentId));
 }
 
-/// <summary>One placement editor action queued from the Deposition tab.</summary>
+/// <summary>
+/// One placement editor action queued from the Deposition tab. Character owns Destination's retainer; both are null
+/// for the global operations (use current holders, clear destinations). MaxUnits is setCap's cap (null clears it).
+/// </summary>
 public sealed record PlacementEditRequest(
     string Operation,
     string OperationLabel,
-    QuartermasterPlacementCharacter Character,
+    QuartermasterPlacementCharacter? Character,
     QuartermasterPlacementDestination? Destination,
-    IReadOnlyList<QuartermasterPlacementEditItem> Items);
+    IReadOnlyList<QuartermasterPlacementEditItem> Items,
+    int? MaxUnits = null)
+{
+    /// <summary>Caps and edits on another character's retainers need Quartermaster's global home chain (placementEdit.v2).</summary>
+    public bool NeedsGlobalChain =>
+        Operation == QuartermasterPlacementOperations.SetCap || Character is { IsOwner: false };
+}
 
 /// <summary>
 /// The Deposition tab's status line: what the last edit did. Problem marks a refusal or failure; it stays until a later
@@ -95,8 +104,14 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
         quartermaster.Changed += OnQuartermasterChanged;
     }
 
-    /// <summary>True while Quartermaster advertises placementEdit.v1 and exposes its channels.</summary>
+    /// <summary>True while Quartermaster advertises placementEdit.v1 or v2 and exposes its channels.</summary>
     public bool HasPlacementEdit { get; private set; }
+
+    /// <summary>
+    /// True while Quartermaster advertises placementEdit.v2: one ranked home chain across characters, per-home caps.
+    /// Without it, caps and edits on other characters' retainers are not offered.
+    /// </summary>
+    public bool HasGlobalChain { get; private set; }
 
     public PlacementView View { get; private set; } = PlacementView.Empty;
 
@@ -172,9 +187,12 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
         {
             capabilityCheckedAtUtc = now;
             capabilityDirty = false;
-            HasPlacementEdit = quartermaster.TryGetCapabilities(out var advertised, out _) && advertised is not null &&
-                               advertised.Capabilities.Contains(QuartermasterPlacementClient.PlacementEditCapability) &&
-                               placement.CanEdit;
+            var capabilities = quartermaster.TryGetCapabilities(out var advertised, out _) && advertised is not null
+                ? advertised.Capabilities
+                : [];
+            var canEdit = capabilities.Length > 0 && placement.CanEdit;
+            HasGlobalChain = canEdit && capabilities.Contains(QuartermasterPlacementClient.PlacementEditV2Capability);
+            HasPlacementEdit = HasGlobalChain || canEdit && capabilities.Contains(QuartermasterPlacementClient.PlacementEditCapability);
         }
         if (!HasPlacementEdit)
         {
@@ -284,10 +302,15 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
             SetStatus(new($"{edit.OperationLabel} not sent: Quartermaster's placement is not loaded for this character.", true));
             return;
         }
+        // An older Quartermaster would read another character's homes as a separate chain and has no caps.
+        if (edit.NeedsGlobalChain && !HasGlobalChain)
+        {
+            SetStatus(new($"{edit.OperationLabel} not sent: Quartermaster does not advertise {QuartermasterPlacementClient.PlacementEditV2Capability}.", true));
+            return;
+        }
         // Quartermaster allows at most MaxItems per edit; a larger selection goes in consecutive edits.
         var applied = 0;
         var unchanged = 0;
-        var notes = new List<string>();
         QuartermasterPlacementEditOutcome? firstRefusal = null;
         string? requestRefusal = null;
         foreach (var chunk in edit.Items.Chunk(QuartermasterPlacementClient.MaxItems))
@@ -297,8 +320,9 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
                     owner,
                     edit.Operation,
                     chunk,
-                    edit.Character.IsOwner ? null : (edit.Character.LocalContentId, edit.Character.HomeWorldId),
+                    edit.Character is { IsOwner: false } other ? (other.LocalContentId, other.HomeWorldId) : null,
                     QuartermasterPlacementOperations.NeedsDestination(edit.Operation) ? edit.Destination : null,
+                    edit.MaxUnits,
                     allOrNothing: false,
                     out var ack,
                     out var error))
@@ -311,13 +335,6 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
             firstRefusal ??= ack.Items.FirstOrDefault(item => item.IsRefused);
             if (ack.IsRejected && firstRefusal is null)
                 requestRefusal ??= $"{ack.ErrorCode ?? "rejected"}: {ack.Message}";
-            foreach (var item in ack.Items)
-            {
-                if (item.RemoteHomesMovedFrom is { } from)
-                    notes.Add($"{item.ItemName}: homes moved from {Name(from)} to {edit.Character.CharacterName}");
-                else if (item.RemoteHomesKeptOn is { } kept)
-                    notes.Add($"{item.ItemName}: homes on {Name(kept)} kept");
-            }
             if (ack.IsRejected && ack.Items.All(item => item.Outcome != "applied"))
                 break;
         }
@@ -332,16 +349,11 @@ public sealed class MarketAcquisitionPlacementService : IDisposable
             : applied > 0
                 ? $"{edit.OperationLabel}: {applied:N0} item{(applied == 1 ? string.Empty : "s")} changed; refused for {refusal}"
                 : $"{edit.OperationLabel} refused for {refusal}";
-        if (notes.Count > 0)
-            text += " " + string.Join("; ", notes.Take(2)) + (notes.Count > 2 ? $"; {notes.Count - 2:N0} more." : ".");
         SetStatus(new(text, refusal is not null));
         if (refusal is not null)
             LogOnce($"Placement edit: {text}");
         dirty = true;
     }
-
-    private static string Name(QuartermasterOwnerScope character) =>
-        string.IsNullOrWhiteSpace(character.CharacterName) ? "another character" : character.CharacterName!;
 
     // ---- Refresh ----------------------------------------------------------------------------------
 
