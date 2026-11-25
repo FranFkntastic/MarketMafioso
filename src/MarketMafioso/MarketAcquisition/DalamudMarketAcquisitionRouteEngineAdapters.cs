@@ -7,6 +7,7 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.Automation.MarketBoard;
+using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.Travel;
 
 namespace MarketMafioso.MarketAcquisition;
@@ -20,12 +21,16 @@ public sealed class DalamudMarketAcquisitionRouteContext : IMarketAcquisitionRou
 {
     private readonly IPlayerState playerState;
     private readonly LifestreamIpc lifestream;
+    private readonly ICondition? condition;
 
-    public DalamudMarketAcquisitionRouteContext(IPlayerState playerState, LifestreamIpc lifestream)
+    public DalamudMarketAcquisitionRouteContext(IPlayerState playerState, LifestreamIpc lifestream, ICondition? condition = null)
     {
         this.playerState = playerState;
         this.lifestream = lifestream;
+        this.condition = condition;
     }
+
+    public string? ActionBlocker => condition is null ? null : PlayerActionReadiness.Blocker(condition);
 
     public bool IsCurrentWorldAvailable => playerState.CurrentWorld.IsValid;
 

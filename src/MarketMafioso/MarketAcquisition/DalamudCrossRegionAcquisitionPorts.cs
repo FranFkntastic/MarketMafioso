@@ -5,13 +5,18 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using MarketMafioso.Automation.Runtime;
+using MarketMafioso.Automation.Travel;
 using MarketMafioso.ProfileLogin;
 
 namespace MarketMafioso.MarketAcquisition;
 
 /// <summary>Live game state for the cross-regional pipeline. Reads run on the framework thread.</summary>
-internal sealed class DalamudCrossRegionGameState : ICrossRegionGameState
+internal sealed class DalamudCrossRegionGameState : ICrossRegionGameState, IDisposable
 {
+    // Right after login the client reports a character before it can act; actions sent then are swallowed or refused.
+    private static readonly TimeSpan LoginSettle = TimeSpan.FromSeconds(5);
+
     // Matches Quartermaster's CourierGame.Bags() (Inventory1..4 only; crystals are not courier-observed).
     private static readonly InventoryType[] CarriedContainers =
     [
@@ -24,13 +29,54 @@ internal sealed class DalamudCrossRegionGameState : ICrossRegionGameState
     private readonly IPlayerState playerState;
     private readonly ICharacterLoginDriver? loginDriver;
     private readonly Func<bool> otherAutomationActive;
+    private readonly ICondition? condition;
+    private readonly IClientState? clientState;
+    private readonly LifestreamIpc? lifestream;
+    // Plugin load counts as a login: a character logged in before load gets the same settle time.
+    private DateTimeOffset loginObservedAtUtc = DateTimeOffset.UtcNow;
 
-    public DalamudCrossRegionGameState(IPlayerState playerState, ICharacterLoginDriver? loginDriver, Func<bool> otherAutomationActive)
+    public DalamudCrossRegionGameState(
+        IPlayerState playerState,
+        ICharacterLoginDriver? loginDriver,
+        Func<bool> otherAutomationActive,
+        ICondition? condition = null,
+        IClientState? clientState = null,
+        LifestreamIpc? lifestream = null)
     {
         this.playerState = playerState;
         this.loginDriver = loginDriver;
         this.otherAutomationActive = otherAutomationActive;
+        this.condition = condition;
+        this.clientState = clientState;
+        this.lifestream = lifestream;
+        if (clientState is not null)
+            clientState.Login += OnLogin;
     }
+
+    public string? ActionBlocker
+    {
+        get
+        {
+            if (playerState.ContentId == 0)
+                return "no character is logged in";
+            if (condition is not null && PlayerActionReadiness.Blocker(condition) is { } blocker)
+                return blocker;
+            var sinceLogin = DateTimeOffset.UtcNow - loginObservedAtUtc;
+            if (sinceLogin < LoginSettle)
+                return $"the character logged in {sinceLogin.TotalSeconds:N0}s ago";
+            if (lifestream is { IsAvailable: true } && lifestream.TryIsBusy(out var busy) && busy)
+                return "Lifestream is busy";
+            return null;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (clientState is not null)
+            clientState.Login -= OnLogin;
+    }
+
+    private void OnLogin() => loginObservedAtUtc = DateTimeOffset.UtcNow;
 
     public CrossRegionCharacter? LoggedInCharacter =>
         playerState.ContentId == 0 || !playerState.HomeWorld.IsValid || string.IsNullOrWhiteSpace(playerState.CharacterName)
@@ -48,7 +94,11 @@ internal sealed class DalamudCrossRegionGameState : ICrossRegionGameState
         get
         {
             var manager = InventoryManager.Instance();
-            return manager == null ? null : manager->GetGil();
+            if (manager == null || playerState.ContentId == 0)
+                return null;
+            // Gil reads 0 until the currency container loads after login; that is unknown, not broke.
+            var currency = manager->GetInventoryContainer(InventoryType.Currency);
+            return currency == null || !currency->IsLoaded ? null : manager->GetGil();
         }
     }
 

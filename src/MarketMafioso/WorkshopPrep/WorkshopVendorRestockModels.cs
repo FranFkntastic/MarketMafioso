@@ -254,6 +254,13 @@ public interface IWorkshopQuartermasterRestockService
         MarketMafioso.Quartermaster.QuartermasterOwnerScope owner,
         IReadOnlyList<WorkshopMaterialAvailability> availability);
     string LastStatus { get; }
+
+    /// <summary>
+    /// True when the last <see cref="Submit"/> failed on something that clears on its own (no owner-matched snapshot
+    /// yet, capabilities unreadable, a transport error under the persisted request id); calling it again is safe.
+    /// </summary>
+    bool LastFailureTransient => false;
+
     WorkshopQuartermasterProgress GetProgress(MarketMafioso.Quartermaster.QuartermasterOwnerScope owner);
 
     /// <summary>The owner's persisted operation that has not reached a terminal status, or null.</summary>

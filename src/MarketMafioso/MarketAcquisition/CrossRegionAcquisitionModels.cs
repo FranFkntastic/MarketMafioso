@@ -201,6 +201,8 @@ public sealed class CrossRegionCollection
     public string? RetrievalOperationId { get; set; }
     public DateTimeOffset? RetrievalSubmittedAtUtc { get; set; }
     public List<CrossRegionRetrievalItem> RetrievalItems { get; set; } = [];
+    /// <summary>Retrievals resent after Quartermaster stopped one before any item moved; each resend gets a new suffixed identity.</summary>
+    public int RetrievalAttempt { get; set; }
     /// <summary>
     /// The only retainers the retrieval may draw from, when the plan counted some of the source's retainers;
     /// null retrieves from any of them.
@@ -246,6 +248,8 @@ public sealed record CrossRegionRetrievalItem(uint ItemId, string ItemName, int 
 public sealed class CrossRegionStow
 {
     public string? RequestId { get; set; }
+    /// <summary>Stows resent after one failed with every unit still in the bags; each resend gets a new suffixed identity.</summary>
+    public int Attempt { get; set; }
     /// <summary>What the run delivered to the primary (completed haul and collection manifests).</summary>
     public List<CrossRegionManifestLine> Claimed { get; set; } = [];
     /// <summary>What was asked of Quartermaster: per item, the claim capped by what the bags gained since Start.</summary>
@@ -287,6 +291,10 @@ public sealed class CrossRegionForwardWatch
     /// <summary>The run's primary, whose bags hold what the forward has not delivered.</summary>
     public string Owner { get; set; } = string.Empty;
     public DateTimeOffset OpenedAtUtc { get; set; }
+    /// <summary>Time the forward's courier run spent parked for the user in Quartermaster; it does not count toward the watch deadline.</summary>
+    public TimeSpan ParkedFor { get; set; }
+    /// <summary>Set while the forward's courier run is parked (stopped and resumable) in Quartermaster.</summary>
+    public DateTimeOffset? ParkedSinceUtc { get; set; }
     public List<QuartermasterDeliveredStowLine> Lines { get; set; } = [];
     public int FailedReads { get; set; }
     public string? LastError { get; set; }

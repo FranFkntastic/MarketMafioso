@@ -4,6 +4,7 @@ using System.Linq;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.Automation.Retainers;
 using Franthropy.Dalamud.Travel;
+using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.Quartermaster;
 
@@ -16,20 +17,25 @@ public sealed class DalamudShardAcquisitionCheckpointRuntime : IShardAcquisition
     private readonly IMarketAcquisitionRouteUiAutomation uiAutomation;
     private readonly DalamudLifestreamPropertyTravel propertyTravel;
     private readonly LifestreamIpc lifestream;
+    private readonly ICondition? condition;
 
     public DalamudShardAcquisitionCheckpointRuntime(
         IPlayerState playerState,
         InventoryScanner scanner,
         IMarketAcquisitionRouteUiAutomation uiAutomation,
         DalamudLifestreamPropertyTravel propertyTravel,
-        LifestreamIpc lifestream)
+        LifestreamIpc lifestream,
+        ICondition? condition = null)
     {
         this.playerState = playerState;
         this.scanner = scanner;
         this.uiAutomation = uiAutomation;
         this.propertyTravel = propertyTravel;
         this.lifestream = lifestream;
+        this.condition = condition;
     }
+
+    public string? ActionBlocker => condition is null ? null : PlayerActionReadiness.Blocker(condition);
 
     public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
     public string? CurrentWorldName => playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : null;

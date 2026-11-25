@@ -56,6 +56,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan UnresolvedTravelLeaseExpiry = TimeSpan.FromMinutes(10);
     private DateTimeOffset? unresolvedTravelLeaseSinceUtc;
     private readonly Action<string> warn;
+    // A `/li` command can be swallowed (sent while the character could not act) without Lifestream ever starting.
+    // Not busy and still on the source world this long after the command means it never started; it is resent a
+    // bounded number of times inside the travel operation's own deadline.
+    private static readonly TimeSpan TravelStartGrace = TimeSpan.FromSeconds(10);
+    private const int MaxUnstartedTravelResends = 2;
+    private TravelStartWatch? travelStartWatch;
+    private string? lastTravelPreflightRefusal;
     private readonly Dictionary<string, uint> initialOnHandByLine = new(StringComparer.Ordinal);
     private readonly Dictionary<string, uint> inventoryCoveredPurchases = new(StringComparer.Ordinal);
     private string? reconciledDepartureWorld;
@@ -1159,6 +1166,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             var lease = activeTravelLease ?? throw new InvalidOperationException("World travel command was accepted without a travel lease.");
             activeTravelLease = lease with { IsOwned = true };
+            if (currentWorld is not null)
+                travelStartWatch = new TravelStartWatch { OperationId = travelOperation.OperationId, SourceWorld = currentWorld, SentAtUtc = clock.UtcNow };
             ObserveWorldTravelOperation(
                 travelOperation,
                 MarketAcquisitionRouteOperationDisposition.Pending,
@@ -1339,11 +1348,57 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private MarketAcquisitionTravelPreflightResult CheckLifestreamCommandPreflight(string operation)
     {
         var lifestreamStateAvailable = context.TryIsWorldTravelBusy(out var lifestreamBusy);
-        return MarketAcquisitionTravelPreflight.Evaluate(
+        var preflight = MarketAcquisitionTravelPreflight.Evaluate(
             uiAutomation.CheckTravelPreflight(),
             lifestreamStateAvailable,
             lifestreamBusy,
-            operation);
+            operation,
+            context.ActionBlocker);
+        lastTravelPreflightRefusal = preflight.CanSendCommand ? null : preflight.Message;
+        return preflight;
+    }
+
+    private sealed class TravelStartWatch
+    {
+        public required string OperationId { get; init; }
+        public required string SourceWorld { get; init; }
+        public DateTimeOffset SentAtUtc { get; set; }
+        public bool Started { get; set; }
+        public int Resends { get; set; }
+        public string? LastRefusal { get; set; }
+    }
+
+    /// <summary>
+    /// Resends a `/li` command Lifestream never started (never busy, world unchanged) after the start grace, up to
+    /// <see cref="MaxUnstartedTravelResends"/> times. Travel that started is never resent; the travel operation's own
+    /// deadline still bounds the whole trip.
+    /// </summary>
+    private void ResendUnstartedTravel(MarketAcquisitionGuidedRouteStop activeStop, string currentWorld, bool lifestreamStateAvailable, bool lifestreamBusy)
+    {
+        if (travelStartWatch is not { } watch || operationExecutor.ActiveSnapshot?.OperationId != watch.OperationId || watch.Started)
+            return;
+        if (lifestreamBusy || !currentWorld.Equals(watch.SourceWorld, StringComparison.OrdinalIgnoreCase))
+        {
+            watch.Started = true;
+            return;
+        }
+        if (!lifestreamStateAvailable || clock.UtcNow - watch.SentAtUtc < TravelStartGrace || watch.Resends >= MaxUnstartedTravelResends)
+            return;
+        var preflight = CheckLifestreamCommandPreflight($"resend travel to {activeStop.WorldName} market board");
+        if (!preflight.CanSendCommand)
+        {
+            watch.LastRefusal = preflight.Message;
+            return;
+        }
+        if (!uiAutomation.ProcessCommand(activeStop.LifestreamCommand))
+        {
+            watch.LastRefusal = $"Lifestream command was not handled: {activeStop.LifestreamCommand}";
+            return;
+        }
+        watch.Resends++;
+        watch.SentAtUtc = clock.UtcNow;
+        warn($"Lifestream never started travel to {activeStop.WorldName} within {TravelStartGrace.TotalSeconds:N0}s of {activeStop.LifestreamCommand}; " +
+             $"resent it ({watch.Resends}/{MaxUnstartedTravelResends}).");
     }
 
     private void HandleWorldScopedStop(MarketAcquisitionGuidedRouteStop activeStop, string currentWorld)
@@ -1360,6 +1415,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
             if (!completion.IsComplete)
             {
+                if (completion.State == MarketAcquisitionTravelCompletionState.WaitingForWorld)
+                    ResendUnstartedTravel(activeStop, currentWorld, lifestreamStateAvailable, lifestreamBusy);
                 if (operationExecutor.ActiveSnapshot is { Kind: MarketAcquisitionRouteOperationKind.Travel } pendingTravel)
                 {
                     ObserveWorldTravelOperation(
@@ -3312,8 +3369,19 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         marketBoard.AbandonBrowse(timedOut.Message);
         runner.RecordRouteOperationSnapshot(timedOut);
-        UpdateStatus(FailRoute(timedOut.Message));
+        UpdateStatus(FailRoute(timedOut.Message + ExpiredOperationReason(timedOut)));
         return true;
+    }
+
+    /// <summary>Names what the expired travel step last waited on, so the failure says why and not only that it timed out.</summary>
+    private string ExpiredOperationReason(MarketAcquisitionRouteOperationSnapshot timedOut)
+    {
+        if (timedOut.Kind == MarketAcquisitionRouteOperationKind.TravelPreparation && lastTravelPreflightRefusal is { } refusal)
+            return $" Last preflight refusal: {refusal}";
+        if (timedOut.Kind == MarketAcquisitionRouteOperationKind.Travel &&
+            travelStartWatch is { Started: false } watch && watch.OperationId == timedOut.OperationId)
+            return $" Lifestream never started travel ({watch.Resends} resend(s))" + (watch.LastRefusal is { } last ? $"; last refusal: {last}" : ".");
+        return string.Empty;
     }
 
     private MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)

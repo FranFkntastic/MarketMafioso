@@ -215,10 +215,13 @@ public sealed class MarketBoardItemSearchDriver
 
         if (!TrySubmitSearchWithTextInputEnter(addon, agent, itemId, searchText, details))
         {
+            // Both refusals happen before any text or callback reaches the window, so nothing was sent: keep
+            // polling inside the item-search deadline instead of failing the stop.
+            details.TryGetValue("searchSubmitStatus", out var notReady);
             return new MarketBoardItemSearchResult
             {
-                Status = "SearchSubmitFailed",
-                Message = $"Could not submit market board item search for {searchText} ({itemId}); see diagnostics.",
+                Status = "SearchInputNotReady",
+                Message = $"Waiting for the market board search input before searching {searchText} ({itemId}): {notReady ?? "not ready"}.",
                 Details = details,
             };
         }
@@ -954,6 +957,6 @@ public sealed record MarketBoardItemSearchResult
         string.Equals(Status, "ListingsReady", StringComparison.OrdinalIgnoreCase);
     public bool IsInProgress =>
         BrowseEvidence?.IsActive == true ||
-        Status is "MarketBoardNotOpen" or "ModeReset" or "StaleListingsClosed" or "SearchSent";
+        Status is "MarketBoardNotOpen" or "ModeReset" or "StaleListingsClosed" or "SearchSent" or "SearchInputNotReady";
 }
 

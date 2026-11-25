@@ -24,6 +24,9 @@ public interface IMarketAcquisitionRouteContext
     string GetCurrentWorldName();
     bool TryGetCharacterScope(out string characterName, out string homeWorld);
     bool TryIsWorldTravelBusy(out bool isBusy);
+
+    /// <summary>Why the character cannot be handed a travel command yet (zoning, a cutscene, an event), or null when it can.</summary>
+    string? ActionBlocker => null;
 }
 
 public interface IMarketAcquisitionRouteUiAutomation

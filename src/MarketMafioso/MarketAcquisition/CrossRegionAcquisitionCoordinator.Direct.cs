@@ -395,7 +395,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             collection.RequestId = CrossRegionAcquisitionSession.CollectRequestIdFor(session.SessionId, session.Collections.IndexOf(collection), collection.Attempt);
             collection.RunId = null;
         }
-        submitAttempts = 0;
+        submitFailingSinceUtc = null;
         historyIndexingRetries = 0;
         awaitingRunAppearanceSinceUtc = null;
         nextSubmitRetryUtc = DateTimeOffset.MinValue;
@@ -558,9 +558,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             watch.LastError = error;
             if (watch.FailedReads >= MaxForwardFailedReads)
                 SettleForward(watch, CodeForwardNotObserved, $"{MaxForwardFailedReads} status reads in a row failed; last error: {error}", now);
-            else if (now - watch.OpenedAtUtc >= ForwardWatchDeadline)
+            else if (WatchedFor(watch, now) >= ForwardWatchDeadline)
                 SettleForward(watch, CodeForwardNotObserved,
-                    $"not settled within {ForwardWatchDeadline.TotalMinutes:N0} minutes; last read failed: {error}", now);
+                    $"not settled within {ForwardWatchDeadline.TotalMinutes:N0} minutes{ParkedNote(watch)}; last read failed: {error}", now);
             else
                 return false;
             return true;
@@ -586,12 +586,49 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             SettleForward(watch, status.Forward.Code ?? status.Forward.State, null, now);
             return true;
         }
-        if (now - watch.OpenedAtUtc < ForwardWatchDeadline)
+        // A courier run parked for the user (stopped, resumable) is waiting on a person, not lost: that time is not
+        // counted, so resuming it in Quartermaster still settles the forward here.
+        var parked = IsForwardRunParked(status.Forward);
+        if (parked && watch.ParkedSinceUtc is null)
+        {
+            watch.ParkedSinceUtc = now;
+            changed = true;
+        }
+        else if (!parked && watch.ParkedSinceUtc is { } parkedSince)
+        {
+            watch.ParkedFor += now - parkedSince;
+            watch.ParkedSinceUtc = null;
+            changed = true;
+        }
+        if (WatchedFor(watch, now) < ForwardWatchDeadline)
             return changed;
         SettleForward(watch, CodeForwardNotObserved,
-            $"still {status.Forward.State} ({status.Forward.Code ?? "no code"}) after {ForwardWatchDeadline.TotalMinutes:N0} minutes; " +
+            $"still {status.Forward.State} ({status.Forward.Code ?? "no code"}) after {ForwardWatchDeadline.TotalMinutes:N0} minutes{ParkedNote(watch)}; " +
             $"last read: {status.Forward.Message ?? "no detail"}", now);
         return true;
+    }
+
+    /// <summary>How long the forward has been followed, not counting time its courier run sat parked for the user.</summary>
+    private static TimeSpan WatchedFor(CrossRegionForwardWatch watch, DateTimeOffset now) =>
+        now - watch.OpenedAtUtc - watch.ParkedFor - (watch.ParkedSinceUtc is { } since ? now - since : TimeSpan.Zero);
+
+    private static string ParkedNote(CrossRegionForwardWatch watch) =>
+        watch.ParkedFor > TimeSpan.Zero ? $" (not counting {watch.ParkedFor.TotalMinutes:N0} minutes parked in Quartermaster)" : string.Empty;
+
+    /// <summary>The forward's courier run is Quartermaster's current run and is stopped where the user can resume it.</summary>
+    private bool IsForwardRunParked(QuartermasterStowForward forward)
+    {
+        if (!Guid.TryParse(forward.RunId, out var runId))
+            return false;
+        try
+        {
+            return courier.TryGetCourierStatus(out var status, out _) &&
+                   status?.Run is { } run && run.RunId == runId && run.IsFailure && run.CanResume;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string ForwardKey(QuartermasterDeliveredStowLine line) =>

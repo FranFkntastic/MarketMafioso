@@ -37,6 +37,13 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
     public const string CourierTransferSchema = "gooseworks-quartermaster-courier-transfer/v1";
     public const string CourierTransferAckSchema = "gooseworks-quartermaster-courier-transfer-ack/v1";
 
+    /// <summary>
+    /// True when a failed submit's error says the request may have reached Quartermaster (the call threw, or its
+    /// acknowledgement was unreadable); false when nothing was submitted. Every submit in this client names that case.
+    /// </summary>
+    public static bool IsAcceptanceUnknown(string? error) =>
+        error?.Contains("acceptance is unknown", StringComparison.OrdinalIgnoreCase) == true;
+
     public bool HasCrossRegionCourier
     {
         get

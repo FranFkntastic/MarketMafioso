@@ -53,6 +53,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
     }
 
     public string LastStatus { get; private set; } = "No Quartermaster retrieval started.";
+    public bool LastFailureTransient { get; private set; }
     public QuartermasterAcknowledgement? LastAcknowledgement { get; private set; }
     public QuartermasterOperationStatus? LastOperation { get; private set; }
 
@@ -60,6 +61,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
     {
         ArgumentNullException.ThrowIfNull(ownerScope);
         ArgumentNullException.ThrowIfNull(availability);
+        LastFailureTransient = false;
         if (!ownerScope.IsAvailable || string.IsNullOrWhiteSpace(ownerScope.CharacterName))
         {
             LastStatus = "Quartermaster retrieval requires current character and home-world identity.";
@@ -75,6 +77,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             snapshot is null || !ownerScope.Matches(snapshot.Owner))
         {
             LastStatus = $"Retainer retrieval unavailable: no owner-matched Quartermaster snapshot. {snapshotError}";
+            LastFailureTransient = true;
             return false;
         }
         var items = availability
@@ -104,6 +107,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         if (!client.TryGetCapabilities(out var capabilities, out var capabilitiesError))
         {
             LastStatus = capabilitiesError;
+            LastFailureTransient = true;
             return false;
         }
         var automaticRetrievalAvailable = capabilities!.Capabilities.Contains(QuartermasterIpcClient.AutomaticRetrievalCapability, StringComparer.Ordinal);
@@ -197,7 +201,9 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             items);
         if (!client.TrySubmitShortages(request, capabilities, out var acknowledgement, out var error))
         {
+            // The identity stays persisted and non-terminal, so the next Submit replays this same request id.
             LastStatus = error;
+            LastFailureTransient = true;
             return false;
         }
 

@@ -19,6 +19,12 @@ public interface ICrossRegionGameState
     /// <summary>Live Inventory1..4 carried bags (matching Quartermaster courier scope), or null when not loaded.</summary>
     IReadOnlyList<CrossRegionBagStack>? ReadCarriedBags();
     bool TrySwitchCharacter(CrossRegionCharacter target, out string message);
+
+    /// <summary>
+    /// Why the logged-in character cannot be handed an action yet (zoning, a cutscene, just logged in, Lifestream
+    /// busy), or null when it can. A blocked step waits inside its own deadline instead of submitting.
+    /// </summary>
+    string? ActionBlocker => null;
 }
 
 public enum CrossRegionShoppingState
@@ -83,14 +89,22 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private static readonly TimeSpan StatusCacheTtl = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SwitchRetryInterval = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan HomeWorldArrivalGrace = TimeSpan.FromSeconds(90);
+    // Right after a login or zone the world, bags and gil read as missing or zero; preparation waits this long for them.
+    private static readonly TimeSpan ShopperReadyTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan CloseBoardTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan BagReadTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AcceptedRunAppearanceTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ResumeTransitionTimeout = TimeSpan.FromSeconds(10);
     // A failed or stopped courier leg re-reads its Quartermaster run this often so Resume follows the live run.
     private static readonly TimeSpan InterruptedCourierRefreshInterval = TimeSpan.FromSeconds(3);
+    // A refused or blocked switch dispatched nothing: it is re-polled this often, and fails only once this window passes.
+    private static readonly TimeSpan SwitchRefusalRetryInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan SwitchRefusalWindow = TimeSpan.FromMinutes(3);
     private const int MaxCharacterSwitchAttempts = 3;
-    private const int MaxSubmitAttempts = 5;
+    // A submit that did not reach Quartermaster (nothing submitted, or acceptance unknown) is sent again under the
+    // same request id this often, and fails only once this window passes.
+    private static readonly TimeSpan SubmitRetryInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SubmitWindow = TimeSpan.FromMinutes(3);
     private const string CodeCourierHistoryIndexing = "CourierHistoryIndexing";
     // Quartermaster's request history is still loading: the same submit is retried this often, this many times.
     private static readonly TimeSpan HistoryIndexingRetryInterval = TimeSpan.FromSeconds(2);
@@ -109,13 +123,17 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private DateTimeOffset nextPollUtc;
     private DateTimeOffset nextInterruptedCourierRefreshUtc;
     private DateTimeOffset? lastSwitchRequestUtc;
+    private DateTimeOffset? switchWaitStartedUtc;
+    private DateTimeOffset nextSwitchPollUtc;
+    private string? lastSwitchRefusal;
     private DateTimeOffset? fundArrivalWaitStartedUtc;
     private DateTimeOffset? closeStartedUtc;
     private DateTimeOffset? awaitingRunAppearanceSinceUtc;
     private DateTimeOffset? awaitingResumeTransitionUntilUtc;
     private (string State, string? Code, string? Detail)? preResumeFailure;
     private bool prepareIssued;
-    private int submitAttempts;
+    private DateTimeOffset? shopperReadyWaitStartedUtc;
+    private DateTimeOffset? submitFailingSinceUtc;
     private int historyIndexingRetries;
     private DateTimeOffset nextSubmitRetryUtc;
     private QuartermasterCourierStatus? cachedStatus;
@@ -522,12 +540,14 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                     return ResumeCourier(target.Value);
                 session.CharacterSwitchAttempts = 0;
                 lastSwitchRequestUtc = null;
+                switchWaitStartedUtc = null;
                 collectBagWaitStartedUtc = null;
                 SetPhase(CrossRegionAcquisitionPhase.CollectingCountedStock, CollectingMessage());
                 return CrossRegionActionResult.Ok(session.LastMessage);
             case CrossRegionAcquisitionPhase.StowingDelivered:
                 session.CharacterSwitchAttempts = 0;
                 lastSwitchRequestUtc = null;
+                switchWaitStartedUtc = null;
                 SetPhase(CrossRegionAcquisitionPhase.StowingDelivered, "Stowing delivered items.");
                 return CrossRegionActionResult.Ok(session.LastMessage);
             case CrossRegionAcquisitionPhase.Paused:
@@ -537,6 +557,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             case CrossRegionAcquisitionPhase.SwitchingToShopper:
                 session.CharacterSwitchAttempts = 0;
                 lastSwitchRequestUtc = null;
+                switchWaitStartedUtc = null;
                 SetPhase(CrossRegionAcquisitionPhase.SwitchingToShopper, $"Switching to {session.Shopper?.Label}.");
                 return CrossRegionActionResult.Ok(session.LastMessage);
             case CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul:
@@ -546,6 +567,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             case CrossRegionAcquisitionPhase.ReturningToPrimary:
                 session.CharacterSwitchAttempts = 0;
                 lastSwitchRequestUtc = null;
+                switchWaitStartedUtc = null;
                 closeStartedUtc = null;
                 SetPhase(CrossRegionAcquisitionPhase.ReturningToPrimary, $"Returning to {session.Primary?.Label}.");
                 return CrossRegionActionResult.Ok(session.LastMessage);
@@ -821,6 +843,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         if (shopper.Matches(me))
         {
             lastSwitchRequestUtc = null;
+            switchWaitStartedUtc = null;
             session.CharacterSwitchAttempts = 0;
             SetPhase(CrossRegionAcquisitionPhase.PreparingShopRoute, $"Preparing the {session.TargetRegion} shop route on {shopper.Label}.");
             return;
@@ -839,20 +862,46 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return;
         if (game.LoggedInCharacter is null && lastSwitchRequestUtc is not null)
             return;
-        if (session.CharacterSwitchAttempts >= MaxCharacterSwitchAttempts)
+        if (now < nextSwitchPollUtc)
+            return;
+        // Only an accepted request counts as an attempt; a refusal or a blocked character dispatched nothing and is
+        // re-polled until the refusal window passes.
+        switchWaitStartedUtc ??= now;
+        var refusalWindowPassed = now - switchWaitStartedUtc.Value >= SwitchRefusalWindow;
+        if (session.CharacterSwitchAttempts >= MaxCharacterSwitchAttempts || refusalWindowPassed)
         {
-            var detail = $"Could not switch to {target.Label} after {MaxCharacterSwitchAttempts} attempts.";
+            var detail = (refusalWindowPassed
+                    ? $"Could not switch to {target.Label} within {SwitchRefusalWindow.TotalMinutes:N0} minutes"
+                    : $"Could not switch to {target.Label} after {MaxCharacterSwitchAttempts} accepted attempts") +
+                (lastSwitchRefusal is { } refusal ? $"; last refusal: {refusal}." : ".");
+            switchWaitStartedUtc = null;
+            lastSwitchRefusal = null;
             if (onExhausted is not null)
                 onExhausted(detail);
             else
                 Fail(phase, failureCode, detail, canResumeCourier: false);
             return;
         }
+        if (game.ActionBlocker is { } blocker)
+        {
+            lastSwitchRefusal = blocker;
+            nextSwitchPollUtc = now + SwitchRefusalRetryInterval;
+            session.LastMessage = $"Waiting to switch to {target.Label}: {blocker}.";
+            return;
+        }
+        if (!game.TrySwitchCharacter(target, out var message))
+        {
+            if (!string.Equals(lastSwitchRefusal, message, StringComparison.Ordinal))
+                log($"Character switch to {target.Label} was not accepted ({message}); retrying until the {SwitchRefusalWindow.TotalMinutes:N0}-minute switch window passes.", null);
+            lastSwitchRefusal = message;
+            nextSwitchPollUtc = now + SwitchRefusalRetryInterval;
+            session.LastMessage = $"Character switch to {target.Label} was not accepted yet: {message}";
+            return;
+        }
         session.CharacterSwitchAttempts++;
         lastSwitchRequestUtc = now;
-        session.LastMessage = game.TrySwitchCharacter(target, out var message)
-            ? $"Switching to {target.Label}…"
-            : $"Character switch to {target.Label} was not accepted: {message}";
+        switchWaitStartedUtc = null;
+        session.LastMessage = $"Switching to {target.Label}…";
         Save();
     }
 
@@ -866,6 +915,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         }
         session.CharacterSwitchAttempts = 0;
         lastSwitchRequestUtc = null;
+        switchWaitStartedUtc = null;
         closeStartedUtc = null;
         SetPhase(CrossRegionAcquisitionPhase.ReturningToPrimary, $"{reason}; returning to {primary.Label}.");
     }
@@ -876,6 +926,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         if (primary.Matches(game.LoggedInCharacter))
         {
             lastSwitchRequestUtc = null;
+            switchWaitStartedUtc = null;
             session.CharacterSwitchAttempts = 0;
             AfterDelivery(session.PurchasedUnits == 0
                 ? "Shopping finished with no purchases; returned to primary."
@@ -906,6 +957,22 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         }
         if (!prepareIssued)
         {
+            // Starting stock, the plan's world and the gil budget are all read below; never from a half-loaded login.
+            if (ShopperNotReady() is { } notReady)
+            {
+                var now = utcNow();
+                shopperReadyWaitStartedUtc ??= now;
+                if (now - shopperReadyWaitStartedUtc.Value < ShopperReadyTimeout)
+                {
+                    session.LastMessage = $"Waiting before preparing the shop route: {notReady}.";
+                    return;
+                }
+                shopperReadyWaitStartedUtc = null;
+                SetPhase(CrossRegionAcquisitionPhase.Paused,
+                    PausedMessage($"Shop route could not start: {notReady} after {ShopperReadyTimeout.TotalMinutes:N0} minutes."));
+                return;
+            }
+            shopperReadyWaitStartedUtc = null;
             if (session.ShopperStartingStock is null)
             {
                 session.ShopperStartingStock = new Dictionary<string, uint>(shopping.CaptureShopperStartingStock(session), StringComparer.Ordinal);
@@ -935,6 +1002,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 break;
         }
     }
+
+    private string? ShopperNotReady() =>
+        string.IsNullOrWhiteSpace(game.CurrentWorldName) ? "the current world is not known yet"
+        : game.ReadCarriedBags() is null ? "the carried bags are not loaded yet"
+        : game.CarriedGil is null ? "carried gil is not loaded yet"
+        : game.ActionBlocker;
 
     private void TickShopping()
     {
@@ -1042,7 +1115,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         session.HaulRunId = null;
         session.HaulManifest = manifest.ToList();
         session.HaulDirect = DirectRouteFor(manifest, [], shopper, "The return haul");
-        submitAttempts = 0;
+        submitFailingSinceUtc = null;
         SetPhase(CrossRegionAcquisitionPhase.HaulingToPrimary,
             $"Hauling {manifest.Sum(line => (long)line.Quantity):N0} item(s) {(session.HaulDirect is null ? "back" : "straight")} to {DestinationOf(CourierLeg.Haul).Label}.");
         SubmitCourier(CourierLeg.Haul);
@@ -1137,17 +1210,29 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         };
         if (!courier.TrySubmitCourierTransfer(request, out var ack, out var error))
         {
-            submitAttempts++;
-            if (submitAttempts >= MaxSubmitAttempts)
+            // Nothing submitted (Quartermaster reloading, IPC not ready) or acceptance unknown: either way the same
+            // request id is sent again, never a new one, and a run Quartermaster did accept is matched by that id
+            // on the next status poll before any replay.
+            var now = utcNow();
+            var unknown = QuartermasterIpcClient.IsAcceptanceUnknown(error);
+            submitFailingSinceUtc ??= now;
+            if (now - submitFailingSinceUtc.Value >= SubmitWindow)
             {
-                Fail(session.Phase, "CourierSubmitFailed", $"Courier submission did not succeed: {error}", canResumeCourier: false);
+                submitFailingSinceUtc = null;
+                Fail(session.Phase, "CourierSubmitFailed",
+                    $"Courier request {requestId} did not reach Quartermaster within {SubmitWindow.TotalMinutes:N0} minutes; last error: {error}" +
+                    (unknown ? " Resume checks Quartermaster for this request id before sending it again." : " Nothing was submitted."),
+                    canResumeCourier: false);
                 return;
             }
-            session.LastMessage = $"Courier submission pending ({submitAttempts}/{MaxSubmitAttempts}): {error}";
+            nextSubmitRetryUtc = now + SubmitRetryInterval;
+            session.LastMessage = unknown
+                ? $"Courier acceptance of {requestId} is unknown; checking Quartermaster and resending the same request: {error}"
+                : $"Courier submission pending; nothing was submitted yet: {error}";
             Save();
             return;
         }
-        submitAttempts = 0;
+        submitFailingSinceUtc = null;
         if (!ack!.IsAccepted)
         {
             if (ack.Status == QuartermasterCourierAckStatuses.Stopping)
@@ -1359,15 +1444,19 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     {
         nextPollUtc = DateTimeOffset.MinValue;
         lastSwitchRequestUtc = null;
+        switchWaitStartedUtc = null;
         fundArrivalWaitStartedUtc = null;
         closeStartedUtc = null;
         awaitingRunAppearanceSinceUtc = null;
         awaitingResumeTransitionUntilUtc = null;
         preResumeFailure = null;
         prepareIssued = false;
-        submitAttempts = 0;
+        shopperReadyWaitStartedUtc = null;
+        submitFailingSinceUtc = null;
         historyIndexingRetries = 0;
         nextSubmitRetryUtc = DateTimeOffset.MinValue;
+        nextSwitchPollUtc = DateTimeOffset.MinValue;
+        lastSwitchRefusal = null;
         collectBagWaitStartedUtc = null;
         nextCustodyPollUtc = DateTimeOffset.MinValue;
         forwardBusySinceUtc = null;
