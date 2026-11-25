@@ -44,23 +44,33 @@ public sealed record QuartermasterPendingCancel
     /// running (someone resumed it), the entry is dropped and the run left alone.
     /// </summary>
     public bool NeverStop { get; set; }
+    /// <summary>
+    /// Courier runs: the run was seen not running (stopped or parked) after this entry began. Seen running again later,
+    /// someone resumed it, so it is left running and never cleared.
+    /// </summary>
+    public bool SeenNotRunning { get; set; }
     /// <summary>Quartermaster's last answer (cancelled, stopping, cancel_queued, rejected, ...); null until one arrives.</summary>
     public string? LastStatus { get; set; }
     /// <summary>Consecutive cancel_queued answers, and when the first and the latest of them arrived.</summary>
     public int QueuedAnswers { get; set; }
     public DateTimeOffset? FirstQueuedUtc { get; set; }
     public DateTimeOffset? LastQueuedUtc { get; set; }
+    /// <summary>When the cancel_queued answers first met the confirmation spacing; a later spaced one settles it as not_held.</summary>
+    public DateTimeOffset? QueuedConfirmedUtc { get; set; }
     /// <summary>A rejected answer was logged once at Warning; later rejections of this entry are not.</summary>
     public bool RejectedWarned { get; set; }
 }
 
-/// <summary>The answer to a cancel attempt. Settled: nothing more to do. Queued: kept in the outbox and retried.</summary>
-public sealed record QuartermasterCancelOutcome(string Status, string Message, bool Settled, bool Queued, Guid? RunId = null);
+/// <summary>
+/// The answer to a cancel attempt. Settled: nothing more to do. Queued: kept in the outbox and retried.
+/// OperationStatus: the requested operation's own status when Quartermaster named it (cancelled, succeeded, ...).
+/// </summary>
+public sealed record QuartermasterCancelOutcome(string Status, string Message, bool Settled, bool Queued, Guid? RunId = null, string? OperationStatus = null);
 
 /// <summary>
 /// Durable cancels for Quartermaster work this plugin gave up on. A give-up path calls <see cref="Cancel"/>: it tries
 /// once at once and, unless Quartermaster settled it, keeps retrying on <see cref="Tick"/> with backoff until the answer
-/// is cancelled, already_terminal, not_found or (after stopping) terminal. An entry is dropped after
+/// is cancelled, already_terminal, not_found, not_held or (after stopping) terminal. An entry is dropped after
 /// <see cref="EntryLifetime"/> with a Warning naming it; Quartermaster expires unstarted requested operations itself.
 /// A Quartermaster that lacks the capability keeps today's behaviour: nothing is retried and a Warning names it once.
 /// </summary>
@@ -78,6 +88,11 @@ public sealed class QuartermasterCancelOutbox
     /// </summary>
     private static readonly TimeSpan QueuedConfirmSpacing = TimeSpan.FromSeconds(5);
     private const string StatusCancelQueued = "cancel_queued";
+    /// <summary>
+    /// A requested-operation cancel answered cancel_queued past the confirmation and once more after it: Quartermaster
+    /// never received anything under the id (its channel has no not_found), so nothing is left to withdraw.
+    /// </summary>
+    public const string StatusNotHeld = "not_held";
     private const string CodeRunNotCurrent = "RunNotCurrent";
     private const string CodeCourierAlreadyRunning = "CourierAlreadyRunning";
 
@@ -273,12 +288,29 @@ public sealed class QuartermasterCancelOutbox
             entry.QueuedAnswers++;
             entry.FirstQueuedUtc ??= now;
             entry.LastQueuedUtc = now;
+            if (entry.Kind == QuartermasterCancelKind.RequestedOperation && QueuedConfirmed(entry))
+            {
+                if (entry.QueuedConfirmedUtc is null)
+                    entry.QueuedConfirmedUtc = now;
+                else if (now - entry.QueuedConfirmedUtc.Value >= QueuedConfirmSpacing)
+                {
+                    // Quartermaster's submit enqueues its persist step before it answers, and each cancel_queued enqueues
+                    // the deferred cancel behind whatever was queued then (one FIFO framework queue). An operation
+                    // persisted under this id would have been cancelled by the first deferred cancel and would answer
+                    // already_terminal from then on; three spaced cancel_queued answers mean nothing was ever received.
+                    info($"[MarketMafioso] QuartermasterCancelNotHeld: Quartermaster holds nothing under {Describe(entry)} " +
+                         $"({entry.QueuedAnswers} cancel_queued answers since {entry.FirstQueuedUtc:O}); nothing is left to withdraw.");
+                    outcome = new(StatusNotHeld, $"Quartermaster never received request {entry.Id}.", Settled: true, Queued: false);
+                    entry.LastStatus = outcome.Status;
+                }
+            }
         }
         else
         {
             entry.QueuedAnswers = 0;
             entry.FirstQueuedUtc = null;
             entry.LastQueuedUtc = null;
+            entry.QueuedConfirmedUtc = null;
         }
         if (outcome.Settled)
         {
@@ -293,7 +325,7 @@ public sealed class QuartermasterCancelOutbox
                 }
                 settledStatuses[key] = outcome.Status;
             }
-            if (Remove(entry) && entry.Attempts > 1)
+            if (Remove(entry) && entry.Attempts > 1 && outcome.Status != StatusNotHeld)
                 info($"[MarketMafioso] Quartermaster settled the queued cancel of {Describe(entry)}: {outcome.Status}. {outcome.Message}");
             return;
         }
@@ -327,8 +359,13 @@ public sealed class QuartermasterCancelOutbox
         }
         if (status == StatusCancelQueued)
             return Queued(entry, ack);
+        // Quartermaster answers cancelled for a stow that had already ended when only its courier forward was withdrawn;
+        // the operation itself ran, so that is already_terminal here and its own status settles what it stowed.
+        if (status == "cancelled" && ack.OperationStatus is { Length: > 0 } operationStatus &&
+            !string.Equals(operationStatus, "cancelled", StringComparison.OrdinalIgnoreCase))
+            status = "already_terminal";
         // cancelled, already_terminal, not_found.
-        return new(status, ack.Message ?? status, Settled: true, Queued: false);
+        return new(status, ack.Message ?? status, Settled: true, Queued: false, OperationStatus: ack.OperationStatus);
     }
 
     /// <summary>
@@ -392,12 +429,8 @@ public sealed class QuartermasterCancelOutbox
             return new("gone", $"Quartermaster no longer holds courier run {runId:D}.", Settled: true, Queued: false);
         if (run.IsRunning)
         {
-            if (entry.NeverStop)
-            {
-                // Not this plugin's run, and someone resumed it: it is left running and nothing more is done.
-                info($"[MarketMafioso] Courier run {runId:D} ({entry.Owner}) is running again; it was not started by MarketMafioso, so it was left running.");
-                return new("left_running", $"Courier run {runId:D} is running; it was not started by MarketMafioso and was left running.", Settled: true, Queued: false);
-            }
+            if (entry.NeverStop || entry.SeenNotRunning)
+                return LeftRunning(entry, runId);
             if (entry.StopSent)
             {
                 entry.LastError = "the run is still running";
@@ -409,6 +442,7 @@ public sealed class QuartermasterCancelOutbox
             entry.LastError = null;
             return new("stopping", stopAck?.Message ?? $"Stopping courier run {runId:D} before clearing it.", Settled: false, Queued: true);
         }
+        entry.SeenNotRunning = true;
         if (entry.ClearAccepted)
             return new("clearing", $"Quartermaster is clearing courier run {runId:D}.", Settled: false, Queued: true);
         if (!courier.TryClearCourierRun(runId.ToString("D"), entry.ClearRequestId ?? $"mmf-cancel-{runId:N}", out var ack, out var error))
@@ -421,11 +455,22 @@ public sealed class QuartermasterCancelOutbox
         }
         if (ack.ErrorCode == CodeRunNotCurrent)
             return new("gone", $"Courier run {runId:D} is no longer current in Quartermaster.", Settled: true, Queued: false);
-        if (entry.NeverStop && ack.ErrorCode == CodeCourierAlreadyRunning)
-            return new("left_running", $"Courier run {runId:D} is running; it was not started by MarketMafioso and was left running.", Settled: true, Queued: false);
+        if (ack.ErrorCode == CodeCourierAlreadyRunning)
+            return LeftRunning(entry, runId); // resumed between the status read and the clear
         entry.LastError = $"{ack.ErrorCode ?? ack.Status}: {ack.Message}" +
                           (ack.DescribeBlocking() is { } blocking ? $" (blocked by {blocking})" : string.Empty);
         return new(ack.ErrorCode == CodeCourierAlreadyRunning ? "running" : "refused", entry.LastError, Settled: false, Queued: true);
+    }
+
+    /// <summary>
+    /// Someone resumed the run after it was seen stopped (or it is not this plugin's run): it is left running and the
+    /// entry settles, so a cancel this plugin queued never clears a run the user chose to continue.
+    /// </summary>
+    private QuartermasterCancelOutcome LeftRunning(QuartermasterPendingCancel entry, Guid runId)
+    {
+        var why = entry.NeverStop ? "it was not started by MarketMafioso" : "it was resumed after it stopped";
+        info($"[MarketMafioso] Courier run {runId:D} ({entry.Owner}) is running again; {why}, so it was left running.");
+        return new("left_running", $"Courier run {runId:D} is running; {why} and was left running.", Settled: true, Queued: false);
     }
 
     private QuartermasterCancelOutcome Failed(QuartermasterPendingCancel entry, string error, string? capability)

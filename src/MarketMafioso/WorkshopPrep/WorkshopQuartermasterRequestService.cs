@@ -512,6 +512,15 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             LastStatus = $"Quartermaster is stopping retrieval {persisted.RequestId} after the current retainer.";
             return false;
         }
+        if (cancel.State == WorkshopQuartermasterCancelState.Settled)
+        {
+            // Cancel recorded it terminal: nothing of it can run, so it is not left as Released (maybe still running).
+            DiagnosticLog?.Invoke(
+                $"[MarketMafioso] Quartermaster operation {persisted.OperationId} had no terminal status {OperationReleaseAge.TotalMinutes:N0} minutes " +
+                $"after {persisted.SubmittedAtUtc:O}; {cancel.Message}");
+            LastStatus = cancel.Message;
+            return true;
+        }
         var released = Clone(persisted);
         released.Status = ReleasedStatus;
         released.Message = $"Released after {OperationReleaseAge.TotalMinutes:N0} minutes without a terminal status (last status {persisted.Status}).";
@@ -545,7 +554,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             outcome = cancels.Cancel(QuartermasterCancelKind.RequestedOperation, persisted.RequestId, reason,
                 $"workshop restock for {persisted.CharacterName}");
         else if (client.TryCancelRequestedOperation(persisted.RequestId, reason, out var ack, out var error))
-            outcome = new(ack!.Status, ack.Message ?? ack.Status, Settled: ack.IsSettled, Queued: false);
+            outcome = new(ack!.Status, ack.Message ?? ack.Status, Settled: ack.IsSettled, Queued: false, OperationStatus: ack.OperationStatus);
         else if (QuartermasterIpcClient.IsCapabilityMissing(error))
         {
             if (!warnedCancelUnsupported)
@@ -570,13 +579,40 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
                 $"Quartermaster retrieval {persisted.RequestId} was not withdrawn: Quartermaster cannot cancel requests (update Quartermaster).");
         if (status == "cancel_queued" && cancels is not null &&
             cancels.IsWithdrawn(QuartermasterCancelKind.RequestedOperation, persisted.RequestId))
+        {
+            PersistWithdrawn(ScopeKey(owner), persisted, "cancelled", "Withdrawn: Quartermaster holds no operation under this request.");
             return new(WorkshopQuartermasterCancelState.Settled,
                 $"Quartermaster holds no operation under retrieval {persisted.RequestId}; its queued cancel is still re-sent.");
+        }
         if (!outcome.Settled)
             return new(WorkshopQuartermasterCancelState.Unconfirmed,
                 $"Quartermaster did not confirm withdrawing retrieval {persisted.RequestId} ({outcome.Message})" +
                 (outcome.Queued ? "; the cancel is kept and retried." : "."));
+        // Settled: the record is terminal from here, so Retry or a restart starts a new identity instead of
+        // replaying (and re-following) the withdrawn one. One that had already ended keeps Quartermaster's status.
+        PersistWithdrawn(ScopeKey(owner), persisted,
+            outcome.OperationStatus is { Length: > 0 } ended && IsTerminalStatus(ended) ? ended : "cancelled",
+            $"Withdrawn in Quartermaster ({outcome.Status}): {outcome.Message}");
         return new(WorkshopQuartermasterCancelState.Settled, $"Quartermaster retrieval {persisted.RequestId}: {outcome.Status}.");
+    }
+
+    /// <summary>Records a retrieval whose cancel Quartermaster settled as terminal, and saves it.</summary>
+    private void PersistWithdrawn(string key, QuartermasterWorkshopRequestState persisted, string status, string message)
+    {
+        var withdrawn = Clone(persisted);
+        withdrawn.Status = status;
+        withdrawn.Message = message;
+        withdrawn.AcceptanceUnknown = false;
+        config.QuartermasterWorkshopRequests[key] = withdrawn;
+        stoppingRequests.Remove(persisted.RequestId);
+        try
+        {
+            saveConfiguration();
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog?.Invoke($"[MarketMafioso] Could not persist the withdrawn Quartermaster retrieval {persisted.RequestId}; continuing. {ex.Message}");
+        }
     }
 
     public void Dispose()

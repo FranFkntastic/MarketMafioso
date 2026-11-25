@@ -207,9 +207,10 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
                 Restored = true;
                 return;
             }
-            ownsSuppression = false;
             if (AutoRetainerHolderRegistry.OtherHolders() is { Length: > 0 } others)
             {
+                // Another Gooseworks plugin still holds it: left suppressed; that plugin lifts it when it is done.
+                ownsSuppression = false;
                 LeftToHolders = string.Join(", ", others);
                 Restored = true;
                 return;
@@ -217,10 +218,13 @@ internal sealed class AutoRetainerSuppressionLease : IDisposable
             try
             {
                 autoRetainer.SetSuppressed(false);
+                ownsSuppression = false;
                 Restored = true;
             }
             catch (Exception ex)
             {
+                // Ownership is kept, so the next lease's release retries the restore instead of mistaking this
+                // plugin's own suppression for one the user set.
                 RestoreError = ex.Message;
             }
         }

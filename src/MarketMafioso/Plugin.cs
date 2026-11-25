@@ -130,9 +130,17 @@ public sealed class Plugin : IDalamudPlugin
 
         // Shared with Quartermaster: no plugin unsuppresses AutoRetainer while another still holds it. A name an earlier
         // load of this plugin left there is dropped now, since this load holds nothing yet.
-        AutoRetainerHolderRegistry.Attach(
-            PluginInterface.GetOrCreateData(AutoRetainerHolderRegistry.Key, () => new HashSet<string>(StringComparer.Ordinal)),
-            message => Log.Warning("{Message}", message));
+        try
+        {
+            AutoRetainerHolderRegistry.Attach(
+                PluginInterface.GetOrCreateData(AutoRetainerHolderRegistry.Key, () => new HashSet<string>(StringComparer.Ordinal)),
+                message => Log.Warning("{Message}", message));
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("[MarketMafioso] AutoRetainerHolderRegistryUnavailable: {Key}: {Error}; AutoRetainer suppression works without it, " +
+                        "but may lift another plugin's suppression.", AutoRetainerHolderRegistry.Key, ex.Message);
+        }
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Configuration.LoadRuntimeState(PluginInterface.GetPluginConfigDirectory());
         AcquisitionHostCheck = new(Configuration, Framework, Log);
