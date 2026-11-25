@@ -29,7 +29,8 @@ public sealed class WorkshopRestockService : IDisposable
     public DalamudGilVendorAccessReader Access { get; }
 
     public WorkshopRestockService(Configuration config, QuartermasterIpcClient quartermaster,
-        WorkshopProjectCatalog catalog, IDataManager dataManager, IPlayerState playerState, IPluginLog log)
+        WorkshopProjectCatalog catalog, IDataManager dataManager, IPlayerState playerState, IPluginLog log,
+        QuartermasterCancelOutbox? cancels = null)
     {
         this.config = config;
         this.catalog = catalog;
@@ -44,7 +45,8 @@ public sealed class WorkshopRestockService : IDisposable
             config,
             quartermaster,
             persistence.Request,
-            persistIdentity: () => config.SaveRequired("WorkshopRestockService.PersistRequestIdentity"));
+            persistIdentity: () => config.SaveRequired("WorkshopRestockService.PersistRequestIdentity"),
+            cancels: cancels);
         automation = new ExternalAutomationCoordinator(
             new DalamudPluginDataStore(Plugin.PluginInterface),
             log);
@@ -167,11 +169,18 @@ public sealed class WorkshopRestockService : IDisposable
         disposed = true;
         Plugin.ClientState.Login -= OnLogin;
         Plugin.ClientState.TerritoryChanged -= OnTerritoryChanged;
-        Runner.Dispose();
-        vendorShop.Dispose();
-        Requests.Dispose();
-        automation.Dispose();
-        persistence.Flush();
+        try
+        {
+            Runner.Dispose();
+            vendorShop.Dispose();
+            Requests.Dispose();
+        }
+        finally
+        {
+            // The TextAdvance pause and trade suppression go back whatever the teardown above threw.
+            automation.Dispose();
+            persistence.Flush();
+        }
     }
 
     private void OnLogin() => Interlocked.Exchange(ref refreshAccess, 1);

@@ -266,8 +266,40 @@ public interface IWorkshopQuartermasterRestockService
     /// <summary>The owner's persisted operation that has not reached a terminal status, or null.</summary>
     string? OpenOperationId(MarketMafioso.Quartermaster.QuartermasterOwnerScope owner);
 
-    /// <summary>Drops the owner's persisted operation record. Quartermaster itself is left as it is.</summary>
+    /// <summary>
+    /// Drops the owner's persisted operation record. Its open operation is withdrawn in Quartermaster first (a cancel
+    /// Quartermaster does not confirm is retried); forgetting itself never waits on that.
+    /// </summary>
     bool ForgetOperation(MarketMafioso.Quartermaster.QuartermasterOwnerScope owner);
+
+    /// <summary>
+    /// Withdraws the owner's open retrieval in Quartermaster (requestedOperationCancel.v1). A new retrieval for the
+    /// same shortage may start only on <see cref="WorkshopQuartermasterCancelState.Settled"/>,
+    /// <see cref="WorkshopQuartermasterCancelState.NoOperation"/> or <see cref="WorkshopQuartermasterCancelState.Unsupported"/>.
+    /// </summary>
+    WorkshopQuartermasterCancelResult Cancel(MarketMafioso.Quartermaster.QuartermasterOwnerScope owner, string reason) =>
+        new(WorkshopQuartermasterCancelState.Unsupported, "This retrieval service cannot cancel in Quartermaster.");
+}
+
+public enum WorkshopQuartermasterCancelState
+{
+    /// <summary>No open operation is recorded for the owner.</summary>
+    NoOperation,
+    /// <summary>Quartermaster answered cancelled, already_terminal or not_found: nothing of it runs any more.</summary>
+    Settled,
+    /// <summary>Quartermaster is stopping it after the current retainer; the record is kept until it is terminal.</summary>
+    Stopping,
+    /// <summary>Quartermaster could not be asked; the cancel is kept and retried.</summary>
+    Unconfirmed,
+    /// <summary>Quartermaster does not advertise the cancel capability: today's behaviour, nothing was withdrawn.</summary>
+    Unsupported,
+}
+
+public sealed record WorkshopQuartermasterCancelResult(WorkshopQuartermasterCancelState State, string Message)
+{
+    /// <summary>A new retrieval for the same shortage cannot double the old one.</summary>
+    public bool AllowsNewRetrieval => State is WorkshopQuartermasterCancelState.NoOperation or WorkshopQuartermasterCancelState.Settled or
+        WorkshopQuartermasterCancelState.Unsupported;
 }
 
 public static class WorkshopVendorRestockPresentation

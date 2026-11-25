@@ -32,6 +32,18 @@ public interface IQuartermasterRunCustodyClient
     /// current retainer. Returns false when the call could not be made or was rejected.
     /// </summary>
     bool TryCancelRequestedOperation(string requestId, string reason, out QuartermasterCancelAcknowledgement? acknowledgement, out string error);
+
+    /// <summary>
+    /// Cancels the courier forward of a delivered stow this plugin submitted (deliveredStowForwardCancel.v1): a
+    /// pending forward never starts; one with a courier run answers stopping with its RunId. False when the call could
+    /// not be made, was rejected, or Quartermaster does not advertise the capability (the error then says so).
+    /// </summary>
+    bool TryCancelDeliveredStowForward(string requestId, string reason, out QuartermasterCancelAcknowledgement? acknowledgement, out string error)
+    {
+        acknowledgement = null;
+        error = $"Quartermaster does not advertise {QuartermasterIpcClient.DeliveredStowForwardCancelCapability}.";
+        return false;
+    }
 }
 
 public interface IQuartermasterDeliveredStowAdapter
@@ -42,9 +54,14 @@ public interface IQuartermasterDeliveredStowAdapter
     string GetDeliveredStow(string requestId);
     bool HasCancelRequestedOperation { get; }
     string CancelRequestedOperation(string requestJson);
+    bool HasCancelDeliveredStowForward => false;
+    string CancelDeliveredStowForward(string requestJson) => throw new NotSupportedException();
 }
 
-/// <summary>Status: cancelled, stopping, already_terminal, cancel_queued or rejected (ErrorCode names why).</summary>
+/// <summary>
+/// Status: cancelled, stopping, already_terminal, cancel_queued, not_found or rejected (ErrorCode names why). A
+/// forward cancel's stopping ack carries the courier RunId Quartermaster is stopping.
+/// </summary>
 public sealed record QuartermasterCancelAcknowledgement
 {
     public string Schema { get; init; } = string.Empty;
@@ -55,8 +72,12 @@ public sealed record QuartermasterCancelAcknowledgement
     public string? OperationStatus { get; init; }
     public string? ErrorCode { get; init; }
     public string? Message { get; init; }
+    /// <summary>The forward's courier run (forward cancel only); a GUID string.</summary>
+    public string? RunId { get; init; }
 
     public bool IsRejected => string.Equals(Status, "rejected", StringComparison.OrdinalIgnoreCase);
+
+    public Guid? ParsedRunId => Guid.TryParse(RunId, out var run) && run != Guid.Empty ? run : null;
 }
 
 /// <summary>
@@ -202,7 +223,8 @@ public sealed partial class DalamudQuartermasterIpcAdapter : IQuartermasterDeliv
     private void InitializeDeliveredStow(IDalamudPluginInterface pluginInterface) => deliveredStowGates = new(
         pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.SubmitDeliveredStowChannel),
         pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.GetDeliveredStowChannel),
-        pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.CancelRequestedOperationChannel));
+        pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.CancelRequestedOperationChannel),
+        pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.CancelDeliveredStowForwardChannel));
 
     public bool HasSubmitDeliveredStow => deliveredStowGates?.Submit.HasFunction == true;
     public bool HasGetDeliveredStow => deliveredStowGates?.Get.HasFunction == true;
@@ -210,11 +232,14 @@ public sealed partial class DalamudQuartermasterIpcAdapter : IQuartermasterDeliv
     public string GetDeliveredStow(string requestId) => deliveredStowGates!.Get.InvokeFunc(requestId);
     public bool HasCancelRequestedOperation => deliveredStowGates?.Cancel.HasFunction == true;
     public string CancelRequestedOperation(string requestJson) => deliveredStowGates!.Cancel.InvokeFunc(requestJson);
+    public bool HasCancelDeliveredStowForward => deliveredStowGates?.CancelForward.HasFunction == true;
+    public string CancelDeliveredStowForward(string requestJson) => deliveredStowGates!.CancelForward.InvokeFunc(requestJson);
 
     private sealed record DeliveredStowGates(
         ICallGateSubscriber<string, string> Submit,
         ICallGateSubscriber<string, string> Get,
-        ICallGateSubscriber<string, string> Cancel);
+        ICallGateSubscriber<string, string> Cancel,
+        ICallGateSubscriber<string, string> CancelForward);
 }
 
 public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyClient
@@ -229,6 +254,68 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterRunCustodyCli
     public const string CancelRequestedOperationChannel = "Quartermaster.v1.CancelRequestedOperation";
     public const string CancelRequestSchema = "gooseworks-quartermaster-cancel-request/v1";
     public const string CancelAckSchema = "gooseworks-quartermaster-cancel-request-ack/v1";
+    public const string DeliveredStowForwardCancelCapability = "deliveredStowForwardCancel.v1";
+    public const string CancelDeliveredStowForwardChannel = "Quartermaster.v1.CancelDeliveredStowForward";
+    /// <summary>A forward-specific ack schema, accepted alongside <see cref="CancelAckSchema"/>.</summary>
+    public const string CancelForwardAckSchema = "gooseworks-quartermaster-cancel-forward-ack/v1";
+
+    /// <summary>True when a failed call's error says Quartermaster is loaded but lacks the capability.</summary>
+    public static bool IsCapabilityMissing(string? error) =>
+        error?.Contains("does not advertise", StringComparison.OrdinalIgnoreCase) == true;
+
+    public bool TryCancelDeliveredStowForward(string requestId, string reason, out QuartermasterCancelAcknowledgement? acknowledgement, out string error)
+    {
+        acknowledgement = null;
+        if (string.IsNullOrWhiteSpace(requestId))
+        {
+            error = "Forward cancel needs the delivered-stow request ID.";
+            return false;
+        }
+        if (!TryGetCapabilities(out var capabilities, out error))
+            return false;
+        if (!capabilities!.Capabilities.Contains(DeliveredStowForwardCancelCapability, StringComparer.Ordinal) ||
+            adapter is not IQuartermasterDeliveredStowAdapter { HasCancelDeliveredStowForward: true } cancel)
+        {
+            error = $"Quartermaster does not advertise {DeliveredStowForwardCancelCapability}.";
+            return false;
+        }
+        // The requested-operation cancel envelope: same schema, provider instance, request id and reason.
+        var requestJson = JsonSerializer.Serialize(new
+        {
+            schema = CancelRequestSchema,
+            providerInstanceId = capabilities.ProviderInstanceId,
+            requestId,
+            reason,
+        }, JsonOptions);
+        string json;
+        try { json = cancel.CancelDeliveredStowForward(requestJson); }
+        catch (Exception ex)
+        {
+            error = $"Quartermaster forward cancel call failed: {ex.Message}";
+            return false;
+        }
+        try { acknowledgement = JsonSerializer.Deserialize<QuartermasterCancelAcknowledgement>(json, JsonOptions); }
+        catch (JsonException ex)
+        {
+            error = $"Quartermaster forward cancel acknowledgement is not valid JSON: {ex.Message}";
+            return false;
+        }
+        if (acknowledgement is null || string.IsNullOrWhiteSpace(acknowledgement.Status) ||
+            !(string.Equals(acknowledgement.Schema, CancelAckSchema, StringComparison.Ordinal) ||
+              string.Equals(acknowledgement.Schema, CancelForwardAckSchema, StringComparison.Ordinal)))
+        {
+            acknowledgement = null;
+            error = "Quartermaster forward cancel acknowledgement used an unsupported schema.";
+            return false;
+        }
+        if (acknowledgement.IsRejected)
+        {
+            error = $"Quartermaster rejected the forward cancel ({acknowledgement.ErrorCode ?? acknowledgement.Status}): {acknowledgement.Message}";
+            return false;
+        }
+        error = string.Empty;
+        return true;
+    }
 
     public bool TryCancelRequestedOperation(string requestId, string reason, out QuartermasterCancelAcknowledgement? acknowledgement, out string error)
     {

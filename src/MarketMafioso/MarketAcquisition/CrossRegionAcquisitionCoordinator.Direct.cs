@@ -654,6 +654,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         watch.Settled = true;
         watch.Code = code;
         watch.SettledAtUtc = now;
+        // Given up on: nobody follows this forward any more, so it is withdrawn in Quartermaster rather than left to run.
+        if (failure is not null)
+            CancelForward(watch.RequestId, $"MarketMafioso stopped following the forward: {failure}", $"forward of {watch.Owner}'s stow");
         watch.Summary = failure is not null
             ? $"Forward of {watch.Owner}'s stow not observed: {failure}"
             : $"Forward of {watch.Owner}'s stow: " + string.Join("; ", ForwardNotes(watch.Lines, open: false).DefaultIfEmpty(code));

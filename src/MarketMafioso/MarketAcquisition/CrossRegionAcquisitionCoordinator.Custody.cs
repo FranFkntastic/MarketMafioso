@@ -45,6 +45,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public const string CodeCountedRetrievalIncomplete = "CountedRetrievalIncomplete";
     public const string CodeCountedRetrievalTimedOut = "CountedRetrievalTimedOut";
     public const string CodeCountedRetrievalCancelled = "CountedRetrievalCancelled";
+    /// <summary>The deadline cancel found the retrieval running and it had not ended <see cref="RetrievalStopGrace"/> later; the bags decide.</summary>
+    public const string CodeCountedRetrievalStopUnconfirmed = "CountedRetrievalStopUnconfirmed";
     public const string CodeCountedRetrievalScopeNarrowed = "CountedRetrievalScopeNarrowed";
     /// <summary>A retrieval limited to the chosen retainers ran, and they held fewer units than were counted.</summary>
     public const string CodeCountedRetrievalSourceShort = "CountedRetrievalSourceShort";
@@ -75,6 +77,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     /// <summary>A counted-stock retrieval not settled this long after its persisted submission is cancelled.</summary>
     public static readonly TimeSpan RetrievalDeadline = TimeSpan.FromMinutes(10);
+    /// <summary>How long a retrieval Quartermaster is stopping after the deadline cancel is followed before the bags decide.</summary>
+    public static readonly TimeSpan RetrievalStopGrace = TimeSpan.FromMinutes(2);
     /// <summary>A delivered stow not settled this long after its persisted submission is cancelled.</summary>
     public static readonly TimeSpan StowDeadline = TimeSpan.FromMinutes(15);
 
@@ -468,6 +472,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     private void SettleNotCollected(CrossRegionCollection collection, string code, string detail)
     {
+        // A retrieval still open for this source has nobody to collect for it any more: withdraw it.
+        if (collection.RetrievalRequestId is { } retrieval && !collection.RetrievalSettled)
+            CancelCustodyRequest(retrieval, $"MarketMafioso is not collecting from {collection.Source.Label} ({code}).");
         collection.State = CrossRegionCollectionState.NotCollected;
         collection.OutcomeCode = code;
         collection.Detail = detail;
@@ -709,16 +716,19 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             if (!overdue && TryRetryRetrievalBeforeMovement(collection, index, operation, now))
                 return;
             RecordUnreachedSources(collection, operation);
+            var stoppedLate = retrievalStoppingRequestId == collection.RetrievalRequestId
+                ? $" It was stopped after the {RetrievalDeadline.TotalMinutes:N0}-minute retrieval deadline; the bags decide what arrived."
+                : string.Empty;
             if (operation.Status.Equals("succeeded", StringComparison.OrdinalIgnoreCase) || operation.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
                 SettleRetrieval(collection, attempted: true, code: null, detail: null);
             else if (string.Equals(operation.Code, QuartermasterSourceRestrictionShort, StringComparison.Ordinal))
-                SettleRetrieval(collection, attempted: true, CodeCountedRetrievalSourceShort, $"{operation.Status}: {operation.Message ?? operation.Code}");
+                SettleRetrieval(collection, attempted: true, CodeCountedRetrievalSourceShort, $"{operation.Status}: {operation.Message ?? operation.Code}{stoppedLate}");
             else if (operation.Status.Equals("rejected", StringComparison.OrdinalIgnoreCase))
                 SettleRetrieval(collection, attempted: false, CodeCountedRetrievalRejected, operation.Message ?? operation.Code ?? operation.Status);
             else if (operation.Status.Equals("cancelled", StringComparison.OrdinalIgnoreCase))
-                SettleRetrieval(collection, attempted: true, CodeCountedRetrievalCancelled, $"{operation.Code ?? operation.Status}: {operation.Message}");
+                SettleRetrieval(collection, attempted: true, CodeCountedRetrievalCancelled, $"{operation.Code ?? operation.Status}: {operation.Message}{stoppedLate}");
             else
-                SettleRetrieval(collection, attempted: true, CodeCountedRetrievalIncomplete, $"{operation.Status}: {operation.Message ?? operation.Code}");
+                SettleRetrieval(collection, attempted: true, CodeCountedRetrievalIncomplete, $"{operation.Status}: {operation.Message ?? operation.Code}{stoppedLate}");
             return;
         }
         if (overdue)
@@ -834,7 +844,32 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     /// </summary>
     private void TimeOutRetrieval(CrossRegionCollection collection, string why)
     {
-        CancelCustodyRequest(collection.RetrievalRequestId!, $"MarketMafioso retrieval deadline of {RetrievalDeadline.TotalMinutes:N0} minutes passed.");
+        var now = utcNow();
+        var requestId = collection.RetrievalRequestId!;
+        if (retrievalStoppingRequestId == requestId)
+        {
+            // Quartermaster answered stopping: keep following the operation until it ends, for a bounded grace.
+            if (now - retrievalStoppingSinceUtc < RetrievalStopGrace)
+            {
+                session.LastMessage = $"Quartermaster is stopping retrieval {requestId} after the current retainer ({why}); " +
+                                      $"waiting up to {RetrievalStopGrace.TotalMinutes:N0} minutes for it to end.";
+                return;
+            }
+            SettleRetrieval(collection, attempted: true, CodeCountedRetrievalStopUnconfirmed,
+                $"Retrieval {requestId} was still stopping in Quartermaster {RetrievalStopGrace.TotalMinutes:N0} minutes after the " +
+                $"{RetrievalDeadline.TotalMinutes:N0}-minute retrieval deadline ({why}); continuing with what is in the bags. The cancel stays queued.");
+            return;
+        }
+        var outcome = CancelCustodyRequest(requestId, $"MarketMafioso retrieval deadline of {RetrievalDeadline.TotalMinutes:N0} minutes passed.");
+        if (outcome is { Status: "stopping" })
+        {
+            retrievalStoppingRequestId = requestId;
+            retrievalStoppingSinceUtc = now;
+            log($"{CodeCountedRetrievalTimedOut}: retrieval {requestId} passed the {RetrievalDeadline.TotalMinutes:N0}-minute deadline while running ({why}); " +
+                $"Quartermaster stops it after the current retainer. Following it for up to {RetrievalStopGrace.TotalMinutes:N0} more minutes.", null);
+            session.LastMessage = $"Quartermaster is stopping retrieval {requestId} after the current retainer.";
+            return;
+        }
         SettleRetrieval(collection, attempted: true, CodeCountedRetrievalTimedOut,
             $"Retrieval {collection.RetrievalRequestId} did not finish within the {RetrievalDeadline.TotalMinutes:N0}-minute retrieval deadline " +
             $"({why}); cancelled in Quartermaster and continuing with what is in the bags.");
@@ -872,6 +907,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     private void SettleRetrieval(CrossRegionCollection collection, bool attempted, string? code, string? detail)
     {
+        if (retrievalStoppingRequestId == collection.RetrievalRequestId)
+            retrievalStoppingRequestId = null;
         collection.RetrievalSettled = true;
         collection.RetrievalAttempted = attempted;
         collection.RetrievalOutcomeCode = code;
@@ -1301,17 +1338,58 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             CancelCustodyRequest(requestId, reason);
     }
 
-    private void CancelCustodyRequest(string requestId, string reason)
+    private string CancelOwner => $"cross-regional session {session.SessionId:N}";
+
+    /// <summary>
+    /// Withdraws a retrieval or stow in Quartermaster. With the cancel outbox, what Quartermaster does not confirm
+    /// (unreachable, or stopping a running operation) is retried after this session is cleared or deleted.
+    /// </summary>
+    private QuartermasterCancelOutcome? CancelCustodyRequest(string requestId, string reason)
     {
+        if (cancels is not null)
+        {
+            var outcome = cancels.Cancel(QuartermasterCancelKind.RequestedOperation, requestId, reason, CancelOwner);
+            log($"Quartermaster request {requestId}: {outcome.Status}. {outcome.Message}" +
+                (outcome.Queued ? " The cancel is kept and retried until Quartermaster settles it." : string.Empty), null);
+            return outcome;
+        }
         if (custody is null)
         {
             log($"Quartermaster request {requestId} could not be cancelled: Quartermaster is unavailable. It expires there if it never starts.", null);
-            return;
+            return null;
         }
         if (custody.TryCancelRequestedOperation(requestId, reason, out var ack, out var error))
+        {
             log($"Quartermaster request {requestId}: {ack!.Status}. {ack.Message}", null);
-        else
-            log($"Quartermaster request {requestId} could not be cancelled: {error} It expires there if it never starts.", null);
+            return new(ack.Status, ack.Message ?? ack.Status, Settled: ack.Status != "stopping", Queued: false);
+        }
+        log($"Quartermaster request {requestId} could not be cancelled: {error} It expires there if it never starts.", null);
+        return null;
+    }
+
+    /// <summary>
+    /// Cancels a delivered stow's courier forward in Quartermaster (gated on deliveredStowForwardCancel.v1; an older
+    /// Quartermaster keeps today's behaviour and is named once). A forward whose run is under way is stopped there
+    /// and its run cleared through the outbox.
+    /// </summary>
+    private QuartermasterCancelOutcome? CancelForward(string requestId, string reason, string owner)
+    {
+        if (cancels is not null)
+        {
+            var outcome = cancels.Cancel(QuartermasterCancelKind.DeliveredStowForward, requestId, reason, owner);
+            log($"Forward of stow {requestId}: {outcome.Status}. {outcome.Message}" +
+                (outcome.Queued ? " The cancel is kept and retried until Quartermaster settles it." : string.Empty), null);
+            return outcome;
+        }
+        if (custody is null)
+            return null;
+        if (custody.TryCancelDeliveredStowForward(requestId, reason, out var ack, out var error))
+        {
+            log($"Forward of stow {requestId}: {ack!.Status}. {ack.Message}", null);
+            return new(ack.Status, ack.Message ?? ack.Status, Settled: true, Queued: false, ack.ParsedRunId);
+        }
+        log($"Forward of stow {requestId} could not be cancelled: {error}", null);
+        return null;
     }
 
     /// <summary>

@@ -87,6 +87,10 @@ public sealed class CrossRegionAcquisitionSession
     public Guid? HaulRunId { get; set; }
     /// <summary>An earlier, different courier run Quartermaster said blocks this session's requests; Clear releases it.</summary>
     public Guid? BlockingCourierRunId { get; set; }
+    /// <summary>The request that owns <see cref="BlockingCourierRunId"/>, when Quartermaster named it.</summary>
+    public string? BlockingCourierRequestId { get; set; }
+    /// <summary>What submitted the blocking run (delivered-stow, ipc:&lt;caller&gt;, manual), when Quartermaster named it.</summary>
+    public string? BlockingCourierSource { get; set; }
     public int HaulAttempt { get; set; }
     public List<CrossRegionManifestLine> HaulManifest { get; set; } = [];
     public Dictionary<string, uint> PrimaryStockBaselines { get; set; } = new(StringComparer.Ordinal);

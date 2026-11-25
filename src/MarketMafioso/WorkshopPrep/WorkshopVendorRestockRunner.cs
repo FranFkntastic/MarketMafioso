@@ -383,6 +383,11 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             return false;
         if (config.ActiveWorkshopVendorBuyRun is not null)
             return coordinator.Stop(message);
+        // A retrieval nobody follows any more is withdrawn in Quartermaster; Stop never waits on the answer.
+        if (state.Phase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster &&
+            quartermaster.Cancel(OwnerOf(state), "Workshop restock stopped in MarketMafioso.") is
+                { State: not WorkshopQuartermasterCancelState.NoOperation } cancel)
+            message = $"{message} {cancel.Message}";
         state.Phase = WorkshopVendorRestockPhase.Stopped;
         state.Message = message;
         runtime.EndAutomation();
@@ -416,7 +421,17 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             return false;
         }
         var state = config.ActiveWorkshopVendorRestockState!;
-        diagnosticLog?.Invoke($"[MarketMafioso] Retrying indeterminate workshop retainer retrieval. Previous result: {state.Message}");
+        // The earlier retrieval may still run in Quartermaster: withdraw it before a second one is sent for the same shortage.
+        var cancel = quartermaster.Cancel(OwnerOf(state), "Retrying the workshop retainer retrieval in MarketMafioso.");
+        if (!cancel.AllowsNewRetrieval)
+        {
+            message = cancel.State == WorkshopQuartermasterCancelState.Stopping
+                ? $"{cancel.Message} Retry once it has ended."
+                : $"{cancel.Message} Retry once Quartermaster confirms it.";
+            diagnosticLog?.Invoke($"[MarketMafioso] Workshop retrieval retry held: {message}");
+            return false;
+        }
+        diagnosticLog?.Invoke($"[MarketMafioso] Retrying indeterminate workshop retainer retrieval. Previous result: {state.Message}. {cancel.Message}");
         state.Phase = WorkshopVendorRestockPhase.RetrieveFromQuartermaster;
         state.QuartermasterSubmitted = false;
         state.RetrievalReconcileStartedAtUtc = null;
@@ -427,6 +442,9 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         message = state.Message;
         return true;
     }
+
+    private static QuartermasterOwnerScope OwnerOf(WorkshopVendorRestockState state) =>
+        new(state.LocalContentId, state.HomeWorldId, null, null);
 
     public static string ComposeContextSignature(QuartermasterOwnerScope owner, string queueSignature) =>
         $"{owner.LocalContentId!.Value.ToString(CultureInfo.InvariantCulture)}|{owner.HomeWorldId!.Value.ToString(CultureInfo.InvariantCulture)}|{queueSignature}";
@@ -439,11 +457,13 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         if (utcNow().UtcDateTime - state.StartedAtUtc > TimeSpan.FromMinutes(15))
         {
             nextQuartermasterSubmitUtc = null;
+            var cancel = quartermaster.Cancel(owner, "The workshop restock's 15-minute retrieval deadline passed.");
+            var cancelNote = cancel.State == WorkshopQuartermasterCancelState.NoOperation ? string.Empty : $" {cancel.Message}";
             FinishPolicy(
                 WorkshopVendorRestockPhase.Indeterminate,
-                state.QuartermasterSubmitted
+                (state.QuartermasterSubmitted
                     ? "Quartermaster retrieval deadline expired; no further retrieval was submitted."
-                    : $"Quartermaster retrieval deadline expired before Quartermaster accepted the request; last error: {quartermaster.LastStatus}");
+                    : $"Quartermaster retrieval deadline expired before Quartermaster accepted the request; last error: {quartermaster.LastStatus}") + cancelNote);
             return;
         }
         if (!state.QuartermasterSubmitted)
