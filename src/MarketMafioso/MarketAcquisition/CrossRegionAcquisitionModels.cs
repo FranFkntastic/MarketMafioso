@@ -87,6 +87,10 @@ public sealed class CrossRegionAcquisitionSession
     public Guid? HaulRunId { get; set; }
     /// <summary>An earlier, different courier run Quartermaster said blocks this session's requests; Clear releases it.</summary>
     public Guid? BlockingCourierRunId { get; set; }
+    /// <summary>The request that owns <see cref="BlockingCourierRunId"/>, when Quartermaster named it.</summary>
+    public string? BlockingCourierRequestId { get; set; }
+    /// <summary>What submitted the blocking run (delivered-stow, ipc or manual), when Quartermaster named it.</summary>
+    public string? BlockingCourierSource { get; set; }
     public int HaulAttempt { get; set; }
     public List<CrossRegionManifestLine> HaulManifest { get; set; } = [];
     public Dictionary<string, uint> PrimaryStockBaselines { get; set; } = new(StringComparer.Ordinal);
@@ -211,6 +215,11 @@ public sealed class CrossRegionCollection
     /// <summary>Chosen sources Quartermaster could not reach during the retrieval, as it reported them.</summary>
     public List<CrossRegionUnreachedSource> UnreachedSources { get; set; } = [];
     public bool RetrievalSettled { get; set; }
+    /// <summary>
+    /// Stop withdrew the current retrieval id: if Quartermaster cancelled it before it started, a resume sends it again
+    /// under a new id instead of settling it as cancelled. Cleared when a new id is issued.
+    /// </summary>
+    public bool RetrievalWithdrawn { get; set; }
     /// <summary>True when retrieval ran to a terminal Quartermaster status, so retainer quantities count toward the cap.</summary>
     public bool RetrievalAttempted { get; set; }
     /// <summary>Why retainer-held counted stock was not (fully) retrieved; null when retrieval succeeded or was not needed.</summary>
@@ -261,6 +270,13 @@ public sealed class CrossRegionStow
     /// <summary>The local stow settled but Quartermaster's courier forward has not; it is watched without holding the run.</summary>
     public bool ForwardOpen { get; set; }
     public string? ForwardCode { get; set; }
+    /// <summary>
+    /// Stop withdrew the current stow id: if its deposit was cancelled before it started, a resume sends it again under
+    /// a new id. Cleared when a new id is issued.
+    /// </summary>
+    public bool Withdrawn { get; set; }
+    /// <summary>The courier forward of the current stow id was cancelled before a resend; it is cancelled once per id.</summary>
+    public bool ForwardCancelSent { get; set; }
     /// <summary>When the request was first persisted for submission; the stow deadline runs from here.</summary>
     public DateTimeOffset? SubmittedAtUtc { get; set; }
     public bool Submitted { get; set; }

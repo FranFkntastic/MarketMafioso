@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using Dalamud.Plugin.Services;
@@ -95,6 +96,8 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     private const string DropboxStopRequests = "Dropbox.StopRequests";
     private const string StopRequestOwner = "MarketMafioso";
     private const string PandoraAutoSelectTurnin = "AutoSelectTurnin";
+    /// <summary>Written before MMF turns Pandora Auto-select Turn-ins off and deleted once it is back on.</summary>
+    internal const string PandoraSuppressionMarkerFile = "pandora-auto-select-turnin-suppressed.marker";
 
     private readonly IPluginDataStore pluginDataStore;
     private readonly IPluginLog log;
@@ -109,17 +112,22 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     // Every coordinator shares the "MarketMafioso" owner entry, so count live holders across instances.
     private static int liveTradeAutoConfirmHolders;
     private static int liveDropboxHolders;
+    private static int liveTextAdvanceHolders;
+    private static readonly object TextAdvanceStopRequestSync = new();
+    private readonly string? pandoraMarkerPath;
 
     internal ExternalAutomationCoordinator(
         IPluginDataStore pluginDataStore,
         IPluginLog log,
         IPandoraFeatureControl? pandoraFeatureControl = null,
-        ITextAdvanceExternalControl? textAdvanceControl = null)
+        ITextAdvanceExternalControl? textAdvanceControl = null,
+        string? stateDirectory = null)
     {
         this.pluginDataStore = pluginDataStore;
         this.log = log;
         this.pandoraFeatureControl = pandoraFeatureControl;
         this.textAdvanceControl = textAdvanceControl;
+        pandoraMarkerPath = string.IsNullOrWhiteSpace(stateDirectory) ? null : Path.Combine(stateDirectory, PandoraSuppressionMarkerFile);
     }
 
     // Takes TextAdvance external control so it skips workshop cutscenes. Safe to
@@ -170,15 +178,24 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         }
     }
 
+    /// <summary>
+    /// Pauses TextAdvance under the shared "MarketMafioso" stop request. Several coordinators share that entry, so
+    /// each counts as a holder and the entry is removed only when the last holder restores.
+    /// </summary>
     public void SuppressTextAdvance()
     {
         if (!pluginDataStore.TryGetData<HashSet<string>>(TextAdvanceStopRequests, out var stopRequests) || stopRequests == null)
             return;
 
-        if (stopRequests.Add(StopRequestOwner))
+        lock (TextAdvanceStopRequestSync)
         {
-            textAdvanceSuppressed = true;
-            log.Debug("[MarketMafioso] Temporarily paused TextAdvance during workshop material request.");
+            if (!textAdvanceSuppressed)
+            {
+                textAdvanceSuppressed = true;
+                liveTextAdvanceHolders++;
+            }
+            if (stopRequests.Add(StopRequestOwner))
+                log.Debug("[MarketMafioso] Temporarily paused TextAdvance during workshop material request.");
         }
     }
 
@@ -187,10 +204,92 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         if (!textAdvanceSuppressed)
             return;
 
-        if (pluginDataStore.TryGetData<HashSet<string>>(TextAdvanceStopRequests, out var stopRequests) && stopRequests?.Remove(StopRequestOwner) == true)
-            log.Debug("[MarketMafioso] Restored TextAdvance after workshop material request.");
+        lock (TextAdvanceStopRequestSync)
+        {
+            textAdvanceSuppressed = false;
+            liveTextAdvanceHolders = Math.Max(0, liveTextAdvanceHolders - 1);
+            if (liveTextAdvanceHolders > 0)
+                return;
+            if (pluginDataStore.TryGetData<HashSet<string>>(TextAdvanceStopRequests, out var stopRequests) && stopRequests?.Remove(StopRequestOwner) == true)
+                log.Debug("[MarketMafioso] Restored TextAdvance after workshop material request.");
+        }
+    }
 
-        textAdvanceSuppressed = false;
+    /// <summary>
+    /// Removes a "MarketMafioso" TextAdvance stop request left behind by an earlier load. An entry a live
+    /// coordinator of this load still holds is left alone.
+    /// </summary>
+    public void ReleaseStaleTextAdvanceSuppression()
+    {
+        lock (TextAdvanceStopRequestSync)
+        {
+            if (liveTextAdvanceHolders == 0 &&
+                pluginDataStore.TryGetData<HashSet<string>>(TextAdvanceStopRequests, out var stopRequests) &&
+                stopRequests?.Remove(StopRequestOwner) == true)
+                log.Warning("[MarketMafioso] Released a TextAdvance pause left over from an earlier MarketMafioso load.");
+        }
+    }
+
+    /// <summary>
+    /// An earlier load turned Pandora Auto-select Turn-ins off and never turned it back on (its marker is still
+    /// there): turn it back on now, unless this coordinator is itself holding it off for a hand-in.
+    /// </summary>
+    public void RestoreStalePandoraSuppression()
+    {
+        if (pandoraFeatureControl == null || pandoraAutoSelectTurninSuppressed || !PandoraMarkerExists())
+            return;
+        try
+        {
+            pandoraFeatureControl.SetEnabled(PandoraAutoSelectTurnin, true);
+        }
+        catch (Exception ex)
+        {
+            // Pandora may load after MMF: the marker stays, and the next hand-in adopts and restores the suppression.
+            log.Warning(ex, "[MarketMafioso] An earlier MarketMafioso load left Pandora Auto-select Turn-ins turned off and it could not be turned back on yet ({Marker}).", pandoraMarkerPath ?? string.Empty);
+            return;
+        }
+        DeletePandoraMarker();
+        log.Warning("[MarketMafioso] Turned Pandora Auto-select Turn-ins back on: an earlier MarketMafioso load turned it off for a workshop hand-in and never restored it.");
+    }
+
+    private bool PandoraMarkerExists()
+    {
+        try
+        {
+            return pandoraMarkerPath is not null && File.Exists(pandoraMarkerPath);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void WritePandoraMarker()
+    {
+        if (pandoraMarkerPath is null)
+            return;
+        try
+        {
+            File.WriteAllText(pandoraMarkerPath, DateTimeOffset.UtcNow.ToString("O"));
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] Could not write the Pandora Auto-select Turn-ins marker {Marker}; an unload that fails to restore it would leave it off.", pandoraMarkerPath);
+        }
+    }
+
+    private void DeletePandoraMarker()
+    {
+        if (pandoraMarkerPath is null)
+            return;
+        try
+        {
+            File.Delete(pandoraMarkerPath);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] Could not delete the Pandora Auto-select Turn-ins marker {Marker}.", pandoraMarkerPath);
+        }
     }
 
     public void SuppressWorkshopRequestAutomation()
@@ -211,14 +310,26 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         }
 
         if (enabled != true)
+        {
+            // Off while our marker is still there: an earlier load turned it off and never restored it. Adopt that
+            // suppression so this hand-in's restore turns it back on.
+            if (enabled == false && PandoraMarkerExists())
+            {
+                pandoraAutoSelectTurninSuppressed = true;
+                log.Warning("[MarketMafioso] Adopted a Pandora Auto-select Turn-ins suppression left by an earlier MarketMafioso load; it is turned back on when this hand-in ends.");
+            }
             return;
+        }
 
+        // The marker is durable before the feature goes off, so a crash or a failed unload is repaired on load.
+        WritePandoraMarker();
         try
         {
             pandoraFeatureControl.SetEnabled(PandoraAutoSelectTurnin, false);
         }
         catch (Exception ex)
         {
+            DeletePandoraMarker();
             throw new InvalidOperationException(
                 "Could not acquire workshop Request-window ownership from Pandora Auto-select Turn-ins.",
                 ex);
@@ -237,6 +348,7 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         {
             pandoraFeatureControl.SetEnabled(PandoraAutoSelectTurnin, true);
             pandoraAutoSelectTurninSuppressed = false;
+            DeletePandoraMarker();
             log.Debug("[MarketMafioso] Restored Pandora Auto-select Turn-ins after MMF released the workshop request window.");
         }
         catch (Exception ex)
@@ -316,13 +428,26 @@ public sealed class ExternalAutomationCoordinator : IDisposable
 
     public void Dispose()
     {
-        ReleaseTextAdvanceCutsceneSkip();
-        RestoreTextAdvance();
-        RestoreWorkshopRequestAutomation();
+        // Each restore runs whatever the one before it threw.
+        Step(ReleaseTextAdvanceCutsceneSkip, "TextAdvance external control");
+        Step(RestoreTextAdvance, "the TextAdvance pause");
+        Step(RestoreWorkshopRequestAutomation, "Pandora Auto-select Turn-ins");
         if (!retainTradeSuppressionOnDispose)
         {
-            RestoreTradeAutoConfirm();
-            RestoreDropboxAutoAccept();
+            Step(RestoreTradeAutoConfirm, "the YesAlready pause");
+            Step(RestoreDropboxAutoAccept, "the Dropbox pause");
+        }
+
+        void Step(Action restore, string what)
+        {
+            try
+            {
+                restore();
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "[MarketMafioso] Could not release {What} while unloading.", what);
+            }
         }
     }
 

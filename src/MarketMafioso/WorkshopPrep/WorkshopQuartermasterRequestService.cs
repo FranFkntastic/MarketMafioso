@@ -19,6 +19,10 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
     private readonly Action saveConfiguration;
     private readonly Action persistIdentity;
     private readonly Func<DateTimeOffset> utcNow;
+    private readonly QuartermasterCancelOutbox? cancels;
+    /// <summary>Requests Quartermaster answered stopping for: followed until terminal instead of being released.</summary>
+    private readonly HashSet<string> stoppingRequests = new(StringComparer.Ordinal);
+    private bool warnedCancelUnsupported;
     private DateTimeOffset nextOperationPollAtUtc;
     private string? activeScopeKey;
     private bool disposed;
@@ -42,8 +46,10 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         QuartermasterIpcClient client,
         Action saveConfiguration,
         Func<DateTimeOffset>? utcNow = null,
-        Action? persistIdentity = null)
+        Action? persistIdentity = null,
+        QuartermasterCancelOutbox? cancels = null)
     {
+        this.cancels = cancels;
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
         this.saveConfiguration = saveConfiguration ?? throw new ArgumentNullException(nameof(saveConfiguration));
@@ -124,6 +130,29 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
                                    !string.IsNullOrWhiteSpace(persisted.RequestId) &&
                                    !string.IsNullOrWhiteSpace(persisted.OperationId) &&
                                    persisted.SubmittedAtUtc != default;
+        // A cancel sent for the recorded id (Stop, the deadline, a release) may still land in Quartermaster, so the id
+        // is never replayed or adopted while that cancel is pending: replaying it would hand the new run to a cancel
+        // that later withdraws it. The cancel is re-sent now; only once nothing of the old request can run does a new
+        // identity start, so two live requests for one shortage never exist.
+        if (hasPersistedIdentity && cancels is not null &&
+            (!IsTerminalStatus(persisted!.Status) || string.Equals(persisted.Status, ReleasedStatus, StringComparison.OrdinalIgnoreCase)) &&
+            cancels.IsPending(QuartermasterCancelKind.RequestedOperation, persisted.RequestId))
+        {
+            var pendingCancel = Cancel(ownerScope, "Re-sent before MarketMafioso starts the workshop retrieval again.");
+            if (!pendingCancel.AllowsNewRetrieval)
+            {
+                LastStatus = pendingCancel.State == WorkshopQuartermasterCancelState.Stopping
+                    ? $"Quartermaster is stopping the withdrawn retrieval {persisted.RequestId}; a new retrieval starts once it ends."
+                    : $"Waiting for Quartermaster to confirm withdrawing retrieval {persisted.RequestId} before a new retrieval starts. {pendingCancel.Message}";
+                LastFailureTransient = true;
+                return false;
+            }
+            DiagnosticLog?.Invoke(
+                $"[MarketMafioso] Withdrawn retrieval {persisted.RequestId} is not reused ({pendingCancel.Message}); a new retrieval request starts.");
+            // Terminal here, so the identity below is new and nothing adopts or replays the withdrawn one.
+            persisted = Clone(persisted);
+            persisted.Status = "cancelled";
+        }
         // A previous submit of this identity may have been taken. If Quartermaster knows it, follow it as submitted;
         // otherwise replay the same identity even though the live shortage has drifted, so it is never doubled.
         var acceptanceUnknown = hasPersistedIdentity && persisted!.AcceptanceUnknown && !IsTerminalStatus(persisted.Status);
@@ -178,12 +207,23 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             !replacingReviewRequest &&
             !replayingPersistedRequest)
         {
+            // The shortage drifted while the earlier retrieval is open: withdraw it first, so the same shortage is
+            // never retrieved twice. A new request starts only once Quartermaster says nothing of the old one runs.
             var operationStatus = string.IsNullOrWhiteSpace(persisted.Status)
                 ? "in an uncertain state"
                 : $"still {persisted.Status}";
+            var cancel = Cancel(ownerScope, "The workshop shortage changed; MarketMafioso replaces this retrieval.");
+            if (!cancel.AllowsNewRetrieval)
+            {
+                LastStatus = cancel.State == WorkshopQuartermasterCancelState.Stopping
+                    ? $"Quartermaster is stopping the earlier retrieval {persisted.RequestId}; the new one starts once it ends. {cancel.Message}"
+                    : $"The earlier retrieval {persisted.RequestId} could not be withdrawn yet; the new one waits for it. {cancel.Message}";
+                LastFailureTransient = true;
+                return false;
+            }
             DiagnosticLog?.Invoke(
-                $"[MarketMafioso] Quartermaster operation {persisted.OperationId} is {operationStatus} " +
-                $"(submitted {persisted.SubmittedAtUtc:O}); starting a new retrieval request without waiting for it.");
+                $"[MarketMafioso] Quartermaster operation {persisted.OperationId} was {operationStatus} " +
+                $"(submitted {persisted.SubmittedAtUtc:O}); {cancel.Message} Starting a new retrieval request.");
         }
         var needsIdentity = !hasPersistedIdentity || !replayingPersistedRequest || IsTerminalStatus(persisted!.Status);
         if (needsIdentity)
@@ -334,11 +374,10 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             IsTerminalStatus(persisted.Status))
             return;
         if (persisted.SubmittedAtUtc != default &&
-            utcNow().UtcDateTime - persisted.SubmittedAtUtc > OperationReleaseAge)
-        {
-            ReleaseStaleOperation(key, persisted);
+            utcNow().UtcDateTime - persisted.SubmittedAtUtc > OperationReleaseAge &&
+            !stoppingRequests.Contains(persisted.RequestId) &&
+            ReleaseStaleOperation(key, persisted, ownerScope))
             return;
-        }
 
         ProgressLog?.Invoke($"[MarketMafioso] RQ restock wake={wakeReason} operation={persisted.OperationId}");
         if (!client.TryGetOperation(persisted.OperationId, ownerScope, out var operation, out var error))
@@ -394,6 +433,8 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         candidate.Status = operation.Status;
         candidate.Message = operation.Message;
         candidate.Code = operation.Code;
+        if (IsTerminalStatus(operation.Status))
+            stoppingRequests.Remove(persisted.RequestId);
         lastWarnedStatus = null;
         var routine = operation.Status.ToLowerInvariant() is "running" or "pending" or "queued" or "accepted" or "succeeded" or "completed";
         (routine ? ProgressLog : DiagnosticLog)?.Invoke($"[MarketMafioso] RQ restock operation={persisted.OperationId} result={operation.Status} code={operation.Code ?? "unspecified"} message={operation.Message} wake={wakeReason}");
@@ -433,11 +474,16 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         if (owner is null || !owner.IsAvailable)
             return false;
         var key = ScopeKey(owner);
+        if (!config.QuartermasterWorkshopRequests.ContainsKey(key))
+            return false;
+        // Forgetting is an escape hatch: it never waits on Quartermaster. What is not confirmed stays queued.
+        var cancel = Cancel(owner, "The workshop restock's Quartermaster operation was forgotten in MarketMafioso.");
         if (!config.QuartermasterWorkshopRequests.Remove(key, out var persisted))
             return false;
+        stoppingRequests.Remove(persisted.RequestId);
         DiagnosticLog?.Invoke(
             $"[MarketMafioso] Forgot Quartermaster operation {persisted.OperationId} status={persisted.Status} " +
-            $"submitted={persisted.SubmittedAtUtc:O} request={persisted.RequestId}; Quartermaster itself was not changed.");
+            $"submitted={persisted.SubmittedAtUtc:O} request={persisted.RequestId}; {cancel.Message}");
         LastOperation = null;
         LastStatus = "Quartermaster operation forgotten.";
         try
@@ -451,15 +497,37 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         return true;
     }
 
-    private void ReleaseStaleOperation(string key, QuartermasterWorkshopRequestState persisted)
+    /// <summary>
+    /// Withdraws an operation that outlived <see cref="OperationReleaseAge"/> and releases its record. Returns false
+    /// when Quartermaster is stopping it: the record is then kept and followed until it is terminal.
+    /// </summary>
+    private bool ReleaseStaleOperation(string key, QuartermasterWorkshopRequestState persisted, QuartermasterOwnerScope owner)
     {
+        var cancel = Cancel(owner, $"MarketMafioso released the retrieval after {OperationReleaseAge.TotalMinutes:N0} minutes without a terminal status.");
+        if (cancel.State == WorkshopQuartermasterCancelState.Stopping)
+        {
+            DiagnosticLog?.Invoke(
+                $"[MarketMafioso] Quartermaster operation {persisted.OperationId} had no terminal status {OperationReleaseAge.TotalMinutes:N0} minutes " +
+                $"after {persisted.SubmittedAtUtc:O}; Quartermaster is stopping it, so it is followed until it ends.");
+            LastStatus = $"Quartermaster is stopping retrieval {persisted.RequestId} after the current retainer.";
+            return false;
+        }
+        if (cancel.State == WorkshopQuartermasterCancelState.Settled)
+        {
+            // Cancel recorded it terminal: nothing of it can run, so it is not left as Released (maybe still running).
+            DiagnosticLog?.Invoke(
+                $"[MarketMafioso] Quartermaster operation {persisted.OperationId} had no terminal status {OperationReleaseAge.TotalMinutes:N0} minutes " +
+                $"after {persisted.SubmittedAtUtc:O}; {cancel.Message}");
+            LastStatus = cancel.Message;
+            return true;
+        }
         var released = Clone(persisted);
         released.Status = ReleasedStatus;
         released.Message = $"Released after {OperationReleaseAge.TotalMinutes:N0} minutes without a terminal status (last status {persisted.Status}).";
         config.QuartermasterWorkshopRequests[key] = released;
         DiagnosticLog?.Invoke(
             $"[MarketMafioso] Quartermaster operation {persisted.OperationId} released: no terminal status " +
-            $"{OperationReleaseAge.TotalMinutes:N0} minutes after {persisted.SubmittedAtUtc:O} (last status {persisted.Status}).");
+            $"{OperationReleaseAge.TotalMinutes:N0} minutes after {persisted.SubmittedAtUtc:O} (last status {persisted.Status}). {cancel.Message}");
         LastStatus = released.Message;
         try
         {
@@ -468,6 +536,82 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         catch (Exception ex)
         {
             DiagnosticLog?.Invoke($"[MarketMafioso] Could not persist the released Quartermaster operation; continuing. {ex.Message}");
+        }
+        return true;
+    }
+
+    public WorkshopQuartermasterCancelResult Cancel(QuartermasterOwnerScope owner, string reason)
+    {
+        if (owner is null || !owner.IsAvailable ||
+            !config.QuartermasterWorkshopRequests.TryGetValue(ScopeKey(owner), out var persisted) ||
+            string.IsNullOrWhiteSpace(persisted.RequestId))
+            return new(WorkshopQuartermasterCancelState.NoOperation, "No Quartermaster retrieval is recorded.");
+        // Released is MarketMafioso's own give-up, not Quartermaster's: that operation may still run, so it is withdrawn too.
+        if (IsTerminalStatus(persisted.Status) && !string.Equals(persisted.Status, ReleasedStatus, StringComparison.OrdinalIgnoreCase))
+            return new(WorkshopQuartermasterCancelState.NoOperation, $"Quartermaster retrieval {persisted.RequestId} already ended ({persisted.Status}).");
+        QuartermasterCancelOutcome outcome;
+        if (cancels is not null)
+            outcome = cancels.Cancel(QuartermasterCancelKind.RequestedOperation, persisted.RequestId, reason,
+                $"workshop restock for {persisted.CharacterName}");
+        else if (client.TryCancelRequestedOperation(persisted.RequestId, reason, out var ack, out var error))
+            outcome = new(ack!.Status, ack.Message ?? ack.Status, Settled: ack.IsSettled, Queued: false, OperationStatus: ack.OperationStatus);
+        else if (QuartermasterIpcClient.IsCapabilityMissing(error))
+        {
+            if (!warnedCancelUnsupported)
+            {
+                warnedCancelUnsupported = true;
+                DiagnosticLog?.Invoke($"[MarketMafioso] QuartermasterCapabilityMissing: {error} Workshop retrievals MarketMafioso gives up on are not withdrawn there.");
+            }
+            outcome = new("unsupported", error, Settled: true, Queued: false);
+        }
+        else
+            outcome = new("failed", error, Settled: false, Queued: false);
+        var status = outcome.Status.ToLowerInvariant();
+        if (status == "stopping")
+        {
+            stoppingRequests.Add(persisted.RequestId);
+            nextOperationPollAtUtc = DateTimeOffset.MinValue;
+            return new(WorkshopQuartermasterCancelState.Stopping,
+                $"Quartermaster is stopping retrieval {persisted.RequestId} after the current retainer.");
+        }
+        if (status == "unsupported")
+            return new(WorkshopQuartermasterCancelState.Unsupported,
+                $"Quartermaster retrieval {persisted.RequestId} was not withdrawn: Quartermaster cannot cancel requests (update Quartermaster).");
+        if (status == "cancel_queued" && cancels is not null &&
+            cancels.IsWithdrawn(QuartermasterCancelKind.RequestedOperation, persisted.RequestId))
+        {
+            PersistWithdrawn(ScopeKey(owner), persisted, "cancelled", "Withdrawn: Quartermaster holds no operation under this request.");
+            return new(WorkshopQuartermasterCancelState.Settled,
+                $"Quartermaster holds no operation under retrieval {persisted.RequestId}; its queued cancel is still re-sent.");
+        }
+        if (!outcome.Settled)
+            return new(WorkshopQuartermasterCancelState.Unconfirmed,
+                $"Quartermaster did not confirm withdrawing retrieval {persisted.RequestId} ({outcome.Message})" +
+                (outcome.Queued ? "; the cancel is kept and retried." : "."));
+        // Settled: the record is terminal from here, so Retry or a restart starts a new identity instead of
+        // replaying (and re-following) the withdrawn one. One that had already ended keeps Quartermaster's status.
+        PersistWithdrawn(ScopeKey(owner), persisted,
+            outcome.OperationStatus is { Length: > 0 } ended && IsTerminalStatus(ended) ? ended : "cancelled",
+            $"Withdrawn in Quartermaster ({outcome.Status}): {outcome.Message}");
+        return new(WorkshopQuartermasterCancelState.Settled, $"Quartermaster retrieval {persisted.RequestId}: {outcome.Status}.");
+    }
+
+    /// <summary>Records a retrieval whose cancel Quartermaster settled as terminal, and saves it.</summary>
+    private void PersistWithdrawn(string key, QuartermasterWorkshopRequestState persisted, string status, string message)
+    {
+        var withdrawn = Clone(persisted);
+        withdrawn.Status = status;
+        withdrawn.Message = message;
+        withdrawn.AcceptanceUnknown = false;
+        config.QuartermasterWorkshopRequests[key] = withdrawn;
+        stoppingRequests.Remove(persisted.RequestId);
+        try
+        {
+            saveConfiguration();
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog?.Invoke($"[MarketMafioso] Could not persist the withdrawn Quartermaster retrieval {persisted.RequestId}; continuing. {ex.Message}");
         }
     }
 

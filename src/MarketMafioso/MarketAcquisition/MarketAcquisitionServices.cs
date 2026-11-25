@@ -75,7 +75,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
         string diagnosticsDirectory,
         Func<bool> otherAutomationActive,
         IPluginLog log,
-        ICharacterLoginDriver? characterLoginDriver = null)
+        ICharacterLoginDriver? characterLoginDriver = null,
+        QuartermasterCancelOutbox? quartermasterCancels = null)
     {
         this.otherAutomationActive = otherAutomationActive;
         this.config = config;
@@ -199,7 +200,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
             quartermaster,
             shardCheckpointRuntime,
             new ConfigurationShardAcquisitionCheckpointStateStore(config, config.Save),
-            message => log.Warning("{Message}", message));
+            message => log.Warning("{Message}", message),
+            quartermasterCancels);
         var marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
             DiagnosticsDirectory,
             universalisFreshnessVerifier.VerifyAsync,
@@ -276,7 +278,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
             new FileCrossRegionAcquisitionStore(Plugin.PluginInterface.GetPluginConfigDirectory()),
             log: (message, exception) => log.Warning(exception, "[MarketMafioso] {Message}", message),
             custody: quartermaster,
-            directDelivery: quartermaster);
+            directDelivery: quartermaster,
+            cancels: quartermasterCancels);
     }
 
     internal void ConnectCurrentDocument(Func<MarketAcquisitionRequestDocument> provider) => currentDocument = provider;

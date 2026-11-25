@@ -329,7 +329,9 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
             return false;
         }
         acknowledgement = new QuartermasterCourierAcknowledgement(wire.ProviderInstanceId, wire.RequestId, wire.RunId,
-            wire.Status.Trim().ToLowerInvariant(), wire.ErrorCode, wire.Message);
+            wire.Status.Trim().ToLowerInvariant(), wire.ErrorCode, wire.Message,
+            string.IsNullOrWhiteSpace(wire.BlockingRequestId) ? null : wire.BlockingRequestId.Trim(),
+            string.IsNullOrWhiteSpace(wire.BlockingSource) ? null : wire.BlockingSource.Trim());
         return true;
     }
 

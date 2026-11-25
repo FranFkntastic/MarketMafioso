@@ -106,6 +106,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     // A submit that did not reach Quartermaster (nothing submitted, or acceptance unknown) is sent again under the
     // same request id this often, and fails only once this window passes.
     private static readonly TimeSpan SubmitRetryInterval = TimeSpan.FromSeconds(5);
+    /// <summary>How long a submission keeps waiting on Quartermaster stopping an earlier run before it fails naming that run.</summary>
+    private static readonly TimeSpan CourierStoppingLimit = TimeSpan.FromMinutes(5);
+    private const string CodeCourierStillStopping = "CourierStillStopping";
+    private DateTimeOffset? courierStoppingSinceUtc;
+    private string? retrievalStoppingRequestId;
+    private DateTimeOffset retrievalStoppingSinceUtc;
     private static readonly TimeSpan SubmitWindow = TimeSpan.FromMinutes(3);
     private const string CodeCourierHistoryIndexing = "CourierHistoryIndexing";
     // Quartermaster's request history is still loading: the same submit is retried this often, this many times.
@@ -120,6 +126,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private readonly Func<DateTimeOffset> utcNow;
     private readonly Action<string, Exception?> log;
     private readonly IQuartermasterRunCustodyClient? custody;
+    /// <summary>Durable cancels: what Quartermaster did not confirm is retried after this session is cleared or deleted.</summary>
+    private readonly QuartermasterCancelOutbox? cancels;
     private readonly IQuartermasterDirectDeliveryClient? directDelivery;
     private CrossRegionAcquisitionSession session;
     private DateTimeOffset nextPollUtc;
@@ -158,8 +166,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         Func<DateTimeOffset>? utcNow = null,
         Action<string, Exception?>? log = null,
         IQuartermasterRunCustodyClient? custody = null,
-        IQuartermasterDirectDeliveryClient? directDelivery = null)
+        IQuartermasterDirectDeliveryClient? directDelivery = null,
+        QuartermasterCancelOutbox? cancels = null)
     {
+        this.cancels = cancels;
         this.custody = custody;
         this.directDelivery = directDelivery;
         this.courier = courier ?? throw new ArgumentNullException(nameof(courier));
@@ -593,22 +603,29 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         var dropped = $"phase={session.Phase} shopper={session.Shopper?.Label} purchasedUnits={session.PurchasedUnits} message={session.LastMessage}";
         var knownRuns = KnownCourierRuns();
         var clearRequestId = $"mmf-clear-{session.SessionId:N}";
+        var owner = $"cleared {CancelOwner}";
         if (session.IsActive)
         {
             var stopped = Stop();
             dropped += $" stop={(stopped.Success ? "ok" : "failed")}: {stopped.Message}";
         }
         // Unconditional: the session is dropped below whatever Quartermaster answers.
-        var courierOutcome = ReleaseCourierRun(knownRuns, clearRequestId);
-        log($"Cross-regional session cleared from MarketMafioso; dropped {dropped}. {courierOutcome}", null);
+        var courierOutcome = ReleaseCourierRun(knownRuns, clearRequestId, owner);
+        var abandoned = AbandonBlockingRun(owner);
+        log($"Cross-regional session cleared from MarketMafioso; dropped {dropped}. {courierOutcome}{(abandoned is null ? string.Empty : " " + abandoned)}", null);
         CancelOpenCustodyOperations("Cleared from MarketMafioso.");
+        // The stow's own forward is withdrawn too: nobody follows this session after Clear. Its watch stays and shows the outcome.
+        if (session.Stow is { ForwardOpen: true, RequestId: { } forwardRequest } &&
+            !string.Equals(forwardRequest, session.BlockingCourierRequestId, StringComparison.Ordinal))
+            CancelForward(forwardRequest, "Cleared from MarketMafioso.", owner);
         // An open forward is not the session's: it stays watched and its outcome shows with the next status.
         DropSettledForwards();
         try { store.Clear(); }
         catch (Exception ex) { log("Cross-regional session file could not be removed.", ex); }
         session = new CrossRegionAcquisitionSession { Phase = CrossRegionAcquisitionPhase.Idle };
         ResetTransientState();
-        return CrossRegionActionResult.Ok(CourierReleaseNote is { } note ? $"Cross-regional session cleared. {note}" : "Cross-regional session cleared.");
+        var result = CourierReleaseNote is { } note ? $"Cross-regional session cleared. {note}" : "Cross-regional session cleared.";
+        return CrossRegionActionResult.Ok(abandoned is null ? result : $"{result} {abandoned}");
     }
 
     // ---- Tick -------------------------------------------------------------------------------
@@ -1247,13 +1264,32 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return;
         }
         submitFailingSinceUtc = null;
-        if (!ack!.IsAccepted)
+        if (ack!.IsAccepted)
+            courierStoppingSinceUtc = null;
+        if (!ack.IsAccepted)
         {
             if (ack.Status == QuartermasterCourierAckStatuses.Stopping)
             {
-                session.LastMessage = "Quartermaster is stopping a previous run; retrying shortly.";
+                var now = utcNow();
+                courierStoppingSinceUtc ??= now;
+                var stoppingRun = ack.RunId is { } previous && previous != Guid.Empty ? $"courier run {previous:D}" : "its previous courier run";
+                if (now - courierStoppingSinceUtc.Value >= CourierStoppingLimit)
+                {
+                    courierStoppingSinceUtc = null;
+                    if (ack.RunId is { } blocking && blocking != Guid.Empty && blocking != RunIdOf(leg))
+                        RecordBlockingRun(blocking, ack);
+                    Fail(session.Phase, CodeCourierStillStopping,
+                        $"Quartermaster was still stopping {stoppingRun}{(ack.DescribeBlocking() is { } what ? $" ({what})" : string.Empty)} after " +
+                        $"{CourierStoppingLimit.TotalMinutes:N0} minutes, so {requestId} was not sent. Clear releases that run; resume sends {requestId} again.",
+                        canResumeCourier: false);
+                    return;
+                }
+                nextSubmitRetryUtc = now + SubmitRetryInterval;
+                session.LastMessage = $"Quartermaster is stopping {stoppingRun}; retrying every {SubmitRetryInterval.TotalSeconds:N0} s " +
+                                      $"({(now - courierStoppingSinceUtc.Value).TotalMinutes:N0}/{CourierStoppingLimit.TotalMinutes:N0} min).";
                 return;
             }
+            courierStoppingSinceUtc = null;
             if (ack.ErrorCode == CodeCourierHistoryIndexing)
             {
                 // Nothing started: the same request id is sent again shortly. Exhaustion stops the run with the
@@ -1410,6 +1446,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     private void Complete(string message)
     {
+        // Nothing still open in Quartermaster belongs to a finished session.
+        CancelOpenCustodyOperations("The cross-regional session completed.");
         session.CompletedAtUtc = utcNow();
         session.LastErrorCode = null;
         SetPhase(CrossRegionAcquisitionPhase.Completed, message);
@@ -1469,6 +1507,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         submitFailingSinceUtc = null;
         historyIndexingRetries = 0;
         nextSubmitRetryUtc = DateTimeOffset.MinValue;
+        courierStoppingSinceUtc = null;
+        retrievalStoppingRequestId = null;
         nextSwitchPollUtc = DateTimeOffset.MinValue;
         lastSwitchRefusal = null;
         collectBagWaitStartedUtc = null;

@@ -564,14 +564,30 @@ public static class QuartermasterCourierAckStatuses
     public const string Clearing = "clearing";
 }
 
+/// <summary>
+/// BlockingRequestId and BlockingSource (optional; older Quartermaster builds omit them): for a refusal caused by
+/// another run, the request that started it and its source: delivered-stow, ipc or manual.
+/// </summary>
 public sealed record QuartermasterCourierAcknowledgement(
     string? ProviderInstanceId,
     string? RequestId,
     Guid? RunId,
     string Status,
     string? ErrorCode,
-    string? Message)
+    string? Message,
+    string? BlockingRequestId = null,
+    string? BlockingSource = null)
 {
+    /// <summary>"delivered-stow forward X", "ipc request X", "manual", ...; null when Quartermaster named neither.</summary>
+    public string? DescribeBlocking() => (BlockingSource, BlockingRequestId) switch
+    {
+        (null or "", null or "") => null,
+        ("delivered-stow", { Length: > 0 } id) => $"delivered-stow forward {id}",
+        ({ Length: > 0 } source, { Length: > 0 } id) => $"{source} request {id}",
+        ({ Length: > 0 } source, _) => source,
+        (_, var id) => $"request {id}",
+    };
+
     /// <summary>The run named by the request exists: newly accepted, deduplicated, or already finished.</summary>
     public bool IsAccepted => Status is QuartermasterCourierAckStatuses.Accepted or
         QuartermasterCourierAckStatuses.AlreadyRunning or QuartermasterCourierAckStatuses.AlreadyCompleted;
@@ -702,4 +718,6 @@ internal sealed class QuartermasterCourierAcknowledgementWire
     public string? Status { get; init; }
     public string? ErrorCode { get; init; }
     public string? Message { get; init; }
+    public string? BlockingRequestId { get; init; }
+    public string? BlockingSource { get; init; }
 }

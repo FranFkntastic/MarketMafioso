@@ -137,6 +137,12 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
     private static readonly TimeSpan TravelTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan BellTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan DepositTimeout = TimeSpan.FromMinutes(2);
+    /// <summary>
+    /// How long after submission a deposit Quartermaster still reports accepted or running is followed past
+    /// <see cref="DepositTimeout"/>; only then is it cancelled and the checkpoint failed with its last status.
+    /// </summary>
+    private static readonly TimeSpan DepositObserveLimit = TimeSpan.FromMinutes(10);
+    private string? lastDepositStatus;
     // A home-world `/li` Lifestream never started (never busy, world unchanged) is resent this many times after the
     // grace, inside the phase's own deadline.
     private static readonly TimeSpan TravelStartGrace = TimeSpan.FromSeconds(10);
@@ -147,6 +153,7 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
     private int homeTravelResends;
     private bool homeTravelResendPending;
     private readonly QuartermasterIpcClient quartermaster;
+    private readonly QuartermasterCancelOutbox? cancels;
     private readonly IShardAcquisitionCheckpointRuntime runtime;
     private readonly IShardAcquisitionCheckpointStateStore store;
     private readonly Action<string> warn;
@@ -156,8 +163,10 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
         QuartermasterIpcClient quartermaster,
         IShardAcquisitionCheckpointRuntime runtime,
         IShardAcquisitionCheckpointStateStore store,
-        Action<string>? warn = null)
+        Action<string>? warn = null,
+        QuartermasterCancelOutbox? cancels = null)
     {
+        this.cancels = cancels;
         this.quartermaster = quartermaster;
         this.runtime = runtime;
         this.store = store;
@@ -215,6 +224,7 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
             (IsActive || Outstanding(state).Values.Any(quantity => quantity > 0)))
         {
             warn($"[MarketMafioso] Replacing a persisted shard ledger for another route or character: {Describe(state)}");
+            CancelDeposit("The shard ledger was replaced by another route.");
             state = null;
             store.Save(null);
         }
@@ -324,8 +334,11 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
             return new(false, false, false, false, Snapshot.Message);
         if (state.Phase == ShardAcquisitionCheckpointPhase.Failed)
             return new(false, false, true, false, state.Message);
-        if (runtime.UtcNow > state.DeadlineUtc)
-            return Fail($"Shard storage checkpoint timed out during {state.Phase}; last state: {state.Message}");
+        if (runtime.UtcNow > state.DeadlineUtc && !FollowingSlowDeposit())
+            return state.Phase == ShardAcquisitionCheckpointPhase.WaitingForDeposit
+                ? Fail($"Shard deposit {state.OperationId} did not finish within {DepositObserveLimit.TotalMinutes:N0} minutes of submission; " +
+                       $"last status: {lastDepositStatus ?? state.Message}. It was cancelled in Quartermaster.")
+                : Fail($"Shard storage checkpoint timed out during {state.Phase}; last state: {state.Message}");
         if (!runtime.TryGetOwner(out var owner) || owner.LocalContentId != state.Owner.LocalContentId || owner.HomeWorldId != state.Owner.HomeWorldId)
             return Fail("Shard storage checkpoint stopped because the current character no longer matches its owner.");
 
@@ -425,6 +438,7 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
     {
         if (state is not null)
             warn($"[MarketMafioso] Shard ledger forgotten: {Describe(state)}");
+        CancelDeposit("The shard ledger was reset in MarketMafioso.");
         state = null;
         store.Save(null);
     }
@@ -454,7 +468,14 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
         if (targets.IsDefaultOrEmpty)
             return CompleteCheckpoint();
 
-        var operationId = state!.OperationId ?? $"mmf-shards-{Guid.NewGuid():N}";
+        if (state!.OperationId is null)
+        {
+            // Persisted before submission: a deposit whose acceptance is unknown is still known here, so it can be
+            // cancelled or resubmitted under the same identity, never under a new one.
+            state = state with { OperationId = $"mmf-shards-{Guid.NewGuid():N}" };
+            Persist();
+        }
+        var operationId = state.OperationId!;
         var request = new QuartermasterElementalDepositRequest(
             operationId,
             operationId,
@@ -485,9 +506,16 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
                 out var error))
             return Waiting(error);
         if (operation is null || !operation.IsTerminal)
-            return Waiting(operation?.Message ?? "Waiting for Quartermaster.");
+        {
+            if (operation is not null)
+                lastDepositStatus = $"{operation.Status}{(string.IsNullOrWhiteSpace(operation.Message) ? string.Empty : $": {operation.Message}")}";
+            return Waiting(runtime.UtcNow > state.DeadlineUtc
+                ? $"Quartermaster deposit is still {operation?.Status ?? "unreported"} past the {DepositTimeout.TotalMinutes:N0}-minute deposit timeout; " +
+                  $"following it for up to {DepositObserveLimit.TotalMinutes:N0} minutes from submission."
+                : operation?.Message ?? "Waiting for Quartermaster.");
+        }
         if (!operation.Status.Equals("succeeded", StringComparison.OrdinalIgnoreCase))
-            return Fail($"Quartermaster deposit ended as {operation.Status}: {operation.Message}");
+            return Fail($"Quartermaster deposit ended as {operation.Status}: {operation.Message}", operationTerminal: true);
 
         var deposited = new Dictionary<uint, int>(state.ConfirmedDepositsByItem);
         foreach (var receipt in operation.Receipts.Where(receipt => receipt.ItemId is not null && receipt.Quantity is > 0))
@@ -571,11 +599,47 @@ public sealed class ShardAcquisitionCheckpointCoordinator : IShardAcquisitionChe
         return new(false, false, false, false, message);
     }
 
-    private ShardAcquisitionCheckpointTickResult Fail(string message)
+    private ShardAcquisitionCheckpointTickResult Fail(string message, bool operationTerminal = false)
     {
+        // A deposit that may exist in Quartermaster must not run after this checkpoint gave up on it.
+        if (!operationTerminal && state!.Phase is ShardAcquisitionCheckpointPhase.SubmittingDeposit or ShardAcquisitionCheckpointPhase.WaitingForDeposit)
+            CancelDeposit($"MarketMafioso's shard storage checkpoint failed: {message}");
+        lastDepositStatus = null;
         state = state! with { Phase = ShardAcquisitionCheckpointPhase.Failed, Message = message };
         Persist();
         return new(true, false, true, false, message);
+    }
+
+    /// <summary>
+    /// Past the 2-minute deposit timeout, an accepted deposit is followed (not failed) until it is terminal or
+    /// <see cref="DepositObserveLimit"/> after submission has passed.
+    /// </summary>
+    private bool FollowingSlowDeposit() =>
+        state is { Phase: ShardAcquisitionCheckpointPhase.WaitingForDeposit, OperationId: not null } current &&
+        runtime.UtcNow <= current.DeadlineUtc - DepositTimeout + DepositObserveLimit;
+
+    /// <summary>
+    /// Withdraws the persisted deposit in Quartermaster; what is not confirmed is retried by the cancel outbox.
+    /// Quartermaster finds a requested operation by its request id across every owner, so this works whichever
+    /// character is logged in (including after the owner-mismatch stop); an id it does not hold answers cancel_queued,
+    /// never not_found, and stays queued.
+    /// </summary>
+    private void CancelDeposit(string reason)
+    {
+        if (state?.OperationId is not { } operationId)
+            return;
+        if (cancels is not null)
+        {
+            var outcome = cancels.Cancel(QuartermasterCancelKind.RequestedOperation, operationId, reason,
+                $"shard storage checkpoint for {state.Owner.CharacterName}");
+            warn($"[MarketMafioso] Shard deposit {operationId}: {outcome.Status}. {outcome.Message}" +
+                 (outcome.Queued ? " The cancel is kept and retried until Quartermaster settles it." : string.Empty));
+            return;
+        }
+        if (quartermaster.TryCancelRequestedOperation(operationId, reason, out var ack, out var error))
+            warn($"[MarketMafioso] Shard deposit {operationId}: {ack!.Status}. {ack.Message}");
+        else
+            warn($"[MarketMafioso] Shard deposit {operationId} could not be cancelled: {error}");
     }
 
     private bool CurrentWorldIsHome() =>
