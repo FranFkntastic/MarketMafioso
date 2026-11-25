@@ -108,15 +108,19 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     private readonly IPandoraFeatureControl? pandoraFeatureControl;
     private readonly ITextAdvanceExternalControl? textAdvanceControl;
     private bool textAdvanceCutsceneSkipHeld;
+    // Every coordinator writes the same "MarketMafioso" owner entry, so each set counts its live holders across
+    // coordinators and only the last release removes the entry.
+    private static readonly SharedStopRequest TextAdvancePause = new(TextAdvanceStopRequests);
+    private static readonly SharedStopRequest YesAlreadyPause = new(YesAlreadyStopRequests);
+    private static readonly SharedStopRequest DropboxPause = new(DropboxStopRequests);
+    // This coordinator's hold on each set: taken at most once, so a repeated or stray release cannot drop another's.
     private bool textAdvanceSuppressed;
     private bool tradeAutoConfirmSuppressed;
+    private bool dropboxHeld;
+    // Why this coordinator wants Dropbox paused: trade auto-accept ownership (per-frame) and/or a trade-confirm run.
+    private bool dropboxWantedForAutoAccept;
+    private bool dropboxWantedForTradeConfirm;
     private bool retainTradeSuppressionOnDispose;
-    private bool dropboxAutoAcceptSuppressed;
-    // Every coordinator shares the "MarketMafioso" owner entry, so count live holders across instances.
-    private static int liveTradeAutoConfirmHolders;
-    private static int liveDropboxHolders;
-    private static int liveTextAdvanceHolders;
-    private static readonly object TextAdvanceStopRequestSync = new();
     // Pandora coordination needs a state directory for its marker; only the workshop assembly coordinator has both.
     private readonly PersistedSuppressionMarker? pandoraMarker;
     private readonly string? legacyPandoraMarkerPath;
@@ -203,35 +207,14 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     /// </summary>
     public void SuppressTextAdvance()
     {
-        if (!pluginDataStore.TryGetData<HashSet<string>>(TextAdvanceStopRequests, out var stopRequests) || stopRequests == null)
-            return;
-
-        lock (TextAdvanceStopRequestSync)
-        {
-            if (!textAdvanceSuppressed)
-            {
-                textAdvanceSuppressed = true;
-                liveTextAdvanceHolders++;
-            }
-            if (stopRequests.Add(StopRequestOwner))
-                log.Debug("[MarketMafioso] Temporarily paused TextAdvance during workshop material request.");
-        }
+        if (TextAdvancePause.Acquire(pluginDataStore, ref textAdvanceSuppressed))
+            log.Debug("[MarketMafioso] Temporarily paused TextAdvance during workshop automation.");
     }
 
     public void RestoreTextAdvance()
     {
-        if (!textAdvanceSuppressed)
-            return;
-
-        lock (TextAdvanceStopRequestSync)
-        {
-            textAdvanceSuppressed = false;
-            liveTextAdvanceHolders = Math.Max(0, liveTextAdvanceHolders - 1);
-            if (liveTextAdvanceHolders > 0)
-                return;
-            if (pluginDataStore.TryGetData<HashSet<string>>(TextAdvanceStopRequests, out var stopRequests) && stopRequests?.Remove(StopRequestOwner) == true)
-                log.Debug("[MarketMafioso] Restored TextAdvance after workshop material request.");
-        }
+        if (TextAdvancePause.Release(pluginDataStore, ref textAdvanceSuppressed))
+            log.Debug("[MarketMafioso] Restored TextAdvance after workshop automation.");
     }
 
     /// <summary>
@@ -240,13 +223,8 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     /// </summary>
     public void ReleaseStaleTextAdvanceSuppression()
     {
-        lock (TextAdvanceStopRequestSync)
-        {
-            if (liveTextAdvanceHolders == 0 &&
-                pluginDataStore.TryGetData<HashSet<string>>(TextAdvanceStopRequests, out var stopRequests) &&
-                stopRequests?.Remove(StopRequestOwner) == true)
-                log.Warning("[MarketMafioso] Released a TextAdvance pause left over from an earlier MarketMafioso load.");
-        }
+        if (TextAdvancePause.ReleaseLeftover(pluginDataStore))
+            log.Warning("[MarketMafioso] Released a TextAdvance pause left over from an earlier MarketMafioso load.");
     }
 
     /// <summary>
@@ -380,57 +358,54 @@ public sealed class ExternalAutomationCoordinator : IDisposable
             pandoraRestorePending = false;
     }
 
+    /// <summary>Pauses YesAlready and Dropbox while MMF confirms trades itself; <see cref="RestoreTradeAutoConfirm"/> releases both.</summary>
     public void SuppressTradeAutoConfirm()
     {
-        SuppressDropboxAutoAccept();
-        if (!pluginDataStore.TryGetData<HashSet<string>>(YesAlreadyStopRequests, out var stopRequests) || stopRequests == null)
-            return;
-
-        if (!tradeAutoConfirmSuppressed)
-            System.Threading.Interlocked.Increment(ref liveTradeAutoConfirmHolders);
-        tradeAutoConfirmSuppressed = true;
-        if (stopRequests.Add(StopRequestOwner))
-        {
-            log.Debug("[MarketMafioso] Temporarily paused YesAlready during Trade Queue execution.");
-        }
+        dropboxWantedForTradeConfirm = true;
+        SyncDropboxHold();
+        if (YesAlreadyPause.Acquire(pluginDataStore, ref tradeAutoConfirmSuppressed))
+            log.Debug("[MarketMafioso] Temporarily paused YesAlready while MMF confirms trades.");
     }
 
     public void RestoreTradeAutoConfirm()
     {
-        if (!tradeAutoConfirmSuppressed)
-            return;
-
-        if (pluginDataStore.TryGetData<HashSet<string>>(YesAlreadyStopRequests, out var stopRequests) && stopRequests?.Remove(StopRequestOwner) == true)
-            log.Debug("[MarketMafioso] Restored YesAlready after Trade Queue execution.");
-
-        tradeAutoConfirmSuppressed = false;
-        System.Threading.Interlocked.Decrement(ref liveTradeAutoConfirmHolders);
-    }
-
-    public void SuppressDropboxAutoAccept()
-    {
-        if (!pluginDataStore.TryGetData<HashSet<string>>(DropboxStopRequests, out var stopRequests) || stopRequests == null)
-            return;
-
-        if (!dropboxAutoAcceptSuppressed)
-            System.Threading.Interlocked.Increment(ref liveDropboxHolders);
-        dropboxAutoAcceptSuppressed = true;
-        if (stopRequests.Add(StopRequestOwner))
+        try
         {
-            log.Debug("[MarketMafioso] Paused Dropbox while MMF owns trade auto-accept.");
+            if (YesAlreadyPause.Release(pluginDataStore, ref tradeAutoConfirmSuppressed))
+                log.Debug("[MarketMafioso] Restored YesAlready after MMF finished confirming trades.");
+        }
+        finally
+        {
+            dropboxWantedForTradeConfirm = false;
+            SyncDropboxHold();
         }
     }
 
+    /// <summary>Per-frame: pauses Dropbox while MMF owns trade auto-accept. Leaves a trade-confirm hold in place.</summary>
+    public void SuppressDropboxAutoAccept()
+    {
+        dropboxWantedForAutoAccept = true;
+        SyncDropboxHold();
+    }
+
+    /// <summary>Per-frame: drops the auto-accept reason. Dropbox stays paused while this or another coordinator still needs it.</summary>
     public void RestoreDropboxAutoAccept()
     {
-        if (!dropboxAutoAcceptSuppressed)
-            return;
+        dropboxWantedForAutoAccept = false;
+        SyncDropboxHold();
+    }
 
-        if (pluginDataStore.TryGetData<HashSet<string>>(DropboxStopRequests, out var stopRequests) && stopRequests?.Remove(StopRequestOwner) == true)
-            log.Debug("[MarketMafioso] Restored Dropbox trade auto-accept ownership.");
-
-        dropboxAutoAcceptSuppressed = false;
-        System.Threading.Interlocked.Decrement(ref liveDropboxHolders);
+    private void SyncDropboxHold()
+    {
+        if (dropboxWantedForAutoAccept || dropboxWantedForTradeConfirm)
+        {
+            if (DropboxPause.Acquire(pluginDataStore, ref dropboxHeld))
+                log.Debug("[MarketMafioso] Paused Dropbox while MMF owns trade acceptance.");
+        }
+        else if (DropboxPause.Release(pluginDataStore, ref dropboxHeld))
+        {
+            log.Debug("[MarketMafioso] Restored Dropbox trade auto-accept.");
+        }
     }
 
     /// <summary>
@@ -439,13 +414,9 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     /// </summary>
     public void ReleaseStaleTradeSuppression()
     {
-        if (System.Threading.Volatile.Read(ref liveTradeAutoConfirmHolders) == 0 &&
-            pluginDataStore.TryGetData<HashSet<string>>(YesAlreadyStopRequests, out var yesAlready) &&
-            yesAlready?.Remove(StopRequestOwner) == true)
+        if (YesAlreadyPause.ReleaseLeftover(pluginDataStore))
             log.Warning("[MarketMafioso] Released a YesAlready pause left over from an earlier MarketMafioso load.");
-        if (System.Threading.Volatile.Read(ref liveDropboxHolders) == 0 &&
-            pluginDataStore.TryGetData<HashSet<string>>(DropboxStopRequests, out var dropbox) &&
-            dropbox?.Remove(StopRequestOwner) == true)
+        if (DropboxPause.ReleaseLeftover(pluginDataStore))
             log.Warning("[MarketMafioso] Released a Dropbox pause left over from an earlier MarketMafioso load.");
     }
 
@@ -470,4 +441,60 @@ public sealed class ExternalAutomationCoordinator : IDisposable
     }
 
     public void RetainTradeSuppressionOnDispose() => retainTradeSuppressionOnDispose = true;
+
+    /// <summary>
+    /// A stop-request set another plugin shares through Dalamud data, where every MMF coordinator writes the same
+    /// "MarketMafioso" entry. Each coordinator holds at most once (its own flag); the entry goes only when the last
+    /// holder of this load releases, so a release from a coordinator that isn't holding never lifts another's pause.
+    /// </summary>
+    private sealed class SharedStopRequest(string dataKey)
+    {
+        private readonly object sync = new();
+        private int holders;
+
+        /// <summary>Takes the caller's hold once and makes sure the entry is set. True when the entry was newly added.</summary>
+        public bool Acquire(IPluginDataStore store, ref bool held)
+        {
+            // The owning plugin isn't loaded: nothing to pause and nothing to hold.
+            if (!store.TryGetData<HashSet<string>>(dataKey, out var stopRequests) || stopRequests == null)
+                return false;
+
+            lock (sync)
+            {
+                if (!held)
+                {
+                    held = true;
+                    holders++;
+                }
+                return stopRequests.Add(StopRequestOwner);
+            }
+        }
+
+        /// <summary>Drops the caller's hold, if it has one. True when that was the last hold and the entry was removed.</summary>
+        public bool Release(IPluginDataStore store, ref bool held)
+        {
+            lock (sync)
+            {
+                if (!held)
+                    return false;
+                held = false;
+                holders = Math.Max(0, holders - 1);
+                if (holders > 0)
+                    return false;
+                return store.TryGetData<HashSet<string>>(dataKey, out var stopRequests) &&
+                    stopRequests?.Remove(StopRequestOwner) == true;
+            }
+        }
+
+        /// <summary>Removes an entry an earlier load left behind, when nothing of this load holds it.</summary>
+        public bool ReleaseLeftover(IPluginDataStore store)
+        {
+            lock (sync)
+            {
+                return holders == 0 &&
+                    store.TryGetData<HashSet<string>>(dataKey, out var stopRequests) &&
+                    stopRequests?.Remove(StopRequestOwner) == true;
+            }
+        }
+    }
 }

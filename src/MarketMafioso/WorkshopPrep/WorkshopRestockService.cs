@@ -85,10 +85,18 @@ public sealed class WorkshopRestockService : IDisposable
                 automation.SuppressTextAdvance();
                 automation.SuppressTradeAutoConfirm();
             },
+            // Runs when the vendor run ends, stops or fails; Dispose releases anything still held at unload.
+            // RestoreTradeAutoConfirm also releases the Dropbox pause SuppressTradeAutoConfirm took.
             endAutomation: () =>
             {
-                automation.RestoreTextAdvance();
-                automation.RestoreTradeAutoConfirm();
+                try
+                {
+                    automation.RestoreTextAdvance();
+                }
+                finally
+                {
+                    automation.RestoreTradeAutoConfirm();
+                }
             });
         Runner = new WorkshopVendorRestockRunner(
             config,
