@@ -97,6 +97,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private static readonly TimeSpan BagReadTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AcceptedRunAppearanceTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ResumeTransitionTimeout = TimeSpan.FromSeconds(10);
+    // Quartermaster retries a halted courier run itself. A failed run is final only once no retry is pending: a retry
+    // is waited on until this long past its due time (Quartermaster's own wait for a ready client is shorter).
+    private static readonly TimeSpan AutoResumeWaitPastDue = TimeSpan.FromMinutes(4);
+    // Quartermaster decides on a retry a moment after the run halts; a fresh failure is read again after this long first.
+    private static readonly TimeSpan FailureSettleGrace = TimeSpan.FromMilliseconds(1500);
     // A failed or stopped courier leg re-reads its Quartermaster run this often so Resume follows the live run.
     private static readonly TimeSpan InterruptedCourierRefreshInterval = TimeSpan.FromSeconds(3);
     // A refused or blocked switch dispatched nothing: it is re-polled this often, and fails only once this window passes.
@@ -141,6 +146,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private DateTimeOffset? awaitingRunAppearanceSinceUtc;
     private DateTimeOffset? awaitingResumeTransitionUntilUtc;
     private (string State, string? Code, string? Detail)? preResumeFailure;
+    private (Guid? Run, int Attempt, DateTimeOffset DeadlineUtc)? autoResumeWait;
+    private (Guid? Run, int Attempt)? autoResumeWaitExpired;
+    private (Guid? Run, string State, string? Code, string? Detail, int Retries)? settlingFailure;
+    private DateTimeOffset settlingFailureSinceUtc;
     private bool prepareIssued;
     private DateTimeOffset? shopperReadyWaitStartedUtc;
     private DateTimeOffset? submitFailingSinceUtc;
@@ -387,6 +396,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         {
             if (run.Active || run.IsRunning)
                 return new(false, "Another courier run is active in Quartermaster.", status) { ShopperEntry = entry };
+            if (run.IsFailure && run.AutoResume is { Pending: true } retry)
+                return new(false, $"Quartermaster is retrying a courier run automatically ({AttemptText(retry)}).", status) { ShopperEntry = entry };
             // Only genuinely unsettled custody or an unverified pending trade blocks starting a new run;
             // zero-custody failed/interrupted runs are auto-archived by Quartermaster on submit.
             // Only courier custody that still holds items or gil blocks starting a new run.
@@ -715,11 +726,92 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return;
         }
         var canResume = run.CanResume || run.IsCompleted;
+        var changed = false;
         if (session.CanResumeCourier != canResume)
         {
             session.CanResumeCourier = canResume;
-            Save();
+            changed = true;
         }
+        // Quartermaster owns the retry: the failed leg shows it and follows its outcome; MarketMafioso never resumes as well.
+        var summary = run.IsFailure && run.AutoResume is { Pending: true } retry ? RetryingText(retry)
+            : run.IsRunning ? FormatCourierPhase(run)
+            : null;
+        if (!string.Equals(summary, session.CourierPhaseSummary, StringComparison.Ordinal))
+        {
+            session.CourierPhaseSummary = summary;
+            changed = true;
+        }
+        if (changed)
+            Save();
+    }
+
+    private static string AttemptText(QuartermasterCourierAutoResume retry) =>
+        $"attempt {retry.Attempt} of {retry.MaxAttempts}";
+
+    private static string RetryingText(QuartermasterCourierAutoResume retry) =>
+        $"Quartermaster retrying automatically ({AttemptText(retry)})";
+
+    /// <summary>
+    /// A failed courier run that Quartermaster is about to resume on its own is not final: the leg keeps its phase and
+    /// follows the run, within <see cref="AutoResumeWaitPastDue"/> of the retry's due time. A failure seen for the first
+    /// time is read again after <see cref="FailureSettleGrace"/>, since Quartermaster schedules its retry just after the
+    /// halt. True while the caller must not give the run up.
+    /// </summary>
+    private bool WaitForQuartermasterRetry(CourierLeg leg, QuartermasterCourierRun run, DateTimeOffset now)
+    {
+        var retry = run.AutoResume;
+        if (retry is { Pending: true } && autoResumeWaitExpired != (run.RunId, retry.Attempt))
+        {
+            var dueDeadline = now + TimeSpan.FromSeconds(Math.Max(0, retry.DueInSeconds ?? 0)) + AutoResumeWaitPastDue;
+            if (autoResumeWait is not { } wait || wait.Run != run.RunId || wait.Attempt != retry.Attempt)
+            {
+                autoResumeWait = (run.RunId, retry.Attempt, dueDeadline);
+                log($"CourierAutoResumeWait: courier {LegNoun(leg)} run {run.RunId} {run.State} ({run.Code ?? "no code"}): {run.Detail ?? "no detail"}; " +
+                    $"Quartermaster will resume it automatically ({AttemptText(retry)}, due in {retry.DueInSeconds ?? 0}s), " +
+                    $"so {DescribeTitle(session.Phase).ToLowerInvariant()} waits for it instead of giving the run up.", null);
+            }
+            else if (now >= wait.DeadlineUtc)
+            {
+                autoResumeWait = null;
+                autoResumeWaitExpired = (run.RunId, retry.Attempt);
+                log($"CourierAutoResumeWaitExpired: Quartermaster's automatic resume of courier {LegNoun(leg)} run {run.RunId} " +
+                    $"({AttemptText(retry)}) was still pending {AutoResumeWaitPastDue.TotalMinutes:N0} minutes past its due time; " +
+                    $"treating {run.State} ({run.Code ?? "no code"}) as final.", null);
+                return false;
+            }
+            else if (retry.DueInSeconds is > 0)
+                autoResumeWait = wait with { DeadlineUtc = dueDeadline };
+            settlingFailure = null;
+            var message = $"{DescribeTitle(session.Phase)}: {RetryingText(retry)}.";
+            if (!string.Equals(message, session.LastMessage, StringComparison.Ordinal))
+            {
+                session.CourierPhaseSummary = RetryingText(retry);
+                session.LastMessage = message;
+                Save();
+            }
+            return true;
+        }
+        if (autoResumeWait is { } ended && ended.Run == run.RunId)
+        {
+            autoResumeWait = null;
+            log($"CourierAutoResumeWaitEnded: courier {LegNoun(leg)} run {run.RunId} {run.State} ({run.Code ?? "no code"}) with no automatic resume pending" +
+                (retry?.ExhaustedCode is { } exhausted
+                    ? $"; Quartermaster spent all {retry.MaxAttempts} attempts ({exhausted}: {retry.ExhaustedDetail ?? "no detail"})."
+                    : "; Quartermaster stopped retrying it.") +
+                " Applying the failed-run outcome.", null);
+            return false;
+        }
+        if (autoResumeWaitExpired is { } expired && expired.Run == run.RunId)
+            return false;
+        // A failure not seen before (a new halt, or one after a retry) is read once more before it is final.
+        var key = (run.RunId, run.State, run.Code, run.Detail, retry?.HistoryCount ?? 0);
+        if (settlingFailure != key)
+        {
+            settlingFailure = key;
+            settlingFailureSinceUtc = now;
+            return true;
+        }
+        return now - settlingFailureSinceUtc < FailureSettleGrace;
     }
 
     private void TickCourier(CourierLeg leg, DateTimeOffset now)
@@ -771,6 +863,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         {
             awaitingResumeTransitionUntilUtc = null;
             preResumeFailure = null;
+            settlingFailure = null;
+            if (autoResumeWait is { } resumed && resumed.Run == run.RunId)
+            {
+                autoResumeWait = null;
+                log($"CourierAutoResumeWaitEnded: Quartermaster resumed courier {LegNoun(leg)} run {run.RunId} (attempt {resumed.Attempt}); following it.", null);
+            }
             var summary = FormatCourierPhase(run);
             if (!string.Equals(summary, session.CourierPhaseSummary, StringComparison.Ordinal))
             {
@@ -784,6 +882,12 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         {
             awaitingResumeTransitionUntilUtc = null;
             preResumeFailure = null;
+            settlingFailure = null;
+            if (autoResumeWait is { } resumed && resumed.Run == run.RunId)
+            {
+                autoResumeWait = null;
+                log($"CourierAutoResumeWaitEnded: courier {LegNoun(leg)} run {run.RunId} completed after Quartermaster's automatic resume (attempt {resumed.Attempt}).", null);
+            }
             session.CourierPhaseSummary = null;
             if (fund)
             {
@@ -811,6 +915,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             }
             awaitingResumeTransitionUntilUtc = null;
             preResumeFailure = null;
+            if (WaitForQuartermasterRetry(leg, run, now))
+                return;
+            settlingFailure = null;
             // A run refused for its destination moved nothing: a direct delivery falls back to the primary once.
             if (string.Equals(run.State, "Refused", StringComparison.OrdinalIgnoreCase) && DirectRouteOf(leg) is not null &&
                 IsDestinationRefusal(run.Code) && run.CustodyUnits == 0 && run.CustodyGil == 0)
@@ -1502,6 +1609,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         awaitingRunAppearanceSinceUtc = null;
         awaitingResumeTransitionUntilUtc = null;
         preResumeFailure = null;
+        autoResumeWait = null;
+        autoResumeWaitExpired = null;
+        settlingFailure = null;
         prepareIssued = false;
         shopperReadyWaitStartedUtc = null;
         submitFailingSinceUtc = null;

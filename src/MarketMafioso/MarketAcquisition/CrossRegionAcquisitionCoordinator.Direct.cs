@@ -619,7 +619,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private static string ParkedNote(CrossRegionForwardWatch watch) =>
         watch.ParkedFor > TimeSpan.Zero ? $" (not counting {watch.ParkedFor.TotalMinutes:N0} minutes parked in Quartermaster)" : string.Empty;
 
-    /// <summary>The forward's courier run is Quartermaster's current run and is stopped where the user can resume it.</summary>
+    /// <summary>
+    /// The forward's courier run is Quartermaster's current run and is stopped where the user can resume it, or where
+    /// Quartermaster is about to resume it on its own.
+    /// </summary>
     private bool IsForwardRunParked(QuartermasterStowForward forward)
     {
         if (!Guid.TryParse(forward.RunId, out var runId))
@@ -627,7 +630,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         try
         {
             return courier.TryGetCourierStatus(out var status, out _) &&
-                   status?.Run is { } run && run.RunId == runId && run.IsFailure && run.CanResume;
+                   status?.Run is { } run && run.RunId == runId && run.IsFailure &&
+                   (run.CanResume || run.AutoResume is { Pending: true });
         }
         catch
         {
