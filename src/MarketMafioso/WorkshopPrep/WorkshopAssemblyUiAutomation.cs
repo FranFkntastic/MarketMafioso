@@ -32,6 +32,26 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     private long categorySelectedAtMs;
     private int categorySelectAttempts;
     private const int MaxCategorySelectAttempts = 2;
+    private ProductRetrievalBaseline? productRetrieval;
+
+    // Bag contents when "Collect finished product." was selected. Dismissing the
+    // retrieval prompt is not proof: a full inventory refuses the handover and
+    // leaves the product at the station, so only a count rise completes the unit.
+    private sealed record ProductRetrievalBaseline(
+        uint ResultItemId,
+        string ProjectName,
+        long ProductCount,
+        IReadOnlyDictionary<uint, long> ItemCounts);
+
+    private sealed record ProductBagObservation(
+        long ProductCount,
+        int FreeSlots,
+        bool HasStackRoom,
+        IReadOnlyDictionary<uint, long> ItemCounts)
+    {
+        public bool CanReceive => FreeSlots > 0 || HasStackRoom;
+        public string Describe() => $"bag count {ProductCount}, free slots {FreeSlots}, partial-stack room {(HasStackRoom ? "yes" : "no")}";
+    }
 
     public WorkshopAssemblyUiAutomation(
         IGameGui gameGui,
@@ -81,7 +101,11 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
     }
 
-    public void BeginPreparationRun() => preparation.BeginRun();
+    public void BeginPreparationRun()
+    {
+        preparation.BeginRun();
+        productRetrieval = null;
+    }
     public void NotePreparationProgress() => preparation.NoteProgress();
 
     public void ResetState()
@@ -93,6 +117,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         pendingContributionItemId = null;
         pendingConfirmationKind = WorkshopAssemblyPendingConfirmationKind.None;
         categorySelectedForItemId = null;
+        // productRetrieval deliberately survives: a bags-full pause resets the UI
+        // state, and resume must still recognise the unit waiting at the station.
         uiDriver.ResetRequestState();
     }
 
@@ -175,11 +201,15 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             return confirmation;
 
         if (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None)
-            return new(false, $"Waiting for {pendingConfirmationKind} confirmation. {DescribeUiState()}");
+            return WaitForPendingConfirmation(entry);
 
         var activeProjectAction = TrySelectActiveProjectAction(entry);
         if (activeProjectAction != null)
             return activeProjectAction;
+
+        var collectedElsewhere = TryReconcileProductLeftStation(entry);
+        if (collectedElsewhere != null)
+            return collectedElsewhere;
 
         var craftingLog = uiDriver.ReadCraftingLog();
         if (craftingLog != null)
@@ -313,14 +343,142 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCompleteConstructionEntry))
             return new(false, $"Selected final construction step for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
-        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCollectFinishedProductEntry))
+        return TrySelectCollectFinishedProduct(entry, successOnSelect: true);
+    }
+
+    // The station menu does not say which product is waiting, so the baseline is
+    // the active entry's result item: a different product never raises its count
+    // and cannot be credited to this entry.
+    private WorkshopAssemblyActionResult? TrySelectCollectFinishedProduct(WorkshopAssemblyQueueEntry entry, bool successOnSelect)
+    {
+        if (!uiDriver.HasSelectStringEntry(WorkshopAssemblyPromptPolicy.IsCollectFinishedProductEntry))
+            return null;
+
+        var bags = ObserveProductBags(entry.ResultItemId, out var readMessage);
+        if (bags == null)
+            return new(false, $"Waiting for a complete bag read before collecting {entry.ProjectName}. {readMessage}");
+        if (!bags.CanReceive)
         {
-            SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProductRetrieval, $"selected finished product collection for {entry.ProjectName}");
-            return new(true, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true);
+            productRetrieval = new(entry.ResultItemId, entry.ProjectName, bags.ProductCount, bags.ItemCounts);
+            Diagnostics.Record("product-retrieval-bags-full", "Bags cannot take the finished product; collection not attempted.", BuildRetrievalDetails(entry, bags));
+            return new(false, $"Bags cannot take {entry.ProjectName} ({bags.Describe()}).", IsInventoryFull: true);
         }
 
-        return null;
+        if (!uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCollectFinishedProductEntry))
+            return null;
+
+        productRetrieval = new(entry.ResultItemId, entry.ProjectName, bags.ProductCount, bags.ItemCounts);
+        Diagnostics.Record("product-retrieval-baseline", "Recorded bag baseline before collecting the finished product.", BuildRetrievalDetails(entry, bags));
+        SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProductRetrieval, $"selected finished product collection for {entry.ProjectName}");
+        return new(successOnSelect, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true);
     }
+
+    // A unit left waiting at the station (bags-full pause) that the station no
+    // longer offers was collected by hand while paused. Credit it only on a bag
+    // count rise; otherwise starting another unit would be a guess.
+    private WorkshopAssemblyActionResult? TryReconcileProductLeftStation(WorkshopAssemblyQueueEntry entry)
+    {
+        if (productRetrieval is not { } baseline || baseline.ResultItemId != entry.ResultItemId)
+            return null;
+        if (!uiDriver.IsCraftingLogVisible && !uiDriver.HasSelectStringEntry(text => text == WorkshopAssemblyPromptPolicy.ViewCraftingLogEntry))
+            return null;
+
+        var bags = ObserveProductBags(entry.ResultItemId, out var readMessage);
+        if (bags == null)
+            return new(false, $"Waiting for a complete bag read to reconcile {entry.ProjectName}, which is no longer offered at the station. {readMessage}");
+
+        productRetrieval = null;
+        var details = BuildRetrievalDetails(entry, bags, baseline);
+        if (bags.ProductCount > baseline.ProductCount)
+        {
+            Diagnostics.Record("product-retrieval-verified", "Finished product was collected while the run was paused.", details);
+            return new(false,
+                $"Retrieved finished {entry.ProjectName} while paused (bag count {baseline.ProductCount} -> {bags.ProductCount}).",
+                IsProjectComplete: true);
+        }
+
+        Diagnostics.Record("product-retrieval-missing", "Finished product left the station but did not arrive in the bags.", details);
+        throw new InvalidOperationException(
+            $"Finished {entry.ProjectName} is no longer offered at the fabrication station, but its bag count is {bags.ProductCount} (expected above {baseline.ProductCount}). " +
+            "It was not counted and no further unit was started.");
+    }
+
+    private WorkshopAssemblyActionResult WaitForPendingConfirmation(WorkshopAssemblyQueueEntry entry)
+    {
+        // A handover the bags cannot take may never show the retrieval prompt.
+        if (pendingConfirmationKind == WorkshopAssemblyPendingConfirmationKind.ProductRetrieval &&
+            ObserveProductBags(entry.ResultItemId, out _) is { CanReceive: false } bags)
+        {
+            return new(false, $"Bags cannot take {entry.ProjectName} while its retrieval prompt is pending ({bags.Describe()}).", IsInventoryFull: true);
+        }
+
+        return new(false, $"Waiting for {pendingConfirmationKind} confirmation. {DescribeUiState()}");
+    }
+
+    public WorkshopAssemblyActionResult TryVerifyProductRetrieval(WorkshopAssemblyQueueEntry entry)
+    {
+        if (productRetrieval is not { } baseline)
+            return new(false, $"No bag baseline was recorded before collecting {entry.ProjectName}, so its retrieval cannot be verified.");
+        if (baseline.ResultItemId != entry.ResultItemId)
+        {
+            return new(false,
+                $"Retrieval baseline belongs to {baseline.ProjectName} ({baseline.ResultItemId}), not the active {entry.ProjectName} ({entry.ResultItemId}).");
+        }
+
+        var bags = ObserveProductBags(entry.ResultItemId, out var readMessage);
+        if (bags == null)
+            return new(false, $"Waiting for a complete bag read to verify {entry.ProjectName} arrived. {readMessage}");
+
+        if (bags.ProductCount > baseline.ProductCount)
+        {
+            productRetrieval = null;
+            Diagnostics.Record("product-retrieval-verified", "Finished product arrived in the bags.", BuildRetrievalDetails(entry, bags, baseline));
+            return new(true,
+                $"Retrieved finished {entry.ProjectName} (bag count {baseline.ProductCount} -> {bags.ProductCount}).",
+                IsProjectComplete: true);
+        }
+
+        var otherArrivals = bags.ItemCounts
+            .Where(x => x.Key != entry.ResultItemId && x.Value > baseline.ItemCounts.GetValueOrDefault(x.Key))
+            .Select(x => $"{ResolveItemName(x.Key)} ({x.Key}) +{x.Value - baseline.ItemCounts.GetValueOrDefault(x.Key)}")
+            .ToArray();
+        return new(false,
+            $"{entry.ProjectName} has not arrived in the bags: expected count above {baseline.ProductCount}, observed {bags.ProductCount} ({bags.Describe()})." +
+            (otherArrivals.Length == 0 ? string.Empty : $" Other items that arrived since collection: {string.Join(", ", otherArrivals)}."),
+            IsInventoryFull: !bags.CanReceive);
+    }
+
+    // All four player bags; finished workshop products are ordinary NQ bag items.
+    private ProductBagObservation? ObserveProductBags(uint resultItemId, out string message)
+    {
+        var read = WorkshopAssemblyInventoryPreparation.Read();
+        message = read.Message;
+        if (!read.IsComplete)
+            return null;
+
+        var maxStack = itemCatalog.Resolve(resultItemId).MaxStack;
+        var product = read.Stacks.Where(x => x.ItemId == resultItemId && x.Quantity > 0).ToArray();
+        return new(
+            product.Sum(x => (long)x.Quantity),
+            read.Stacks.Count(x => x.ItemId == 0),
+            maxStack > 1 && product.Any(x => x.IsOrdinary && !x.IsHighQuality && x.Quantity < maxStack),
+            read.Stacks.Where(x => x.ItemId != 0 && x.Quantity > 0)
+                .GroupBy(x => x.ItemId)
+                .ToDictionary(x => x.Key, x => x.Sum(stack => (long)stack.Quantity)));
+    }
+
+    private static Dictionary<string, string?> BuildRetrievalDetails(
+        WorkshopAssemblyQueueEntry entry,
+        ProductBagObservation bags,
+        ProductRetrievalBaseline? baseline = null) => new()
+    {
+        ["project"] = entry.ProjectName,
+        ["resultItemId"] = entry.ResultItemId.ToString(),
+        ["baselineCount"] = baseline?.ProductCount.ToString(),
+        ["bagCount"] = bags.ProductCount.ToString(),
+        ["freeSlots"] = bags.FreeSlots.ToString(),
+        ["stackRoom"] = bags.HasStackRoom.ToString(),
+    };
 
     public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry)
     {
@@ -329,7 +487,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             return confirmation;
 
         if (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None)
-            return new(false, $"Waiting for {pendingConfirmationKind} confirmation. {DescribeUiState()}");
+            return WaitForPendingConfirmation(entry);
 
         if (pendingContributionItemId != null)
         {
@@ -344,11 +502,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                 ActiveMaterialItemId: pendingContributionItemId);
         }
 
-        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCollectFinishedProductEntry))
-        {
-            SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProductRetrieval, $"selected finished product collection for {entry.ProjectName}");
-            return new(false, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true);
-        }
+        if (TrySelectCollectFinishedProduct(entry, successOnSelect: false) is { } collect)
+            return collect;
 
         if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCompleteConstructionEntry))
             return new(false, $"Selected final construction step for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
@@ -566,7 +721,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                 pendingContributionItemId = null;
                 uiDriver.ClearMaterialRequest();
                 ClearPendingConfirmation();
-                return new(true, "Retrieved finished workshop project.", IsProjectComplete: true);
+                return new(false, "Confirmed finished product retrieval; waiting for it to arrive in the bags.",
+                    ActionTaken: true, IsAwaitingProduct: true);
 
             default:
                 return null;

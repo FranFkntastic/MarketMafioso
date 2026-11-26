@@ -40,6 +40,11 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
         WorkshopAssemblyPhaseContext? contributionPhase) =>
         TryWaitForContributionProgress(entry, materialItemId, previousStepsComplete);
 
+    // After a confirmed retrieval: IsProjectComplete once the entry's result item
+    // count in the bags has risen; IsInventoryFull when the bags cannot take it.
+    WorkshopAssemblyActionResult TryVerifyProductRetrieval(WorkshopAssemblyQueueEntry entry) =>
+        new(false, "Finished product retrieval cannot be verified by this automation provider.");
+
     string DescribeUiState();
 
     // Arms the native-crash fuse for the duration of a run and, when asked, takes

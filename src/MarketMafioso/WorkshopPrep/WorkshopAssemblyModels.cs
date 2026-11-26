@@ -25,6 +25,8 @@ public enum WorkshopAssemblyRunnerState
     Stopped,
     Failed,
     PreparingMaterials,
+    // The retrieval prompt was confirmed; the unit counts only once it is in the bags.
+    RetrievingProduct,
 }
 
 internal enum WorkshopAssemblyPendingConfirmationKind
@@ -88,7 +90,11 @@ public sealed record WorkshopAssemblyActionResult(
     bool IsWaiting = false,
     WorkshopMaterialBlocker MaterialBlocker = WorkshopMaterialBlocker.None,
     WorkshopAssemblyPhaseContext? ContributionPhase = null,
-    uint? LiveResultItemId = null);
+    uint? LiveResultItemId = null,
+    // Retrieval was confirmed but the product is not yet proven to be in the bags.
+    bool IsAwaitingProduct = false,
+    // The bags cannot take the finished product, so it stays at the station.
+    bool IsInventoryFull = false);
 
 public sealed record WorkshopAssemblyPreflightResult(
     bool CanStart,
