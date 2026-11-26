@@ -141,6 +141,74 @@ public record MarketPurchaseIntentDraft
     public required string WorldName { get; init; }
     public required DateTimeOffset ArmedAtUtc { get; init; }
     public required DateTimeOffset DeadlineUtc { get; init; }
+
+    /// <summary>
+    /// Wallet and bag state captured on the framework thread just before confirmation was submitted. Optional and
+    /// additive: intents persisted before it existed load with <c>null</c> and keep the manual reconcile halt.
+    /// </summary>
+    public MarketPurchaseSettleBaseline? SettleBaseline { get; init; }
+}
+
+/// <summary>Game state captured when a purchase intent is armed, used to settle a purchase whose packet never arrived.</summary>
+public sealed record MarketPurchaseSettleBaseline
+{
+    /// <summary>Carried gil before confirmation.</summary>
+    public required ulong WalletGil { get; init; }
+
+    /// <summary>Carried bag count of the intent's item id with the intent's HQ flag before confirmation.</summary>
+    public required uint BagQuantity { get; init; }
+
+    /// <summary>Gil the purchase takes from the wallet: listing total plus the market tax shown on the listing.</summary>
+    public required ulong WalletCost { get; init; }
+}
+
+/// <summary>Current wallet and bag reading for the settle decision. <c>null</c> means the value could not be read yet.</summary>
+public readonly record struct MarketPurchaseSettleReading(ulong? WalletGil, uint? BagQuantity)
+{
+    public static MarketPurchaseSettleReading Unavailable => new(null, null);
+}
+
+public enum MarketPurchaseSettleOutcome
+{
+    /// <summary>Gil fell by exactly the wallet cost and the bag rose by exactly the quantity.</summary>
+    Purchased,
+
+    /// <summary>Gil and bag count are both exactly at the armed snapshot.</summary>
+    NotPurchased,
+
+    /// <summary>No snapshot, an unreadable value, a partial change, or a mismatch. Never settled automatically.</summary>
+    Ambiguous,
+}
+
+public sealed record MarketPurchaseSettleVerdict(MarketPurchaseSettleOutcome Outcome, string Detail);
+
+/// <summary>
+/// Decides a timed-out purchase from wallet and bag state alone. Only exact, internally consistent evidence settles:
+/// a wrong "not purchased" would let the route buy the same line again with real gil.
+/// </summary>
+public static class MarketPurchaseSettleDecision
+{
+    public static MarketPurchaseSettleVerdict Decide(MarketPurchaseIntent intent, MarketPurchaseSettleReading current)
+    {
+        ArgumentNullException.ThrowIfNull(intent);
+        if (intent.SettleBaseline is not { } baseline)
+            return new(MarketPurchaseSettleOutcome.Ambiguous, "no wallet/bag snapshot was captured when the intent was armed");
+
+        var numbers = $"snapshot gil {baseline.WalletGil:N0}, bag {baseline.BagQuantity:N0}; " +
+                      $"now gil {Format(current.WalletGil)}, bag {Format(current.BagQuantity)}; " +
+                      $"expected cost {baseline.WalletCost:N0} gil for {intent.Quantity:N0} item(s)";
+        if (current.WalletGil is not { } gil || current.BagQuantity is not { } bag)
+            return new(MarketPurchaseSettleOutcome.Ambiguous, $"wallet or bag is not readable yet ({numbers})");
+        if (gil == baseline.WalletGil && bag == baseline.BagQuantity)
+            return new(MarketPurchaseSettleOutcome.NotPurchased, $"wallet and bag are unchanged ({numbers})");
+        if (gil < baseline.WalletGil && baseline.WalletGil - gil == baseline.WalletCost &&
+            bag > baseline.BagQuantity && bag - baseline.BagQuantity == intent.Quantity)
+            return new(MarketPurchaseSettleOutcome.Purchased, $"wallet and bag moved by exactly the purchase ({numbers})");
+        return new(MarketPurchaseSettleOutcome.Ambiguous, $"wallet and bag changed inconsistently with the purchase ({numbers})");
+    }
+
+    private static string Format(ulong? value) => value is { } known ? known.ToString("N0") : "unreadable";
+    private static string Format(uint? value) => value is { } known ? known.ToString("N0") : "unreadable";
 }
 
 public sealed record MarketPurchaseIntentContext
@@ -179,8 +247,22 @@ public sealed record PendingMarketPurchase(
     DateTimeOffset? ConfirmationSubmittedAtUtc = null)
     : MarketPurchaseEvidenceState(MarketPurchaseEvidenceStateKind.Pending, PendingIntent);
 public sealed record ConfirmedMarketPurchase(MarketPurchaseIntent ConfirmedIntent, MarketPurchasePacketObservation Evidence)
-    : MarketPurchaseEvidenceState(MarketPurchaseEvidenceStateKind.Confirmed, ConfirmedIntent);
-public sealed record TimedOutIndeterminateMarketPurchase(MarketPurchaseIntent TimedOutIntent, DateTimeOffset TimedOutAtUtc)
+    : MarketPurchaseEvidenceState(MarketPurchaseEvidenceStateKind.Confirmed, ConfirmedIntent)
+{
+    /// <summary>How long after the intent deadline the confirming packet was observed; zero when it was on time.</summary>
+    public TimeSpan LateBy => Evidence.ObservedAtUtc > ConfirmedIntent.DeadlineUtc
+        ? Evidence.ObservedAtUtc - ConfirmedIntent.DeadlineUtc
+        : TimeSpan.Zero;
+}
+
+/// <param name="ConfirmationSubmitted">
+/// Whether the confirmation was recorded as submitted before the deadline. Only a submitted intent can be confirmed by
+/// a late packet; intents persisted before this flag existed load as <c>false</c>.
+/// </param>
+public sealed record TimedOutIndeterminateMarketPurchase(
+    MarketPurchaseIntent TimedOutIntent,
+    DateTimeOffset TimedOutAtUtc,
+    bool ConfirmationSubmitted = false)
     : MarketPurchaseEvidenceState(MarketPurchaseEvidenceStateKind.TimedOutIndeterminate, TimedOutIntent);
 public sealed record ConflictingMarketPurchasePacket(MarketPurchaseIntent ConflictingIntent, MarketPurchasePacketObservation Evidence)
     : MarketPurchaseEvidenceState(MarketPurchaseEvidenceStateKind.ConflictingPacket, ConflictingIntent);
@@ -282,6 +364,7 @@ public sealed class MarketPurchaseEvidenceCoordinator
     private readonly IMarketPurchaseEvidenceStateStore store;
     private readonly IMarketPurchasePacketEvidenceQueue packetQueue;
     private readonly Func<bool> isMutationThread;
+    private readonly Action<string> warning;
     private MarketPurchaseEvidenceSnapshot snapshot;
 
     public MarketPurchaseEvidenceCoordinator(
@@ -294,11 +377,13 @@ public sealed class MarketPurchaseEvidenceCoordinator
     public MarketPurchaseEvidenceCoordinator(
         IMarketPurchaseEvidenceStateStore store,
         IMarketPurchasePacketEvidenceQueue packetQueue,
-        Func<bool> isMutationThread)
+        Func<bool> isMutationThread,
+        Action<string>? warning = null)
     {
         this.store = store ?? throw new ArgumentNullException(nameof(store));
         this.packetQueue = packetQueue ?? throw new ArgumentNullException(nameof(packetQueue));
         this.isMutationThread = isMutationThread ?? throw new ArgumentNullException(nameof(isMutationThread));
+        this.warning = warning ?? (_ => { });
         snapshot = Clone(store.Load() ?? new MarketPurchaseEvidenceSnapshot());
     }
 
@@ -340,6 +425,7 @@ public sealed class MarketPurchaseEvidenceCoordinator
             WorldName = draft.WorldName,
             ArmedAtUtc = draft.ArmedAtUtc,
             DeadlineUtc = draft.DeadlineUtc,
+            SettleBaseline = draft.SettleBaseline,
             PacketFloor = floor,
         };
         var next = snapshot with
@@ -425,8 +511,16 @@ public sealed class MarketPurchaseEvidenceCoordinator
                     return new(MarketPurchaseEvidenceAdvanceStatus.PersistenceFailed, dequeued, snapshot.State,
                         $"Packet evidence persistence failed before dequeue: {exception.Message}");
                 }
+                var previous = snapshot.State;
                 snapshot = next;
                 changed = true;
+                if (next.State is ConfirmedMarketPurchase late && late.LateBy > TimeSpan.Zero &&
+                    previous is not ConfirmedMarketPurchase)
+                {
+                    warning($"[MarketMafioso] Purchase intent {late.Intent.IntentId} was confirmed by a server packet " +
+                            $"{late.LateBy.TotalSeconds:N1}s after its evidence deadline (listing {late.Intent.ListingId}, " +
+                            $"{late.Intent.Quantity:N0} item(s) on {late.Intent.WorldName}).");
+                }
             }
 
             if (!packetQueue.TryDequeue(out var removed) || removed.Position != observation.Position)
@@ -439,7 +533,10 @@ public sealed class MarketPurchaseEvidenceCoordinator
             var next = snapshot with
             {
                 Revision = snapshot.Revision + 1,
-                State = new TimedOutIndeterminateMarketPurchase(pending.Intent, pending.Intent.DeadlineUtc),
+                State = new TimedOutIndeterminateMarketPurchase(
+                    pending.Intent,
+                    pending.Intent.DeadlineUtc,
+                    pending.Phase == PendingMarketPurchasePhase.ConfirmationSubmitted),
             };
             try
             {
@@ -508,28 +605,19 @@ public sealed class MarketPurchaseEvidenceCoordinator
             return current;
 
         var observations = current.Observations.Append(observation).TakeLast(MaxObservationHistory).ToArray();
-        MarketPurchaseEvidenceState? state = current.State;
-        if (state is PendingMarketPurchase pending && observation.Position.IsAfter(pending.Intent.PacketFloor))
+        // Attribution: TryArm refuses while any state (pending or terminal) is unresolved, so the active packet epoch
+        // cannot move past this intent's floor until it resolves. A post-floor packet therefore belongs to this
+        // intent's confirmation window, even when it arrives after the deadline. Once the intent resolves, State is
+        // null and packets are ignored; the next intent reserves a fresh epoch, so a straggler from this one can never
+        // sit after the next intent's floor.
+        MarketPurchaseEvidenceState? state = current.State switch
         {
-            if (observation.ObservedAtUtc > pending.Intent.DeadlineUtc)
-            {
-                state = new TimedOutIndeterminateMarketPurchase(pending.Intent, pending.Intent.DeadlineUtc);
-            }
-            else if (observation.ObservedAtUtc < pending.Intent.ArmedAtUtc ||
-                     pending.Phase != PendingMarketPurchasePhase.ConfirmationSubmitted)
-            {
-                state = new ConflictingMarketPurchasePacket(pending.Intent, observation);
-            }
-            else
-            {
-                var matches = observation.ItemId == pending.Intent.ItemId &&
-                              observation.IsHighQuality == pending.Intent.IsHighQuality &&
-                              observation.Quantity == pending.Intent.Quantity;
-                state = matches
-                    ? new ConfirmedMarketPurchase(pending.Intent, observation)
-                    : new ConflictingMarketPurchasePacket(pending.Intent, observation);
-            }
-        }
+            PendingMarketPurchase pending when observation.Position.IsAfter(pending.Intent.PacketFloor) =>
+                Classify(pending.Intent, pending.Phase == PendingMarketPurchasePhase.ConfirmationSubmitted, observation),
+            TimedOutIndeterminateMarketPurchase timedOut when observation.Position.IsAfter(timedOut.Intent.PacketFloor) =>
+                Classify(timedOut.Intent, timedOut.ConfirmationSubmitted, observation),
+            var unchanged => unchanged,
+        };
 
         return current with
         {
@@ -537,6 +625,23 @@ public sealed class MarketPurchaseEvidenceCoordinator
             State = state,
             Observations = observations,
         };
+    }
+
+    // A packet before the arm time or before confirmation submission conflicts. Otherwise a packet matching the exact
+    // item, quality and quantity confirms, including a late one; anything else conflicts.
+    private static MarketPurchaseEvidenceState Classify(
+        MarketPurchaseIntent intent,
+        bool confirmationSubmitted,
+        MarketPurchasePacketObservation observation)
+    {
+        if (observation.ObservedAtUtc < intent.ArmedAtUtc || !confirmationSubmitted)
+            return new ConflictingMarketPurchasePacket(intent, observation);
+        var matches = observation.ItemId == intent.ItemId &&
+                      observation.IsHighQuality == intent.IsHighQuality &&
+                      observation.Quantity == intent.Quantity;
+        return matches
+            ? new ConfirmedMarketPurchase(intent, observation)
+            : new ConflictingMarketPurchasePacket(intent, observation);
     }
 
     private void EnsureFrameworkThread()
@@ -565,6 +670,8 @@ public sealed class MarketPurchaseEvidenceCoordinator
             return "Purchase intent total gil must exactly equal unit price times quantity.";
         if (draft.DeadlineUtc <= draft.ArmedAtUtc)
             return "Purchase intent deadline must follow its armed time.";
+        if (draft.SettleBaseline is { } baseline && baseline.WalletCost < draft.TotalGil)
+            return "Purchase intent wallet cost cannot be below the listing total.";
         return null;
     }
 

@@ -143,6 +143,9 @@ public interface IMarketAcquisitionPurchaseIo
         DateTimeOffset resolvedAtUtc,
         string resolution) =>
         new(MarketPurchaseTerminalResolutionStatus.NoTerminalEvidence, "Server purchase evidence is unavailable.");
+
+    /// <summary>Carried gil and the carried bag count of one exact item and quality, for settling a timed-out purchase.</summary>
+    MarketPurchaseSettleReading ReadSettleState(uint itemId, bool isHq) => MarketPurchaseSettleReading.Unavailable;
 }
 
 public interface IMarketAcquisitionRouteReporter

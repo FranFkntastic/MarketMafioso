@@ -1553,6 +1553,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         session.InterruptedPhase = phase is CrossRegionAcquisitionPhase.Failed or CrossRegionAcquisitionPhase.Stopped
             ? session.InterruptedPhase
             : phase;
+        // One dalamud.log line per halt; a repeated identical failure while already failed is not a new halt.
+        if (session.Phase != CrossRegionAcquisitionPhase.Failed || session.LastErrorCode != code || session.LastMessage != message)
+            log($"Cross-regional session halted at {phase} ({code}): {message}", null);
         session.LastErrorCode = code;
         session.CanResumeCourier = canResumeCourier;
         SetPhase(CrossRegionAcquisitionPhase.Failed, message);

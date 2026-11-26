@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
@@ -219,6 +220,17 @@ public sealed class DalamudMarketAcquisitionPurchaseIo : IMarketAcquisitionPurch
                 context.EvidenceTimeout <= TimeSpan.Zero)
                 return "Purchase evidence context is incomplete; confirmation was not submitted.";
 
+            // Snapshot on the framework thread immediately before submission. An unreadable wallet or bag only drops
+            // the snapshot (the intent then keeps the manual reconcile halt); it never blocks the purchase.
+            var before = ReadSettleState(candidate.ItemId, candidate.IsHq);
+            var settleBaseline = before is { WalletGil: { } walletGil, BagQuantity: { } bagQuantity }
+                ? new MarketPurchaseSettleBaseline
+                {
+                    WalletGil = walletGil,
+                    BagQuantity = bagQuantity,
+                    WalletCost = candidate.WalletCost,
+                }
+                : null;
             var sequence = Interlocked.Increment(ref intentSequence);
             var arm = evidence.TryArm(new MarketPurchaseIntentDraft
             {
@@ -238,6 +250,7 @@ public sealed class DalamudMarketAcquisitionPurchaseIo : IMarketAcquisitionPurch
                 WorldName = candidate.WorldName,
                 ArmedAtUtc = submittedAtUtc,
                 DeadlineUtc = submittedAtUtc.Add(context.EvidenceTimeout),
+                SettleBaseline = settleBaseline,
             });
             if (!arm.IsArmed || arm.Intent is null)
                 return $"Purchase confirmation was blocked: {arm.Message}";
@@ -259,6 +272,48 @@ public sealed class DalamudMarketAcquisitionPurchaseIo : IMarketAcquisitionPurch
         string resolution) =>
         evidence?.ResolveTerminal(intentId, disposition, resolvedAtUtc, resolution) ??
         new(MarketPurchaseTerminalResolutionStatus.NoTerminalEvidence, "Server purchase evidence is unavailable.");
+
+    private static readonly InventoryType[] SettleBags =
+    [
+        InventoryType.Inventory1,
+        InventoryType.Inventory2,
+        InventoryType.Inventory3,
+        InventoryType.Inventory4,
+    ];
+
+    public unsafe MarketPurchaseSettleReading ReadSettleState(uint itemId, bool isHq)
+    {
+        var manager = InventoryManager.Instance();
+        if (manager == null || playerState is null || playerState.ContentId == 0)
+            return MarketPurchaseSettleReading.Unavailable;
+
+        // Gil reads 0 until the currency container loads; that is unreadable, not an empty wallet.
+        var currency = manager->GetInventoryContainer(InventoryType.Currency);
+        ulong? gil = currency == null || !currency->IsLoaded ? null : manager->GetGil();
+
+        // Crystals live in their own pouch and have no HQ variant.
+        var crystal = itemId is >= 2 and <= 19;
+        uint? bag = 0;
+        foreach (var type in crystal ? new[] { InventoryType.Crystals } : SettleBags)
+        {
+            var container = manager->GetInventoryContainer(type);
+            if (container == null || !container->IsLoaded)
+            {
+                bag = null;
+                break;
+            }
+            for (var index = 0; index < container->Size; index++)
+            {
+                var slot = container->GetInventorySlot(index);
+                if (slot == null || slot->ItemId != itemId || slot->Quantity <= 0)
+                    continue;
+                if (!crystal && slot->Flags.HasFlag(InventoryItem.ItemFlags.HighQuality) != isHq)
+                    continue;
+                bag = checked(bag + (uint)slot->Quantity);
+            }
+        }
+        return new MarketPurchaseSettleReading(gil, bag);
+    }
 }
 
 public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRouteReporter
