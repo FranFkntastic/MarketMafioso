@@ -355,7 +355,14 @@ public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceSta
         Evidence = state is ConfirmedMarketPurchase confirmed ? confirmed.Evidence
             : state is ConflictingMarketPurchasePacket conflicting ? conflicting.Evidence : null,
         TimedOutAtUtc = state is TimedOutIndeterminateMarketPurchase timedOut ? timedOut.TimedOutAtUtc : null,
-        PendingPhase = state is PendingMarketPurchase pending ? pending.Phase : null,
+        // Timed-out states keep the submission phase so a late packet can still confirm them; older readers ignore it.
+        PendingPhase = state switch
+        {
+            PendingMarketPurchase pending => pending.Phase,
+            TimedOutIndeterminateMarketPurchase { ConfirmationSubmitted: true } => PendingMarketPurchasePhase.ConfirmationSubmitted,
+            TimedOutIndeterminateMarketPurchase => PendingMarketPurchasePhase.ArmedBeforeConfirmation,
+            _ => null,
+        },
         ConfirmationSubmittedAtUtc = state is PendingMarketPurchase submitted ? submitted.ConfirmationSubmittedAtUtc : null,
     };
 
@@ -372,7 +379,10 @@ public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceSta
             MarketPurchaseEvidenceStateKind.Confirmed when document.Evidence is not null =>
                 new ConfirmedMarketPurchase(document.Intent, document.Evidence),
             MarketPurchaseEvidenceStateKind.TimedOutIndeterminate when document.TimedOutAtUtc is not null =>
-                new TimedOutIndeterminateMarketPurchase(document.Intent, document.TimedOutAtUtc.Value),
+                new TimedOutIndeterminateMarketPurchase(
+                    document.Intent,
+                    document.TimedOutAtUtc.Value,
+                    document.PendingPhase == PendingMarketPurchasePhase.ConfirmationSubmitted),
             MarketPurchaseEvidenceStateKind.ConflictingPacket when document.Evidence is not null =>
                 new ConflictingMarketPurchasePacket(document.Intent, document.Evidence),
             _ => throw new InvalidDataException("Purchase evidence state is incomplete."),
@@ -419,8 +429,10 @@ public sealed class MarketPurchaseEvidenceFileStore : IMarketPurchaseEvidenceSta
         };
         if (!evidence.Position.IsAfter(intent.PacketFloor))
             throw new InvalidDataException("Terminal packet evidence does not follow the intent floor.");
+        // A confirming packet may arrive after the deadline; it is still attributable because no later intent can arm
+        // until this one resolves.
         if (state is ConfirmedMarketPurchase &&
-            (evidence.ObservedAtUtc < intent.ArmedAtUtc || evidence.ObservedAtUtc > intent.DeadlineUtc ||
+            (evidence.ObservedAtUtc < intent.ArmedAtUtc ||
              evidence.ItemId != intent.ItemId || evidence.IsHighQuality != intent.IsHighQuality ||
              evidence.Quantity != intent.Quantity))
             throw new InvalidDataException("Confirmed packet evidence does not match its purchase intent.");

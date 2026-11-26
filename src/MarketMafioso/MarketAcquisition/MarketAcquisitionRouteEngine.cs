@@ -18,6 +18,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MarketBoardPurchaseOutcomeWatchdog = TimeSpan.FromSeconds(30);
+    // Slack after the outcome watchdog: a late packet still confirms, and wallet/bag state settles the rest.
+    private static readonly TimeSpan PurchaseSettleWindow = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan UniversalisFreshnessVerificationDelay = TimeSpan.FromSeconds(10);
     private readonly MarketAcquisitionRouteRunner runner;
     private readonly IMarketAcquisitionRouteContext context;
@@ -53,6 +55,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool exactAcquisitionDryRunFaultInjected;
     private bool exactAcquisitionDryRunNoViableConsumed;
     private bool purchaseEvidenceRouteBlocked;
+    private string? settlingPurchaseIntentId;
     private static readonly TimeSpan UnresolvedTravelLeaseExpiry = TimeSpan.FromMinutes(10);
     private DateTimeOffset? unresolvedTravelLeaseSinceUtc;
     private readonly Action<string> warn;
@@ -748,6 +751,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 UnitPrice = intent.UnitPrice,
                 Quantity = intent.Quantity,
                 IsHq = intent.IsHighQuality,
+                // The armed snapshot holds the listing's real wallet cost; without it the tax falls back to the estimate.
+                TotalTax = intent.SettleBaseline is { } baseline && baseline.WalletCost >= intent.TotalGil
+                    ? checked((uint)(baseline.WalletCost - intent.TotalGil))
+                    : null,
             };
             uint nextWorldQuantity;
             uint nextWorldGil;
@@ -2265,8 +2272,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             case ConfirmedMarketPurchase confirmed:
                 return ApplyConfirmedServerPurchase(session, confirmed, nowUtc);
             case TimedOutIndeterminateMarketPurchase timedOut:
-                return StopForTerminalPurchaseEvidence(
-                    $"Purchase evidence timed out for intent {timedOut.Intent.IntentId}; reconcile outcome before any retry.");
+                return SettleTimedOutPurchase(timedOut, nowUtc);
             case ConflictingMarketPurchasePacket conflicting:
                 return StopForTerminalPurchaseEvidence(
                     $"A conflicting purchase packet followed intent {conflicting.Intent.IntentId}; reconcile outcome before any retry.");
@@ -2274,6 +2280,93 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return StopForTerminalPurchaseEvidence(
                     "Durable purchase intent disappeared before terminal server evidence was applied.");
         }
+    }
+
+    /// <summary>
+    /// A timed-out purchase stays in its session for <see cref="PurchaseSettleWindow"/>: a late matching packet still
+    /// confirms it through the normal path, and otherwise wallet and bag state settle it. Only an exact purchase or an
+    /// exact no-op settles; everything else halts for manual reconciliation, and nothing is ever retried here.
+    /// </summary>
+    private MarketAcquisitionRouteEngineTickResult SettleTimedOutPurchase(
+        TimedOutIndeterminateMarketPurchase timedOut,
+        DateTimeOffset nowUtc)
+    {
+        var intent = timedOut.Intent;
+        if (intent.SettleBaseline is null)
+        {
+            return StopForTerminalPurchaseEvidence(
+                $"Purchase evidence timed out for intent {intent.IntentId}; reconcile outcome before any retry.");
+        }
+
+        var settleUntil = timedOut.TimedOutAtUtc.Add(PurchaseSettleWindow);
+        if (!string.Equals(settlingPurchaseIntentId, intent.IntentId, StringComparison.Ordinal))
+        {
+            settlingPurchaseIntentId = intent.IntentId;
+            warn($"[MarketMafioso] Purchase intent {intent.IntentId} for listing {intent.ListingId} got no server packet by its " +
+                 $"deadline; waiting until {settleUntil:HH:mm:ss}Z for a late packet before settling from wallet and bag state.");
+        }
+
+        var verdict = MarketPurchaseSettleDecision.Decide(intent, purchase.ReadSettleState(intent.ItemId, intent.IsHighQuality));
+        // An exact purchase is conclusive at once. "Unchanged" is only conclusive once the window has closed, because
+        // the server may still be applying the purchase.
+        if (verdict.Outcome == MarketPurchaseSettleOutcome.Purchased ||
+            verdict.Outcome == MarketPurchaseSettleOutcome.NotPurchased && nowUtc >= settleUntil)
+        {
+            return ResolveSettledPurchase(intent, verdict);
+        }
+
+        if (nowUtc < settleUntil)
+        {
+            purchaseAutomation.ScheduleNextMonitor(nowUtc, MarketAcquisitionRoutePacing.PurchaseEvidencePollInterval);
+            state.AcquisitionStatus = "Purchase: no server confirmation yet; checking wallet and bag before deciding.";
+            return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
+        }
+
+        settlingPurchaseIntentId = null;
+        return StopForTerminalPurchaseEvidence(
+            $"Purchase evidence timed out for intent {intent.IntentId} and could not be settled from game state: " +
+            $"{verdict.Detail}. Reconcile outcome before any retry.");
+    }
+
+    private MarketAcquisitionRouteEngineTickResult ResolveSettledPurchase(
+        MarketPurchaseIntent intent,
+        MarketPurchaseSettleVerdict verdict)
+    {
+        settlingPurchaseIntentId = null;
+        var purchased = verdict.Outcome == MarketPurchaseSettleOutcome.Purchased;
+        var previousBrowseOperationId = state.MarketBoardReadResult?.BrowseOperationId;
+        // Same accounting and recovery as the manual purchased / not purchased reconcile.
+        var resolved = ReconcileTerminalPurchaseEvidence(
+            purchased,
+            $"Settled from game state after the server packet timed out: {verdict.Detail}.");
+        if (!resolved.IsResolved)
+        {
+            return StopForTerminalPurchaseEvidence(
+                $"Purchase intent {intent.IntentId} looked {(purchased ? "purchased" : "not purchased")} from game state, " +
+                $"but recording it failed: {resolved.Message} Reconcile outcome before any retry.");
+        }
+
+        warn($"[MarketMafioso] Purchase intent {intent.IntentId} for listing {intent.ListingId} was settled as " +
+             $"{(purchased ? "purchased" : "not purchased")} from game state: {verdict.Detail}.");
+        if (exactAcquisitionAuthority is not null)
+        {
+            // Reconciliation requested exact-acquisition recovery, which replans and restarts the remaining route.
+            if (runner.IsRunning || runner.IsPaused)
+                runner.Stop();
+        }
+        else
+        {
+            // The listing may be gone; the next purchase read must be a fresh browse, not the cached rows.
+            RequirePurchaseRecoveryRefresh(verdict.Detail);
+            state.PurchaseRecoveryPreviousBrowseOperationId = previousBrowseOperationId;
+            state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+        }
+
+        state.AcquisitionStatus = purchased
+            ? $"Purchase settled from game state: listing {intent.ListingId} was purchased. Refreshing live listings before continuing."
+            : $"Purchase settled from game state: listing {intent.ListingId} was not purchased. Refreshing live listings before continuing.";
+        ReportRouteProgress();
+        return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
     }
 
     private MarketAcquisitionRouteEngineTickResult ApplyConfirmedServerPurchase(
@@ -3386,6 +3479,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
     {
+        warn($"[MarketMafioso] Route halted: {message}");
         if (exception != null)
         {
             CaptureFailure(exception);
