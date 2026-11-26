@@ -162,6 +162,10 @@ public sealed class WorkshopVendorRestockState
     public string? QuartermasterPartialResult { get; set; }
     // Set when Quartermaster reports an indeterminate retrieval; bounds the bag reconcile.
     public DateTime? RetrievalReconcileStartedAtUtc { get; set; }
+    // Start of the current retrieval attempt for its 15-minute deadline; restarted on resume. Null on older saves: StartedAtUtc.
+    public DateTime? RetrievalStartedAtUtc { get; set; }
+    // Set by a full-bag pause or a retry: the next submit pulls only what bags still lack, not the reviewed quantities.
+    public bool RecomputeRetrievalBeforeSubmit { get; set; }
     public ulong LocalContentId { get; set; }
     public uint HomeWorldId { get; set; }
     public string CharacterName { get; set; } = string.Empty;
@@ -199,6 +203,8 @@ public sealed class WorkshopVendorRestockPolicyLine
     public string ItemName { get; set; } = string.Empty;
     public int RequiredQuantity { get; set; }
     public int ReviewedRetainerQuantity { get; set; }
+    // Bag count the retainer pull should reach (pre-retrieval bags + reviewed pull), fixed at first submit.
+    public int? RetrievalTargetQuantity { get; set; }
     public int ApprovedVendorQuantity { get; set; }
     public int LivePlayerQuantity { get; set; }
     public uint UnitPriceGil { get; set; }
@@ -246,7 +252,8 @@ public enum WorkshopQuartermasterProgressState
     Indeterminate,
 }
 
-public sealed record WorkshopQuartermasterProgress(WorkshopQuartermasterProgressState State, string Message);
+/// <summary><paramref name="Code"/> is Quartermaster's terminal result code (e.g. <c>InventoryFull</c>), when it gave one.</summary>
+public sealed record WorkshopQuartermasterProgress(WorkshopQuartermasterProgressState State, string Message, string? Code = null);
 
 public interface IWorkshopQuartermasterRestockService
 {
