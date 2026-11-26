@@ -53,6 +53,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private string? wrapUpMessage;
     private DateTimeOffset wrapUpStartedAt;
     private DateTimeOffset? inspectionReadyAt;
+    // Set from the confirmed retrieval prompt until the product is proven in the bags.
+    private string? uncollectedProjectName;
 
     public WorkshopAssemblyRunner(
         IFramework framework,
@@ -154,6 +156,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         actionSinceNativeFaultPoll = false;
         inspectOnly = inspect;
         inspectionReadyAt = null;
+        uncollectedProjectName = null;
         skippedProjects.Clear();
         skippedQuantity = 0;
         wrapUpMessage = null;
@@ -290,7 +293,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                     ["requiresWorkshopReopen"] = cutsceneResult.RequiresWorkshopReopen.ToString(),
                 });
             NoteAction(cutsceneResult, alwaysPace: true);
-            if (cutsceneResult.RequiresWorkshopReopen)
+            // Reopening mid-retrieval would offer a fresh project instead of re-verifying the unit.
+            if (cutsceneResult.RequiresWorkshopReopen && Progress.State != WorkshopAssemblyRunnerState.RetrievingProduct)
                 SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, cutsceneResult.Message);
 
             return;
@@ -331,6 +335,10 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
             case WorkshopAssemblyRunnerState.WaitingForContributionLockout:
                 TickWaitingForContributionLockout(entry);
+                break;
+
+            case WorkshopAssemblyRunnerState.RetrievingProduct:
+                TickRetrievingProduct(entry);
                 break;
 
             default:
@@ -424,6 +432,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         // Crafting-log navigation stays paced: it is a handful of actions per
         // project, and re-firing it is what crashed the game on Nov 6.
         NoteAction(result, alwaysPace: true);
+        if (TryHandleProductRetrieval(entry, result))
+            return;
         if (result.IsProjectComplete)
         {
             CompleteActiveProject(entry, result.Message);
@@ -506,6 +516,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         RecordActionResult("submit-material", entry, result);
         NoteAction(result);
+        if (TryHandleProductRetrieval(entry, result))
+            return;
         if (result.IsProjectComplete)
         {
             CompleteActiveProject(entry, result.Message);
@@ -581,6 +593,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         activeMaterialItemId = result.ActiveMaterialItemId;
         RecordActionResult("confirm-contribution", entry, result);
         NoteAction(result);
+        if (TryHandleProductRetrieval(entry, result))
+            return;
         if (result.IsProjectComplete)
         {
             CompleteActiveProject(entry, result.Message);
@@ -699,8 +713,78 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         Progress = BuildProgress(state, result.Message);
     }
 
+    // Full bags pause before or after the retrieval prompt; a confirmed prompt
+    // only starts verification. Returns true when the result was handled.
+    private bool TryHandleProductRetrieval(WorkshopAssemblyQueueEntry entry, WorkshopAssemblyActionResult result)
+    {
+        if (result.IsInventoryFull)
+        {
+            PauseForFullBags(entry, result.Message);
+            return true;
+        }
+
+        if (!result.IsAwaitingProduct)
+            return false;
+
+        uncollectedProjectName = entry.ProjectName;
+        SetState(WorkshopAssemblyRunnerState.RetrievingProduct, result.Message);
+        return true;
+    }
+
+    private void TickRetrievingProduct(WorkshopAssemblyQueueEntry entry)
+    {
+        var result = uiAutomation.TryVerifyProductRetrieval(entry);
+        if (result.IsProjectComplete)
+        {
+            RecordActionResult("product-retrieval", entry, result);
+            CompleteActiveProject(entry, result.Message);
+            return;
+        }
+
+        if (result.IsInventoryFull)
+        {
+            RecordActionResult("product-retrieval", entry, result);
+            PauseForFullBags(entry, result.Message);
+            return;
+        }
+
+        if (Now - stateStartedAt > WorkshopAssemblyTiming.AddonTimeout)
+        {
+            // Bags had room, the prompt was confirmed, yet nothing arrived.
+            var message = $"Finished {entry.ProjectName} did not arrive in the bags within the {WorkshopAssemblyTiming.AddonTimeout.TotalSeconds:F0}s retrieval threshold. " +
+                $"{result.Message} The queue was not decremented and the unit was not counted.";
+            RecordActionResult("product-retrieval-unverified", entry, result);
+            log.Warning("[MarketMafioso] Workshop product retrieval unverified for {Project} (result item {ResultItemId}, entry {EntryIndex}, completed {Completed}/{Quantity}): {Observation}",
+                entry.ProjectName, entry.ResultItemId, activeEntryIndex, ActiveEntryCompletedQuantity, entry.Quantity, result.Message);
+            throw new InvalidOperationException(message);
+        }
+
+        Progress = BuildProgress(WorkshopAssemblyRunnerState.RetrievingProduct, result.Message);
+    }
+
+    // Same release as a user pause, but resume re-enters the station for this
+    // entry: the station still offers "Collect finished product." and the
+    // retrieval is re-verified before anything is counted.
+    private void PauseForFullBags(WorkshopAssemblyQueueEntry entry, string observation)
+    {
+        var message = $"Bags full: {entry.ProjectName} is waiting at the fabrication station. Free a slot, then resume.";
+        uncollectedProjectName = entry.ProjectName;
+        framework.Update -= OnFrameworkUpdate;
+        uiAutomation.ResetState();
+        uiAutomation.EndRun();
+        activeMaterialItemId = null;
+        stateBeforePause = WorkshopAssemblyRunnerState.WaitingForFabricationStation;
+        stateStartedBeforePause = Now;
+        var details = BuildActiveDetails(entry);
+        details["observation"] = observation;
+        diagnostics.Record("paused-bags-full", message, details);
+        log.Warning("[MarketMafioso] Native workshop assembly paused: {Message} Observed: {Observation}", message, observation);
+        SetState(WorkshopAssemblyRunnerState.Paused, message);
+    }
+
     private void CompleteActiveProject(WorkshopAssemblyQueueEntry entry, string message)
     {
+        uncollectedProjectName = null;
         uiAutomation.NotePreparationProgress();
         onProjectRetrieved(entry);
         actionGuard.NoteProgress();
@@ -752,7 +836,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         Progress = BuildProgress(WorkshopAssemblyRunnerState.OpeningProject, message);
     }
 
-    private void Complete() => BeginWrapUp(BuildCompletionMessage());
+    private void Complete()
+    {
+        if (uncollectedProjectName != null)
+            throw new InvalidOperationException($"Workshop assembly cannot finish: finished {uncollectedProjectName} is still waiting at the fabrication station.");
+        BeginWrapUp(BuildCompletionMessage());
+    }
 
     // Leave the character free to move: close the crafting log (a skipped last
     // entry leaves it up), then answer "Nothing." on the idle station menu that
