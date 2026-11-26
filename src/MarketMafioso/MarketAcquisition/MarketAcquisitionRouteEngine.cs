@@ -20,6 +20,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private static readonly TimeSpan MarketBoardPurchaseOutcomeWatchdog = TimeSpan.FromSeconds(30);
     // Slack after the outcome watchdog: a late packet still confirms, and wallet/bag state settles the rest.
     private static readonly TimeSpan PurchaseSettleWindow = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan PurchaseSettleMinimumObservation = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan UniversalisFreshnessVerificationDelay = TimeSpan.FromSeconds(10);
     private readonly MarketAcquisitionRouteRunner runner;
     private readonly IMarketAcquisitionRouteContext context;
@@ -56,6 +57,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool exactAcquisitionDryRunNoViableConsumed;
     private bool purchaseEvidenceRouteBlocked;
     private string? settlingPurchaseIntentId;
+    private DateTimeOffset settlingStartedUtc;
+    /// <summary>Set when the last purchased reconcile filled a shard lot and its storage checkpoint began.</summary>
+    private bool reconcileRequestedShardCheckpoint;
     private static readonly TimeSpan UnresolvedTravelLeaseExpiry = TimeSpan.FromMinutes(10);
     private DateTimeOffset? unresolvedTravelLeaseSinceUtc;
     private readonly Action<string> warn;
@@ -796,9 +800,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             runner.ActivePlan?.RunSpend.Record(candidate.WalletCost);
             CompleteTerminalPurchaseReconciliation(
                 $"Purchase outcome reconciled: listing {candidate.ListingId} was purchased. Recovering will refresh live listings before continuing.");
+            reconcileRequestedShardCheckpoint = false;
             try
             {
-                ReportConfirmedPurchase(candidate, nextLineQuantity, nextLineGil);
+                reconcileRequestedShardCheckpoint = ReportConfirmedPurchase(candidate, nextLineQuantity, nextLineGil);
             }
             catch (Exception exception)
             {
@@ -2298,10 +2303,19 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 $"Purchase evidence timed out for intent {intent.IntentId}; reconcile outcome before any retry.");
         }
 
-        var settleUntil = timedOut.TimedOutAtUtc.Add(PurchaseSettleWindow);
         if (!string.Equals(settlingPurchaseIntentId, intent.IntentId, StringComparison.Ordinal))
         {
             settlingPurchaseIntentId = intent.IntentId;
+            settlingStartedUtc = nowUtc;
+        }
+
+        // The window runs from the deadline, but never closes before the route has watched game state for a while: a
+        // stalled monitor that first ticks after the window must not settle "not purchased" from a single reading.
+        var settleUntil = timedOut.TimedOutAtUtc.Add(PurchaseSettleWindow);
+        if (settleUntil < settlingStartedUtc.Add(PurchaseSettleMinimumObservation))
+            settleUntil = settlingStartedUtc.Add(PurchaseSettleMinimumObservation);
+        if (settlingStartedUtc == nowUtc)
+        {
             warn($"[MarketMafioso] Purchase intent {intent.IntentId} for listing {intent.ListingId} got no server packet by its " +
                  $"deadline; waiting until {settleUntil:HH:mm:ss}Z for a late packet before settling from wallet and bag state.");
         }
@@ -2348,6 +2362,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         warn($"[MarketMafioso] Purchase intent {intent.IntentId} for listing {intent.ListingId} was settled as " +
              $"{(purchased ? "purchased" : "not purchased")} from game state: {verdict.Detail}.");
+        if (purchased && reconcileRequestedShardCheckpoint)
+        {
+            // The settled lot filled shard storage and its checkpoint began: pause exactly as a confirmed purchase does,
+            // so the checkpoint's travel never races the route.
+            reconcileRequestedShardCheckpoint = false;
+            PauseForShardCheckpoint();
+            ReportRouteProgress();
+            return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
+        }
+
         if (exactAcquisitionAuthority is not null)
         {
             // Reconciliation requested exact-acquisition recovery, which replans and restarts the remaining route.
