@@ -869,6 +869,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             awaitingResumeTransitionUntilUtc = null;
             preResumeFailure = null;
             settlingFailure = null;
+            // A running run starts a fresh retry budget in Quartermaster: an expired wait suppresses only the timed-out retry.
+            autoResumeWaitExpired = null;
             if (autoResumeWait is { } resumed && resumed.Run == run.RunId)
             {
                 autoResumeWait = null;
