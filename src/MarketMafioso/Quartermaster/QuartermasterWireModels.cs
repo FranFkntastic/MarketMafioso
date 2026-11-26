@@ -516,7 +516,8 @@ public sealed record QuartermasterCourierRun(
     bool CanResume,
     bool CanClear,
     long CustodyUnits,
-    long CustodyGil)
+    long CustodyGil,
+    QuartermasterCourierAutoResume? AutoResume = null)
 {
     public bool IsRunning => State.Equals("Running", StringComparison.OrdinalIgnoreCase);
     public bool IsCompleted => State.Equals("Completed", StringComparison.OrdinalIgnoreCase);
@@ -525,6 +526,22 @@ public sealed record QuartermasterCourierRun(
                              State.Equals("Indeterminate", StringComparison.OrdinalIgnoreCase) ||
                              State.Equals("Refused", StringComparison.OrdinalIgnoreCase);
 }
+
+/// <summary>
+/// Quartermaster resuming a halted courier run on its own, under the same run id. Null when no automatic resume
+/// applies to the run, and always null from a Quartermaster that predates the field.
+/// </summary>
+/// <param name="Attempt">The pending attempt; otherwise the attempts made since the run last progressed.</param>
+/// <param name="DueInSeconds">Seconds until the pending attempt is sent; 0 while it waits for the client to be ready.</param>
+public sealed record QuartermasterCourierAutoResume(
+    bool Pending,
+    int Attempt,
+    int MaxAttempts,
+    int? DueInSeconds,
+    string? Code,
+    string? ExhaustedCode,
+    string? ExhaustedDetail,
+    int HistoryCount);
 
 public sealed record QuartermasterCourierStatus(
     string ProviderInstanceId,
@@ -674,6 +691,24 @@ internal sealed class QuartermasterCourierRunWire
     public bool CanClear { get; init; }
     public long CustodyUnits { get; init; }
     public long CustodyGil { get; init; }
+    public QuartermasterCourierAutoResumeWire? AutoResume { get; init; }
+}
+
+internal sealed class QuartermasterCourierAutoResumeWire
+{
+    public bool Pending { get; init; }
+    public int Attempt { get; init; }
+    public int MaxAttempts { get; init; }
+    public int? DueInSeconds { get; init; }
+    public string? Code { get; init; }
+    public QuartermasterCourierAutoResumeExhaustedWire? Exhausted { get; init; }
+    public List<JsonElement>? History { get; init; }
+}
+
+internal sealed class QuartermasterCourierAutoResumeExhaustedWire
+{
+    public string? Code { get; init; }
+    public string? Detail { get; init; }
 }
 
 internal sealed class QuartermasterCourierCharacterWire

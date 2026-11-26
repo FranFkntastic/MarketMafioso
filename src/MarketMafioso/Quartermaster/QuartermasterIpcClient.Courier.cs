@@ -307,7 +307,11 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
             .ToImmutableArray();
         var run = wire.Run is { } r && !string.IsNullOrWhiteSpace(r.State)
             ? new QuartermasterCourierRun(r.RunId, r.RequestId, r.State!, r.OwnerPhase, r.CarrierPhase, r.Trip, r.Trips,
-                r.Code, r.Detail, r.Active, r.CanResume, r.CanClear, r.CustodyUnits, r.CustodyGil)
+                r.Code, r.Detail, r.Active, r.CanResume, r.CanClear, r.CustodyUnits, r.CustodyGil,
+                r.AutoResume is { } auto
+                    ? new QuartermasterCourierAutoResume(auto.Pending, auto.Attempt, auto.MaxAttempts, auto.DueInSeconds, auto.Code,
+                        auto.Exhausted?.Code, auto.Exhausted?.Detail, auto.History?.Count ?? 0)
+                    : null)
             : null;
         status = new QuartermasterCourierStatus(wire.ProviderInstanceId ?? string.Empty, loggedIn, carrier, bridge, roster, run);
         return true;
