@@ -381,8 +381,13 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         state.Phase = state.ResumePhase is WorkshopVendorRestockPhase.Idle or WorkshopVendorRestockPhase.Paused
             ? WorkshopVendorRestockPhase.RefreshInventory
             : state.ResumePhase;
-        // A pause must not spend the bounded retrieval reconcile window.
+        // A pause must not spend the bounded retrieval reconcile window or the retrieval deadline.
         state.RetrievalReconcileStartedAtUtc = null;
+        if (state.Phase == WorkshopVendorRestockPhase.RetrieveFromQuartermaster)
+        {
+            state.RetrievalStartedAtUtc = utcNow().UtcDateTime;
+            nextQuartermasterSubmitUtc = null;
+        }
         state.Message = "Workshop restock resumed.";
         runtime.BeginAutomation();
         PersistPolicy();
@@ -449,8 +454,11 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         diagnosticLog?.Invoke($"[MarketMafioso] Retrying indeterminate workshop retainer retrieval. Previous result: {state.Message}. {cancel.Message}");
         state.Phase = WorkshopVendorRestockPhase.RetrieveFromQuartermaster;
         state.QuartermasterSubmitted = false;
+        // Part of the earlier pull may have landed: retry only what bags still lack.
+        state.RecomputeRetrievalBeforeSubmit = true;
         state.RetrievalReconcileStartedAtUtc = null;
         state.StartedAtUtc = utcNow().UtcDateTime;
+        state.RetrievalStartedAtUtc = state.StartedAtUtc;
         state.Message = "Retrying retainer retrieval.";
         runtime.BeginAutomation();
         PersistPolicy();
@@ -469,7 +477,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
 
     private void TickQuartermaster(WorkshopVendorRestockState state, QuartermasterOwnerScope owner)
     {
-        if (utcNow().UtcDateTime - state.StartedAtUtc > TimeSpan.FromMinutes(15))
+        if (utcNow().UtcDateTime - (state.RetrievalStartedAtUtc ?? state.StartedAtUtc) > TimeSpan.FromMinutes(15))
         {
             nextQuartermasterSubmitUtc = null;
             var cancel = quartermaster.Cancel(owner, "The workshop restock's 15-minute retrieval deadline passed.");
@@ -485,6 +493,18 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         {
             if (nextQuartermasterSubmitUtc is { } retryAt && utcNow().UtcDateTime < retryAt)
                 return;
+            if (state.RecomputeRetrievalBeforeSubmit && !TryRecomputeRemainingRetrieval(state))
+                return;
+            if (!state.Lines.Any(line => line.ReviewedRetainerQuantity > 0))
+            {
+                // Every line already holds its reviewed retainer pull; nothing is left to retrieve.
+                state.Phase = WorkshopVendorRestockPhase.RefreshInventory;
+                state.Message = "Bags already hold every reviewed retainer pull.";
+                PersistPolicy();
+                return;
+            }
+            foreach (var line in state.Lines.Where(line => line.ReviewedRetainerQuantity > 0))
+                line.RetrievalTargetQuantity ??= line.LivePlayerQuantity + line.ReviewedRetainerQuantity;
             var availability = state.Lines.Where(line => line.ReviewedRetainerQuantity > 0)
                 .Select(line => new WorkshopMaterialAvailability(
                     line.ItemId, line.ItemName, 0, line.RequiredQuantity, line.LivePlayerQuantity,
@@ -513,6 +533,13 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         }
 
         var progress = quartermaster.GetProgress(owner);
+        // Full bags end partial (some moved) or failed (nothing moved); either way the rest waits on bag space.
+        if (progress.State is WorkshopQuartermasterProgressState.PartiallySucceeded or WorkshopQuartermasterProgressState.Failed &&
+            string.Equals(progress.Code, InventoryFullCode, StringComparison.OrdinalIgnoreCase))
+        {
+            PauseForFullInventory(state, progress.Message);
+            return;
+        }
         switch (progress.State)
         {
             case WorkshopQuartermasterProgressState.NotStarted:
@@ -590,6 +617,83 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         PersistPolicy();
     }
 
+    private const string InventoryFullCode = "InventoryFull";
+
+    private static int RetrievalTarget(WorkshopVendorRestockPolicyLine line) =>
+        line.RetrievalTargetQuantity ?? line.LivePlayerQuantity + line.ReviewedRetainerQuantity;
+
+    /// <summary>
+    /// Quartermaster stopped because bags filled. Pauses (never finishes) so the player can free space; resume
+    /// resubmits only what bags still lack, under a fresh identity because the old operation is terminal.
+    /// </summary>
+    private void PauseForFullInventory(WorkshopVendorRestockState state, string quartermasterMessage)
+    {
+        var pulled = state.Lines.Where(line => line.ReviewedRetainerQuantity > 0).ToArray();
+        var inventory = runtime.CaptureInventory(pulled.Select(line => line.ItemId).ToArray());
+        string remaining;
+        if (inventory.IsComplete)
+        {
+            var shortfalls = pulled
+                .Select(line => (line.ItemName, Short: RetrievalTarget(line) - inventory.ItemCounts.GetValueOrDefault(line.ItemId)))
+                .Where(entry => entry.Short > 0)
+                .ToArray();
+            if (shortfalls.Length == 0)
+            {
+                diagnosticLog?.Invoke($"[MarketMafioso] Quartermaster reported full bags, but bags hold every reviewed retainer pull; continuing. Quartermaster: {quartermasterMessage}");
+                state.Phase = WorkshopVendorRestockPhase.RefreshInventory;
+                state.Message = "Bags hold every reviewed retainer pull.";
+                PersistPolicy();
+                return;
+            }
+            remaining = "Bags full: " + string.Join(", ", shortfalls.Select(entry => $"{entry.Short:N0} {entry.ItemName}")) +
+                        " still on retainers.";
+        }
+        else
+        {
+            // Bags unreadable right now: Quartermaster's own count of the blocked units stands in.
+            remaining = $"Bags full; {quartermasterMessage.TrimEnd('.')}.";
+        }
+        diagnosticLog?.Invoke($"[MarketMafioso] Workshop restock paused during retainer retrieval. {remaining} Quartermaster: {quartermasterMessage}");
+        nextQuartermasterSubmitUtc = null;
+        state.ResumePhase = WorkshopVendorRestockPhase.RetrieveFromQuartermaster;
+        state.QuartermasterSubmitted = false;
+        state.RecomputeRetrievalBeforeSubmit = true;
+        state.Phase = WorkshopVendorRestockPhase.Paused;
+        state.Message = $"{remaining} Free bag space, then resume.";
+        runtime.EndAutomation();
+        PersistPolicy();
+    }
+
+    /// <summary>
+    /// Rewrites each retainer line's pull to what bags still lack (target minus live count); satisfied lines drop
+    /// to zero. False while inventory is unreadable; the retrieval deadline bounds the wait.
+    /// </summary>
+    private bool TryRecomputeRemainingRetrieval(WorkshopVendorRestockState state)
+    {
+        var pulled = state.Lines
+            .Where(line => line.ReviewedRetainerQuantity > 0 || line.RetrievalTargetQuantity is not null)
+            .ToArray();
+        var inventory = runtime.CaptureInventory(pulled.Select(line => line.ItemId).ToArray());
+        if (!inventory.IsComplete)
+        {
+            state.Message = $"Waiting for inventory to size the remaining retainer pull: {inventory.Message}";
+            return false;
+        }
+        foreach (var line in pulled)
+        {
+            var target = RetrievalTarget(line);
+            var observed = inventory.ItemCounts.GetValueOrDefault(line.ItemId);
+            line.RetrievalTargetQuantity = target;
+            line.LivePlayerQuantity = observed;
+            line.ReviewedRetainerQuantity = Math.Max(0, target - observed);
+        }
+        state.RecomputeRetrievalBeforeSubmit = false;
+        diagnosticLog?.Invoke("[MarketMafioso] Workshop retainer retrieval resized from bags: " + string.Join("; ",
+            pulled.Select(line => $"{line.ItemName} bags {line.LivePlayerQuantity:N0}/{line.RetrievalTargetQuantity:N0} pull {line.ReviewedRetainerQuantity:N0}")));
+        PersistPolicy();
+        return true;
+    }
+
     private bool TryStartVendorEngine(bool waitForInventory, out string error)
     {
         var state = config.ActiveWorkshopVendorRestockState!;
@@ -646,6 +750,19 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         {
             foreach (var line in state.Lines)
                 line.LivePlayerQuantity = inventory.ItemCounts.GetValueOrDefault(line.ItemId);
+            // Never green while a retainer pull is missing from bags: name what fell short.
+            var retainerShort = state.Lines
+                .Where(line => line.RetrievalTargetQuantity is { } target && line.LivePlayerQuantity < target)
+                .ToArray();
+            if (retainerShort.Length > 0)
+            {
+                FinishPolicy(
+                    WorkshopVendorRestockPhase.Failed,
+                    "Restock incomplete; retainer pull short: " + string.Join("; ", retainerShort.Select(line =>
+                        $"{line.ItemName} bags {line.LivePlayerQuantity:N0}/{line.RetrievalTargetQuantity:N0} (short {line.RetrievalTargetQuantity - line.LivePlayerQuantity:N0})")) + ".");
+                error = string.Empty;
+                return true;
+            }
             FinishPolicy(
                 WorkshopVendorRestockPhase.Completed,
                 state.AutomaticallyBuyVendorMaterials

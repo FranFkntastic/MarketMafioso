@@ -340,9 +340,9 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
         var detail = $"Quartermaster retrieval {status} code={state.Code ?? "unspecified"} message={state.Message}";
         if (status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
             status.Equals("succeeded", StringComparison.OrdinalIgnoreCase))
-            return new(WorkshopQuartermasterProgressState.Completed, state.Message ?? "Quartermaster retrieval completed.");
+            return new(WorkshopQuartermasterProgressState.Completed, state.Message ?? "Quartermaster retrieval completed.", state.Code);
         if (status.Equals("partially_succeeded", StringComparison.OrdinalIgnoreCase))
-            return new(WorkshopQuartermasterProgressState.PartiallySucceeded, detail);
+            return new(WorkshopQuartermasterProgressState.PartiallySucceeded, detail, state.Code);
         if (status.Equals("indeterminate", StringComparison.OrdinalIgnoreCase) ||
             status.Equals(ReleasedStatus, StringComparison.OrdinalIgnoreCase))
             return new(WorkshopQuartermasterProgressState.Indeterminate, state.Message ?? "Quartermaster retrieval outcome is indeterminate.");
@@ -350,7 +350,7 @@ public sealed class WorkshopQuartermasterRequestService : IWorkshopQuartermaster
             status.Equals("cancelled", StringComparison.OrdinalIgnoreCase) ||
             status.Equals("rejected", StringComparison.OrdinalIgnoreCase) ||
             status.Equals("not_found", StringComparison.OrdinalIgnoreCase))
-            return new(WorkshopQuartermasterProgressState.Failed, detail);
+            return new(WorkshopQuartermasterProgressState.Failed, detail, state.Code);
         return new(WorkshopQuartermasterProgressState.Running, state.Message ?? $"Quartermaster retrieval {status}.");
     }
 
