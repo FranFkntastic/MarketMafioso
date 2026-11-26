@@ -9,7 +9,7 @@ on:
       - 'tests/MarketMafioso.Server.Tests/**'
       - 'tests/MarketMafioso.ContractTests/**'
       - 'MarketMafioso.sln'
-      - 'eng/franthropy.ref'
+      - 'eng/Franthropy.Version.props'
       - '.github/workflows/deploy-vps-marketmafioso-dev.yml'
   workflow_dispatch:
 
