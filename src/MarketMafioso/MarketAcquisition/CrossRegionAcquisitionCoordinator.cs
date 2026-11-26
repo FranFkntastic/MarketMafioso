@@ -777,6 +777,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 log($"CourierAutoResumeWaitExpired: Quartermaster's automatic resume of courier {LegNoun(leg)} run {run.RunId} " +
                     $"({AttemptText(retry)}) was still pending {AutoResumeWaitPastDue.TotalMinutes:N0} minutes past its due time; " +
                     $"treating {run.State} ({run.Code ?? "no code"}) as final.", null);
+                // Back the write-off with an explicit cancel: an IPC Stop on a halted run drops Quartermaster's pending
+                // retry, so the run cannot deliver later what this leg is about to give up.
+                if (run.RunId is { } staleRun && !courier.TryStopCourierRun(staleRun.ToString("D"), out _, out var stopError))
+                    log($"CourierAutoResumeCancelFailed: could not cancel Quartermaster's pending retry of run {staleRun}: {stopError}", null);
                 return false;
             }
             else if (retry.DueInSeconds is > 0)
@@ -798,8 +802,9 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 (retry?.ExhaustedCode is { } exhausted
                     ? $"; Quartermaster spent all {retry.MaxAttempts} attempts ({exhausted}: {retry.ExhaustedDetail ?? "no detail"})."
                     : "; Quartermaster stopped retrying it.") +
-                " Applying the failed-run outcome.", null);
-            return false;
+                " Applying the failed-run outcome once it settles.", null);
+            // Fall through: a retry that halted before this leg ever saw it running reads "not pending" for a moment
+            // before Quartermaster schedules the next attempt, so the failure gets the same settle re-read as a new one.
         }
         if (autoResumeWaitExpired is { } expired && expired.Run == run.RunId)
             return false;
