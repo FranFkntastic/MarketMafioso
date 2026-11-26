@@ -138,7 +138,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
                 "market-purchase-evidence.json")),
             marketPurchasePacketObserver.Queue,
-            () => Plugin.Framework.IsInFrameworkUpdateThread);
+            () => Plugin.Framework.IsInFrameworkUpdateThread,
+            message => log.Warning("{Message}", message));
         Controller = new MarketBoardAcquisitionController(
             config,
             Plugin.MarketBoard,

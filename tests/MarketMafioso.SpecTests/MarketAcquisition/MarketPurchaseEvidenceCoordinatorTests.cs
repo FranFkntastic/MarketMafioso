@@ -31,6 +31,30 @@ public sealed class MarketPurchaseEvidenceCoordinatorTests
         Assert.False(File.Exists(journalPath));
     }
 
+    // A wrong "not purchased" makes the route buy the same line again with real gil. It only shows up under
+    // timing-dependent packet loss and cannot be told apart from a genuine no-op in route logs alone.
+    [Fact]
+    public void SettleDecision_SettlesOnlyExactPurchaseOrExactNoOp()
+    {
+        var baseline = new MarketPurchaseSettleBaseline { WalletGil = 100_000, BagQuantity = 5, WalletCost = 312 };
+        var coordinator = CreateArmed(Queue(), Draft() with { SettleBaseline = baseline });
+        var intent = Assert.IsType<PendingMarketPurchase>(coordinator.State).Intent;
+        MarketPurchaseSettleOutcome Decide(ulong? gil, uint? bag) =>
+            MarketPurchaseSettleDecision.Decide(intent, new MarketPurchaseSettleReading(gil, bag)).Outcome;
+
+        Assert.Equal(MarketPurchaseSettleOutcome.Purchased, Decide(99_688, 8));
+        Assert.Equal(MarketPurchaseSettleOutcome.NotPurchased, Decide(100_000, 5));
+        Assert.Equal(MarketPurchaseSettleOutcome.Ambiguous, Decide(null, 5));
+        Assert.Equal(MarketPurchaseSettleOutcome.Ambiguous, Decide(null, 8));
+        Assert.Equal(MarketPurchaseSettleOutcome.Ambiguous, Decide(99_688, null));
+        Assert.Equal(MarketPurchaseSettleOutcome.Ambiguous, Decide(99_688, 5));
+        Assert.Equal(MarketPurchaseSettleOutcome.Ambiguous, Decide(100_000, 8));
+        Assert.Equal(MarketPurchaseSettleOutcome.Ambiguous, Decide(99_703, 8));
+        Assert.Equal(MarketPurchaseSettleOutcome.Ambiguous, Decide(99_688, 7));
+        Assert.Equal(MarketPurchaseSettleOutcome.Ambiguous,
+            MarketPurchaseSettleDecision.Decide(intent with { SettleBaseline = null }, new(100_000, 5)).Outcome);
+    }
+
     private static MarketPurchaseEvidenceCoordinator CreateArmed(
         MarketPurchasePacketEvidenceQueue queue,
         MarketPurchaseIntentDraft? draft = null,
