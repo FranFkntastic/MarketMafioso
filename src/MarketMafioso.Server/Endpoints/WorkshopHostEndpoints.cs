@@ -1,5 +1,10 @@
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.WorkshopHost;
+using CraftAppraisalQuote = MarketMafioso.Server.WorkshopHost.CraftAppraisalQuote;
+using CraftAppraisalRequest = MarketMafioso.Server.WorkshopHost.CraftAppraisalRequest;
+using EngineCraftAppraisalQuote = FFXIV_Craft_Architect.Core.Integrations.WorkshopHost.CraftAppraisalQuote;
+using EngineCraftAppraisalRequest = FFXIV_Craft_Architect.Core.Integrations.WorkshopHost.CraftAppraisalRequest;
 
 namespace MarketMafioso.Server.Endpoints;
 
@@ -12,22 +17,24 @@ internal static class WorkshopHostEndpoints
     {
         app.MapGet("/api/capabilities", (
             HttpRequest request,
-            IWorkshopHostCraftQuoteService craftQuoteService,
             WorkshopHostCredentialStore credentialStore,
             CancellationToken token) =>
             GetCapabilitiesAsync(
                 request,
-                craftQuoteService,
                 credentialStore,
                 enableMarketAcquisition,
                 requireApiKey,
                 token));
         app.MapPost("/api/craft/appraise", AppraiseCraft);
+
+        // Capability URL: the 64-hex content hash is the only credential. The Craft Architect
+        // web app fetches it cross-origin from the user's browser.
+        app.MapGet($"{WorkshopHostCraftAppraisalSettings.PlanSnapshotPath}/{{planId}}", OpenPlanSnapshotAsync)
+            .RequireCors(WorkshopHostCraftAppraisalSettings.PlanSnapshotCorsPolicy);
     }
 
     private static async Task<IResult> GetCapabilitiesAsync(
         HttpRequest request,
-        IWorkshopHostCraftQuoteService craftQuoteService,
         WorkshopHostCredentialStore credentialStore,
         bool enableMarketAcquisition,
         bool requireApiKey,
@@ -86,7 +93,7 @@ internal static class WorkshopHostEndpoints
             });
         }
 
-        if (craftQuoteService.IsAvailable && await AllowsAsync(WorkshopHostCredentialScope.CraftQuote))
+        if (await AllowsAsync(WorkshopHostCredentialScope.CraftQuote))
         {
             capabilities.Add(new WorkshopHostCapability
             {
@@ -104,53 +111,115 @@ internal static class WorkshopHostEndpoints
     }
 
     private static async Task<IResult> AppraiseCraft(
+        HttpRequest httpRequest,
         CraftAppraisalRequest quoteRequest,
-        IWorkshopHostCraftQuoteService quoteService,
+        IHostedCraftAppraisalCoordinator coordinator,
+        WorkshopHostCraftAppraisalSettings settings,
+        ILoggerFactory loggerFactory,
         CancellationToken token)
     {
-        if (quoteRequest.SchemaVersion != 1)
-            return Results.BadRequest(new { error = "unsupported_schema_version" });
-        if (quoteRequest.ItemId == 0)
-            return Results.BadRequest(new { error = "item_id_required" });
-        if (quoteRequest.Quantity == 0)
-            return Results.BadRequest(new { error = "quantity_required" });
-        if (!quoteService.IsAvailable)
+        var engineRequest = CraftAppraisalContractMapper.ToEngine(quoteRequest);
+        var rejection = CraftAppraisalRequestValidation.GetRejection(engineRequest, settings.Options);
+        if (rejection != null)
         {
-            return Results.Json(
-                new { error = "craft_appraisal_unavailable" },
-                statusCode: StatusCodes.Status503ServiceUnavailable);
+            return Results.BadRequest(new
+            {
+                error = rejection,
+                detail = DescribeRejection(rejection, engineRequest, settings.Options),
+            });
         }
 
-        CraftAppraisalQuote? quote;
+        var log = loggerFactory.CreateLogger("MarketMafioso.Server.CraftAppraisal");
+        EngineCraftAppraisalQuote quote;
         try
         {
-            quote = await quoteService.AppraiseAsync(quoteRequest, token);
-            if (quote == null)
-                return Results.NotFound(new { error = "craft_appraisal_not_found" });
+            quote = await coordinator.AppraiseAsync(engineRequest, token);
         }
-        catch (TaskCanceledException) when (!token.IsCancellationRequested)
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
+            log.LogWarning(
+                "Craft appraisal for item {ItemId} x{Quantity} in {Region} exceeded the {TimeoutSeconds}-second quote timeout.",
+                engineRequest.ItemId,
+                engineRequest.Quantity,
+                engineRequest.Scope.Region,
+                settings.Options.QuoteTimeout.TotalSeconds);
             return Results.Json(
-                new { error = "craft_architect_api_timeout" },
+                new
+                {
+                    error = "craft_architect_api_timeout",
+                    detail = $"Craft appraisal exceeded the {settings.Options.QuoteTimeout.TotalSeconds:0}-second quote timeout.",
+                },
                 statusCode: StatusCodes.Status504GatewayTimeout);
         }
-        catch (CraftArchitectApiException ex)
-            when (ex.StatusCode == System.Net.HttpStatusCode.GatewayTimeout)
+        catch (HttpRequestException ex)
         {
+            var upstreamStatus = ex.StatusCode?.ToString() ?? "no response";
+            log.LogWarning(
+                ex,
+                "Craft appraisal for item {ItemId} x{Quantity} in {Region} failed: a market or item data request returned {UpstreamStatus}.",
+                engineRequest.ItemId,
+                engineRequest.Quantity,
+                engineRequest.Scope.Region,
+                upstreamStatus);
             return Results.Json(
-                new { error = "craft_architect_api_timeout" },
-                statusCode: StatusCodes.Status504GatewayTimeout);
-        }
-        catch (HttpRequestException)
-        {
-            return Results.Json(
-                new { error = "craft_architect_api_error" },
+                new
+                {
+                    error = "craft_architect_api_error",
+                    detail = $"A market or item data request failed ({upstreamStatus}): {ex.Message}",
+                },
                 statusCode: StatusCodes.Status502BadGateway);
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogError(
+                ex,
+                "Craft appraisal for item {ItemId} x{Quantity} in {Region} failed unexpectedly.",
+                engineRequest.ItemId,
+                engineRequest.Quantity,
+                engineRequest.Scope.Region);
+            return Results.Json(
+                new
+                {
+                    error = "craft_appraisal_failed",
+                    detail = $"{ex.GetType().Name}: {ex.Message}",
+                },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
 
-        var response = string.IsNullOrWhiteSpace(quote.Source)
-            ? quote with { Source = "CraftArchitectHosted" }
-            : quote;
+        CraftAppraisalQuote response = CraftAppraisalContractMapper.FromEngine(
+            quote,
+            settings.ResolvePlanUrl(httpRequest, quote.PlanId, quote.PlanUrl));
         return Results.Ok(response);
+    }
+
+    private static string DescribeRejection(
+        string rejection,
+        EngineCraftAppraisalRequest request,
+        CraftAppraisalApiOptions options) =>
+        rejection switch
+        {
+            CraftAppraisalRequestValidation.UnsupportedSchemaVersion =>
+                $"schemaVersion {request.SchemaVersion} is not supported; this host accepts 1.",
+            CraftAppraisalRequestValidation.ItemIdRequired => "itemId must be greater than zero.",
+            CraftAppraisalRequestValidation.QuantityRequired => "quantity must be greater than zero.",
+            CraftAppraisalRequestValidation.QuantityExceedsLimit =>
+                $"quantity {request.Quantity} exceeds this host's limit of {options.MaximumQuantity}.",
+            CraftAppraisalRequestValidation.UnsupportedPricingMode =>
+                $"pricingMode '{request.Options.PricingMode}' is not supported; this host accepts CurrentMarketEvidence.",
+            _ => rejection,
+        };
+
+    private static async Task<IResult> OpenPlanSnapshotAsync(
+        string planId,
+        CraftAppraisalPlanStore planStore,
+        CancellationToken token)
+    {
+        if (planId.Length != 64 || !planId.All(Uri.IsHexDigit))
+            return Results.NotFound(new { error = "craft_appraisal_plan_id_invalid" });
+
+        var planJson = await planStore.ReadAsync(planId, token);
+        return planJson == null
+            ? Results.NotFound(new { error = CraftAppraisalRequestValidation.PlanNotFound })
+            : Results.Text(planJson, "application/json");
     }
 }

@@ -89,7 +89,10 @@ function Invoke-WorkshopHostSmoke {
     $headers = @{ "X-Api-Key" = $ClientApiKey }
     $capabilities = Invoke-RestMethod -Uri "$BaseUrl/api/capabilities" -Headers $headers -TimeoutSec 10
     $capabilityIds = @($capabilities.capabilities | ForEach-Object { $_.id })
-    $craftQuoteAvailable = $capabilityIds -contains "craft.appraise"
+    if ($capabilityIds -notcontains "craft.appraise") {
+        $advertised = if ($capabilityIds.Count -gt 0) { $capabilityIds -join ", " } else { "none" }
+        throw "Workshop Host did not advertise craft.appraise at $BaseUrl/api/capabilities (advertised: $advertised). Craft quotes run inside Workshop Host and need no extra service; check that this key has the craft:quote scope and that the container runs a current image."
+    }
 
     $unauthenticatedQuoteStatus = Get-HttpStatusCode -Request @{
         Method = "Post"
@@ -112,12 +115,7 @@ function Invoke-WorkshopHostSmoke {
         throw "Invalid-schema craft quote smoke returned HTTP $invalidQuoteStatus; expected 400."
     }
 
-    if ($craftQuoteAvailable) {
-        Write-Host "Workshop Host advertises the configured Craft Architect appraisal API."
-    } else {
-        Write-Host "Craft Architect appraisal is not configured; Workshop Host correctly omits craft.appraise."
-    }
-    Write-Host "Workshop Host quote route auth and schema smoke checks passed."
+    Write-Host "Workshop Host advertises craft.appraise; quote route auth and schema smoke checks passed."
 }
 
 $root = Get-PackageRoot

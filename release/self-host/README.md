@@ -32,7 +32,16 @@ Workshop Host is a small private background server. It saves inventory reports i
 
 You do not need Workshop Host for basic plugin use. Install it only if you want stored inventory history, the browser dashboard, diagnostics, or suite integrations.
 
-MarketMafioso checks `http://localhost:5088/api/capabilities` before using backend-only features such as Craft Architect quote lookup. Workshop Host advertises `craft.appraise` only when its optional loopback CA service URL is configured.
+MarketMafioso checks `http://localhost:5088/api/capabilities` before using backend-only features such as Craft Architect quote lookup. Craft quotes run inside Workshop Host itself, so there is no extra service to install.
+
+### Outside services
+
+Workshop Host contacts only these outside services:
+
+- **Universalis** (`universalis.app`) for market prices used in craft quotes and listing diagnostics.
+- **Garland Tools** (`www.garlandtools.org`) for item names, recipes, and vendor data used in craft quotes and dashboard item search.
+
+Craft quotes and dashboard item search need outbound internet access to those two services. Workshop Host never contacts a Craft Architect server. A quote's "open plan" link opens the Craft Architect web app in your browser, and that page then reads the priced plan back from your Workshop Host.
 
 ## Install Docker First
 
@@ -150,7 +159,7 @@ data\
 backups\
 ```
 
-`config\marketmafioso.env` contains the generated API key and dashboard bootstrap password. `data\` contains the SQLite database. `backups\` is created by the update script.
+`config\marketmafioso.env` contains the generated API key and dashboard bootstrap password. `data\` contains the SQLite database, craft quote plan snapshots, and the craft quote price cache. `backups\` is created by the update script.
 
 ## Updating
 
@@ -204,9 +213,7 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<client-api-key>" }
 ```
 
-`craft.appraise` is present only when the separate Craft Architect appraisal service is configured. Its absence is an explicit unavailable state.
-
-The installer and updater also smoke-test `/api/craft/appraise` auth and schema validation without doing a live appraisal.
+The response should list `craft.appraise`. The installer and updater fail with a message naming what was advertised if it is missing, and they smoke-test `/api/craft/appraise` auth and schema validation without doing a live appraisal.
 
 Container status:
 

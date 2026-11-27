@@ -18,7 +18,17 @@ The address Workshop Host listens on inside Docker. Leave this as `http://0.0.0.
 
 The browser address users should open for the dashboard. For local installs this is `http://localhost:5088`.
 
-This matters because Workshop Host uses it when returning dashboard links to the plugin.
+This matters because Workshop Host uses it when returning dashboard links to the plugin and when building craft quote plan links. If it is blank, those links follow the address the plugin used to reach Workshop Host.
+
+### `MarketMafioso__CraftArchitectAppOrigin`
+
+The Craft Architect web app that a craft quote's "open plan" link opens. Default: `https://xivcraftarchitect.com`. Leave it unless you run your own copy of the Craft Architect web app; it must be an `http` or `https` origin with no path.
+
+Workshop Host never sends requests to this address. It only allows this origin to read plan snapshots from Workshop Host in your browser.
+
+### Retired settings
+
+`MarketMafioso__CraftArchitectAppraiseUrl` and `MarketMafioso__XivDataBaseUrl` are no longer used because craft quotes and item search run inside Workshop Host. If your `config\marketmafioso.env` still sets them, Workshop Host starts normally and logs a warning; you can delete those lines.
 
 ### `MarketMafioso__BasePath`
 
@@ -79,7 +89,7 @@ The SQLite database path inside Docker. In the bundle, `/data/marketmafioso.db` 
 data\marketmafioso\marketmafioso.db
 ```
 
-This database is the durable Workshop Host history.
+This database is the durable Workshop Host history. The same folder also holds `craft-appraisal-plans\` (priced plans behind quote links) and `craft-appraisal-cache\` (cached market prices, safe to delete).
 
 ### `MarketMafioso__RawJsonRetentionCount`
 

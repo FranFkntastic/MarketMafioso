@@ -10,6 +10,7 @@ on:
       - 'tests/MarketMafioso.ContractTests/**'
       - 'MarketMafioso.sln'
       - 'eng/Franthropy.Version.props'
+      - 'eng/CraftArchitectCore.Version.props'
       - '.github/workflows/deploy-vps-marketmafioso-dev.yml'
   workflow_dispatch:
 
@@ -35,22 +36,6 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Read pinned Franthropy revision
-        id: franthropy-ref
-        shell: pwsh
-        run: |
-          [xml]$pin = Get-Content eng/Franthropy.Version.props
-          $revision = ([string]$pin.Project.PropertyGroup.FranthropyPackageVersion).Replace('0.1.0-commit.', '')
-          if ($revision -notmatch '^[0-9a-f]{40}$') { throw 'Invalid Franthropy package pin.' }
-          "ref=$revision" >> $env:GITHUB_OUTPUT
-
-      - name: Checkout Franthropy
-        uses: actions/checkout@v4
-        with:
-          repository: FranFkntastic/Franthropy
-          path: franthropy
-          ref: ${{ steps.franthropy-ref.outputs.ref }}
-
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -62,8 +47,9 @@ jobs:
           -c Release
           -r linux-x64
           --self-contained true
-          -p:FranthropySource=Local
-          -p:FranthropyRoot="${GITHUB_WORKSPACE}/franthropy"
+          --source https://api.nuget.org/v3/index.json
+          -p:FranthropySource=Package
+          -p:RestoreAdditionalProjectSources=
           -o dist/marketmafioso-server
 
       - name: Verify published receiver restart
@@ -79,7 +65,6 @@ jobs:
           export MarketMafioso__BasePath=/marketmafioso
           export MarketMafioso__DatabasePath="$database_path"
           export MarketMafioso__EnableMarketAcquisition=true
-          export MarketMafioso__CraftArchitectAppraiseUrl=http://127.0.0.1:5129/craft/appraise
 
           start_receiver() {
             "$receiver" >"$runtime_dir/receiver.log" 2>&1 &
@@ -141,7 +126,7 @@ jobs:
           MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
           MarketMafioso__StorageLabel=dev receiver storage
           MarketMafioso__EnableMarketAcquisition=true
-          MarketMafioso__CraftArchitectAppraiseUrl=http://127.0.0.1:5129/craft/appraise
+          MarketMafioso__CraftArchitectAppOrigin=https://dev.xivcraftarchitect.com
           MarketMafioso__AllowedOrigins__0=https://dev.xivcraftarchitect.com
           MarketMafioso__AllowedOrigins__1=https://xivcraftarchitect.com
           MarketMafioso__AcquisitionExecutionLeaseSeconds=900
@@ -506,13 +491,21 @@ jobs:
               if (quote?.source !== "CraftArchitectHosted") process.exit(1);
               if (quote?.itemId !== 7017 || quote?.requestedQuantity !== 1) process.exit(1);
               const planUrl = new URL(quote.planUrl);
+              if (planUrl.origin !== "https://dev.xivcraftarchitect.com") process.exit(1);
               const snapshot = planUrl.searchParams.get("appraisalPlan");
-              if (!snapshot?.startsWith("https://dev.xivcraftarchitect.com/api/craft/plans/")) process.exit(1);
+              if (!/^https:\/\/dev\.xivcraftarchitect\.com\/marketmafioso\/api\/craft\/plans\/[0-9a-f]{64}$/.test(snapshot ?? "")) process.exit(1);
               process.stdout.write(snapshot);
             '
           )"
-          curl --fail --silent --show-error "$snapshot_url" --output craft-plan-smoke.json
+          snapshot_headers="$(curl --fail --silent --show-error --dump-header - \
+            --header 'Origin: https://dev.xivcraftarchitect.com' \
+            --output craft-plan-smoke.json \
+            "$snapshot_url")"
           test -s craft-plan-smoke.json
+          printf '%s' "$snapshot_headers" | tr -d '\r' | grep -i -F 'access-control-allow-origin: https://dev.xivcraftarchitect.com' > /dev/null
+          snapshot_invalid_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/craft/plans/not-a-plan-id")"
+          expect_status snapshot-invalid-id "$snapshot_invalid_status" 404
 
           retired_dashboard_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/")"
