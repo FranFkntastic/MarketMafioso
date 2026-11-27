@@ -245,7 +245,6 @@ internal sealed class ControlledMarketActorListingProbe : IDisposable
                     return;
                 }
 
-                await CloseSessionAsync(cancellationToken).ConfigureAwait(false);
                 lock (sync)
                 {
                     retainer = null;
@@ -258,6 +257,7 @@ internal sealed class ControlledMarketActorListingProbe : IDisposable
                         UpdatedAtUtc = DateTimeOffset.UtcNow,
                     };
                 }
+                await CloseSessionAsync(cancellationToken).ConfigureAwait(false);
             }
         }
         catch (RetainerMarketMutationIndeterminateException exception)
@@ -279,11 +279,17 @@ internal sealed class ControlledMarketActorListingProbe : IDisposable
         }
     }
 
+    // Ends the bell session after a verified receipt: backs out of the retainer, closes the list, and reopens and
+    // re-closes it from the bell once when the session will not end. A session left open is appended to the
+    // receipt's message rather than changing what was verified.
     private async Task CloseSessionAsync(CancellationToken cancellationToken)
     {
-        var returned = await session.ReturnToRetainerListAsync(cancellationToken).ConfigureAwait(false);
-        if (returned.Success)
-            await session.CloseRetainerListAsync(cancellationToken).ConfigureAwait(false);
+        var ended = await session.EnsureRetainerSessionEndedAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (ended.Success)
+            return;
+        log.Warning("[MarketMafioso] Controlled market actor bell session not ended: {Code}: {Message}", ended.Code, ended.Message);
+        lock (sync)
+            view = view with { Message = $"{view.Message} The summoning-bell session could not be closed ({ended.Code}): {ended.Message}" };
     }
 
     private (uint ItemId, string Name)? ResolveExactItem(string itemName)
