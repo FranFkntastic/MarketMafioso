@@ -39,6 +39,7 @@ MarketMafioso__ClientApiKey=<secret>
 MarketMafioso__PreviousClientApiKey=<optional-previous-secret>
 MarketMafioso__BasePath=/marketmafioso
 MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
+MarketMafioso__CraftArchitectAppOrigin=https://dev.xivcraftarchitect.com
 MarketMafioso__StorageLabel=dev receiver storage
 MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
 MarketMafioso__RawJsonRetentionCount=20
@@ -50,7 +51,7 @@ MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 
 `/health` remains public for uptime checks. Inventory ingestion, `/api/capabilities`, and `/api/reports...` machine-read routes require the client key. Browser dashboard routes use app-managed login sessions backed by the receiver SQLite database.
 
-Hosted Workshop Host exposes `/api/capabilities` for feature discovery. It advertises `craft.appraise` only while a valid loopback Craft Architect API endpoint is configured; absent capability means the quote service is unavailable, not that MMF should compute a quote itself.
+Hosted Workshop Host exposes `/api/capabilities` for feature discovery. Craft quotes run in-process, so it advertises `craft.appraise` to every key with the `craft:quote` scope. Quote plan snapshots are served anonymously at `/marketmafioso/api/craft/plans/<64-hex-id>` for the Craft Architect origin set in `MarketMafioso__CraftArchitectAppOrigin`.
 
 The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
 
@@ -95,7 +96,7 @@ MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
 
 The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read routes, and proxied dashboard routes.
 
-The server compiles independently of Craft Architect. The dev deployment points it at CA's environment-matched loopback appraisal endpoint, then smoke-tests capability discovery, authentication, schema validation, and a real quote.
+The server restores Franthropy and the Craft Architect appraisal engine (`Gooseworks.FFXIVCraftArchitect.Core`) from nuget.org and needs no Franthropy or Craft Architect checkout. The deployment smoke-tests capability discovery, authentication, schema validation, a real quote, and that the quote's plan snapshot is served by this host.
 
 Server deployment is intentionally separate from plugin deployment. A backend deploy updates the VPS Workshop Host only; it does not copy a DLL into Dalamud. Use `Deploy-PluginDev.ps1` when the in-game plugin needs to change too.
 
@@ -197,4 +198,4 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<secret>" }
 ```
 
-The response should include inventory/read diagnostics capabilities. It includes `craft.appraise` only when the separate Craft Architect service is configured and reachable by policy.
+The response should include inventory/read diagnostics capabilities and `craft.appraise`.

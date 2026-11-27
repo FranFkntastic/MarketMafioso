@@ -26,21 +26,29 @@ Example:
 MarketMafioso__PublicOrigin=http://localhost:5088
 ```
 
-This is the public browser address for Workshop Host. The server uses it when it returns dashboard links after a plugin upload.
+This is the public browser address for Workshop Host. The server uses it when it returns dashboard links after a plugin upload, and as the address of craft quote plan snapshots (`{PublicOrigin}{BasePath}/api/craft/plans/<id>`).
 
-Why it matters: if this points to the wrong address, uploads may still work but links shown by the plugin can open the wrong site.
+When it is blank, Workshop Host builds those links from the address each request arrived on (honoring `X-Forwarded-Proto` and `X-Forwarded-Host`).
 
-### `MarketMafioso__CraftArchitectAppraiseUrl`
+Why it matters: if this points to the wrong address, uploads may still work but links shown by the plugin can open the wrong site, and Craft Architect cannot load a quote's plan.
+
+### `MarketMafioso__CraftArchitectAppOrigin`
 
 Example:
 
 ```text
-MarketMafioso__CraftArchitectAppraiseUrl=http://127.0.0.1:5129/craft/appraise
+MarketMafioso__CraftArchitectAppOrigin=https://xivcraftarchitect.com
 ```
 
-Set this to the exact loopback endpoint of a separately hosted Craft Architect appraisal service. Workshop Host refuses non-loopback targets so the internal compute API cannot be redirected to an arbitrary remote service.
+The Craft Architect web app that a craft quote's plan link opens. Leave it at the default unless you run your own copy of the Craft Architect web app. The value must be an `http` or `https` origin with no path.
 
-Why it matters: Workshop Host advertises `craft.appraise` only when this boundary is configured, and Craft Architect—not MMF—owns quote caching and the exact priced-plan snapshot link.
+Workshop Host never sends requests to this address. Your browser opens the link, and the Craft Architect page then fetches the plan snapshot from Workshop Host. Workshop Host allows exactly this origin to read plan snapshots cross-origin, including from a public HTTPS page to a Workshop Host on `localhost` or your home network.
+
+Why it matters: craft quotes run inside Workshop Host. This setting only decides where the "open plan" link points.
+
+### Retired settings
+
+`MarketMafioso__CraftArchitectAppraiseUrl` and `MarketMafioso__XivDataBaseUrl` are no longer used: craft quotes and item search run inside Workshop Host. An old configuration that still sets them starts normally and logs a warning naming each one; remove them when convenient.
 
 ### `MarketMafioso__BasePath`
 
@@ -167,6 +175,8 @@ MarketMafioso__DatabasePath=/data/marketmafioso.db
 ```
 
 This is where Workshop Host stores its SQLite database inside the container. The Docker bundle maps `/data` to `release/self-host/data/marketmafioso/` on your machine.
+
+Craft quote plan snapshots (`craft-appraisal-plans/`) and the craft quote market cache (`craft-appraisal-cache/`) are kept in the same directory as the database, so they live in the same mounted folder.
 
 Why it matters: this database is the durable Workshop Host history. Back up the mapped host folder, not only the container.
 

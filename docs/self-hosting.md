@@ -6,7 +6,7 @@ Workshop Host enables persistent inventory snapshots, the inventory browser, Mar
 
 The current package still keeps receiver-era names in scripts, routes, Docker image, and some setting filenames for compatibility.
 
-Craft Architect quote lookup is an optional service integration. Workshop Host compiles independently, advertises `craft.appraise` only when `MarketMafioso__CraftArchitectAppraiseUrl` points to a loopback CA service, and never reaches inside CA's engine.
+Craft Architect craft quotes run inside Workshop Host: there is no separate Craft Architect service to install, and `craft.appraise` is always available to keys with the `craft:quote` scope.
 
 ## Requirements
 
@@ -14,6 +14,16 @@ Craft Architect quote lookup is an optional service integration. Workshop Host c
 - A random client API key shared between the plugin and Workshop Host.
 - A dashboard username/password for browser login.
 - Persistent storage for the SQLite database.
+- Outbound internet access to Universalis and Garland Tools for craft quotes and item search (see [Outside Services](#outside-services)).
+
+## Outside Services
+
+Workshop Host runs Craft Architect's appraisal engine and item search in-process. It contacts only these outside services:
+
+- **Universalis** (`universalis.app`) for market prices used in craft quotes and listing diagnostics.
+- **Garland Tools** (`www.garlandtools.org`) for item names, recipes, and vendor data used in craft quotes and dashboard item search.
+
+Craft quotes and dashboard item search need outbound internet access to those two services. Workshop Host never sends requests to any Craft Architect server; a quote's plan link only opens the Craft Architect web app in your browser, which then reads the plan snapshot back from your Workshop Host.
 
 For Windows users who do not already have Docker, install Docker Desktop first. Docker's official Windows install guide is:
 
@@ -85,7 +95,7 @@ Publish the server:
 .\src\MarketMafioso\tools\Publish-ServerRelease.ps1
 ```
 
-Direct source publishing does not require a Craft Architect checkout. Quote computation remains unavailable until a separate CA helper is running and its exact loopback appraisal URL is configured.
+Direct source publishing does not require a Craft Architect checkout: the appraisal engine comes from the `Gooseworks.FFXIVCraftArchitect.Core` package on nuget.org.
 
 For a self-contained Linux x64 build:
 
@@ -115,8 +125,8 @@ MarketMafioso__InventoryReadApiKey=<optional-inventory-read-only-key>
 MarketMafioso__CraftQuoteApiKey=<optional-craft-quote-only-key>
 MarketMafioso__DiagnosticsReadApiKey=<optional-diagnostics-read-only-key>
 MarketMafioso__BasePath=<path-prefix-or-empty>
-MarketMafioso__PublicOrigin=<public-origin-for-dashboard-links>
-MarketMafioso__CraftArchitectAppraiseUrl=<optional-loopback-ca-appraisal-url>
+MarketMafioso__PublicOrigin=<public-origin-for-dashboard-and-plan-links>
+MarketMafioso__CraftArchitectAppOrigin=https://xivcraftarchitect.com
 MarketMafioso__DatabasePath=<sqlite-file-path>
 MarketMafioso__EnableMarketAcquisition=true
 MarketMafioso__RawJsonRetentionCount=20
@@ -144,6 +154,8 @@ Reverse proxy, HTTPS, path-prefix, manual Docker, and direct .NET hosting notes 
 ## Backups
 
 Workshop Host state lives in one SQLite database. Back up the configured `MarketMafioso__DatabasePath` file while the service is stopped, or use SQLite's online backup tooling if you need hot backups.
+
+The same directory also holds `craft-appraisal-plans/` (priced plan snapshots behind quote plan links) and `craft-appraisal-cache/` (cached market prices). Back up the plans folder if you want old plan links to keep opening; the cache can be deleted at any time. Workshop Host does not prune old plan snapshots; each is a small JSON file.
 
 The receiver keeps one durable current inventory for every known character. `InventoryHistoryRetentionPerCharacter` bounds older semantic changes independently, while `RawJsonRetentionCount` separately bounds original uploaded JSON used for diagnostics.
 
@@ -175,7 +187,7 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<client-api-key>" }
 ```
 
-`craft.appraise` appears only when the separate CA service URL is configured. When present, Acquisition Workbench can use the hosted quote API after you enable Craft Architect quotes in plugin settings.
+The response lists `craft.appraise` for any key with the `craft:quote` scope, including the client API key. Acquisition Workbench uses it after you enable Craft Architect quotes in plugin settings.
 
 The quote endpoint exists at:
 
@@ -183,6 +195,6 @@ The quote endpoint exists at:
 http://localhost:5088/api/craft/appraise
 ```
 
-The endpoint is an authenticated gateway to the separately hosted Craft Architect API.
+Workshop Host computes the quote itself, using Universalis and Garland Tools data. A quote's `planUrl` opens the Craft Architect web app (`MarketMafioso__CraftArchitectAppOrigin`), which reads the priced plan from this host at `/api/craft/plans/<id>`. That snapshot route needs no API key; the 64-character plan id is the access token.
 
 The installer and updater smoke-test quote auth and request validation without doing a real appraisal, so setup is not blocked by transient upstream recipe or pricing data.

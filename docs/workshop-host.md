@@ -36,7 +36,7 @@ Workshop Host exposes a machine-readable capabilities endpoint:
 GET /api/capabilities
 ```
 
-MMF uses this endpoint before enabling hosted Craft Architect quote lookup. Workshop Host advertises `craft.appraise` only when `MarketMafioso__CraftArchitectAppraiseUrl` names a valid loopback CA service. If it is absent, MMF keeps the quote action unavailable instead of silently substituting another computation path.
+MMF uses this endpoint before enabling hosted Craft Architect quote lookup. Workshop Host advertises `craft.appraise` whenever the calling key has the `craft:quote` scope. If it is absent, MMF keeps the quote action unavailable instead of silently substituting another computation path.
 
 ## Craft Quote API
 
@@ -46,7 +46,17 @@ Workshop Host reserves the private craft appraisal route:
 POST /api/craft/appraise
 ```
 
-The route requires the client API key when API-key auth is enabled. Workshop Host forwards the versioned wire contract to CA's loopback API; it does not reference or invoke Craft Architect Core. MMF treats configured quote API failures as visible evidence-provider failures, not as a silent fallback to stale or manual costs.
+The route requires the client API key when API-key auth is enabled. Workshop Host runs Craft Architect's appraisal engine in-process (the `Gooseworks.FFXIVCraftArchitect.Core` package) and maps it onto the same versioned wire contract. Error responses carry an `error` code and a `detail` sentence naming what was missing or which limit tripped. MMF treats quote API failures as visible evidence-provider failures, not as a silent fallback to stale or manual costs.
+
+A quote's `planUrl` opens the Craft Architect web app, which reads the priced plan back from Workshop Host:
+
+```text
+GET /api/craft/plans/{planId}
+```
+
+The plan id is the SHA-256 of the snapshot (64 hex characters) and is the only credential: the route needs no API key or dashboard session, returns 404 for any other id shape, and allows cross-origin `GET` only from `MarketMafioso__CraftArchitectAppOrigin`, including the private-network preflight a public HTTPS page sends to a `localhost` host.
+
+Dashboard item search (`GET /api/xivdata/items/search?q=&limit=`) is served from the same engine's item data provider.
 
 MMF keeps an in-memory last-good quote cache per appraisal signature while the plugin session is alive. If live quote evidence fails, the cached quote is labeled with `(last-good)` and warning text. Route creation still uses the user's explicit buy threshold, not the cached quote cost.
 
