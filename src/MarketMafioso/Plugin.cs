@@ -125,6 +125,15 @@ public sealed class Plugin : IDalamudPlugin
 
     private CancellationTokenSource? timerCancellation;
 
+    // Ordinary play: deliver shortly after a burst settles; the cap only guards against a never-settling stream.
+    private static readonly InventoryDeliveryWindow InteractiveInventoryDelivery =
+        new(TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(5));
+
+    // Automation runs change inventory every few seconds for hours; batch those changes into about one delivery a
+    // minute. Nothing reads this character's delivered inventory back during these runs, and a run's end flushes.
+    private static readonly InventoryDeliveryWindow BatchRunInventoryDelivery =
+        new(TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(60));
+
     public Plugin()
     {
         Instance = this;
@@ -212,14 +221,16 @@ public sealed class Plugin : IDalamudPlugin
             retainerReports,
             quartermaster);
         inventoryDelivery = new InventoryDeliveryCoalescer(
-            TimeSpan.FromMilliseconds(500),
+            InteractiveInventoryDelivery,
+            BatchRunInventoryDelivery,
             token => Framework.RunOnTick(
                 () => reporter.SendDeltaReportAsync(quiet: true),
                 cancellationToken: token),
             (message, exception) =>
             {
+                // The reporter already logs each sent delta; the coalescing detail is for diagnosis only.
                 if (exception is null)
-                    Log.Information("[MarketMafioso] {Message}", message);
+                    Log.Debug("[MarketMafioso] {Message}", message);
                 else
                     Log.Warning(exception, "[MarketMafioso] {Message}", message);
             });
@@ -962,6 +973,7 @@ public sealed class Plugin : IDalamudPlugin
         frameTimings.Mark("tradeQueue");
         workshopRestock.Tick();
         frameTimings.Mark("workshopRestock");
+        inventoryDelivery.SetBatchRunActive(IsInventoryBatchRunActive());
         acquisitionServices.Tick();
         frameTimings.Mark(AcquisitionStep);
         agentBridge.Tick();
@@ -1212,6 +1224,12 @@ public sealed class Plugin : IDalamudPlugin
     {
         inventoryDelivery.Notify(reason);
     }
+
+    // Long automation runs that mutate this character's inventory in a steady stream. Market acquisition routes are
+    // left out: they relog, and a change still batched at a relog would reach the host only on that character's
+    // next session.
+    private bool IsInventoryBatchRunActive() =>
+        workshopAssemblyRunner.IsRunning || workshopRestock.Runner.IsRunning || tradeQueueRunner.IsActive;
 
     private void StartTimer()
     {
