@@ -219,12 +219,29 @@ internal sealed class HomeTabPanel : IDisposable
         return snapshotProbe.HasValue ? snapshotProbe.Value : EmptySnapshot;
     }
 
-    private bool ShouldShowGettingStarted(HomeSnapshot snapshot) =>
-        !config.HomeGettingStartedHidden && !IsGettingStartedSettled(snapshot);
+    private bool ShouldShowGettingStarted(HomeSnapshot snapshot)
+    {
+        if (config.HomeGettingStartedHidden)
+            return false;
 
-    /// <summary>Settled once a workshop project is queued and the current character's retainer stock has been seen.</summary>
+        // Queues empty again after a handoff or a run, so settling is remembered rather than re-evaluated.
+        if (IsGettingStartedSettled(snapshot))
+        {
+            HideGettingStarted();
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Settled once something is in the Trade Queue and a buy list has been started.</summary>
     internal static bool IsGettingStartedSettled(HomeSnapshot snapshot) =>
-        snapshot.Workshop.ProjectCount > 0 && snapshot.RetainersSeen is > 0;
+        IsHandoffStarted(snapshot) && IsBuyListStarted(snapshot);
+
+    private static bool IsHandoffStarted(HomeSnapshot snapshot) => snapshot.Trade.LineCount > 0 || snapshot.Trade.RunActive;
+
+    private static bool IsBuyListStarted(HomeSnapshot snapshot) =>
+        snapshot.Market.BuyListLines > 0 || snapshot.Market.PlanLines is not null || snapshot.Market.RouteActive;
 
     private void DrawGettingStarted(HomeSnapshot snapshot)
     {
@@ -256,23 +273,37 @@ internal sealed class HomeTabPanel : IDisposable
                     case 1:
                         DrawStep(
                             1,
-                            "Pick a workshop project",
-                            "Open Workshop Logistics, add the airship or submarine parts your company is building, and MMF works out every material you need.",
-                            snapshot.Workshop.ProjectCount > 0 ? $"✓ {Plural(snapshot.Workshop.ProjectCount, "project")} queued" : null,
+                            "Line up a handoff",
+                            "Add items to the Trade Queue and pick who gets them. When you open a trade with that player, MMF fills the window and tracks what's left.",
+                            IsHandoffStarted(snapshot) ? $"✓ {Plural(snapshot.Trade.LineCount, "item")} queued" : null,
                             () =>
                             {
-                                if (ImGui.Button("Open Workshop Logistics##homeStep1"))
-                                    actions.OpenTab("Workshop Logistics");
-                                RegisterLast("home.getting-started.workshop", "Open Workshop Logistics", () => actions.OpenTab("Workshop Logistics"));
+                                if (ImGui.Button("Open Trade Queue##homeStep1"))
+                                    actions.OpenTab("Trade Queue");
+                                RegisterLast("home.getting-started.trade", "Open Trade Queue", () => actions.OpenTab("Trade Queue"));
                             });
                         break;
                     case 2:
                         DrawStep(
                             2,
-                            "Check your stock",
-                            "Visit a summoning bell once. MMF remembers what your retainers hold, so shortages count everything you own.",
-                            snapshot.RetainersSeen is > 0 ? $"✓ {Plural(snapshot.RetainersSeen.Value, "retainer")} seen" : null,
-                            null);
+                            "Build a buy list",
+                            "List what you need and the most you'll pay. MMF finds the cheapest worlds, plans the route, and buys under your ceiling.",
+                            IsBuyListStarted(snapshot) ? "✓ Buy list started" : null,
+                            () =>
+                            {
+                                if (snapshot.Market.Unlocked)
+                                {
+                                    if (ImGui.Button("Open Market Acquisition##homeStep2"))
+                                        actions.OpenTab("Market Acquisition");
+                                    RegisterLast("home.getting-started.market", "Open Market Acquisition", () => actions.OpenTab("Market Acquisition"));
+                                }
+                                else
+                                {
+                                    if (ImGui.Button("Set up Workshop Host##homeStep2"))
+                                        actions.OpenServerSettings();
+                                    RegisterLast("home.getting-started.market-host", "Open Settings > Server Connection to set up a Workshop Host", actions.OpenServerSettings);
+                                }
+                            });
                         break;
                     default:
                         DrawStep(
@@ -329,19 +360,19 @@ internal sealed class HomeTabPanel : IDisposable
     {
         var lineHeight = ImGui.GetTextLineHeightWithSpacing();
         var estimate = (lineHeight * 6f) + ImGui.GetFrameHeightWithSpacing();
-        var topRowHeight = CardHeight(estimate, "##homeWorkshop", "##homeTrade");
-        var bottomRowHeight = CardHeight(estimate, "##homeMarket", "##homeInventory");
+        var topRowHeight = CardHeight(estimate, "##homeTrade", "##homeMarket");
+        var bottomRowHeight = CardHeight(estimate, "##homeWorkshop", "##homeInventory");
         if (!ImGui.BeginTable("##mmfHomeCards", 2, ImGuiTableFlags.SizingStretchSame | ImGuiTableFlags.NoPadOuterX))
             return;
 
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
-        DrawWorkshopCard(snapshot.Workshop, topRowHeight);
-        ImGui.TableNextColumn();
         DrawTradeCard(snapshot.Trade, topRowHeight);
+        ImGui.TableNextColumn();
+        DrawMarketCard(snapshot.Market, snapshot.Host, topRowHeight);
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
-        DrawMarketCard(snapshot.Market, snapshot.Host, bottomRowHeight);
+        DrawWorkshopCard(snapshot.Workshop, bottomRowHeight);
         ImGui.TableNextColumn();
         DrawInventoryCard(snapshot.Host, snapshot.RetainersSeen, bottomRowHeight);
         ImGui.EndTable();

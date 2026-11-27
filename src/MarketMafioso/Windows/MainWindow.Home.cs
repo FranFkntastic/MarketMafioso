@@ -15,9 +15,9 @@ public partial class MainWindow
     private static readonly string[] MainTabNames =
     [
         HomeTabPanel.TabName,
-        "Workshop Logistics",
         "Trade Queue",
         "Market Acquisition",
+        "Workshop Logistics",
         "Diagnostics",
         "Settings",
         "Status",

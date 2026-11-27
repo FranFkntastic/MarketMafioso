@@ -1,6 +1,6 @@
 # MarketMafioso
 
-MarketMafioso is a Dalamud plugin for Free Company workshop production, market-board buying, and player handoff. It stands on its own; an optional self-hosted Workshop Host unlocks extra features.
+MarketMafioso is a Dalamud plugin for player handoff, cross-world market buying, and Free Company workshop production. It stands on its own; an optional self-hosted Workshop Host unlocks extra features.
 
 ## Start Here
 

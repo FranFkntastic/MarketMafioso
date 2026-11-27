@@ -102,7 +102,7 @@ public partial class MainWindow : Window, IDisposable
     public MarketMafiosoCaptureRegion? AgentCaptureRegion { get; private set; }
     public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
 
-    internal const string ProductTagline = "Free Company workshop production, market-board buying, and player handoff.";
+    internal const string ProductTagline = "Player handoff, cross-world market buying, and Free Company workshop production.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, material shortages, Quartermaster requests, handoff, and assembly.";
 
     internal static readonly Vector4 ColHeader = MarketMafiosoUiTheme.Header;
@@ -829,13 +829,6 @@ public partial class MainWindow : Window, IDisposable
                     ImGui.EndTabItem();
                 }
 
-                if (ImGui.BeginTabItem("Workshop Logistics", GetMainTabFlags("Workshop Logistics")))
-                {
-                    ObserveOpenMainTab("Workshop Logistics");
-                    DrawWorkshopPrepTab();
-                    ImGui.EndTabItem();
-                }
-
                 if (ImGui.BeginTabItem("Trade Queue", GetMainTabFlags("Trade Queue")))
                 {
                     ObserveOpenMainTab("Trade Queue");
@@ -847,6 +840,13 @@ public partial class MainWindow : Window, IDisposable
                 {
                     ObserveOpenMainTab("Market Acquisition");
                     DrawMarketAcquisitionTab();
+                    ImGui.EndTabItem();
+                }
+
+                if (ImGui.BeginTabItem("Workshop Logistics", GetMainTabFlags("Workshop Logistics")))
+                {
+                    ObserveOpenMainTab("Workshop Logistics");
+                    DrawWorkshopPrepTab();
                     ImGui.EndTabItem();
                 }
 
