@@ -40,6 +40,8 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
 
         // The courier is interrupted; MMF fails resumably and Resume asks QM to resume the same run.
         fixture.Courier.Run = Run(runId, requestId, "Interrupted", canResume: true);
+        // A fresh failure is re-read once after the settle grace before it is final.
+        fixture.TickAfter(restarted);
         fixture.TickAfter(restarted);
         Assert.Equal(CrossRegionAcquisitionPhase.Failed, restarted.Phase);
         Assert.True(restarted.CanResume);
