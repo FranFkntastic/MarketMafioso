@@ -10,6 +10,7 @@ Use Workshop Host when you want private state or automation:
 
 - persistent inventory snapshots;
 - browser dashboard sessions;
+- Market Acquisition work orders queued from the dashboard or Craft Architect;
 - diagnostics and stored report history;
 - Craft Architect quote lookup for Acquisition Workbench craft appraisal;
 - future private cross-tool state between Craft Architect and MarketMafioso.
@@ -20,6 +21,7 @@ MarketMafioso should remain useful without Workshop Host:
 
 - Workshop Logistics;
 - local queue preparation;
+- Market Acquisition buy lists, plans, and buying routes;
 - manual craft-cost evidence for Acquisition Workbench appraisal;
 - Craft Architect quote-file imports for Acquisition Workbench appraisal;
 - local quick-shop route preparation.

@@ -23,9 +23,7 @@ internal sealed class SettingsTabPanel
         Configuration config,
         HttpReporter reporter,
         IPluginLog log,
-        Action stopMarketAcquisitionRoute,
         IRetainerListingRefreshControls retainerListingRefreshControls,
-        MarketAcquisitionHostCheck hostCheck,
         Action restartTimer,
         AgentBridgeUiReviewRegistry reviewRegistry,
         Func<MarketIntelligenceReportingStatus>? intelligenceStatus = null)
@@ -46,7 +44,7 @@ internal sealed class SettingsTabPanel
             config,
             retainerListingRefreshControls,
             reviewRegistry).Descriptors);
-        pages.AddRange(new AdvancedSettingsPages(config, stopMarketAcquisitionRoute, hostCheck, reviewRegistry).Descriptors);
+        pages.AddRange(new AdvancedSettingsPages(config, reviewRegistry).Descriptors);
         navigationCatalog = new SettingsNavigationCatalog(pages);
     }
 

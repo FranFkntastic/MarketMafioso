@@ -54,16 +54,11 @@ public partial class MainWindow
     }
 
     private string ResolveRestorableMainTab(string? stored) =>
-        stored is not null && MainTabNames.Contains(stored, StringComparer.Ordinal) && IsMainTabAvailable(stored)
+        stored is not null && IsMainTabAvailable(stored)
             ? stored
             : HomeTabPanel.TabName;
 
-    private bool IsMainTabAvailable(string mainTab) =>
-        mainTab switch
-        {
-            "Market Acquisition" => acquisitionServices.IsMarketAcquisitionUnlocked(),
-            _ => MainTabNames.Contains(mainTab, StringComparer.Ordinal),
-        };
+    private static bool IsMainTabAvailable(string mainTab) => MainTabNames.Contains(mainTab, StringComparer.Ordinal);
 
     /// <summary>Flags for one main tab item, honoring an explicit request first, then the open-time restore.</summary>
     private ImGuiTabItemFlags GetMainTabFlags(string tabName)
@@ -197,19 +192,10 @@ public partial class MainWindow
 
     private HomeMarketFacts BuildHomeMarketFacts()
     {
-        var unlocked = acquisitionServices.IsMarketAcquisitionUnlocked();
-        var hostStatus = Plugin.Instance.AcquisitionHostCheck.Status;
-        var hostOffers = !hostStatus.StartsWith("Server does not offer", StringComparison.Ordinal);
-        if (!unlocked)
-            return new HomeMarketFacts(false, config.MarketAcquisitionLockedByUser, hostOffers, 0, 0, false, string.Empty, 0, 0, null, null, null, null, false);
-
         var route = routeEngine.CreateSnapshot();
         var plan = acquisitionWorkspace.PreparedPlan;
         var ready = plan is { Status: "Ready" };
         return new HomeMarketFacts(
-            true,
-            config.MarketAcquisitionLockedByUser,
-            hostOffers,
             acquisitionRequestBuilder.LineCount,
             acquisitionWorkspace.PendingRequests.Count,
             route.IsRouteActive,
@@ -226,16 +212,14 @@ public partial class MainWindow
     private HomeHostFacts BuildHomeHostFacts()
     {
         var serverUrl = config.ServerUrl;
-        var hostStatus = Plugin.Instance.AcquisitionHostCheck.Status;
+        var reachability = Plugin.Instance.HostReachability.Status;
         var lastSendOk = reporter.LastSentAt.HasValue && reporter.LastStatus.StartsWith('2');
-        var hostReached = hostStatus is "Unlocked." or "Server offers Market Acquisition." ||
-                          hostStatus.StartsWith("Server does not offer", StringComparison.Ordinal);
         var paired = !string.IsNullOrWhiteSpace(config.ApiKey);
         var connection = string.IsNullOrWhiteSpace(serverUrl)
             ? HomeHostConnection.NotConnected
-            : lastSendOk || hostReached
+            : lastSendOk || reachability == WorkshopHostReachability.Reachable
                 ? HomeHostConnection.Connected
-                : hostStatus == "Checking..."
+                : reachability == WorkshopHostReachability.Checking
                     ? HomeHostConnection.Checking
                     // The default localhost receiver with no key is "never set up", not a fault.
                     : paired || reporter.LastSentAt.HasValue

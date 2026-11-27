@@ -75,9 +75,6 @@ public class Configuration : IPluginConfiguration
     public List<ulong> MarketAcquisitionDepositionDefaultedOwners { get; set; } = [];
     /// <summary>Deposition rail expansion by character content id; absent = the owner open, others closed.</summary>
     public Dictionary<ulong, bool> MarketAcquisitionDepositionExpanded { get; set; } = new();
-    public bool EnableMarketAcquisition { get; set; } = false;
-    public bool MarketAcquisitionLockedByUser { get; set; }
-    public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
     public MarketAcquisitionRouteDiagnosticsLevel MarketAcquisitionRouteDiagnostics { get; set; } =
         MarketAcquisitionRouteDiagnosticsLevel.Summary;

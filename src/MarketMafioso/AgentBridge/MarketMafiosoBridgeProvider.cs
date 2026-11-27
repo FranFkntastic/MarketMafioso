@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Franthropy.Dalamud.AgentBridge;
 
 namespace MarketMafioso.AgentBridge;
@@ -35,7 +34,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         new("mmf.main-window.compact", "MarketMafioso compact window", 20),
     ];
 
-    private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> PublicReviewSurfaces =
+    private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> ReviewSurfaces =
     [
         new("home", "Home", "select-main-tab", "Home", 30),
         new("workshop-logistics", "Workshop Logistics", "select-main-tab", "Workshop Logistics", 40),
@@ -44,18 +43,14 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         new("workshop-logistics.materials", "Workshop Logistics - Materials", "select-main-tab", "Workshop Logistics/Materials", 43),
         new("workshop-logistics.assembly", "Workshop Logistics - Assembly", "select-main-tab", "Workshop Logistics/Assembly", 44),
         new("trade-queue", "Trade Queue", "select-main-tab", "Trade Queue", 45),
-        new("diagnostics", "Diagnostics", "select-main-tab", "Diagnostics", 70),
-        new("settings", "Settings", "select-main-tab", "Settings", 80),
-        new("status", "Status", "select-main-tab", "Status", 90),
-    ];
-
-    private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> AcquisitionSurfaces =
-    [
         new("market-listings", "Market Listings", "open-main-window", "Market Listings", 59),
         new("market-acquisition", "Market Acquisition", "select-main-tab", "Market Acquisition", 60),
         new("market-acquisition.inbox", "Market Acquisition - Inbox", "select-main-tab", "Market Acquisition/Inbox", 62),
         new("market-acquisition.workbench", "Market Acquisition - Workbench", "select-main-tab", "Market Acquisition/Workbench", 63),
         new("market-acquisition.route", "Market Acquisition - Route", "select-main-tab", "Market Acquisition/Route", 64),
+        new("diagnostics", "Diagnostics", "select-main-tab", "Diagnostics", 70),
+        new("settings", "Settings", "select-main-tab", "Settings", 80),
+        new("status", "Status", "select-main-tab", "Status", 90),
     ];
 
     private readonly Func<AgentBridgeTruth> createSnapshot;
@@ -70,7 +65,6 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<string, AgentBridgeControlledMarketListingTruth> beginControlledMarketActorListing;
     private readonly Func<AgentBridgeControlledMarketListingTruth> removeControlledMarketActorListing;
     private readonly Func<string, AgentBridgeControlledMarketBrowseTruth> beginControlledMarketActorBrowse;
-    private readonly Func<bool> isMarketAcquisitionUnlocked;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public MarketMafiosoBridgeProvider(
@@ -86,7 +80,6 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<string, AgentBridgeControlledMarketListingTruth> beginControlledMarketActorListing,
         Func<AgentBridgeControlledMarketListingTruth> removeControlledMarketActorListing,
         Func<string, AgentBridgeControlledMarketBrowseTruth> beginControlledMarketActorBrowse,
-        Func<bool> isMarketAcquisitionUnlocked,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.createSnapshot = createSnapshot;
@@ -101,7 +94,6 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.beginControlledMarketActorListing = beginControlledMarketActorListing;
         this.removeControlledMarketActorListing = removeControlledMarketActorListing;
         this.beginControlledMarketActorBrowse = beginControlledMarketActorBrowse;
-        this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked;
         this.reviewRegistry = reviewRegistry;
     }
 
@@ -117,9 +109,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public AgentBridgeControlledMarketListingTruth BeginControlledMarketActorListing(string itemName) => beginControlledMarketActorListing(itemName);
     public AgentBridgeControlledMarketListingTruth RemoveControlledMarketActorListing() => removeControlledMarketActorListing();
     public AgentBridgeControlledMarketBrowseTruth BeginControlledMarketActorBrowse(string itemName) => beginControlledMarketActorBrowse(itemName);
-    public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => isMarketAcquisitionUnlocked()
-        ? PublicReviewSurfaces.Concat(AcquisitionSurfaces).OrderBy(surface => surface.Order).ToArray()
-        : PublicReviewSurfaces;
+    public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => ReviewSurfaces;
     public IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> GetCaptureSurfaces() => CaptureSurfaces;
     public IReadOnlyList<AgentBridgeActionDescriptor> GetActions() => reviewRegistry.ActionCatalog();
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();

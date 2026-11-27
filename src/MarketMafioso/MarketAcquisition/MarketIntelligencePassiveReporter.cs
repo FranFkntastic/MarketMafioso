@@ -30,6 +30,7 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
     private readonly HttpClient http;
     private readonly FileMarketAcquisitionReportOutbox outbox;
     private readonly Action<Exception> reportFailure;
+    private readonly Func<bool> isHostReachable;
     private readonly object enqueueSync = new();
     private string? lastPassiveEvidenceId;
     private readonly SemaphoreSlim flushGate = new(1, 1);
@@ -37,9 +38,10 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
     private readonly Task retryLoop;
 
     public MarketIntelligencePassiveReporter(Configuration configuration, HttpClient http, string pluginConfigDirectory, Action<Exception> reportFailure,
-        Action<string>? logInformation = null, Action<Exception, string>? logWarning = null)
+        Action<string>? logInformation = null, Action<Exception, string>? logWarning = null, Func<bool>? isHostReachable = null)
     {
         this.configuration = configuration;
+        this.isHostReachable = isHostReachable ?? (() => false);
         this.http = http;
         this.reportFailure = reportFailure;
         outbox = new FileMarketAcquisitionReportOutbox(Path.Combine(pluginConfigDirectory, "market-intelligence-outbox.jsonl"),
@@ -48,9 +50,17 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
         _ = FlushAsync(lifetime.Token);
     }
 
+    /// <summary>
+    /// Evidence only has somewhere to go when a Workshop Host is set up: a key is configured, or a keyless
+    /// host answered the reachability probe. Without one nothing is queued, sent or logged.
+    /// </summary>
+    private bool CanUpload =>
+        ReceiverEndpointClassifier.BuildAcquisitionBaseUrl(configuration.ServerUrl) is not null &&
+        (!string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(configuration)) || isHostReachable());
+
     public void Enqueue(MarketEvidenceUploadRequest evidence)
     {
-        if (string.IsNullOrWhiteSpace(evidence.OccurrenceId)) return;
+        if (!CanUpload || string.IsNullOrWhiteSpace(evidence.OccurrenceId)) return;
         var id = $"evidence|{evidence.SourceKind}|{evidence.OccurrenceId}";
         lock (enqueueSync)
         {
@@ -67,7 +77,7 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
 
     public void EnqueueActorName(ulong contentId, string name, string resolutionMethod, DateTimeOffset observedAtUtc)
     {
-        if (contentId == 0 || string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(resolutionMethod)) return;
+        if (!CanUpload || contentId == 0 || string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(resolutionMethod)) return;
         var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{contentId}|{name.Trim()}|{resolutionMethod.Trim()}|{observedAtUtc.ToUniversalTime():O}")));
         var request = new MarketActorNameObservationUploadRequest
@@ -161,6 +171,8 @@ internal sealed class MarketIntelligencePassiveReporter : IMarketAcquisitionInte
 
     private async Task FlushAsync(CancellationToken cancellationToken)
     {
+        // Reports queued for an earlier host wait quietly until one is configured again.
+        if (!CanUpload) return;
         bool entered;
         try { entered = await flushGate.WaitAsync(0, cancellationToken).ConfigureAwait(false); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }

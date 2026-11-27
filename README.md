@@ -1,6 +1,6 @@
 # MarketMafioso
 
-MarketMafioso is a Dalamud plugin for player handoff, cross-world market buying, and Free Company workshop production. It stands on its own; an optional self-hosted Workshop Host unlocks extra features.
+MarketMafioso is a Dalamud plugin for player handoff, cross-world market buying, and Free Company workshop production. It stands on its own; an optional self-hosted Workshop Host adds inventory history, a browser dashboard, and work orders.
 
 ## Start Here
 
@@ -22,10 +22,11 @@ Full step-by-step instructions live in [docs/installation.md](docs/installation.
 
 - **Workshop Logistics** builds Free Company workshop material queues, checks player and retainer stock, withdraws available materials from retainers, can execute the MarketMafioso queue natively, and can still send the prepared queue to VIWI Workshoppa.
 - **Trade Queue** lines up items for another player and fills the trade window for you when you open a trade with them.
+- **Market Acquisition** turns a shopping list into a buying run across worlds, under the price ceiling you set. Prices come from Universalis and the live market board.
 
 ### With Optional Workshop Host
 
-- **Market Acquisition** turns a shopping list into a buying run across worlds, under the price ceiling you set.
+- Work orders queued from the dashboard or Craft Architect appear in Market Acquisition's **Inbox**.
 - Workshop Host stores inventory snapshots in SQLite and serves the browser dashboard.
 - Retainer cache data makes those stored snapshots more useful after you have refreshed retainer data in game.
 

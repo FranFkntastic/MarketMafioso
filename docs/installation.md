@@ -3,9 +3,9 @@
 MarketMafioso has two pieces:
 
 - the Dalamud plugin client, installed through a third-party plugin repository;
-- optional private Workshop Host, installed separately when you want saved inventory history and the browser dashboard.
+- optional private Workshop Host, installed separately when you want saved inventory history, the browser dashboard, and work orders.
 
-Workshop Host is the self-hosted backend tier for private state and automation. Its current MarketMafioso runtime is still named **receiver** in scripts, routes, and Docker image names for compatibility. The plugin can open without Workshop Host, and Workshop Logistics can be used locally. Inventory history, dashboard browsing, and report uploads require Workshop Host.
+Workshop Host is the self-hosted backend tier for private state and automation. Its current MarketMafioso runtime is still named **receiver** in scripts, routes, and Docker image names for compatibility. The plugin works without Workshop Host: Trade Queue, Market Acquisition, and Workshop Logistics all run locally. Inventory history, dashboard browsing, work orders, and report uploads require Workshop Host.
 
 For the architecture boundary between standalone plugin features, Craft Architect quote-file handoffs, and self-hosted automation, see `docs/workshop-host.md`.
 

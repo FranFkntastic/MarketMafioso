@@ -350,7 +350,6 @@ public partial class MainWindow : Window, IDisposable
             AcquisitionDiagnostics.Draw,
             AutomationDiagnostics.Draw,
             () => { },
-            acquisitionServices.IsMarketAcquisitionUnlocked,
             uiStateCapture,
             AgentReviewRegistry,
             () => acquisitionRequestBuilderCraftAppraisal.State.CreateDiagnosticsSnapshot(),
@@ -394,9 +393,7 @@ public partial class MainWindow : Window, IDisposable
             config,
             reporter,
             log,
-            () => _ = routeEngine.Stop(),
             retainerListingRefreshControls,
-            Plugin.Instance.AcquisitionHostCheck,
             Plugin.Instance.RestartTimer,
             AgentReviewRegistry,
             marketIntelligencePassiveReporter.CreateStatus);
@@ -791,9 +788,6 @@ public partial class MainWindow : Window, IDisposable
     {
         ClearAgentReviewWindowOverride();
 
-            if (!acquisitionServices.IsMarketAcquisitionUnlocked())
-                AcquisitionCompositionWindow.IsOpen = false;
-
             var viewport = ImGui.GetWindowViewport();
             var windowPosition = ImGui.GetWindowPos();
             var windowSize = ImGui.GetWindowSize();
@@ -836,7 +830,7 @@ public partial class MainWindow : Window, IDisposable
                     ImGui.EndTabItem();
                 }
 
-                if (acquisitionServices.IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetMainTabFlags("Market Acquisition")))
+                if (ImGui.BeginTabItem("Market Acquisition", GetMainTabFlags("Market Acquisition")))
                 {
                     ObserveOpenMainTab("Market Acquisition");
                     DrawMarketAcquisitionTab();
@@ -909,9 +903,7 @@ public partial class MainWindow : Window, IDisposable
 
         var allowed = mainTab switch
         {
-            "Home" or "Workshop Logistics" or "Trade Queue" or "Settings" or "Status" => true,
-            "Diagnostics" => true,
-            "Market Acquisition" => acquisitionServices.IsMarketAcquisitionUnlocked(),
+            "Home" or "Workshop Logistics" or "Trade Queue" or "Market Acquisition" or "Diagnostics" or "Settings" or "Status" => true,
             _ => false,
         };
         if (!allowed || !IsAllowedWorkspaceView(mainTab, workspaceView))
@@ -925,9 +917,6 @@ public partial class MainWindow : Window, IDisposable
     public void StageExternalExactAcquisition(ExactAcquisitionWorkbenchTransfer transfer)
     {
         ArgumentNullException.ThrowIfNull(transfer);
-        if (!acquisitionServices.IsMarketAcquisitionUnlocked())
-            throw new InvalidOperationException("Market Acquisition must be unlocked before an external plan can be staged.");
-
         acquisitionRequestBuilder.StageExactAcquisitionTransfer(transfer);
         QueueAgentTabSelection("Market Acquisition", "Acquisition");
         IsOpen = true;
@@ -946,7 +935,6 @@ public partial class MainWindow : Window, IDisposable
     }
 
     private bool CanStageMarketAcquisition() =>
-        acquisitionServices.IsMarketAcquisitionUnlocked() &&
         !acquisitionWorkspace.IsBusy &&
         !routeEngine.IsRouteActive &&
         !acquisitionRequestBuilder.IsSynchronizing &&
@@ -1046,13 +1034,24 @@ public partial class MainWindow : Window, IDisposable
         homeSelectionFramesRemaining = 0;
     }
 
-    private static bool IsAllowedWorkspaceView(string mainTab, string? workspaceView) =>
+    private bool IsAllowedWorkspaceView(string mainTab, string? workspaceView) =>
         workspaceView is null || (mainTab, workspaceView) switch
         {
+            ("Market Acquisition", "Inbox") => IsWorkOrderInboxAvailable(),
             ("Workshop Logistics", "Combined" or "Queue" or "Materials" or "Assembly") => true,
             ("Market Acquisition", "Acquisition" or "Deposition" or "Workbench" or "Inbox" or "Route" or "Compose" or "Working Set" or "Request" or "Plan") => true,
             _ => false,
         };
+
+    /// <summary>
+    /// Work orders come from a Workshop Host, so the inbox shows once an acquisition-capable key is set,
+    /// or while hosted work is still loaded (a claim or fetched requests survive a cleared key).
+    /// </summary>
+    private bool IsWorkOrderInboxAvailable() =>
+        (!string.IsNullOrWhiteSpace(config.ServerUrl) &&
+         !string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config))) ||
+        acquisitionWorkspace.ClaimedRequest is not null ||
+        acquisitionWorkspace.PendingRequests.Count > 0;
 
     public void AgentOpenForReview()
     {
@@ -1201,7 +1200,7 @@ public partial class MainWindow : Window, IDisposable
         if (!ImGui.BeginTabBar("##marketAcquisitionWorkspace"))
             return;
 
-        if (ImGui.BeginTabItem(
+        if (IsWorkOrderInboxAvailable() && ImGui.BeginTabItem(
                 BuildCountedWorkspaceTabLabel("Inbox", acquisitionWorkspace.PendingRequests.Count, "MarketAcquisitionInbox"),
                 GetAgentWorkspaceTabFlags("Inbox")))
         {

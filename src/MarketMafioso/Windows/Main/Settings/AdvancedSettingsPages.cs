@@ -3,26 +3,19 @@ using System.Collections.Generic;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Settings;
-using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.Windows.Main.Settings;
 
 internal sealed class AdvancedSettingsPages
 {
     private readonly Configuration config;
-    private readonly Action stopMarketAcquisitionRoute;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
-    private readonly MarketAcquisitionHostCheck hostCheck;
 
     public AdvancedSettingsPages(
         Configuration config,
-        Action stopMarketAcquisitionRoute,
-        MarketAcquisitionHostCheck hostCheck,
         AgentBridgeUiReviewRegistry? reviewRegistry = null)
     {
-        this.hostCheck = hostCheck;
         this.config = config ?? throw new ArgumentNullException(nameof(config));
-        this.stopMarketAcquisitionRoute = stopMarketAcquisitionRoute ?? throw new ArgumentNullException(nameof(stopMarketAcquisitionRoute));
         this.reviewRegistry = reviewRegistry ?? new AgentBridgeUiReviewRegistry();
         Descriptors =
         [
@@ -32,8 +25,6 @@ internal sealed class AdvancedSettingsPages
                 searchTerms: ["local agent test bridge", "named pipe", "review capture"]),
             new("advanced.testing", "Advanced / Testing", DrawTesting, 82,
                 searchTerms: ["dry run", "market acquisition", "diagnostic package", "no purchase"]),
-            new("advanced.private-features", "Advanced / Private Features", DrawPrivateFeatures, 83,
-                searchTerms: ["unlock private module", "unlock from server", "lock feature"]),
         ];
     }
 
@@ -83,30 +74,6 @@ internal sealed class AdvancedSettingsPages
     {
         config.EnableMarketAcquisitionDryRunTools = enabled;
         config.Save();
-    }
-
-    private void DrawPrivateFeatures(SettingsPageContext context)
-    {
-        if (MarketAcquisitionUnlock.IsUnlocked(config))
-        {
-            var unlockedAt = config.MarketAcquisitionUnlockedAtUtc == null
-                ? "enabled"
-                : $"enabled {config.MarketAcquisitionUnlockedAtUtc.Value:yyyy-MM-dd HH:mm:ss} UTC";
-            ImGui.TextColored(MarketMafiosoUiTheme.Success, $"Market Acquisition {unlockedAt}.");
-            if (ImGui.Button("Lock Market Acquisition"))
-            {
-                stopMarketAcquisitionRoute();
-                MarketAcquisitionUnlock.Lock(config);
-                config.Save();
-                hostCheck.Reset();
-            }
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Locking hides the module and its settings. Existing drafts, inbox work, and execution history remain untouched.");
-            return;
-        }
-
-        if (ImGuiUi.Button("Unlock from server", !string.IsNullOrWhiteSpace(config.ServerUrl)))
-            hostCheck.CheckOnDemand();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, hostCheck.Status);
     }
 
     private void DrawCheckbox(SettingsPageContext context, string label, string description, Func<bool> getter, Action<bool> setter) =>

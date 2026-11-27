@@ -163,7 +163,6 @@ public sealed class MarketLockoutRelogTests
     {
         var config = new Configuration
         {
-            EnableMarketAcquisition = true,
             EnableRetainerListingRefresh = true,
         };
         config.RetainerListingRefresh = new PersistedRetainerListingRefreshState { LastObservedCaptureId = "baseline" };

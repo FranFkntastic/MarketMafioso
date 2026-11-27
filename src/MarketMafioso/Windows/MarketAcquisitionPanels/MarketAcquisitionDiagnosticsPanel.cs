@@ -22,7 +22,6 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly Action drawMarketAcquisitionDiagnostics;
     private readonly Action drawAutomationDiagnostics;
     private readonly Action drawExternalExactRouteDiagnostics;
-    private readonly Func<bool> isMarketAcquisitionUnlocked;
     private readonly UiStateCaptureService uiStateCapture;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics;
@@ -46,7 +45,6 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         Action drawMarketAcquisitionDiagnostics,
         Action drawAutomationDiagnostics,
         Action drawExternalExactRouteDiagnostics,
-        Func<bool> isMarketAcquisitionUnlocked,
         UiStateCaptureService uiStateCapture,
         AgentBridgeUiReviewRegistry reviewRegistry,
         Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics,
@@ -67,7 +65,6 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         this.drawMarketAcquisitionDiagnostics = drawMarketAcquisitionDiagnostics ?? throw new ArgumentNullException(nameof(drawMarketAcquisitionDiagnostics));
         this.drawAutomationDiagnostics = drawAutomationDiagnostics ?? throw new ArgumentNullException(nameof(drawAutomationDiagnostics));
         this.drawExternalExactRouteDiagnostics = drawExternalExactRouteDiagnostics ?? throw new ArgumentNullException(nameof(drawExternalExactRouteDiagnostics));
-        this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked ?? throw new ArgumentNullException(nameof(isMarketAcquisitionUnlocked));
         this.uiStateCapture = uiStateCapture ?? throw new ArgumentNullException(nameof(uiStateCapture));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         this.getCraftAppraisalDiagnostics = getCraftAppraisalDiagnostics ?? throw new ArgumentNullException(nameof(getCraftAppraisalDiagnostics));
@@ -87,18 +84,13 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         ImGui.Spacing();
         ImGuiUi.SectionHeader("Diagnostics", MarketMafiosoUiTheme.Header);
 
-        var marketAcquisitionUnlocked = isMarketAcquisitionUnlocked();
-        MarketAcquisitionRouteEngineSnapshot? snapshot = null;
-        if (marketAcquisitionUnlocked)
-        {
-            snapshot = getRouteSnapshot();
-            DrawReportOverview(snapshot);
-        }
+        var snapshot = getRouteSnapshot();
+        DrawReportOverview(snapshot);
 
         var marketFlags = DiagnosticsHierarchyState.MarketAcquisitionDefaultOpen
             ? ImGuiTreeNodeFlags.DefaultOpen
             : ImGuiTreeNodeFlags.None;
-        if (snapshot != null && ImGui.CollapsingHeader(BuildMarketAcquisitionHeader(snapshot), marketFlags))
+        if (ImGui.CollapsingHeader(BuildMarketAcquisitionHeader(snapshot), marketFlags))
             drawMarketAcquisitionDiagnostics();
 
         var automationFlags = DiagnosticsHierarchyState.AutomationDefaultOpen
