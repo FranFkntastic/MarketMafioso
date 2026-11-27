@@ -1,7 +1,8 @@
 param(
-    [string]$PublicOrigin = "",
-    [string]$DashboardUsername = "",
+    [string]$PublicOrigin = "http://localhost:5088",
+    [string]$DashboardUsername = "marketmafioso",
     [switch]$Force,
+    # Accepted for older scripts; the installer no longer prompts.
     [switch]$NonInteractive
 )
 
@@ -132,33 +133,60 @@ function Invoke-WorkshopHostSmoke {
     Write-Host "Workshop Host quote route auth and schema smoke checks passed."
 }
 
-function Read-Defaulted {
-    param(
-        [string]$Prompt,
-        [string]$DefaultValue
-    )
+function Get-ErrorDetail {
+    param([System.Management.Automation.ErrorRecord]$ErrorRecord)
 
-    $value = Read-Host "$Prompt [$DefaultValue]"
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        return $DefaultValue
+    $response = $ErrorRecord.Exception.Response
+    if ($response -and $response.StatusCode) {
+        return "HTTP $([int]$response.StatusCode) ($($response.StatusCode))"
     }
 
-    return $value.Trim()
+    return $ErrorRecord.Exception.Message
 }
 
-function Read-YesNo {
+function New-PluginConnectionCode {
     param(
-        [string]$Prompt,
-        [bool]$DefaultYes
+        [Parameter(Mandatory = $true)]
+        [string]$BaseUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$HostBaseUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Username,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Password
     )
 
-    $suffix = if ($DefaultYes) { "Y/n" } else { "y/N" }
-    $value = Read-Host "$Prompt [$suffix]"
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        return $DefaultYes
+    $session = $null
+    $loginBody = @{ username = $Username; password = $Password } | ConvertTo-Json -Compress
+    try {
+        Invoke-RestMethod -Method Post -Uri "$BaseUrl/auth/login" -ContentType "application/json" -Body $loginBody -SessionVariable session -TimeoutSec 10 | Out-Null
+    }
+    catch {
+        $detail = Get-ErrorDetail -ErrorRecord $_
+        throw "dashboard sign-in as '$Username' at $BaseUrl/auth/login failed: $detail"
     }
 
-    return $value.Trim().StartsWith("y", [StringComparison]::OrdinalIgnoreCase)
+    try {
+        $created = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/settings/client-pairing" -WebSession $session -TimeoutSec 10
+    }
+    catch {
+        $detail = Get-ErrorDetail -ErrorRecord $_
+        throw "connection code request to $BaseUrl/api/settings/client-pairing failed: $detail"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($created.token)) {
+        throw "connection code request to $BaseUrl/api/settings/client-pairing returned no code."
+    }
+
+    # Same format the dashboard's Connect game client button produces: mmf1_<base64url(host)>.<token>
+    $encodedHost = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($HostBaseUrl)).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+    return [pscustomobject]@{
+        Code = "mmf1_$encodedHost.$($created.token)"
+        ExpiresAt = ([DateTimeOffset]$created.expiresAtUtc).ToLocalTime()
+    }
 }
 
 function Get-NormalizedOrigin {
@@ -191,9 +219,10 @@ $envPath = Join-Path $configDir "marketmafioso.env"
 $composePath = Join-Path $configDir "compose.yaml"
 
 Write-Section "MarketMafioso Workshop Host Installer"
-Write-Host "This wizard installs the private Workshop Host backend on this computer."
+Write-Host "This installs the private Workshop Host backend on this computer."
 Write-Host "The underlying service is still named receiver in scripts, routes, and Docker image names for compatibility."
 Write-Host "It will create config\marketmafioso.env and data\marketmafioso\marketmafioso.db."
+Write-Host "Dashboard address: $PublicOrigin. For remote hosting, read docs\ADVANCED-CONFIGURATION.md."
 
 if ((Test-Path -LiteralPath $envPath) -and -not $Force) {
     throw "config\marketmafioso.env already exists. Run scripts\Update-MarketMafiosoReceiver.ps1 to update, or re-run this installer with -Force to replace configuration."
@@ -201,30 +230,6 @@ if ((Test-Path -LiteralPath $envPath) -and -not $Force) {
 
 $docker = Get-DockerCommand
 Test-DockerReady -Docker $docker
-
-if ([string]::IsNullOrWhiteSpace($DashboardUsername)) {
-    $DashboardUsername = if ($NonInteractive) {
-        "marketmafioso"
-    }
-    else {
-        Read-Defaulted -Prompt "Dashboard username" -DefaultValue "marketmafioso"
-    }
-}
-
-if ([string]::IsNullOrWhiteSpace($PublicOrigin)) {
-    if ($NonInteractive) {
-        $PublicOrigin = "http://localhost:5088"
-    }
-    else {
-        $localOnly = Read-YesNo -Prompt "Will you use Workshop Host only on this computer?" -DefaultYes $true
-        if ($localOnly) {
-            $PublicOrigin = "http://localhost:5088"
-        }
-        else {
-            $PublicOrigin = Read-Defaulted -Prompt "Public dashboard address" -DefaultValue "http://localhost:5088"
-        }
-    }
-}
 
 $PublicOrigin = Get-NormalizedOrigin -Origin $PublicOrigin
 $DashboardUsername = $DashboardUsername.Trim()
@@ -295,9 +300,40 @@ else {
     Write-Warning "Workshop Host was started, but the health check did not pass within 60 seconds. Check Docker Desktop and run: docker compose -f config\compose.yaml logs marketmafioso"
 }
 
+$connection = $null
+$connectionFailure = "the health check did not pass"
+if ($healthPassed) {
+    try {
+        $connection = New-PluginConnectionCode -BaseUrl "http://localhost:5088" -HostBaseUrl $PublicOrigin -Username $DashboardUsername -Password $dashboardPassword
+    }
+    catch {
+        $connectionFailure = $_.Exception.Message
+    }
+}
+
+Write-Section "Connect The Plugin"
+if ($null -ne $connection) {
+    Write-Host "In game, type /mmf, open Settings > General / Server Connection,"
+    Write-Host "paste this into Connect with code, then press Connect:"
+    Write-Host ""
+    Write-Host "  $($connection.Code)"
+    Write-Host ""
+    $minutesLeft = [Math]::Max(1, [int][Math]::Round(($connection.ExpiresAt - [DateTimeOffset]::Now).TotalMinutes))
+    Write-Host "The code works once and expires in $minutesLeft minutes (at $($connection.ExpiresAt.ToString('HH:mm')))."
+    Write-Host "For a new code, sign in to the dashboard, open Settings > Authentication and press Connect game client."
+}
+else {
+    Write-Warning "Install finished, but no connection code was created: $connectionFailure."
+    Write-Host "Use the manual setup below, or make a code later in the dashboard: Settings > Authentication > Connect game client."
+}
+
+Write-Host ""
+Write-Host "Manual setup instead (Settings > General / Server Connection > Manual setup):"
+Write-Host "  Server URL: $PublicOrigin/inventory"
+Write-Host "  MarketMafioso Client Key: $clientKey"
+
+Write-Section "Dashboard"
 Write-Host "Dashboard: $PublicOrigin/"
-Write-Host "Plugin Server URL: $PublicOrigin/inventory"
-Write-Host "Plugin Client API Key: $clientKey"
 Write-Host "Dashboard username: $DashboardUsername"
 Write-Host "Dashboard password: $dashboardPassword"
 Write-Host ""

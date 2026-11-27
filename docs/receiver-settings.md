@@ -78,6 +78,18 @@ Set this to the Craft Architect browser origin when CA and Workshop Host use dif
 
 Why it matters: browsers block CA from calling a separately hosted Workshop Host unless the receiver explicitly allows CA's origin. This setting grants browser access only; every protected request still requires the client API key.
 
+### `MarketMafioso__EnableMarketAcquisition`
+
+Example:
+
+```text
+MarketMafioso__EnableMarketAcquisition=true
+```
+
+Turns on Market Acquisition work orders: the dashboard's Acquisition pages and the acquisition capabilities in `/api/capabilities`. It defaults to `true` when unset. Set it to `false` to hide work orders.
+
+Why it matters: when it is off, the host stops advertising work orders to the plugin and the dashboard shows inventory and diagnostics only.
+
 ## Plugin API Key Settings
 
 ### `MarketMafioso__RequireApiKey`

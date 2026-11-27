@@ -104,18 +104,20 @@ If you prefer PowerShell, open PowerShell in the extracted folder and run:
 .\scripts\Install-MarketMafiosoReceiver.ps1
 ```
 
-The installer wizard will:
+The installer asks no questions. It will:
 
 - confirm Docker is available;
-- ask for a dashboard username;
-- ask whether Workshop Host is local-only;
-- create `config\marketmafioso.env`;
+- create `config\marketmafioso.env` for local use on this computer;
 - generate a private plugin API key;
 - generate the first dashboard password;
 - download the MarketMafioso server image;
 - start the Workshop Host container;
 - wait for the health check;
-- print the values you need for the plugin and dashboard.
+- sign in to the dashboard and print a one-time connection code for the plugin, plus the dashboard login.
+
+The dashboard username is `marketmafioso`. Pass `-DashboardUsername <name>` or `-PublicOrigin <address>` to the PowerShell script to change them; remote hosting is covered in `docs/receiver-advanced-configuration.md`.
+
+To install without the script, copy `config\marketmafioso.env.example` to `config\marketmafioso.env`, replace `MarketMafioso__ClientApiKey` and `MarketMafioso__DashboardBootstrapPassword` with long random strings, then run `docker compose -f config\compose.yaml up -d`.
 
 Default local addresses:
 
@@ -135,11 +137,15 @@ release/self-host/data/marketmafioso/marketmafioso.db
 
 ## Connect The Plugin To Workshop Host
 
-In `/mmf` settings, set:
+In game, type `/mmf`, open **Settings > General / Server Connection**, paste the connection code into **Connect with code**, then press **Connect**.
+
+A code works once and expires after 10 minutes. To make a new one, sign in to the dashboard, open **Settings > Authentication** and press **Connect game client**.
+
+To use the key instead, open **Manual setup** on the same plugin page and set:
 
 ```text
 Server URL: http://localhost:5088/inventory
-Client API Key: <generated client API key>
+MarketMafioso Client Key: <generated client API key>
 ```
 
 The installer prints the generated client API key. It is also saved as `MarketMafioso__ClientApiKey` in `config/marketmafioso.env`.

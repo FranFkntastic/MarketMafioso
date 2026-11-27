@@ -37,7 +37,7 @@ cd release/self-host
 .\scripts\Install-MarketMafiosoReceiver.ps1
 ```
 
-The installer wizard generates `config/marketmafioso.env`, pulls the server image, starts the container, checks `/health`, and prints the plugin endpoint/API key.
+The installer asks no questions. It generates `config/marketmafioso.env` for local use (dashboard user `marketmafioso`), pulls the server image, starts the container, checks `/health`, then signs in with the generated dashboard password and prints a one-time plugin connection code. The API key is printed as a fallback. Use `-DashboardUsername` and `-PublicOrigin` to change the defaults.
 
 After health passes, the installer checks Workshop Host capabilities, reports whether the optional CA service is configured, confirms unauthenticated quote requests are rejected, and confirms the quote endpoint validates schema shape with the generated client key.
 
@@ -52,38 +52,28 @@ The update script backs up the SQLite database, pulls the latest image, restarts
 
 ## Manual Docker Setup
 
-1. Copy the environment sample and replace every placeholder secret:
+1. Copy the environment sample:
 
 ```powershell
 Copy-Item release/self-host/config/marketmafioso.env.example release/self-host/config/marketmafioso.env
 ```
 
-2. Edit `config/marketmafioso.env`:
+2. Replace the two secrets in `config/marketmafioso.env` with long random strings:
 
 ```text
 MarketMafioso__ClientApiKey=<random-client-key>
-MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<random-dashboard-password>
 ```
 
-3. Start Workshop Host from the repo-local compose file:
+3. Start Workshop Host:
 
 ```powershell
 docker compose -f release/self-host/config/compose.yaml up -d
 ```
 
-4. Open the dashboard:
+Sign in to `http://localhost:5088/` as `marketmafioso`, open **Settings > Authentication** and press **Connect game client**. In game, type `/mmf`, open **Settings > General / Server Connection**, paste the code into **Connect with code** and press **Connect**. Codes work once and expire after 10 minutes.
 
-```text
-http://localhost:5088/
-```
-
-5. Configure the plugin:
-
-```text
-Server URL:     http://localhost:5088/inventory
-Client API Key: the same MarketMafioso__ClientApiKey value
-```
+To use the key instead, open **Manual setup** on that plugin page and enter `http://localhost:5088/inventory` as the Server URL and `MarketMafioso__ClientApiKey` as the MarketMafioso Client Key.
 
 The release-bundle Docker path stores SQLite data under `release/self-host/data/marketmafioso/` on the host.
 
@@ -128,6 +118,7 @@ MarketMafioso__BasePath=<path-prefix-or-empty>
 MarketMafioso__PublicOrigin=<public-origin-for-dashboard-links>
 MarketMafioso__CraftArchitectAppraiseUrl=<optional-loopback-ca-appraisal-url>
 MarketMafioso__DatabasePath=<sqlite-file-path>
+MarketMafioso__EnableMarketAcquisition=true
 MarketMafioso__RawJsonRetentionCount=20
 MarketMafioso__InventoryHistoryRetentionPerCharacter=100
 MarketMafioso__DiagnosticsRetentionCount=5000

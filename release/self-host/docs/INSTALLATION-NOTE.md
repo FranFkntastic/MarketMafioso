@@ -35,22 +35,21 @@ Or run PowerShell:
 .\scripts\Install-MarketMafiosoReceiver.ps1
 ```
 
-The installer wizard generates your API key, creates the dashboard password, starts Workshop Host, and prints the plugin settings.
+The installer asks no questions. It generates your API key and dashboard password, starts Workshop Host, and prints a one-time connection code for the plugin.
 
 If Windows shows a warning for the downloaded script, only continue if the package came from the official MarketMafioso release page.
 
-Paste these into the MarketMafioso plugin settings:
+To install without the script, copy `config\marketmafioso.env.example` to `config\marketmafioso.env`, replace `MarketMafioso__ClientApiKey` and `MarketMafioso__DashboardBootstrapPassword` with long random strings, then run `docker compose -f config\compose.yaml up -d`.
 
-```text
-Server URL: http://localhost:5088/inventory
-Client API Key: the generated API key
-```
+## Connect The Plugin
 
-Open the dashboard at:
+In game, type `/mmf`, open **Settings > General / Server Connection**, paste the connection code into **Connect with code**, then press **Connect**.
 
-```text
-http://localhost:5088/
-```
+A code works once and expires after 10 minutes. To make a new one, sign in to the dashboard, open **Settings > Authentication** and press **Connect game client**.
+
+To use the key instead, open **Manual setup** on the same plugin page and enter `http://localhost:5088/inventory` as the Server URL and the generated key as the MarketMafioso Client Key.
+
+Open the dashboard at `http://localhost:5088/`.
 
 ## Updating
 

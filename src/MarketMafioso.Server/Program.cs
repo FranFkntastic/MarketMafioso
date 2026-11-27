@@ -61,7 +61,7 @@ var basePath = app.Configuration["MarketMafioso:BasePath"];
 var configuredBasePath = NormalizeConfiguredBasePath(basePath);
 var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
 var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
-var enableMarketAcquisition = app.Configuration.GetValue<bool>("MarketMafioso:EnableMarketAcquisition");
+var enableMarketAcquisition = app.Configuration.GetValue("MarketMafioso:EnableMarketAcquisition", true);
 var xivDataBaseUrl = NormalizeXivDataBaseUrl(FirstConfigured(
     app.Configuration["MarketMafioso:XivDataBaseUrl"],
     DefaultXivDataBaseUrl(publicOrigin)));
