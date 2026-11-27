@@ -228,6 +228,145 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         Assert.All(primary.Items, item => Assert.Null(item.RetainerId));
     }
 
+    // Why this test exists: a shopper whose bags fill mid-route hands the haul back, stows it, and shops again. Each
+    // cycle moves real items and gil between regions. A second fund moves gil twice, a re-used haul or stow id is
+    // adopted as already done (so the purchases are never shipped or stowed), counted stock riding an intermediate
+    // haul or collected twice ships another character's stock twice, and a cycle-2 route that re-buys what cycle 1
+    // already bought silently overspends. None of it is visible until a cross-character inventory and wallet audit.
+    [Fact]
+    public void InventoryFullCycleStowsThenShopsOnlyTheRemainderWithoutRefundingOrCollectingTwice()
+    {
+        using var fixture = new Fixture();
+        fixture.Game.BagsByCharacter = new()
+        {
+            [Primary.LocalContentId] = [],
+            [Shopper.LocalContentId] = [new(IronIngot, false, 3)],
+            [FirstAlt.LocalContentId] = [new(IronIngot, false, 4)],
+        };
+        fixture.Courier.OnSubmit = request =>
+        {
+            var runId = Guid.NewGuid();
+            fixture.Courier.Run = Run(runId, request.RequestId, "Completed");
+            fixture.Game.Move(request.Source.LocalContentId, request.Destination.LocalContentId, request.Items);
+            return Accept(request, runId);
+        };
+        fixture.Custody.OnStowed = request => fixture.Game.Take(Primary.LocalContentId, request.Items);
+        var coordinator = fixture.CreateCoordinator();
+        var document = CycleDocument();
+        Assert.True(coordinator.Start(new(Shopper, "Japan", 100_000, document, new Dictionary<string, uint>())).Success);
+        var sessionId = coordinator.Session.SessionId;
+
+        // Cycle 1: bags fill after 20 of the 30 required Darksteel Ore.
+        fixture.DriveUntil(coordinator, CrossRegionAcquisitionPhase.Shopping);
+        fixture.Shopping.Raise(new(Darksteel, "Darksteel Ore", false, 20, 40_000, "Atomos", "a"));
+        fixture.Game.Give(Shopper.LocalContentId, Darksteel, 20);
+        fixture.Shopping.CompletedWithInventoryFull = true;
+        fixture.Shopping.State = CrossRegionShoppingState.Completed;
+        fixture.DriveUntil(coordinator, CrossRegionAcquisitionPhase.PreparingShopRoute);
+
+        Assert.Equal(2, coordinator.Session.CycleNumber);
+        var firstHaul = fixture.Courier.Submitted[1];
+        Assert.Equal(CrossRegionAcquisitionSession.HaulRequestIdFor(sessionId, 1), firstHaul.RequestId);
+        // I5: the shopper's 3 counted Iron Ingots do not ride an intermediate haul.
+        Assert.Equal([(Darksteel, 20)], firstHaul.Items.Select(item => (item.ItemId, item.Quantity)).ToArray());
+        var firstStow = Assert.Single(fixture.Custody.Stows);
+        Assert.Equal(CrossRegionAcquisitionSession.StowRequestIdFor(sessionId), firstStow.RequestId);
+        Assert.DoesNotContain(fixture.Courier.Submitted, request => request.Source.LocalContentId == FirstAlt.LocalContentId);
+
+        // Cycle 2: no second fund (D4), and the route is prepared for the 10 still required (I4).
+        fixture.DriveUntil(coordinator, CrossRegionAcquisitionPhase.Shopping);
+        Assert.Equal([30u, 10u], fixture.Shopping.PreparedDarksteelTargets);
+        fixture.Shopping.Raise(new(Darksteel, "Darksteel Ore", false, 10, 20_000, "Atomos", "b"));
+        fixture.Game.Give(Shopper.LocalContentId, Darksteel, 10);
+        fixture.Shopping.CompletedWithInventoryFull = false;
+        fixture.Shopping.State = CrossRegionShoppingState.Completed;
+        fixture.DriveUntil(coordinator, CrossRegionAcquisitionPhase.Completed);
+
+        var submitted = fixture.Courier.Submitted;
+        Assert.Single(submitted, request => request.GilAmount > 0);
+        var secondHaul = submitted[2];
+        Assert.Equal(CrossRegionAcquisitionSession.HaulRequestIdFor(sessionId, 1, cycle: 2), secondHaul.RequestId);
+        Assert.EndsWith("-c2", secondHaul.RequestId);
+        Assert.Equal(
+            [(IronIngot, 3), (Darksteel, 10)],
+            secondHaul.Items.Select(item => (item.ItemId, item.Quantity)).OrderBy(item => item.ItemId).ToArray());
+        var collect = Assert.Single(submitted, request => request.Source.LocalContentId == FirstAlt.LocalContentId);
+        Assert.Equal(3, submitted.IndexOf(collect));
+        Assert.Equal(
+            [CrossRegionAcquisitionSession.StowRequestIdFor(sessionId), CrossRegionAcquisitionSession.StowRequestIdFor(sessionId, cycle: 2)],
+            fixture.Custody.Stows.Select(stow => stow.RequestId).ToArray());
+        Assert.Equal(
+            [(IronIngot, 7), (Darksteel, 10)],
+            fixture.Custody.Stows[1].Items.Select(item => (item.ItemId, item.Quantity)).OrderBy(item => item.ItemId).ToArray());
+    }
+
+    // Why this test exists: a cycle whose stow makes no room (every home full) must end the session. Starting another
+    // cycle would switch regions again and buy into the same full bags forever, burning gil and hours unattended.
+    [Fact]
+    public void InventoryFullCycleWhoseStowMakesNoRoomEndsInsteadOfShoppingAgain()
+    {
+        using var fixture = new Fixture();
+        fixture.Game.LoggedIn = Shopper;
+        fixture.Game.BagsByCharacter = new()
+        {
+            [Primary.LocalContentId] = [],
+            [Shopper.LocalContentId] = [new(Darksteel, false, 20)],
+        };
+        fixture.Courier.OnSubmit = request =>
+        {
+            var runId = Guid.NewGuid();
+            fixture.Courier.Run = Run(runId, request.RequestId, "Completed");
+            fixture.Game.Move(request.Source.LocalContentId, request.Destination.LocalContentId, request.Items);
+            return Accept(request, runId);
+        };
+        fixture.Custody.MakesRoom = false;
+        var session = ShoppingSession();
+        session.RequestDocumentSnapshot = CycleDocument() with { Lines = [CycleDocument().Lines[0]] };
+        session.PrimaryBagBaseline = [];
+        fixture.Store.Save(session);
+        var coordinator = fixture.CreateCoordinator();
+
+        fixture.Shopping.Raise(new(Darksteel, "Darksteel Ore", false, 20, 40_000, "Atomos", "a"));
+        fixture.Shopping.CompletedWithInventoryFull = true;
+        fixture.Shopping.State = CrossRegionShoppingState.Completed;
+        fixture.DriveUntil(coordinator, CrossRegionAcquisitionPhase.Completed);
+
+        Assert.Equal(1, coordinator.Session.CycleNumber);
+        Assert.False(coordinator.Session.CycleEndedWithInventoryFull);
+        Assert.Single(fixture.Custody.Stows);
+        Assert.Single(fixture.Courier.Submitted);
+        Assert.Equal([Primary], fixture.Game.SwitchRequests);
+        Assert.Empty(fixture.Shopping.PreparedDarksteelTargets);
+        Assert.Contains("Stopped after cycle 1", coordinator.Session.LastMessage);
+    }
+
+    private const uint Darksteel = 5057;
+    private const uint IronIngot = 5056;
+
+    /// <summary>30 Darksteel Ore to buy outright, and Iron Ingots counted on the shopper's and First Alt's bags.</summary>
+    private static MarketAcquisitionRequestDocument CycleDocument() => new()
+    {
+        Region = "Japan",
+        StowAfterDelivery = true,
+        Lines =
+        [
+            new()
+            {
+                ItemId = Darksteel, ItemName = "Darksteel Ore", QuantityMode = "TargetQuantity", TargetQuantity = 30,
+                TargetBasis = MarketAcquisitionTargetBases.RequiredPurchaseQuantity,
+            },
+            new()
+            {
+                ItemId = IronIngot, ItemName = "Iron Ingot", QuantityMode = "TargetQuantity", TargetQuantity = 10,
+                CountedStock =
+                [
+                    new(Shopper.LocalContentId, Shopper.HomeWorldId, Shopper.CharacterName, Shopper.HomeWorldName, "bags", 3, DateTimeOffset.UnixEpoch),
+                    new(FirstAlt.LocalContentId, FirstAlt.HomeWorldId, FirstAlt.CharacterName, FirstAlt.HomeWorldName, "bags", 4, DateTimeOffset.UnixEpoch),
+                ],
+            },
+        ],
+    };
+
     /// <summary>Shops 12 Darksteel Ore with Stow after delivery on and returns the haul the coordinator submits.</summary>
     private static QuartermasterCourierTransferRequest HaulDarksteel(Fixture fixture)
     {
@@ -288,9 +427,21 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         public FakeGame Game { get; } = new();
         public FakeShopping Shopping { get; } = new();
         public FakeDirectDelivery Direct { get; } = new();
+        public FakeCustody Custody { get; } = new();
 
         public CrossRegionAcquisitionCoordinator CreateCoordinator() =>
-            new(Courier, Game, Shopping, Store, () => now, directDelivery: Direct);
+            new(Courier, Game, Shopping, Store, () => now, custody: Custody, directDelivery: Direct);
+
+        /// <summary>Ticks until the phase is reached; fails on Failed or after a bounded number of ticks.</summary>
+        public void DriveUntil(CrossRegionAcquisitionCoordinator coordinator, CrossRegionAcquisitionPhase phase)
+        {
+            for (var tick = 0; tick < 60 && coordinator.Phase != phase; tick++)
+            {
+                Assert.NotEqual(CrossRegionAcquisitionPhase.Failed, coordinator.Phase);
+                TickAfter(coordinator);
+            }
+            Assert.True(phase == coordinator.Phase, $"Expected {phase}, stuck in {coordinator.Phase}: {coordinator.Session.LastMessage}");
+        }
 
         public CrossRegionStartRequest StartRequest(int fundGil) =>
             new(Shopper, "Japan", fundGil, new MarketAcquisitionRequestDocument { Region = "Japan" }, new Dictionary<string, uint>());
@@ -401,6 +552,69 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         }
     }
 
+    /// <summary>Quartermaster's delivered stow: every unit stowed (MakesRoom) or none for lack of room.</summary>
+    private sealed class FakeCustody : IQuartermasterRunCustodyClient
+    {
+        private readonly Dictionary<string, QuartermasterDeliveredStowStatus> statuses = new(StringComparer.Ordinal);
+        public List<QuartermasterDeliveredStowRequest> Stows { get; } = [];
+        public bool MakesRoom { get; set; } = true;
+        public Action<QuartermasterDeliveredStowRequest>? OnStowed { get; set; }
+
+        public bool HasAutomaticRetrieval => false;
+        public bool HasDeliveredStow => true;
+        public bool HasShortageSourceRetainers => false;
+
+        public bool TrySubmitShortages(QuartermasterShortageRequest request, out QuartermasterAcknowledgement? acknowledgement, out string error)
+        {
+            acknowledgement = null;
+            error = "Retrieval is not used here.";
+            return false;
+        }
+
+        public bool TryGetOperation(string operationId, QuartermasterOwnerScope expectedOwner, out QuartermasterOperationStatus? operationStatus, out string error)
+        {
+            operationStatus = null;
+            error = "Retrieval is not used here.";
+            return false;
+        }
+
+        public bool TrySubmitDeliveredStow(QuartermasterDeliveredStowRequest request, out QuartermasterDeliveredStowStatus? acknowledgement, out string error)
+        {
+            Stows.Add(request);
+            var lines = request.Items.Select(item => new QuartermasterDeliveredStowLine
+            {
+                ItemId = item.ItemId,
+                ItemName = item.ItemName,
+                IsHq = item.IsHq,
+                Requested = item.Quantity,
+                Carried = item.Quantity,
+                Planned = MakesRoom ? item.Quantity : 0,
+                Stowed = MakesRoom ? item.Quantity : 0,
+                Code = MakesRoom ? "Stowed" : "NoRoom",
+            }).ToList();
+            if (MakesRoom)
+                OnStowed?.Invoke(request);
+            statuses[request.RequestId] = new() { RequestId = request.RequestId, OperationId = "op-" + request.RequestId, Status = "succeeded", Lines = lines };
+            acknowledgement = statuses[request.RequestId] with { Status = "accepted" };
+            error = string.Empty;
+            return true;
+        }
+
+        public bool TryGetDeliveredStow(string requestId, out QuartermasterDeliveredStowStatus? status, out string error)
+        {
+            status = statuses.GetValueOrDefault(requestId) ?? new() { RequestId = requestId, Status = "not_found" };
+            error = string.Empty;
+            return true;
+        }
+
+        public bool TryCancelRequestedOperation(string requestId, string reason, out QuartermasterCancelAcknowledgement? acknowledgement, out string error)
+        {
+            acknowledgement = new() { RequestId = requestId, Status = "cancelled" };
+            error = string.Empty;
+            return true;
+        }
+    }
+
     private sealed class FakeGame : ICrossRegionGameState
     {
         public CrossRegionCharacter? LoggedIn { get; set; } = Primary;
@@ -409,8 +623,39 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         public string? CurrentWorldName => LoggedIn?.HomeWorldName;
         public ulong? CarriedGil => 2_000_000;
         public bool OtherAutomationActive => false;
-        public IReadOnlyList<CrossRegionBagStack>? ReadCarriedBags() => Bags;
+        /// <summary>When set, each character carries its own bags and courier transfers move stacks between them.</summary>
+        public Dictionary<ulong, List<CrossRegionBagStack>>? BagsByCharacter { get; set; }
+        public IReadOnlyList<CrossRegionBagStack>? ReadCarriedBags() =>
+            BagsByCharacter is null ? Bags : LoggedIn is { } character ? BagsByCharacter.GetValueOrDefault(character.LocalContentId, []).ToList() : null;
         public List<CrossRegionCharacter> SwitchRequests { get; } = [];
+
+        public void Give(ulong character, uint itemId, uint quantity) => BagsByCharacter![character].Add(new(itemId, false, quantity));
+
+        public void Take(ulong character, IEnumerable<QuartermasterDeliveredStowItem> items)
+        {
+            foreach (var item in items)
+                Remove(character, item.ItemId, (uint)item.Quantity);
+        }
+
+        public void Move(ulong from, ulong to, IEnumerable<QuartermasterCourierItem> items)
+        {
+            if (BagsByCharacter is null)
+                return;
+            foreach (var item in items)
+            {
+                Remove(from, item.ItemId, (uint)item.Quantity);
+                Give(to, item.ItemId, (uint)item.Quantity);
+            }
+        }
+
+        private void Remove(ulong character, uint itemId, uint quantity)
+        {
+            var bags = BagsByCharacter![character];
+            var left = bags.Where(stack => stack.ItemId == itemId).Aggregate(0UL, (total, stack) => total + stack.Quantity) - quantity;
+            bags.RemoveAll(stack => stack.ItemId == itemId);
+            if (left > 0)
+                bags.Add(new(itemId, false, (uint)left));
+        }
 
         /// <summary>Records the request and lands on the target, like a completed relog.</summary>
         public bool TrySwitchCharacter(CrossRegionCharacter target, out string message)
@@ -430,7 +675,18 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         public event Action<MarketAcquisitionConfirmedPurchase>? ConfirmedPurchase;
         public void Raise(MarketAcquisitionConfirmedPurchase purchase) => ConfirmedPurchase?.Invoke(purchase);
         public IReadOnlyDictionary<string, uint> CaptureShopperStartingStock(CrossRegionAcquisitionSession session) => new Dictionary<string, uint>();
-        public void BeginPrepareAndStart(CrossRegionAcquisitionSession session) => State = CrossRegionShoppingState.Running;
+        public bool CompletedWithInventoryFull { get; set; }
+        public bool HasUnmetTargets(CrossRegionAcquisitionSession session) => true;
+        /// <summary>The Darksteel target of each prepared route, from the real resume rule over the session's purchases.</summary>
+        public List<uint> PreparedDarksteelTargets { get; } = [];
+
+        public void BeginPrepareAndStart(CrossRegionAcquisitionSession session)
+        {
+            if (session.RequestDocumentSnapshot is { } document)
+                PreparedDarksteelTargets.AddRange(MarketAcquisitionCrossRegionShoppingRoute.ResumedDocument(document, session.PurchasedManifest).Document.Lines
+                    .Where(line => line.ItemId == Darksteel).Select(line => line.TargetQuantity));
+            State = CrossRegionShoppingState.Running;
+        }
         public void Tick() { }
         public bool Pause(out string message) { message = string.Empty; return true; }
         public bool ResumeInPlace(out string message) { message = string.Empty; return false; }

@@ -54,6 +54,15 @@ public interface ICrossRegionShoppingRoute
     bool ResumeInPlace(out string message);
     void Stop();
     bool TryCloseMarketBoard();
+
+    /// <summary>
+    /// True when the route completed because the shopper's bags (or crystal pouch) could not hold what was still to buy,
+    /// rather than because targets, budget or listings ran out.
+    /// </summary>
+    bool CompletedWithInventoryFull => false;
+
+    /// <summary>True while some line of the session's request is still short after everything the session bought.</summary>
+    bool HasUnmetTargets(CrossRegionAcquisitionSession session) => true;
 }
 
 public sealed record CrossRegionStartRequest(
@@ -204,7 +213,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public bool IsLoggedInAsShopper => session.Shopper?.Matches(game.LoggedInCharacter) == true;
 
     public bool CanHaulNow =>
-        session.PurchasedUnits > 0 && IsLoggedInAsShopper &&
+        session.CyclePurchasedUnits > 0 && IsLoggedInAsShopper &&
         (session.Phase == CrossRegionAcquisitionPhase.Paused ||
          session.Phase == CrossRegionAcquisitionPhase.Stopped && session.InterruptedPhase is CrossRegionAcquisitionPhase.Paused or
              CrossRegionAcquisitionPhase.Shopping or CrossRegionAcquisitionPhase.PreparingShopRoute or CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul);
@@ -602,9 +611,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public CrossRegionActionResult HaulNow()
     {
         if (!CanHaulNow)
-            return CrossRegionActionResult.Fail(session.PurchasedUnits == 0
-                ? "Nothing has been purchased yet."
+            return CrossRegionActionResult.Fail(session.CyclePurchasedUnits == 0
+                ? session.CycleNumber > 1 ? "Nothing has been purchased this cycle yet." : "Nothing has been purchased yet."
                 : !IsLoggedInAsShopper ? $"Log in as {session.Shopper?.Label} to haul." : "Haul is available only while shopping is paused or stopped.");
+        // A manual haul ends the run: it is the final cycle, so counted stock rides along and collections follow.
+        session.CycleEndedWithInventoryFull = false;
         BeginHaul("Hauling purchased items now.");
         return CrossRegionActionResult.Ok(session.LastMessage);
     }
@@ -1195,14 +1206,26 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private void FinishShopping()
     {
         prepareIssued = false;
-        if (session.PurchasedUnits == 0 && !HasShopperCountedStock)
+        // I3/I4: another cycle only when this one bought something, stopped on full bags, stows on delivery and left
+        // targets unmet. Otherwise this is the final cycle and counted stock and collections ride along.
+        session.CycleEndedWithInventoryFull =
+            session.CyclePurchasedUnits > 0 &&
+            session.RequestDocumentSnapshot?.StowAfterDelivery == true &&
+            shopping.CompletedWithInventoryFull &&
+            shopping.HasUnmetTargets(session);
+        if (session.CyclePurchasedUnits == 0 && !HasShopperCountedStock)
         {
-            ReturnToPrimaryOrComplete("Shopping finished with no purchases");
+            ReturnToPrimaryOrComplete(session.CycleNumber > 1
+                ? $"Cycle {session.CycleNumber} finished with no further purchases"
+                : "Shopping finished with no purchases");
             return;
         }
-        BeginHaul(session.PurchasedUnits == 0
-            ? "Shopping finished with no purchases. Preparing the return haul of counted stock."
-            : $"Shopping finished: {session.PurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil. Preparing the return haul.");
+        var cycle = session.CycleNumber > 1 ? $"Cycle {session.CycleNumber} " : string.Empty;
+        BeginHaul(session.CyclePurchasedUnits == 0
+            ? $"{(cycle.Length > 0 ? cycle + "shopping" : "Shopping")} finished with no purchases. Preparing the return haul of counted stock."
+            : session.IsIntermediateCycle
+                ? $"{(cycle.Length > 0 ? cycle + "bags" : "Bags")} full after {session.CyclePurchasedUnits:N0} item(s); hauling and stowing them before shopping again."
+                : $"{(cycle.Length > 0 ? cycle + "shopping" : "Shopping")} finished: {session.CyclePurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil. Preparing the return haul.");
     }
 
     private void BeginHaul(string message)
@@ -1227,9 +1250,10 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             session.LastMessage = "Closing the market board before the return haul.";
             return;
         }
-        if (session.ShopperCounted is { HomeChecked: false } uncheckedShopper)
+        // I5: counted stock rides only on the final cycle; an intermediate haul ships this cycle's purchases alone.
+        if (!session.IsIntermediateCycle && session.ShopperCounted is { HomeChecked: false } uncheckedShopper)
             KeepCountedStockAtHome(uncheckedShopper);
-        if (session.ShopperCounted is { } shopperCounted && !shopperCounted.RetrievalSettled)
+        if (!session.IsIntermediateCycle && session.ShopperCounted is { } shopperCounted && !shopperCounted.RetrievalSettled)
         {
             TickRetrieval(shopperCounted, -1, now);
             // The bag-read window starts once the retrieval settles, not when the board closed.
@@ -1248,7 +1272,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return;
         }
 
-        var manifest = AddShopperCountedStock(ReconcileManifest(session.PurchasedManifest, bags), bags);
+        var purchased = ReconcileManifest(session.CyclePurchasedManifest, bags);
+        var manifest = session.IsIntermediateCycle ? purchased : AddShopperCountedStock(purchased, bags);
         if (manifest.Count == 0)
         {
             ReturnToPrimaryOrComplete($"None of the purchased items remain in {shopper.CharacterName}'s bags");
@@ -1256,7 +1281,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         }
         // I1: persist the haul request before it is submitted.
         session.HaulAttempt++;
-        session.HaulRequestId = CrossRegionAcquisitionSession.HaulRequestIdFor(session.SessionId, session.HaulAttempt);
+        session.HaulRequestId = CrossRegionAcquisitionSession.HaulRequestIdFor(session.SessionId, session.HaulAttempt, session.CycleNumber);
         session.HaulRunId = null;
         session.HaulManifest = manifest.ToList();
         session.HaulDirect = DirectRouteFor(manifest, [], shopper, "The return haul");
@@ -1491,22 +1516,28 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             if (session.RecordedPurchaseKeys.Count > MaxRecordedPurchaseKeys)
                 session.RecordedPurchaseKeys.RemoveRange(0, session.RecordedPurchaseKeys.Count - MaxRecordedPurchaseKeys);
         }
-        var index = session.PurchasedManifest.FindIndex(line => line.ItemId == purchase.ItemId && line.IsHq == purchase.IsHq);
-        if (index < 0)
-            session.PurchasedManifest.Add(new CrossRegionManifestLine(purchase.ItemId, purchase.ItemName ?? purchase.ItemId.ToString(), purchase.IsHq,
-                purchase.Quantity, purchase.WalletGil));
-        else
-        {
-            var line = session.PurchasedManifest[index];
-            session.PurchasedManifest[index] = line with
-            {
-                Quantity = checked(line.Quantity + purchase.Quantity),
-                SpentGil = checked(line.SpentGil + purchase.WalletGil),
-                ItemName = string.IsNullOrWhiteSpace(line.ItemName) ? purchase.ItemName ?? line.ItemName : line.ItemName,
-            };
-        }
+        AddPurchase(session.PurchasedManifest, purchase);
+        AddPurchase(session.CyclePurchasedManifest, purchase);
         session.TotalSpentGil = checked(session.TotalSpentGil + purchase.WalletGil);
         Save();
+    }
+
+    private static void AddPurchase(List<CrossRegionManifestLine> manifest, MarketAcquisitionConfirmedPurchase purchase)
+    {
+        var index = manifest.FindIndex(line => line.ItemId == purchase.ItemId && line.IsHq == purchase.IsHq);
+        if (index < 0)
+        {
+            manifest.Add(new CrossRegionManifestLine(purchase.ItemId, purchase.ItemName ?? purchase.ItemId.ToString(), purchase.IsHq,
+                purchase.Quantity, purchase.WalletGil));
+            return;
+        }
+        var line = manifest[index];
+        manifest[index] = line with
+        {
+            Quantity = checked(line.Quantity + purchase.Quantity),
+            SpentGil = checked(line.SpentGil + purchase.WalletGil),
+            ItemName = string.IsNullOrWhiteSpace(line.ItemName) ? purchase.ItemName ?? line.ItemName : line.ItemName,
+        };
     }
 
     /// <summary>
@@ -1573,6 +1604,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     private string HaulSummary()
     {
         var returned = session.HaulManifest.Aggregate(0UL, (total, line) => total + line.Quantity);
+        if (session.IsIntermediateCycle)
+            return $"Cycle {session.CycleNumber}: bought {session.CyclePurchasedUnits:N0} item(s), " +
+                   (session.HaulDirect is { } cycleDirect
+                       ? $"delivered {returned:N0} straight to {cycleDirect.Destination.Label}."
+                       : $"returned {returned:N0} to {session.Primary?.Label}.");
         return $"Done: funded {session.FundGil:N0} gil, bought {session.PurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil, " +
                (session.HaulDirect is { } direct
                    ? $"delivered {returned:N0} item(s) straight to {direct.Destination.Label}."
@@ -1600,7 +1636,11 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         try
         {
             if (store.Load() is { } loaded)
+            {
+                // I6: a session saved before cycles existed resumes as cycle 1 with every purchase in that cycle.
+                loaded.NormalizeLegacyCycle();
                 return loaded;
+            }
         }
         catch (Exception ex)
         {

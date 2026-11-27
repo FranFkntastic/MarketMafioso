@@ -385,7 +385,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         {
             session.HaulDirect = null;
             session.HaulAttempt++;
-            session.HaulRequestId = CrossRegionAcquisitionSession.HaulRequestIdFor(session.SessionId, session.HaulAttempt);
+            session.HaulRequestId = CrossRegionAcquisitionSession.HaulRequestIdFor(session.SessionId, session.HaulAttempt, session.CycleNumber);
             session.HaulRunId = null;
         }
         else if (CurrentCollection() is { } collection)

@@ -694,6 +694,8 @@ public partial class MainWindow : Window, IDisposable
             return "A market listing purchase is in progress.";
         if (routeEngine.IsShardCheckpointActive)
             return "A shard acquisition checkpoint is in progress.";
+        if (routeEngine.IsDepositCheckpointActive)
+            return "Purchases are being stowed mid-route.";
         return null;
     }
 

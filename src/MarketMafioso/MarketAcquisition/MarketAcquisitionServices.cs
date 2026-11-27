@@ -260,7 +260,19 @@ internal sealed class MarketAcquisitionServices : IDisposable
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
                 lifestream,
                 () => config.MarketAcquisitionAethernetDeparture),
-            message => log.Warning("{Message}", message));
+            message => log.Warning("{Message}", message),
+            new MarketAcquisitionDepositCheckpointCoordinator(
+                quartermaster,
+                new DalamudMarketAcquisitionDepositCheckpointRuntime(
+                    playerState,
+                    () => crossRegionGameState?.ReadCarriedBags(),
+                    routeUiAutomation,
+                    lifestream,
+                    quartermaster,
+                    Plugin.Condition),
+                new ConfigurationMarketAcquisitionDepositCheckpointStateStore(config, config.Save),
+                message => log.Warning("{Message}", message),
+                quartermasterCancels));
         var crossRegionGame = crossRegionGameState = new DalamudCrossRegionGameState(
             playerState, characterLoginDriver, () => otherAutomationActive() || RouteEngine.IsRouteActive, Plugin.Condition, Plugin.ClientState, lifestream);
         crossRegionShopping = new MarketAcquisitionCrossRegionShoppingRoute(

@@ -80,7 +80,8 @@ public partial class MainWindow
         {
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(PhaseColor(session.Phase),
-                $"{CrossRegionAcquisitionCoordinator.DescribeTitle(session.Phase)} · {session.Shopper?.Label} · {session.TargetRegion}");
+                $"{CrossRegionAcquisitionCoordinator.DescribeTitle(session.Phase)} · {session.Shopper?.Label} · {session.TargetRegion}" +
+                (session.CycleNumber > 1 ? $" · Cycle {session.CycleNumber}" : string.Empty));
             ImGui.SameLine();
             void OpenRoute() => QueueAgentTabSelection("Market Acquisition", "Route");
             if (ImGuiUi.Button("Open Route##CrossRegionOpenRoute", true))
@@ -244,6 +245,8 @@ public partial class MainWindow
                 ImGui.SameLine();
             }
             var name = index == 1 && region.Length > 0 ? $"Shop on {region}" : CrossRegionStageLabels[index];
+            if (index == 1 && CrossRegion.HasSession && session.CycleNumber > 1)
+                name = $"{name} · Cycle {session.CycleNumber}";
             var label = $"{position + 1}. {name}";
             var skipped = index == 0 && CrossRegion.HasSession && session.FundGil == 0;
             var color = !CrossRegion.HasSession || skipped ? ColMuted
