@@ -122,6 +122,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public bool IsRouteRunning => runner.IsRunning || state.ProbeRunning;
 
+    /// <summary>The current or last run skipped at least one line because the bags could not take its next listing.</summary>
+    public bool HasInventoryFullSkips => inventoryFullLines.Count > 0;
+
     public bool IsPurchaseAutomationBusy => purchaseAutomation.IsBusy;
 
     public bool IsShardCheckpointActive => shardCheckpoints?.IsActive == true;

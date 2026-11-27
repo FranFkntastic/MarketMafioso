@@ -79,8 +79,9 @@ public partial class MainWindow
         if (CrossRegion.HasSession)
         {
             ImGui.AlignTextToFramePadding();
+            var cycle = session.CycleNumber > 1 ? $" · Cycle {session.CycleNumber}" : string.Empty;
             ImGui.TextColored(PhaseColor(session.Phase),
-                $"{CrossRegionAcquisitionCoordinator.DescribeTitle(session.Phase)} · {session.Shopper?.Label} · {session.TargetRegion}");
+                $"{CrossRegionAcquisitionCoordinator.DescribeTitle(session.Phase)} · {session.Shopper?.Label} · {session.TargetRegion}{cycle}");
             ImGui.SameLine();
             void OpenRoute() => QueueAgentTabSelection("Market Acquisition", "Route");
             if (ImGuiUi.Button("Open Route##CrossRegionOpenRoute", true))
@@ -137,6 +138,25 @@ public partial class MainWindow
                 ImGui.SetTooltip("Already matches the plan");
             AgentReviewRegistry.RegisterLastButton("acquisition.cross-region.match-plan", "Set the transfer gil to the prepared plan's total", canMatch, MatchPlan);
         }
+
+        // Going back out needs the delivery stowed; a Quartermaster that cannot stow would only overfill the primary's bags.
+        var canStow = status?.SupportsDepositToRetainers != false;
+        var multiCycle = config.CrossRegionMultiCycle && canStow;
+        void ToggleMultiCycle()
+        {
+            config.CrossRegionMultiCycle = !config.CrossRegionMultiCycle;
+            config.Save();
+        }
+        ImGui.BeginDisabled(!canStow);
+        if (ImGui.Checkbox("Multi-trip when bags fill##CrossRegionMultiCycle", ref multiCycle))
+            ToggleMultiCycle();
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(canStow
+                ? "Haul, deposit into the primary's retainers, and go back for the rest"
+                : "Update Quartermaster to deposit deliveries into retainers");
+        AgentReviewRegistry.RegisterLastButton("acquisition.cross-region.multi-cycle",
+            "Toggle multi-trip cross-regional shopping (haul, deposit to retainers, continue)", canStow && !locked, ToggleMultiCycle);
         ImGui.EndDisabled();
 
         var readiness = CrossRegion.EvaluateReadiness(shopper, region, config.CrossRegionFundGil, acquisitionRequestBuilder.CurrentDocument);
@@ -203,8 +223,9 @@ public partial class MainWindow
     private static int StageOf(CrossRegionAcquisitionPhase? phase) => phase switch
     {
         CrossRegionAcquisitionPhase.FundingShopper => 0,
-        CrossRegionAcquisitionPhase.SwitchingToShopper or CrossRegionAcquisitionPhase.PreparingShopRoute or
-            CrossRegionAcquisitionPhase.Shopping or CrossRegionAcquisitionPhase.Paused => 1,
+        CrossRegionAcquisitionPhase.SwitchingToShopper or CrossRegionAcquisitionPhase.SwitchingToShopperForNextCycle or
+            CrossRegionAcquisitionPhase.PreparingShopRoute or CrossRegionAcquisitionPhase.Shopping or
+            CrossRegionAcquisitionPhase.Paused => 1,
         CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul or CrossRegionAcquisitionPhase.HaulingToPrimary or
             CrossRegionAcquisitionPhase.ReturningToPrimary => 2,
         CrossRegionAcquisitionPhase.Completed => 3,
@@ -243,6 +264,11 @@ public partial class MainWindow
                 : ColMuted;
             ImGui.TextColored(color, skipped ? $"{label} (skipped)" : label);
         }
+        if (CrossRegion.HasSession && session.MultiCycleEnabled)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(session.CycleNumber > 1 ? ColHeader : ColMuted, $"· Cycle {session.CycleNumber}");
+        }
 
         if (CrossRegion.HasSession)
         {
@@ -254,17 +280,37 @@ public partial class MainWindow
         DrawCrossRegionActions();
         if (!string.IsNullOrWhiteSpace(crossRegionActionMessage))
             ImGui.TextColored(ColWarning, crossRegionActionMessage);
-        if (CrossRegion.HasSession && session.PurchasedManifest.Count > 0)
+        if (CrossRegion.HasSession && (session.PurchasedManifest.Count > 0 || session.EarlierPurchasedManifest.Count > 0))
             DrawCrossRegionPurchasedTable(session);
     }
 
     private const int CrossRegionTableMaxVisibleRows = 8;
 
+    private static Dictionary<(uint ItemId, bool IsHq), ulong> CrossRegionUnits(IEnumerable<CrossRegionManifestLine> lines) =>
+        lines.GroupBy(line => (line.ItemId, line.IsHq))
+            .ToDictionary(group => group.Key, group => group.Aggregate(0UL, (total, line) => total + line.Quantity));
+
+    /// <summary>
+    /// One row per (item, quality) across every cycle. Bought and Spent are run totals; the current
+    /// cycle's units show as In bags (Haul once a haul manifest exists), and Delivered is cumulative.
+    /// The two extra columns appear only once they hold something Bought does not already say.
+    /// </summary>
     private static void DrawCrossRegionPurchasedTable(CrossRegionAcquisitionSession session)
     {
-        var showHaul = session.HaulManifest.Count > 0;
-        var hauled = session.HaulManifest.ToDictionary(line => (line.ItemId, line.IsHq), line => line.Quantity);
-        var rows = session.PurchasedManifest.OrderBy(line => line.ItemName, StringComparer.OrdinalIgnoreCase).ThenBy(line => line.IsHq).ToArray();
+        var hauling = session.HaulManifest.Count > 0;
+        var delivered = CrossRegionUnits(session.DeliveredManifest);
+        var thisCycle = CrossRegionUnits(session.PurchasedManifest);
+        var carried = hauling ? CrossRegionUnits(session.HaulManifest) : thisCycle;
+        var showCarried = hauling || delivered.Count > 0 && thisCycle.Count > 0;
+        var showDelivered = delivered.Count > 0;
+        var rows = session.AllPurchases()
+            .GroupBy(line => (line.ItemId, line.IsHq))
+            .Select(group => new CrossRegionManifestLine(group.Key.ItemId, group.First().ItemName, group.Key.IsHq,
+                (uint)Math.Min(group.Aggregate(0UL, (total, line) => total + line.Quantity), uint.MaxValue),
+                group.Aggregate(0UL, (total, line) => total + line.SpentGil)))
+            .OrderBy(line => line.ItemName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(line => line.IsHq)
+            .ToArray();
         var flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp;
         var outer = Vector2.Zero;
         if (rows.Length > CrossRegionTableMaxVisibleRows)
@@ -273,15 +319,17 @@ public partial class MainWindow
             outer = new Vector2(0, ImGui.GetFrameHeightWithSpacing() * (CrossRegionTableMaxVisibleRows + 1));
         }
         ImGui.Spacing();
-        if (!ImGui.BeginTable("CrossRegionPurchased", showHaul ? 5 : 4, flags, outer))
+        if (!ImGui.BeginTable("CrossRegionPurchased", 4 + (showCarried ? 1 : 0) + (showDelivered ? 1 : 0), flags, outer))
             return;
         ImGui.TableSetupScrollFreeze(0, 1);
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 3f);
         ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthStretch, 0.5f);
         ImGui.TableSetupColumn("Bought", ImGuiTableColumnFlags.WidthStretch, 1f);
         ImGui.TableSetupColumn("Spent", ImGuiTableColumnFlags.WidthStretch, 1.4f);
-        if (showHaul)
-            ImGui.TableSetupColumn("Haul", ImGuiTableColumnFlags.WidthStretch, 1f);
+        if (showCarried)
+            ImGui.TableSetupColumn(hauling ? "Haul" : "In bags", ImGuiTableColumnFlags.WidthStretch, 1f);
+        if (showDelivered)
+            ImGui.TableSetupColumn("Delivered", ImGuiTableColumnFlags.WidthStretch, 1f);
         ImGui.TableHeadersRow();
         foreach (var line in rows)
         {
@@ -295,14 +343,30 @@ public partial class MainWindow
             ImGui.TableNextColumn();
             // Sessions saved before per-line spend tracking have no per-line figure.
             ImGui.TextUnformatted(line.SpentGil > 0 ? $"{line.SpentGil:N0}" : "—");
-            if (showHaul)
+            var key = (line.ItemId, line.IsHq);
+            if (showCarried)
             {
                 ImGui.TableNextColumn();
-                var haul = hauled.GetValueOrDefault((line.ItemId, line.IsHq));
-                if (haul < line.Quantity)
-                    ImGui.TextColored(ColWarning, haul.ToString("N0"));
+                var units = carried.GetValueOrDefault(key);
+                var boughtThisCycle = thisCycle.GetValueOrDefault(key);
+                // A haul that ships less than this cycle bought left units behind on the shopper.
+                if (hauling && units < boughtThisCycle)
+                    ImGui.TextColored(ColWarning, units.ToString("N0"));
+                else if (units == 0)
+                    ImGui.TextColored(ColMuted, "—");
                 else
-                    ImGui.TextUnformatted(haul.ToString("N0"));
+                    ImGui.TextUnformatted(units.ToString("N0"));
+            }
+            if (showDelivered)
+            {
+                ImGui.TableNextColumn();
+                var units = delivered.GetValueOrDefault(key);
+                if (session.IsTerminal && units < line.Quantity)
+                    ImGui.TextColored(ColWarning, units.ToString("N0"));
+                else if (units == 0)
+                    ImGui.TextColored(ColMuted, "—");
+                else
+                    ImGui.TextUnformatted(units.ToString("N0"));
             }
         }
         ImGui.EndTable();
@@ -402,7 +466,8 @@ public partial class MainWindow
             return;
         }
         var region = DocumentRegion!;
-        var shopper = ResolveCrossRegionShopper(CrossRegion.GetCourierStatus(out _, force: true), region, out _);
+        var status = CrossRegion.GetCourierStatus(out _, force: true);
+        var shopper = ResolveCrossRegionShopper(status, region, out _);
         if (shopper is null)
         {
             crossRegionActionMessage = $"Select a shopper in {region}.";
@@ -422,7 +487,8 @@ public partial class MainWindow
             }
             baselines[line.LineId] = observed.Quantity;
         }
-        var result = CrossRegion.Start(new CrossRegionStartRequest(shopper, region, config.CrossRegionFundGil, document, baselines));
+        var result = CrossRegion.Start(new CrossRegionStartRequest(shopper, region, config.CrossRegionFundGil, document, baselines,
+            MultiCycle: config.CrossRegionMultiCycle && status?.SupportsDepositToRetainers == true));
         crossRegionActionMessage = result.Success ? null : result.Message;
     }
 }

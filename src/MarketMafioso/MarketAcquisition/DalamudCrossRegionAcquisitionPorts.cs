@@ -176,6 +176,8 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
         }
     }
 
+    public bool StoppedForBagSpace => ownsRun && settledState is null && prepareTask is null && engine.HasInventoryFullSkips;
+
     public IReadOnlyDictionary<string, uint> CaptureShopperStartingStock(CrossRegionAcquisitionSession session)
     {
         var document = session.RequestDocumentSnapshot ?? throw new InvalidOperationException("The session has no request document.");
@@ -222,7 +224,7 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
             Settle(CrossRegionShoppingState.Completed, NoSpendableGilMessage);
             return;
         }
-        var (resumedDocument, keptOrdinals) = ResumedDocument(document, session.PurchasedManifest);
+        var (resumedDocument, keptOrdinals) = ResumedDocument(document, session.AllPurchases());
         if (resumedDocument.Lines.Count == 0)
         {
             Settle(CrossRegionShoppingState.Completed, "All shopping targets are already satisfied.");
@@ -232,12 +234,14 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
         try
         {
             // Line ids are ordinal-based; carry the session's per-line baselines over to the resumed ids.
-            var originalIds = MarketAcquisitionPlanPreparationService.GetPlanLines(workspace.ResolveLocalExecutionRequest(document))
+            var originalRequest = workspace.ResolveLocalExecutionRequest(document);
+            var originalIds = MarketAcquisitionPlanPreparationService.GetPlanLines(originalRequest)
                 .ToDictionary(line => line.Ordinal, line => line.LineId);
             var resumedRequest = workspace.ResolveLocalExecutionRequest(resumedDocument);
             var lineIds = MarketAcquisitionPlanPreparationService.GetPlanLines(resumedRequest)
                 .ToDictionary(line => originalIds[keptOrdinals[line.Ordinal]], line => line.LineId, StringComparer.Ordinal);
-            preparedPrimaryBaselines = RemapLineIds(session.PrimaryStockBaselines, lineIds);
+            preparedPrimaryBaselines = RemapLineIds(
+                WithDelivered(session.PrimaryStockBaselines, TargetLines(originalRequest), session.DeliveredManifest), lineIds);
             preparedShopperStartingStock = session.ShopperStartingStock is null ? null : RemapLineIds(session.ShopperStartingStock, lineIds);
             overrides = BuildBaselineOverrides(preparedPrimaryBaselines, preparedShopperStartingStock, resumedRequest);
         }
@@ -407,6 +411,30 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
         const ulong reserve = CrossRegionAcquisitionCoordinator.TravelFeeReserveGil;
         maxSafeSpend = gil > reserve ? gil - reserve : 0;
         return true;
+    }
+
+    /// <summary>
+    /// The primary's stock a target line is measured against once earlier cycles have delivered: the
+    /// baseline captured at the start plus every delivered unit the line counts. The original baseline
+    /// is never rewritten, so a later cycle shops only for what is still missing.
+    /// </summary>
+    internal static Dictionary<string, uint> WithDelivered(
+        IReadOnlyDictionary<string, uint> primaryBaselines,
+        IEnumerable<MarketAcquisitionBatchLineView> targetLines,
+        IReadOnlyList<CrossRegionManifestLine> delivered)
+    {
+        var effective = new Dictionary<string, uint>(primaryBaselines, StringComparer.Ordinal);
+        if (delivered.Count == 0)
+            return effective;
+        foreach (var line in targetLines)
+        {
+            var units = delivered
+                .Where(landed => landed.ItemId == line.ItemId && MarketAcquisitionPolicy.HqMatches(line.HqPolicy, landed.IsHq))
+                .Aggregate(0UL, (total, landed) => total + landed.Quantity);
+            if (units > 0)
+                effective[line.LineId] = (uint)Math.Min(effective.GetValueOrDefault(line.LineId) + units, uint.MaxValue);
+        }
+        return effective;
     }
 
     /// <summary>

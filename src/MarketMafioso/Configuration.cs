@@ -74,6 +74,8 @@ public class Configuration : IPluginConfiguration
     public ulong CrossRegionShopperContentId { get; set; }
     /// <summary>Exact carried gil the courier moves from primary to shopper before shopping; 0 skips the transfer.</summary>
     public int CrossRegionFundGil { get; set; }
+    /// <summary>When the shopper's bags end a cross-regional cycle: haul, stow into the primary's retainers, and go back for the rest.</summary>
+    public bool CrossRegionMultiCycle { get; set; } = true;
     public bool MarketAcquisitionRouteAlerts { get; set; } = true;
     public bool ArchiveCompletedMarketAcquisitionRouteDiagnostics { get; set; } = true;
     public int MarketAcquisitionRouteDiagnosticsHotDays { get; set; } = 14;

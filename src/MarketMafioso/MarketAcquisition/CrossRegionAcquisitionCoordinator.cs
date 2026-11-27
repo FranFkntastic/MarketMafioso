@@ -38,6 +38,8 @@ public interface ICrossRegionShoppingRoute
     CrossRegionShoppingState State { get; }
     string StatusMessage { get; }
     bool CanResumeInPlace { get; }
+    /// <summary>The route this adapter last ran left at least one line unbought because the shopper's bags could not take it.</summary>
+    bool StoppedForBagSpace { get; }
     event Action<MarketAcquisitionConfirmedPurchase>? ConfirmedPurchase;
     IReadOnlyDictionary<string, uint> CaptureShopperStartingStock(CrossRegionAcquisitionSession session);
     void BeginPrepareAndStart(CrossRegionAcquisitionSession session);
@@ -53,7 +55,8 @@ public sealed record CrossRegionStartRequest(
     string TargetRegion,
     int FundGil,
     MarketAcquisitionRequestDocument Document,
-    IReadOnlyDictionary<string, uint> PrimaryStockBaselines);
+    IReadOnlyDictionary<string, uint> PrimaryStockBaselines,
+    bool MultiCycle = false);
 
 public sealed record CrossRegionReadiness(bool Ready, string? Blocker, QuartermasterCourierStatus? Status)
 {
@@ -69,13 +72,20 @@ public sealed record CrossRegionActionResult(bool Success, string Message)
 }
 
 /// <summary>
-/// Single-cycle cross-regional shopping: fund the shopper through Quartermaster's courier, shop the
-/// foreign region on the shopper, then haul exactly what was bought back to the primary.
+/// Cross-regional shopping: fund the shopper through Quartermaster's courier, shop the foreign region
+/// on the shopper, then haul exactly what was bought back to the primary. With multi-cycle on, a cycle
+/// that ends because the shopper's bags filled has its haul stowed into the primary's retainers and is
+/// followed by another, until the targets are met, the shopper's gil is spent, or the retainers are full.
 /// </summary>
 public sealed class CrossRegionAcquisitionCoordinator
 {
     public const long MaxCarriedGil = 999_999_999L;
     public const int TravelFeeReserveGil = 5_000;
+    /// <summary>
+    /// Hard bound on shop-then-haul cycles. Every continued cycle has also delivered at least one unit,
+    /// and a cycle that buys nothing ends the run, so the loop cannot spin; this caps a slow one.
+    /// </summary>
+    public const int MaxCycles = 20;
     public const string BlockerShopperNotPaired = "ShopperNotPaired";
     /// <summary>How long an accepted pairing may take to show up in the carrier's presence before it is reported.</summary>
     private static readonly TimeSpan PairConfirmationWindow = TimeSpan.FromSeconds(10);
@@ -385,6 +395,7 @@ public sealed class CrossRegionAcquisitionCoordinator
             Shopper = request.Shopper,
             TargetRegion = request.TargetRegion,
             FundGil = request.FundGil,
+            MultiCycleEnabled = request.MultiCycle,
             PrimaryStockBaselines = new Dictionary<string, uint>(request.PrimaryStockBaselines, StringComparer.Ordinal),
             // Detached copy: the Workbench keeps editing (and rescoping) its own document.
             RequestDocumentSnapshot = request.Document with
@@ -455,6 +466,7 @@ public sealed class CrossRegionAcquisitionCoordinator
                 return CrossRegionActionResult.Ok(session.LastMessage);
             case CrossRegionAcquisitionPhase.Paused:
             case CrossRegionAcquisitionPhase.SwitchingToShopper:
+            case CrossRegionAcquisitionPhase.SwitchingToShopperForNextCycle:
             case CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul:
             case CrossRegionAcquisitionPhase.ReturningToPrimary:
                 if (phase == CrossRegionAcquisitionPhase.Paused)
@@ -482,9 +494,10 @@ public sealed class CrossRegionAcquisitionCoordinator
             case CrossRegionAcquisitionPhase.PreparingShopRoute:
                 return ResumeShopping();
             case CrossRegionAcquisitionPhase.SwitchingToShopper:
+            case CrossRegionAcquisitionPhase.SwitchingToShopperForNextCycle:
                 session.CharacterSwitchAttempts = 0;
                 lastSwitchRequestUtc = null;
-                SetPhase(CrossRegionAcquisitionPhase.SwitchingToShopper, $"Switching to {session.Shopper?.Label}.");
+                SetPhase(target.Value, $"Switching to {session.Shopper?.Label}.");
                 return CrossRegionActionResult.Ok(session.LastMessage);
             case CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul:
                 closeStartedUtc = null;
@@ -507,6 +520,8 @@ public sealed class CrossRegionAcquisitionCoordinator
             return CrossRegionActionResult.Fail(session.PurchasedUnits == 0
                 ? "Nothing has been purchased yet."
                 : !IsLoggedInAsShopper ? $"Log in as {session.Shopper?.Label} to haul." : "Haul is available only while shopping is paused or stopped.");
+        // A haul the user asked for brings back what there is and ends the run; it never starts another cycle.
+        session.NeedsContinueAfterHaul = false;
         BeginHaul("Hauling purchased items now.");
         return CrossRegionActionResult.Ok(session.LastMessage);
     }
@@ -542,6 +557,7 @@ public sealed class CrossRegionAcquisitionCoordinator
                     TickCourier(fund: true, now);
                     break;
                 case CrossRegionAcquisitionPhase.SwitchingToShopper:
+                case CrossRegionAcquisitionPhase.SwitchingToShopperForNextCycle:
                     TickSwitch(now);
                     break;
                 case CrossRegionAcquisitionPhase.PreparingShopRoute:
@@ -641,7 +657,7 @@ public sealed class CrossRegionAcquisitionCoordinator
             }
             else
             {
-                Complete(HaulSummary());
+                SettleHaul(status!, run);
             }
             return;
         }
@@ -700,7 +716,103 @@ public sealed class CrossRegionAcquisitionCoordinator
             SetPhase(CrossRegionAcquisitionPhase.PreparingShopRoute, $"Preparing the {session.TargetRegion} shop route on {shopper.Label}.");
             return;
         }
-        DriveCharacterSwitch(shopper, CrossRegionAcquisitionPhase.SwitchingToShopper, "ShopperSwitchFailed", now);
+        // The first trip out and every later cycle share this one switch driver; the phase only records which it is.
+        DriveCharacterSwitch(shopper, session.Phase, "ShopperSwitchFailed", now);
+    }
+
+    /// <summary>
+    /// A completed haul: fold the cycle into the cumulative manifests, then finish or go back out.
+    /// Everything changes in memory first and reaches disk in the single write of the phase change, so a
+    /// restart finds either the unsettled haul (re-observed by its request id, never resubmitted) or the
+    /// settled cycle: never a delivery counted twice, and never the same cycle sent out again.
+    /// </summary>
+    private void SettleHaul(QuartermasterCourierStatus status, QuartermasterCourierRun run)
+    {
+        var cycle = Math.Max(1, session.CycleNumber);
+        var hauled = session.HaulManifest.Aggregate(0UL, (total, line) => total + line.Quantity);
+        var stop = session.NeedsContinueAfterHaul ? NextCycleBlocker(status, run, cycle, hauled) : null;
+        var again = session.NeedsContinueAfterHaul && stop is null;
+        var singleCycleSummary = HaulSummary();
+
+        CrossRegionAcquisitionSession.Accumulate(session.DeliveredManifest, session.HaulManifest);
+        CrossRegionAcquisitionSession.Accumulate(session.EarlierPurchasedManifest, session.PurchasedManifest);
+        session.PurchasedManifest = [];
+        session.HaulManifest = [];
+        session.HaulRequestId = null;
+        session.HaulRunId = null;
+        session.HaulAttempt = 0;
+        session.NeedsContinueAfterHaul = false;
+        session.DepositToRetainers = false;
+        session.CycleStopReason = null;
+        submitAttempts = 0;
+        if (again)
+        {
+            session.CycleNumber = cycle + 1;
+            session.CharacterSwitchAttempts = 0;
+            lastSwitchRequestUtc = null;
+            SetPhase(CrossRegionAcquisitionPhase.SwitchingToShopperForNextCycle,
+                $"Cycle {cycle} delivered {hauled:N0} item(s) to {session.Primary?.Label}; switching to {session.Shopper?.Label} for cycle {cycle + 1}.");
+            return;
+        }
+        Complete(stop is not null ? MultiCycleSummary(cycle, stop)
+            : cycle > 1 ? MultiCycleSummary(cycle, UnstowedNote(run))
+            : singleCycleSummary);
+    }
+
+    /// <summary>
+    /// Why the run must not go back out after this haul, or null when it may. Each reason names what
+    /// was hit, because the run ends as Completed and this sentence is all the user gets.
+    /// </summary>
+    private string? NextCycleBlocker(QuartermasterCourierStatus status, QuartermasterCourierRun run, int cycle, ulong hauled)
+    {
+        const string skipped = "remaining targets skipped";
+        var primary = session.Primary?.CharacterName ?? "the primary";
+        if (hauled == 0)
+            return $"the last haul delivered nothing — {skipped}";
+        if (cycle >= MaxCycles)
+            return $"the {MaxCycles}-cycle limit was reached — {skipped}";
+        // Without stowing, the next delivery lands on top of this one in the primary's bags.
+        if (!session.DepositToRetainers)
+            return $"this Quartermaster cannot stow deliveries into retainers — {skipped}";
+        if (run.Deposit is not { } deposit)
+            return $"Quartermaster did not report the retainer deposit — {skipped}";
+        if (string.Equals(deposit.Code, "DepositUnavailable", StringComparison.Ordinal))
+            return $"{primary}'s retainers were out of reach, so the delivery stayed in bags — {skipped}";
+        if (deposit.UnstowedUnits > 0 || !string.IsNullOrWhiteSpace(deposit.Code))
+            return $"{primary}'s retainers are full ({deposit.UnstowedUnits:N0} item(s) stayed in bags) — {skipped}";
+        if (PrimaryRetainerFreeSlots(status) == 0)
+            return $"{primary}'s retainers have no free slots left — {skipped}";
+        if (session.ShopperGilAtHaul is { } gil && gil <= TravelFeeReserveGil)
+            return $"shopper gil exhausted — {skipped}";
+        return null;
+    }
+
+    /// <summary>The primary's cached free retainer slots as Quartermaster last observed them; null when unknown.</summary>
+    private int? PrimaryRetainerFreeSlots(QuartermasterCourierStatus status)
+    {
+        if (session.Primary is not { } primary)
+            return null;
+        if (status.LoggedIn is { } me && me.LocalContentId == primary.LocalContentId && me.HomeWorldId == primary.HomeWorldId &&
+            me.RetainerFreeSlots is { } live)
+            return live;
+        return status.Roster.FirstOrDefault(row => row.LocalContentId == primary.LocalContentId && row.HomeWorldId == primary.HomeWorldId)
+            ?.RetainerFreeSlots;
+    }
+
+    /// <summary>What a final stowing haul left in the primary's bags, or null when it all went into retainers.</summary>
+    private static string? UnstowedNote(QuartermasterCourierRun run) => run.Deposit switch
+    {
+        { Code: "DepositUnavailable" } => "retainers were out of reach, so the last delivery stayed in bags",
+        { UnstowedUnits: > 0 } deposit => $"{deposit.UnstowedUnits:N0} item(s) of the last delivery did not fit the retainers and stayed in bags",
+        _ => null,
+    };
+
+    private string MultiCycleSummary(int cycles, string? reason)
+    {
+        cycles = Math.Max(1, cycles);
+        return $"Completed {cycles:N0} cycle{(cycles == 1 ? string.Empty : "s")}{(reason is null ? "." : $"; {reason}.")} " +
+               $"Bought {session.TotalPurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil; " +
+               $"delivered {session.DeliveredUnits:N0} to {session.Primary?.Label}.";
     }
 
     /// <summary>Requests a character switch with bounded retries; the caller detects arrival.</summary>
@@ -727,15 +839,19 @@ public sealed class CrossRegionAcquisitionCoordinator
     /// <summary>Nothing to haul: leave the shopper (market board closed first) and finish on the primary.</summary>
     private void ReturnToPrimaryOrComplete(string reason)
     {
+        // A later cycle with nothing to haul ends a run whose earlier cycles did deliver.
+        var laterCycle = session.CycleNumber > 1;
         if (session.Primary is not { } primary || primary.Matches(game.LoggedInCharacter))
         {
-            Complete($"{reason}.");
+            Complete(laterCycle ? MultiCycleSummary(session.CycleNumber - 1, reason) : $"{reason}.");
             return;
         }
+        session.CycleStopReason = laterCycle ? reason : null;
         session.CharacterSwitchAttempts = 0;
         lastSwitchRequestUtc = null;
         closeStartedUtc = null;
-        SetPhase(CrossRegionAcquisitionPhase.ReturningToPrimary, $"{reason}; returning to {primary.Label}.");
+        SetPhase(CrossRegionAcquisitionPhase.ReturningToPrimary,
+            $"{char.ToUpperInvariant(reason[0])}{reason[1..]}; returning to {primary.Label}.");
     }
 
     private void TickReturning(DateTimeOffset now)
@@ -745,9 +861,11 @@ public sealed class CrossRegionAcquisitionCoordinator
         {
             lastSwitchRequestUtc = null;
             session.CharacterSwitchAttempts = 0;
-            Complete(session.PurchasedUnits == 0
-                ? "Shopping finished with no purchases; returned to primary."
-                : "None of the purchased items remained in bags; returned to primary.");
+            Complete(session.CycleNumber > 1
+                ? MultiCycleSummary(session.CycleNumber - 1, session.CycleStopReason ?? "the last cycle had nothing to haul")
+                : session.PurchasedUnits == 0
+                    ? "Shopping finished with no purchases; returned to primary."
+                    : "None of the purchased items remained in bags; returned to primary.");
             return;
         }
         if (session.Shopper?.Matches(game.LoggedInCharacter) == true)
@@ -847,10 +965,23 @@ public sealed class CrossRegionAcquisitionCoordinator
         prepareIssued = false;
         if (session.PurchasedUnits == 0)
         {
-            ReturnToPrimaryOrComplete("Shopping finished with no purchases");
+            // A cycle that buys nothing never hauls and never repeats: this is what ends the loop
+            // when gil, budget, stock, or the targets themselves run out.
+            var why = shopping.StatusMessage.Trim().TrimEnd('.');
+            ReturnToPrimaryOrComplete(session.CycleNumber > 1
+                ? $"cycle {session.CycleNumber} bought nothing{(why.Length == 0 ? string.Empty : $" ({why})")}"
+                : "Shopping finished with no purchases");
             return;
         }
-        BeginHaul($"Shopping finished: {session.PurchasedUnits:N0} item(s) for {session.TotalSpentGil:N0} gil. Preparing the return haul.");
+        // Bag space is the only ending worth coming back from; any other means the remaining
+        // targets are met, unaffordable, or not for sale.
+        session.NeedsContinueAfterHaul = session.MultiCycleEnabled && shopping.StoppedForBagSpace;
+        var spent = session.CycleNumber > 1
+            ? session.PurchasedManifest.Aggregate(0UL, (total, line) => total + line.SpentGil)
+            : session.TotalSpentGil;
+        BeginHaul(session.NeedsContinueAfterHaul
+            ? $"Bags are full after {session.PurchasedUnits:N0} item(s) for {spent:N0} gil; hauling before going back for the rest."
+            : $"Shopping finished: {session.PurchasedUnits:N0} item(s) for {spent:N0} gil. Preparing the return haul.");
     }
 
     private void BeginHaul(string message)
@@ -889,14 +1020,33 @@ public sealed class CrossRegionAcquisitionCoordinator
         var manifest = ReconcileManifest(session.PurchasedManifest, bags);
         if (manifest.Count == 0)
         {
-            ReturnToPrimaryOrComplete($"None of the purchased items remain in {shopper.CharacterName}'s bags");
+            ReturnToPrimaryOrComplete(session.CycleNumber > 1
+                ? $"none of cycle {session.CycleNumber}'s purchases remain in {shopper.CharacterName}'s bags"
+                : $"None of the purchased items remain in {shopper.CharacterName}'s bags");
             return;
+        }
+        // Stowing is what frees the primary's bags for the next delivery, so it applies to a haul that
+        // another cycle follows and to every haul after the first. A run that never fills the shopper's
+        // bags still delivers to the primary's bags. An older Quartermaster would ignore the flag
+        // silently, so it is only sent to one that advertises it.
+        var deposit = false;
+        if (session.MultiCycleEnabled && (session.NeedsContinueAfterHaul || session.CycleNumber > 1))
+        {
+            if (!courier.TryGetCourierStatus(out var status, out var statusError))
+            {
+                session.LastMessage = $"Waiting for Quartermaster courier status: {statusError}";
+                return;
+            }
+            deposit = status!.SupportsDepositToRetainers;
         }
         // I1: persist the haul request before it is submitted.
         session.HaulAttempt++;
-        session.HaulRequestId = CrossRegionAcquisitionSession.HaulRequestIdFor(session.SessionId, session.HaulAttempt);
+        session.HaulRequestId = CrossRegionAcquisitionSession.HaulRequestIdFor(session.SessionId, session.CycleNumber, session.HaulAttempt);
         session.HaulRunId = null;
         session.HaulManifest = manifest.ToList();
+        session.DepositToRetainers = deposit;
+        // The next-cycle decision is made on the primary, which cannot read the shopper's wallet.
+        session.ShopperGilAtHaul = game.CarriedGil;
         submitAttempts = 0;
         SetPhase(CrossRegionAcquisitionPhase.HaulingToPrimary,
             $"Hauling {manifest.Sum(line => (long)line.Quantity):N0} item(s) back to {session.Primary?.Label}.");
@@ -983,7 +1133,8 @@ public sealed class CrossRegionAcquisitionCoordinator
             : new QuartermasterCourierTransferRequest(requestId, session.Shopper.ToCourier(), session.Primary.ToCourier(), 0,
                 session.HaulManifest.Select(line => new QuartermasterCourierItem(line.ItemId, line.ItemName, line.IsHq,
                     (int)Math.Min(line.Quantity, int.MaxValue))).ToImmutableArray(),
-                ReturnOwner: false, ReturnDestinationHome: false, ReturnCarrier: true);
+                ReturnOwner: false, ReturnDestinationHome: false, ReturnCarrier: true,
+                DepositToRetainers: session.DepositToRetainers);
         if (!courier.TrySubmitCourierTransfer(request, out var ack, out var error))
         {
             submitAttempts++;
@@ -1195,6 +1346,7 @@ public sealed class CrossRegionAcquisitionCoordinator
         CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul => "preparing the return haul",
         CrossRegionAcquisitionPhase.HaulingToPrimary => "the return haul",
         CrossRegionAcquisitionPhase.ReturningToPrimary => "returning to the primary",
+        CrossRegionAcquisitionPhase.SwitchingToShopperForNextCycle => "switching to the shopper for the next cycle",
         _ => phase?.ToString() ?? "the session",
     };
 
@@ -1210,6 +1362,7 @@ public sealed class CrossRegionAcquisitionCoordinator
         CrossRegionAcquisitionPhase.ClosingMarketBoardForHaul => "Preparing return haul",
         CrossRegionAcquisitionPhase.HaulingToPrimary => "Hauling to primary",
         CrossRegionAcquisitionPhase.ReturningToPrimary => "Returning to primary",
+        CrossRegionAcquisitionPhase.SwitchingToShopperForNextCycle => "Switching to shopper",
         CrossRegionAcquisitionPhase.Completed => "Completed",
         CrossRegionAcquisitionPhase.Stopped => "Stopped",
         CrossRegionAcquisitionPhase.Failed => "Failed",

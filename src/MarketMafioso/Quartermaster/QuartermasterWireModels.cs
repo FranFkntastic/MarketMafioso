@@ -448,7 +448,8 @@ public sealed record QuartermasterCourierLoggedIn(
     int FreeBagSlots,
     bool HasMeetingBell,
     string? MeetingBellLabel,
-    bool? IsPairedWithCarrier = null);
+    bool? IsPairedWithCarrier = null,
+    int? RetainerFreeSlots = null);
 
 public sealed record QuartermasterCourierCarrier(
     bool Configured,
@@ -479,7 +480,15 @@ public sealed record QuartermasterCourierRosterEntry(
     bool HasMeetingBell,
     string? MeetingBellLabel,
     bool IsCarrier,
-    bool? IsPairedWithCarrier = null);
+    bool? IsPairedWithCarrier = null,
+    int? FreeBagSlots = null,
+    int? RetainerFreeSlots = null);
+
+/// <summary>
+/// The outcome of a transfer that asked to stow its delivery into the destination's retainers.
+/// UnstowedUnits stayed in the destination's bags; Code names why (DepositLimited, DepositUnavailable) or is null.
+/// </summary>
+public sealed record QuartermasterCourierDeposit(long UnstowedUnits, string? Code);
 
 public sealed record QuartermasterCourierRun(
     Guid? RunId,
@@ -497,6 +506,9 @@ public sealed record QuartermasterCourierRun(
     long CustodyUnits,
     long CustodyGil)
 {
+    /// <summary>Null unless the transfer asked for a retainer deposit and Quartermaster reports its outcome.</summary>
+    public QuartermasterCourierDeposit? Deposit { get; init; }
+
     public bool IsRunning => State.Equals("Running", StringComparison.OrdinalIgnoreCase);
     public bool IsCompleted => State.Equals("Completed", StringComparison.OrdinalIgnoreCase);
     public bool IsFailure => State.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
@@ -511,7 +523,17 @@ public sealed record QuartermasterCourierStatus(
     QuartermasterCourierCarrier? Carrier,
     QuartermasterCourierBridge? Bridge,
     ImmutableArray<QuartermasterCourierRosterEntry> Roster,
-    QuartermasterCourierRun? Run);
+    QuartermasterCourierRun? Run)
+{
+    public const string DepositToRetainersFeature = "depositToRetainers";
+
+    /// <summary>Optional courier behaviours this Quartermaster build advertises; empty on older builds.</summary>
+    public ImmutableArray<string> Features { get; init; } = [];
+
+    /// <summary>False on a Quartermaster that would silently ignore a transfer's DepositToRetainers.</summary>
+    public bool SupportsDepositToRetainers =>
+        !Features.IsDefault && Features.Contains(DepositToRetainersFeature, StringComparer.Ordinal);
+}
 
 public sealed record QuartermasterCourierItem(
     uint ItemId,
@@ -527,7 +549,8 @@ public sealed record QuartermasterCourierTransferRequest(
     ImmutableArray<QuartermasterCourierItem> Items,
     bool ReturnOwner,
     bool ReturnDestinationHome,
-    bool ReturnCarrier);
+    bool ReturnCarrier,
+    bool DepositToRetainers = false);
 
 public static class QuartermasterCourierAckStatuses
 {
@@ -557,6 +580,7 @@ internal sealed class QuartermasterCourierStatusWire
     public string? Schema { get; init; }
     public string? ProviderInstanceId { get; init; }
     public string? Error { get; init; }
+    public List<string>? Features { get; init; }
     public QuartermasterCourierLoggedInWire? LoggedIn { get; init; }
     public QuartermasterCourierCarrierWire? Carrier { get; init; }
     public QuartermasterCourierBridgeWire? Bridge { get; init; }
@@ -574,6 +598,7 @@ internal sealed class QuartermasterCourierLoggedInWire
     public string? RegionName { get; init; }
     public ulong CarriedGil { get; init; }
     public int FreeBagSlots { get; init; }
+    public int? RetainerFreeSlots { get; init; }
     public bool HasMeetingBell { get; init; }
     public string? MeetingBellLabel { get; init; }
     public bool? IsPairedWithCarrier { get; init; }
@@ -614,6 +639,8 @@ internal sealed class QuartermasterCourierRosterEntryWire
     public string? MeetingBellLabel { get; init; }
     public bool IsCarrier { get; init; }
     public bool? IsPairedWithCarrier { get; init; }
+    public int? FreeBagSlots { get; init; }
+    public int? RetainerFreeSlots { get; init; }
 }
 
 internal sealed class QuartermasterCourierRunWire
@@ -632,6 +659,13 @@ internal sealed class QuartermasterCourierRunWire
     public bool CanClear { get; init; }
     public long CustodyUnits { get; init; }
     public long CustodyGil { get; init; }
+    public QuartermasterCourierDepositWire? Deposit { get; init; }
+}
+
+internal sealed class QuartermasterCourierDepositWire
+{
+    public long UnstowedUnits { get; init; }
+    public string? Code { get; init; }
 }
 
 internal sealed class QuartermasterCourierCharacterWire
@@ -662,6 +696,7 @@ internal sealed class QuartermasterCourierTransferRequestWire
     public bool ReturnOwner { get; init; }
     public bool ReturnDestinationHome { get; init; }
     public bool ReturnCarrier { get; init; }
+    public bool DepositToRetainers { get; init; }
 }
 
 internal sealed class QuartermasterCourierAcknowledgementWire

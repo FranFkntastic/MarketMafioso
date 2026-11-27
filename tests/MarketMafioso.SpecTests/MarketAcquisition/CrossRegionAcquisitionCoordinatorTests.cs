@@ -135,6 +135,139 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         Assert.Empty(gone.Courier.Submitted);
     }
 
+    // Why this test exists: a multi-cycle run settles a finished haul and goes back out across a
+    // relog, so a crash can land on either side of the settlement. Counting a delivery twice makes the
+    // next cycle under-buy with every target looking met; reusing a finished haul's request id makes
+    // Quartermaster acknowledge the next haul without moving anything, so the run reports Completed
+    // while the purchases sit on the shopper in another region. Both only surface after a restart in a
+    // three-character run that takes over half an hour per cycle to reproduce live, and both cost the
+    // user gil or a manual cross-region recovery.
+    [Fact]
+    public void MultiCycleHaulSettlesOnceAcrossRestartsAndEachCycleShipsOnlyItsOwnPurchases()
+    {
+        using var fixture = new Fixture();
+        fixture.Game.LoggedIn = Shopper;
+        var saved = ShoppingSession();
+        saved.MultiCycleEnabled = true;
+        fixture.Store.Save(saved);
+        // Like Quartermaster: a request id it already ran is acknowledged again and moves nothing.
+        var runIds = new Dictionary<string, Guid>();
+        var moved = new List<int>();
+        fixture.Courier.OnSubmit = request =>
+        {
+            if (runIds.TryGetValue(request.RequestId, out var known))
+                return new("qm", request.RequestId, known, QuartermasterCourierAckStatuses.AlreadyCompleted, null, null);
+            runIds[request.RequestId] = Guid.NewGuid();
+            moved.Add(request.Items.Sum(item => item.Quantity));
+            fixture.Courier.Run = Run(runIds[request.RequestId], request.RequestId, "Running");
+            return Accept(request, runIds[request.RequestId]);
+        };
+
+        var coordinator = fixture.CreateCoordinator();
+        fixture.Shopping.Raise(new(5057, "Darksteel Ore", false, 10, 20_000, "Atomos", "a"));
+        fixture.Game.Bags = [new(5057, false, 10)];
+        fixture.Shopping.StoppedForBagSpace = true;
+        fixture.Shopping.State = CrossRegionShoppingState.Completed;
+        fixture.TickAfter(coordinator);
+        fixture.TickAfter(coordinator);
+        var first = Assert.Single(fixture.Courier.Submitted);
+        Assert.True(first.DepositToRetainers);
+
+        // Quartermaster finishes the haul, but the client restarts before MarketMafioso sees it.
+        fixture.Courier.Run = Run(runIds[first.RequestId], first.RequestId, "Completed") with { Deposit = new(0, null) };
+        fixture.Game.LoggedIn = Primary;
+        var afterHaul = fixture.Restart();
+        fixture.TickAfter(afterHaul);
+        Assert.Equal(CrossRegionAcquisitionPhase.SwitchingToShopperForNextCycle, afterHaul.Phase);
+
+        // And restarts again once the cycle is settled: the delivery is neither re-sent nor counted twice.
+        var nextCycle = fixture.Restart();
+        fixture.TickAfter(nextCycle);
+        Assert.Single(fixture.Courier.Submitted);
+        var persisted = fixture.Store.Load()!;
+        Assert.Equal(2, persisted.CycleNumber);
+        Assert.Equal(10u, Assert.Single(persisted.DeliveredManifest).Quantity);
+        Assert.Empty(persisted.PurchasedManifest);
+        Assert.Equal([Shopper], fixture.Game.SwitchRequests);
+
+        // Cycle 2 buys five more while Quartermaster still shows the finished first haul.
+        fixture.TickAfter(nextCycle);
+        fixture.TickAfter(nextCycle);
+        fixture.TickAfter(nextCycle);
+        Assert.Equal(CrossRegionAcquisitionPhase.Shopping, nextCycle.Phase);
+        fixture.Shopping.Raise(new(5057, "Darksteel Ore", false, 5, 10_000, "Atomos", "b"));
+        fixture.Game.Bags = [new(5057, false, 5)];
+        fixture.Shopping.StoppedForBagSpace = true;
+        fixture.Shopping.State = CrossRegionShoppingState.Completed;
+        fixture.TickAfter(nextCycle);
+        fixture.TickAfter(nextCycle);
+        Assert.Equal(CrossRegionAcquisitionPhase.HaulingToPrimary, nextCycle.Phase);
+        Assert.Equal([10, 5], moved);
+        var second = fixture.Courier.Submitted[^1];
+
+        // The retainers take only part of it: the run ends on the primary instead of going back out.
+        fixture.Courier.Run = Run(runIds[second.RequestId], second.RequestId, "Completed") with { Deposit = new(2, "DepositLimited") };
+        fixture.Game.LoggedIn = Primary;
+        fixture.TickAfter(nextCycle);
+        Assert.Equal(CrossRegionAcquisitionPhase.Completed, nextCycle.Phase);
+        Assert.Equal(15u, Assert.Single(fixture.Store.Load()!.DeliveredManifest).Quantity);
+        Assert.Equal([Shopper], fixture.Game.SwitchRequests);
+        Assert.Contains("retainers are full", nextCycle.Session.LastMessage);
+    }
+
+    // Why this test exists: nothing but this bound and the buys-nothing ending stops a run whose every
+    // cycle fills the bags. A loop that keeps going sends three characters back and forth across data
+    // centers unattended, spending the user's gil for hours; it cannot be observed short of a live run
+    // of that length on the user's own accounts.
+    [Fact]
+    public void MultiCycleRunEndsAtTheCycleLimitAndOnACycleThatBuysNothing()
+    {
+        // Every cycle buys, fills the bags, and stows cleanly: only the cycle limit ends it.
+        using var endless = new Fixture();
+        DriveToEnd(endless, alwaysBuys: true);
+        Assert.Equal(CrossRegionAcquisitionCoordinator.MaxCycles, endless.Courier.Submitted.Count);
+        Assert.Contains("limit", endless.Store.Load()!.LastMessage);
+
+        // The second cycle finds nothing to buy: no haul, no third trip, back on the primary.
+        using var spent = new Fixture();
+        DriveToEnd(spent, alwaysBuys: false);
+        Assert.Single(spent.Courier.Submitted);
+        Assert.Equal(Primary, spent.Game.LoggedIn);
+        Assert.Contains("cycle 2 bought nothing", spent.Store.Load()!.LastMessage);
+
+        static void DriveToEnd(Fixture fixture, bool alwaysBuys)
+        {
+            fixture.Game.LoggedIn = Shopper;
+            var saved = ShoppingSession();
+            saved.MultiCycleEnabled = true;
+            fixture.Store.Save(saved);
+            fixture.Courier.OnSubmit = request =>
+            {
+                var runId = Guid.NewGuid();
+                fixture.Courier.Run = Run(runId, request.RequestId, "Completed") with { Deposit = new(0, null) };
+                fixture.Game.LoggedIn = Primary;
+                return Accept(request, runId);
+            };
+            var coordinator = fixture.CreateCoordinator();
+            var listing = 0;
+            for (var tick = 0; tick < 2_000 && !coordinator.Session.IsTerminal; tick++)
+            {
+                if (coordinator.Phase == CrossRegionAcquisitionPhase.Shopping && fixture.Shopping.State == CrossRegionShoppingState.Running)
+                {
+                    if (alwaysBuys || coordinator.Session.CycleNumber == 1)
+                    {
+                        fixture.Shopping.Raise(new(5057, "Darksteel Ore", false, 1, 2_000, "Atomos", (++listing).ToString()));
+                        fixture.Game.Bags = [new(5057, false, 1)];
+                        fixture.Shopping.StoppedForBagSpace = true;
+                    }
+                    fixture.Shopping.State = CrossRegionShoppingState.Completed;
+                }
+                fixture.TickAfter(coordinator);
+            }
+            Assert.Equal(CrossRegionAcquisitionPhase.Completed, coordinator.Phase);
+        }
+    }
+
     private static CrossRegionAcquisitionSession ShoppingSession() => new()
     {
         SessionId = Guid.NewGuid(),
@@ -167,10 +300,17 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         public FileCrossRegionAcquisitionStore Store { get; }
         public FakeCourier Courier { get; } = new();
         public FakeGame Game { get; } = new();
-        public FakeShopping Shopping { get; } = new();
+        public FakeShopping Shopping { get; private set; } = new();
 
         public CrossRegionAcquisitionCoordinator CreateCoordinator() =>
             new(Courier, Game, Shopping, Store, () => now);
+
+        /// <summary>A client restart: a new coordinator over the same store, with a route adapter that has run nothing.</summary>
+        public CrossRegionAcquisitionCoordinator Restart()
+        {
+            Shopping = new FakeShopping();
+            return CreateCoordinator();
+        }
 
         public CrossRegionStartRequest StartRequest(int fundGil) =>
             new(Shopper, "Japan", fundGil, new MarketAcquisitionRequestDocument { Region = "Japan" }, new Dictionary<string, uint>());
@@ -210,7 +350,10 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
                 [
                     new(Shopper.LocalContentId, Shopper.HomeWorldId, Shopper.CharacterName, Shopper.HomeWorldName, "jp", "Japan", true, "Bell", false),
                 ],
-                Run);
+                Run)
+            {
+                Features = [QuartermasterCourierStatus.DepositToRetainersFeature],
+            };
             error = string.Empty;
             return true;
         }
@@ -272,6 +415,7 @@ public sealed class CrossRegionAcquisitionCoordinatorTests
         public CrossRegionShoppingState State { get; set; } = CrossRegionShoppingState.Running;
         public string StatusMessage => State.ToString();
         public bool CanResumeInPlace => false;
+        public bool StoppedForBagSpace { get; set; }
         public event Action<MarketAcquisitionConfirmedPurchase>? ConfirmedPurchase;
         public void Raise(MarketAcquisitionConfirmedPurchase purchase) => ConfirmedPurchase?.Invoke(purchase);
         public IReadOnlyDictionary<string, uint> CaptureShopperStartingStock(CrossRegionAcquisitionSession session) => new Dictionary<string, uint>();

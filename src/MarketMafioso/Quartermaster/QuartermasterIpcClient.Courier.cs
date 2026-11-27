@@ -219,6 +219,7 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
         ReturnOwner = request.ReturnOwner,
         ReturnDestinationHome = request.ReturnDestinationHome,
         ReturnCarrier = request.ReturnCarrier,
+        DepositToRetainers = request.DepositToRetainers,
     };
 
     private static QuartermasterCourierCharacterWire ToCourierWire(QuartermasterCourierCharacter character) => new()
@@ -248,7 +249,7 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
         var loggedIn = wire.LoggedIn is { LocalContentId: > 0 } li
             ? new QuartermasterCourierLoggedIn(li.LocalContentId, li.HomeWorldId, li.CharacterName ?? string.Empty,
                 li.HomeWorldName ?? string.Empty, RegionText(li.RegionId), li.RegionName, li.CarriedGil, li.FreeBagSlots,
-                li.HasMeetingBell, li.MeetingBellLabel, li.IsPairedWithCarrier)
+                li.HasMeetingBell, li.MeetingBellLabel, li.IsPairedWithCarrier, li.RetainerFreeSlots)
             : null;
         var carrier = wire.Carrier is { } c
             ? new QuartermasterCourierCarrier(c.Configured, c.Online, c.LocalContentId ?? 0, c.HomeWorldId ?? 0, c.CharacterName,
@@ -259,13 +260,20 @@ public sealed partial class QuartermasterIpcClient : IQuartermasterCourierClient
             .Where(entry => entry.LocalContentId > 0)
             .Select(entry => new QuartermasterCourierRosterEntry(entry.LocalContentId, entry.HomeWorldId,
                 entry.CharacterName ?? string.Empty, entry.HomeWorldName ?? string.Empty, RegionText(entry.RegionId),
-                entry.RegionName, entry.HasMeetingBell, entry.MeetingBellLabel, entry.IsCarrier, entry.IsPairedWithCarrier))
+                entry.RegionName, entry.HasMeetingBell, entry.MeetingBellLabel, entry.IsCarrier, entry.IsPairedWithCarrier,
+                entry.FreeBagSlots, entry.RetainerFreeSlots))
             .ToImmutableArray();
         var run = wire.Run is { } r && !string.IsNullOrWhiteSpace(r.State)
             ? new QuartermasterCourierRun(r.RunId, r.RequestId, r.State!, r.OwnerPhase, r.CarrierPhase, r.Trip, r.Trips,
                 r.Code, r.Detail, r.Active, r.CanResume, r.CanClear, r.CustodyUnits, r.CustodyGil)
+            {
+                Deposit = r.Deposit is { } deposit ? new QuartermasterCourierDeposit(deposit.UnstowedUnits, deposit.Code) : null,
+            }
             : null;
-        status = new QuartermasterCourierStatus(wire.ProviderInstanceId ?? string.Empty, loggedIn, carrier, bridge, roster, run);
+        status = new QuartermasterCourierStatus(wire.ProviderInstanceId ?? string.Empty, loggedIn, carrier, bridge, roster, run)
+        {
+            Features = (wire.Features ?? []).Where(feature => !string.IsNullOrWhiteSpace(feature)).ToImmutableArray(),
+        };
         return true;
     }
 
