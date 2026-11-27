@@ -77,19 +77,25 @@ If you prefer PowerShell, run:
 .\scripts\Install-MarketMafiosoReceiver.ps1
 ```
 
-The installer wizard:
+The installer asks no questions. It:
 
 - checks that Docker is installed and running;
-- asks for a dashboard username;
-- asks whether Workshop Host is local-only;
-- creates `config\marketmafioso.env`;
+- creates `config\marketmafioso.env` for local use on this computer;
 - generates the plugin/server API key;
 - generates the first dashboard password;
 - downloads the server image;
 - starts Workshop Host;
 - waits for the health check;
 - checks Workshop Host capabilities and quote endpoint auth/validation;
-- prints the values to paste into the plugin.
+- signs in to the dashboard and prints a one-time connection code for the plugin.
+
+The dashboard username is `marketmafioso`. For a different username or a remote address, run:
+
+```powershell
+.\scripts\Install-MarketMafiosoReceiver.ps1 -DashboardUsername <name> -PublicOrigin https://<your-host>
+```
+
+Remote hosting also needs the steps in `docs\ADVANCED-CONFIGURATION.md`.
 
 Default local values:
 
@@ -99,22 +105,40 @@ Plugin Server URL: http://localhost:5088/inventory
 Database file: data\marketmafioso\marketmafioso.db
 ```
 
-## Plugin Settings
+## Manual Install
 
-After setup, copy the printed values into MarketMafioso:
+If you would rather not run the script:
+
+1. Copy `config\marketmafioso.env.example` to `config\marketmafioso.env`.
+2. In `config\marketmafioso.env`, replace both placeholders with long random strings:
+
+```text
+MarketMafioso__ClientApiKey=<random-client-key>
+MarketMafioso__DashboardBootstrapPassword=<random-dashboard-password>
+```
+
+3. Start Workshop Host:
+
+```powershell
+docker compose -f config\compose.yaml up -d
+```
+
+Sign in to `http://localhost:5088/` as `marketmafioso` with that password, open **Settings > Authentication** and press **Connect game client** for a connection code.
+
+## Connect The Plugin
+
+In game, type `/mmf`, open **Settings > General / Server Connection**, paste the connection code into **Connect with code**, then press **Connect**.
+
+A code works once and expires after 10 minutes. To make a new one, sign in to the dashboard, open **Settings > Authentication** and press **Connect game client**.
+
+If the code step failed or you prefer a key, open **Manual setup** on the same plugin page and enter:
 
 ```text
 Server URL: http://localhost:5088/inventory
-Client API Key: <generated key>
+MarketMafioso Client Key: MarketMafioso__ClientApiKey from config\marketmafioso.env
 ```
 
-Open the dashboard:
-
-```text
-http://localhost:5088/
-```
-
-Log in with the generated dashboard username and password.
+Open the dashboard at `http://localhost:5088/` and sign in with the printed username and password.
 
 ## Files To Keep
 

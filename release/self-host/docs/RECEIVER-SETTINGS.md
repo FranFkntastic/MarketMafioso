@@ -32,6 +32,10 @@ Set this to the Craft Architect browser origin when CA and Workshop Host use dif
 
 A friendly label for this Workshop Host storage. Useful if you run more than one host.
 
+### `MarketMafioso__EnableMarketAcquisition`
+
+Turns on Market Acquisition work orders in the dashboard and for the plugin. On by default; set it to `false` to hide work orders.
+
 ## Plugin API Key Settings
 
 ### `MarketMafioso__RequireApiKey`
