@@ -231,6 +231,38 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
         }
     }
 
+    public bool CompletedWithInventoryFull
+    {
+        get
+        {
+            if (!ownsRun || settledState is not null || prepareTask is not null)
+                return false;
+            var snapshot = engine.CreateSnapshot();
+            return snapshot.RouteState == "Completed" &&
+                   (snapshot.CompletionOutcome?.Kind == MarketAcquisitionRouteCompletionKinds.InventoryFull || engine.HasInventoryFullSkips);
+        }
+    }
+
+    public bool HasUnmetTargets(CrossRegionAcquisitionSession session)
+    {
+        if (session.RequestDocumentSnapshot is not { } document)
+            return false;
+        var (remaining, _) = ResumedDocument(document, session.PurchasedManifest);
+        if (remaining.Lines.Any(line => !string.Equals(line.QuantityMode, "TargetQuantity", StringComparison.Ordinal) ||
+                                        !MarketAcquisitionTargetBases.CountsOnHand(line.TargetBasis)))
+            return true;
+        // On-hand targets: the primary's stock at Start plus everything the session bought for the line.
+        foreach (var line in TargetLines(workspace.ResolveLocalExecutionRequest(document)))
+        {
+            var bought = session.PurchasedManifest
+                .Where(entry => entry.ItemId == line.ItemId && MarketAcquisitionPolicy.HqMatches(line.HqPolicy, entry.IsHq))
+                .Aggregate(0UL, (total, entry) => total + entry.Quantity);
+            if (session.PrimaryStockBaselines.GetValueOrDefault(line.LineId) + bought < line.TargetQuantity)
+                return true;
+        }
+        return false;
+    }
+
     public IReadOnlyDictionary<string, uint> CaptureShopperStartingStock(CrossRegionAcquisitionSession session)
     {
         var document = session.RequestDocumentSnapshot ?? throw new InvalidOperationException("The session has no request document.");
@@ -292,7 +324,7 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
             var resumedRequest = workspace.ResolveLocalExecutionRequest(resumedDocument);
             var lineIds = MarketAcquisitionPlanPreparationService.GetPlanLines(resumedRequest)
                 .ToDictionary(line => originalIds[keptOrdinals[line.Ordinal]], line => line.LineId, StringComparer.Ordinal);
-            preparedPrimaryBaselines = RemapLineIds(session.PrimaryStockBaselines, lineIds);
+            preparedPrimaryBaselines = RemapLineIds(WithEarlierCycles(session, document), lineIds);
             preparedShopperStartingStock = session.ShopperStartingStock is null ? null : RemapLineIds(session.ShopperStartingStock, lineIds);
             overrides = BuildBaselineOverrides(preparedPrimaryBaselines, preparedShopperStartingStock, resumedRequest);
         }
@@ -465,9 +497,10 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
     }
 
     /// <summary>
-    /// The remaining request after this session's confirmed purchases. AllBelowThreshold lines carry no
-    /// on-hand target, so a re-prepared route would otherwise buy their full quantity/budget again.
-    /// TargetQuantity lines already resume through the primary baseline plus the shopper's bag delta.
+    /// The remaining request after this session's confirmed purchases. AllBelowThreshold lines and
+    /// required-purchase TargetQuantity lines carry no on-hand target, so a re-prepared route (a resume or a
+    /// later shopping cycle) would otherwise buy their full quantity/budget again. On-hand TargetQuantity
+    /// lines resume through the primary baseline, earlier cycles' purchases and the shopper's bag delta.
     /// </summary>
     internal static (MarketAcquisitionRequestDocument Document, IReadOnlyList<int> KeptOrdinals) ResumedDocument(
         MarketAcquisitionRequestDocument document,
@@ -478,7 +511,8 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
         for (var ordinal = 0; ordinal < document.Lines.Count; ordinal++)
         {
             var line = document.Lines[ordinal];
-            if (purchased.Count == 0 || string.Equals(line.QuantityMode, "TargetQuantity", StringComparison.Ordinal))
+            var isTarget = string.Equals(line.QuantityMode, "TargetQuantity", StringComparison.Ordinal);
+            if (purchased.Count == 0 || (isTarget && MarketAcquisitionTargetBases.CountsOnHand(line.TargetBasis)))
             {
                 lines.Add(line);
                 kept.Add(ordinal);
@@ -490,7 +524,13 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
             var boughtQuantity = matches.Aggregate(0UL, (total, bought) => total + bought.Quantity);
             var spentGil = matches.Aggregate(0UL, (total, bought) => total + bought.SpentGil);
             var resumed = line;
-            if (line.MaxQuantity > 0)
+            if (isTarget)
+            {
+                if (boughtQuantity >= line.TargetQuantity)
+                    continue;
+                resumed = resumed with { TargetQuantity = (uint)(line.TargetQuantity - boughtQuantity) };
+            }
+            else if (line.MaxQuantity > 0)
             {
                 if (boughtQuantity >= line.MaxQuantity)
                     continue;
@@ -542,6 +582,41 @@ internal sealed class MarketAcquisitionCrossRegionShoppingRoute : ICrossRegionSh
         }
         return overrides;
     }
+
+    /// <summary>
+    /// The primary baselines plus what earlier shopping cycles bought for each on-hand target line. Those units
+    /// left the shopper's bags (hauled and stowed), so neither the baseline nor the bag delta still counts them.
+    /// </summary>
+    private Dictionary<string, uint> WithEarlierCycles(CrossRegionAcquisitionSession session, MarketAcquisitionRequestDocument document)
+    {
+        var baselines = new Dictionary<string, uint>(session.PrimaryStockBaselines, StringComparer.Ordinal);
+        if (session.CycleNumber <= 1)
+            return baselines;
+        var earlier = EarlierCyclePurchases(session);
+        if (earlier.Count == 0)
+            return baselines;
+        foreach (var line in TargetLines(workspace.ResolveLocalExecutionRequest(document)))
+        {
+            var bought = earlier
+                .Where(entry => entry.ItemId == line.ItemId && MarketAcquisitionPolicy.HqMatches(line.HqPolicy, entry.IsHq))
+                .Aggregate(0UL, (total, entry) => total + entry.Quantity);
+            if (bought > 0)
+                baselines[line.LineId] = (uint)Math.Min(baselines.GetValueOrDefault(line.LineId) + bought, uint.MaxValue);
+        }
+        return baselines;
+    }
+
+    /// <summary>Cumulative purchases minus the current cycle's, per item variant.</summary>
+    internal static IReadOnlyList<CrossRegionManifestLine> EarlierCyclePurchases(CrossRegionAcquisitionSession session) =>
+        session.PurchasedManifest
+            .Select(line => line with
+            {
+                Quantity = (uint)Math.Max(0L, (long)line.Quantity - session.CyclePurchasedManifest
+                    .Where(cycle => cycle.ItemId == line.ItemId && cycle.IsHq == line.IsHq)
+                    .Sum(cycle => (long)cycle.Quantity)),
+            })
+            .Where(line => line.Quantity > 0)
+            .ToList();
 
     private static Dictionary<string, uint> RemapLineIds(IReadOnlyDictionary<string, uint> values, IReadOnlyDictionary<string, string> lineIds)
     {

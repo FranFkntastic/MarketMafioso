@@ -73,7 +73,8 @@ public readonly record struct CrossRegionBagStack(uint ItemId, bool IsHq, uint Q
 /// </summary>
 public sealed class CrossRegionAcquisitionSession
 {
-    public int SchemaVersion { get; set; } = 1;
+    /// <summary>2 adds shopping cycles; a version-1 session loads as cycle 1 (see <see cref="NormalizeLegacyCycle"/>).</summary>
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public Guid SessionId { get; set; }
     public CrossRegionAcquisitionPhase Phase { get; set; }
     public CrossRegionCharacter? Primary { get; set; }
@@ -117,6 +118,17 @@ public sealed class CrossRegionAcquisitionSession
     public CrossRegionCollection? ShopperCounted { get; set; }
     /// <summary>One entry per other source character, collected in order after the haul.</summary>
     public List<CrossRegionCollection> Collections { get; set; } = [];
+    /// <summary>
+    /// The shopping cycle, 1-based. A cycle whose route stopped on a full inventory hauls and stows what it bought,
+    /// then shops again for what is still unmet; collections and counted stock ride only on the final cycle.
+    /// </summary>
+    public int CycleNumber { get; set; } = 1;
+    /// <summary>Confirmed purchases of the current cycle only; the haul ships this, while <see cref="PurchasedManifest"/> stays cumulative.</summary>
+    public List<CrossRegionManifestLine> CyclePurchasedManifest { get; set; } = [];
+    /// <summary>The current cycle's route stopped on a full inventory with purchases and unmet targets: it hauls and stows, then shops again.</summary>
+    public bool CycleEndedWithInventoryFull { get; set; }
+    /// <summary>One summary line per finished intermediate cycle, shown ahead of the final summary.</summary>
+    public List<string> CycleSummaries { get; set; } = [];
     /// <summary>Counted stock the run never attempts (for example held by the courier carrier).</summary>
     public List<CrossRegionLineOutcome> NotCollected { get; set; } = [];
     public CrossRegionStow? Stow { get; set; }
@@ -143,14 +155,40 @@ public sealed class CrossRegionAcquisitionSession
     public uint PurchasedUnits => PurchasedManifest.Aggregate(0u, (total, line) => total + line.Quantity);
 
     [JsonIgnore]
+    public uint CyclePurchasedUnits => CyclePurchasedManifest.Aggregate(0u, (total, line) => total + line.Quantity);
+
+    /// <summary>True while the current cycle will hand off to another shopping cycle instead of finishing the run.</summary>
+    [JsonIgnore]
+    public bool IsIntermediateCycle => CycleEndedWithInventoryFull;
+
+    [JsonIgnore]
     public bool IsTerminal => Phase is CrossRegionAcquisitionPhase.Completed or CrossRegionAcquisitionPhase.Failed or CrossRegionAcquisitionPhase.Stopped;
 
     [JsonIgnore]
     public bool IsActive => Phase != CrossRegionAcquisitionPhase.Idle && !IsTerminal;
 
+    public const int CurrentSchemaVersion = 2;
+
+    /// <summary>
+    /// A version-1 session predates cycles: it is cycle 1 and everything it bought belongs to that cycle, so its
+    /// haul and stow ids keep their legacy spelling.
+    /// </summary>
+    public void NormalizeLegacyCycle()
+    {
+        if (SchemaVersion >= CurrentSchemaVersion)
+            return;
+        CycleNumber = 1;
+        CyclePurchasedManifest = PurchasedManifest.ToList();
+        CycleEndedWithInventoryFull = false;
+        CycleSummaries ??= [];
+        SchemaVersion = CurrentSchemaVersion;
+    }
+
     public static string FundRequestIdFor(Guid sessionId) => $"mmf-xr-{sessionId:N}-fund";
 
-    public static string HaulRequestIdFor(Guid sessionId, int attempt) => $"mmf-xr-{sessionId:N}-haul-{attempt}";
+    /// <summary>Cycle 1 keeps the legacy id; later cycles append -c{cycle} so no cycle replays another's courier run.</summary>
+    public static string HaulRequestIdFor(Guid sessionId, int attempt, int cycle = 1) =>
+        $"mmf-xr-{sessionId:N}-haul-{attempt}{CycleSuffix(cycle)}";
 
     public static string CollectRequestIdFor(Guid sessionId, int index, int attempt) => $"mmf-xr-{sessionId:N}-collect-{index}-{attempt}";
 
@@ -158,7 +196,9 @@ public sealed class CrossRegionAcquisitionSession
     public static string RetrievalRequestIdFor(Guid sessionId, int index) =>
         index < 0 ? $"mmf-xr-{sessionId:N}-retrieve-shopper" : $"mmf-xr-{sessionId:N}-retrieve-{index}";
 
-    public static string StowRequestIdFor(Guid sessionId) => $"mmf-xr-{sessionId:N}-stow";
+    public static string StowRequestIdFor(Guid sessionId, int cycle = 1) => $"mmf-xr-{sessionId:N}-stow{CycleSuffix(cycle)}";
+
+    private static string CycleSuffix(int cycle) => cycle <= 1 ? string.Empty : $"-c{cycle}";
 }
 
 /// <summary>

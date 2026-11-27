@@ -59,6 +59,7 @@ public class Configuration : IPluginConfiguration
     [JsonProperty("OutfitterRouteExecutionStateJson")]
     public string? ExactAcquisitionRouteExecutionStateJson { get; set; }
     public string? ShardAcquisitionCheckpointStateJson { get; set; }
+    public string? MarketAcquisitionDepositCheckpointStateJson { get; set; }
     public List<PersistedMarketAcquisitionWorkbenchComposition> MarketAcquisitionWorkbenchCompositions { get; set; } = [];
     public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public PersistedMarketAcquisitionWorkbenchCompositionSource? MarketAcquisitionWorkbenchCompositionSource { get; set; }

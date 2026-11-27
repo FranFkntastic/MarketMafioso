@@ -81,6 +81,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
     public static readonly TimeSpan RetrievalStopGrace = TimeSpan.FromMinutes(2);
     /// <summary>A delivered stow not settled this long after its persisted submission is cancelled.</summary>
     public static readonly TimeSpan StowDeadline = TimeSpan.FromMinutes(15);
+    /// <summary>An intermediate cycle with an open courier forward waits up to this long before giving up so Primary is not logged out mid-forward.</summary>
+    public static readonly TimeSpan IntermediateForwardDeadline = TimeSpan.FromMinutes(45);
 
     private const string RetainersContainer = "retainers";
     private const string BagsContainer = "bags";
@@ -317,7 +319,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
                 shopperCounted.State = CrossRegionCollectionState.Completed;
         }
         session.DeliverySummary ??= summary;
-        if (CurrentCollection() is not null)
+        // Collections are final-cycle work; an intermediate cycle goes straight to its stow.
+        if (!session.IsIntermediateCycle && CurrentCollection() is not null)
         {
             ResetCustodyTransients();
             SetPhase(CrossRegionAcquisitionPhase.CollectingCountedStock, CollectingMessage());
@@ -952,7 +955,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         var stow = session.Stow ??= new CrossRegionStow();
         if (stow.Settled)
         {
-            Complete(FinalSummary());
+            AfterStowSettled();
             return;
         }
         var primary = session.Primary!;
@@ -963,7 +966,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             if (claimed.Count == 0 && sentDirect.Count == 0)
             {
                 stow.Settled = true;
-                Complete(FinalSummary());
+                AfterStowSettled();
                 return;
             }
             stow.Claimed = claimed;
@@ -1000,7 +1003,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             // Identity, items, forwarding and submit time are durable before Quartermaster sees the request.
             stow.Items = items;
             stow.AllowForward = StowNeedsForward(items);
-            stow.RequestId = CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId);
+            stow.RequestId = CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId, session.CycleNumber);
             stow.SubmittedAtUtc = now;
             ResetCustodySubmitWindow();
             custodyWaitReason = null;
@@ -1139,13 +1142,23 @@ public sealed partial class CrossRegionAcquisitionCoordinator
             return;
         }
         MergeStowLines(stow, status);
-        // A forward to another character may wait a long time for the courier; the owner's own stow settles the run.
+        // A forward to another character may wait a long time for the courier; on a final cycle the owner's own stow
+        // settles the run, while an intermediate cycle waits for the forward to finish before switching back to the shopper.
         if (!status.IsLocalSettled)
         {
             if (overdue)
                 TimeOutStow(stow, $"last status {status.Status}");
             else
                 session.LastMessage = $"Stowing delivered items: {status.Status}.";
+            return;
+        }
+        if (session.IsIntermediateCycle && status.Forward is { IsSettled: false } pendingForward)
+        {
+            var forwardOverdue = now - stow.SubmittedAtUtc.Value >= IntermediateForwardDeadline;
+            if (forwardOverdue)
+                TimeOutStow(stow, $"courier forward did not settle ({pendingForward.State})");
+            else
+                session.LastMessage = $"Forwarding delivered items to alt homes before the next cycle ({pendingForward.State}).";
             return;
         }
         if (stow.Withdrawn && StowCancelledBeforeStart(stow, status))
@@ -1214,7 +1227,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         stow.Attempt++;
         stow.Withdrawn = false;
         stow.ForwardCancelSent = false;
-        stow.RequestId = $"{CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId)}-{stow.Attempt + 1}";
+        stow.RequestId = $"{CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId, session.CycleNumber)}-{stow.Attempt + 1}";
         stow.Items = items;
         stow.AllowForward = StowNeedsForward(items);
         stow.Submitted = false;
@@ -1362,7 +1375,93 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         stowBagWaitStartedUtc = null;
         if (code is not null)
             log($"{code}: delivered stow {stow.RequestId ?? "(not submitted)"} for {stow.Items.Sum(line => (long)line.Quantity)} unit(s). {detail}", null);
+        AfterStowSettled();
+    }
+
+    // ---- Shopping cycles --------------------------------------------------------------------
+
+    public const string CodeCycleNoProgress = "CycleNoProgress";
+
+    /// <summary>
+    /// The stow settled. A final cycle completes; an intermediate cycle that made room (I3) shops again for what is
+    /// still unmet, without funding again (D4). One that made no room ends rather than buying into full bags.
+    /// </summary>
+    private void AfterStowSettled()
+    {
+        if (!session.IsIntermediateCycle)
+        {
+            Complete(FinalSummary());
+            return;
+        }
+        var progress = StowProgress(session.Stow);
+        if (progress > 0)
+        {
+            AdvanceCycle(progress);
+            return;
+        }
+        // Final after all. Counted stock on the shopper never rode an intermediate haul, so it is not collected now.
+        var cycle = session.CycleNumber;
+        session.CycleEndedWithInventoryFull = false;
+        log($"{CodeCycleNoProgress}: cycle {cycle} of session {session.SessionId:N} stowed and forwarded nothing; shopping stops.", null);
+        if (session.ShopperCounted is { IsSettled: false } shopperCounted)
+        {
+            shopperCounted.State = CrossRegionCollectionState.NotCollected;
+            shopperCounted.OutcomeCode = CodeCycleNoProgress;
+            shopperCounted.Detail = "Shopping stopped after a cycle whose stow made no room.";
+        }
+        session.DeliverySummary = $"{session.DeliverySummary} Stopped after cycle {cycle}: its stow made no room (nothing stowed or forwarded), " +
+                                  "so another cycle would only buy into full bags.";
+        if (CurrentCollection() is not null)
+        {
+            ResetCustodyTransients();
+            SetPhase(CrossRegionAcquisitionPhase.CollectingCountedStock, CollectingMessage());
+            return;
+        }
         Complete(FinalSummary());
+    }
+
+    /// <summary>Units the stow actually moved out of the primary's bags: stowed, sent direct, or delivered via forward.</summary>
+    private static long StowProgress(CrossRegionStow? stow)
+    {
+        if (stow is null)
+            return 0;
+        var forwards = stow.Lines.SelectMany(line => line.AllForwards).Where(forward => !forward.IsNeutral && forward.Code != "NoRoom");
+        return stow.Lines.Sum(line => (long)line.Stowed) +
+               stow.SentDirect.Sum(line => (long)line.Quantity) +
+               forwards.Sum(forward => forward.Delivered is { } delivered ? (long)delivered : 0L);
+    }
+
+    private void AdvanceCycle(long progress)
+    {
+        var finished = session.CycleNumber;
+        session.CycleSummaries.Add($"{session.DeliverySummary ?? $"Cycle {finished}."} Stowed or forwarded {progress:N0}.");
+        session.CycleNumber = finished + 1;
+        session.CyclePurchasedManifest = [];
+        session.CycleEndedWithInventoryFull = false;
+        session.HaulAttempt = 0;
+        session.HaulRequestId = null;
+        session.HaulRunId = null;
+        session.HaulManifest = [];
+        session.HaulDirect = null;
+        session.HaulDelivered = false;
+        session.DeliverySummary = null;
+        session.Stow = null;
+        session.ShopperStartingStock = null;
+        session.ShoppingPausedByUser = false;
+        // What the primary's bags hold now (this cycle's leftovers included) is not the next cycle's delivery.
+        if (session.Primary?.Matches(game.LoggedInCharacter) == true && session.RequestDocumentSnapshot is { } document &&
+            PrimaryBagSnapshot(game.ReadCarriedBags(), document) is { } baseline)
+            session.PrimaryBagBaseline = baseline;
+        else
+            log($"CycleBaselineStale: the primary's bags could not be re-read after cycle {finished}; the next stow compares against the earlier baseline.", null);
+        ResetTransientState();
+        ResetCustodyTransients();
+        var shopper = session.Shopper!;
+        var next = $"Cycle {session.CycleNumber}: shopping {session.TargetRegion} again for what is still unmet";
+        if (shopper.Matches(game.LoggedInCharacter))
+            SetPhase(CrossRegionAcquisitionPhase.PreparingShopRoute, $"{next}.");
+        else
+            SetPhase(CrossRegionAcquisitionPhase.SwitchingToShopper, $"{next}; switching to {shopper.Label}.");
     }
 
     // ---- Cancelling open Quartermaster work ------------------------------------------------------
@@ -1529,7 +1628,7 @@ public sealed partial class CrossRegionAcquisitionCoordinator
         stow.Attempt++;
         stow.Withdrawn = false;
         stow.ForwardCancelSent = false;
-        stow.RequestId = $"{CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId)}-{stow.Attempt + 1}";
+        stow.RequestId = $"{CrossRegionAcquisitionSession.StowRequestIdFor(session.SessionId, session.CycleNumber)}-{stow.Attempt + 1}";
         stow.Submitted = false;
         stow.OperationId = null;
         stow.Lines = [];
@@ -1614,7 +1713,8 @@ public sealed partial class CrossRegionAcquisitionCoordinator
 
     private string FinalSummary()
     {
-        var parts = new List<string> { session.DeliverySummary ?? "Done." };
+        var parts = session.CycleSummaries.ToList();
+        parts.Add(session.DeliverySummary ?? "Done.");
         var collected = CollectedUnits();
         if (collected > 0)
         {

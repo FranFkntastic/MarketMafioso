@@ -84,6 +84,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private string? lastFeedbackState;
     private bool userPaused;
     private readonly Dictionary<string, string> inventoryFullLines = new(StringComparer.Ordinal);
+    private readonly IMarketAcquisitionDepositCheckpointCoordinator? depositCheckpoints;
+    /// <summary>The current run is a live, local, non-exact route whose bags may be stowed mid-run.</summary>
+    private bool depositCheckpointsEligible;
     private long lastFeedbackRunSequence;
     private MarketAcquisitionCrossRegionBaseline? crossRegionBaseline;
     public event Action<MarketAcquisitionRouteEngineSnapshot>? FeedbackTransition;
@@ -112,7 +115,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         IMarketAcquisitionIntelligenceReporter? intelligenceReporter = null,
         IMarketAcquisitionInventoryObserver? inventoryObserver = null,
         MarketAcquisitionAethernetDeparture? aethernetDeparture = null,
-        Action<string>? warn = null)
+        Action<string>? warn = null,
+        IMarketAcquisitionDepositCheckpointCoordinator? depositCheckpoints = null)
     {
         this.warn = warn ?? (_ => { });
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
@@ -137,6 +141,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         this.aethernetDeparture = aethernetDeparture;
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
         this.shardCheckpoints = shardCheckpoints;
+        this.depositCheckpoints = depositCheckpoints;
     }
 
     public bool IsRouteRunning => runner.IsRunning || state.ProbeRunning;
@@ -144,6 +149,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public bool IsPurchaseAutomationBusy => purchaseAutomation.IsBusy;
 
     public bool IsShardCheckpointActive => shardCheckpoints?.IsActive == true;
+
+    public bool IsDepositCheckpointActive => depositCheckpoints?.IsActive == true;
+
+    /// <summary>True when this run skipped at least one line because the bags or crystal pouch could not hold it.</summary>
+    public bool HasInventoryFullSkips => inventoryFullLines.Count > 0;
 
     public bool IsRouteActive =>
         runner.IsRunning ||
@@ -153,7 +163,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.ProbeRunning ||
         operationExecutor.ActiveSnapshot != null ||
         purchaseAutomation.PurchaseSession?.IsActive == true ||
-        shardCheckpoints?.IsActive == true;
+        shardCheckpoints?.IsActive == true ||
+        depositCheckpoints?.IsActive == true;
 
     public ExactAcquisitionDryRunScenario ArmedExactAcquisitionDryRunScenario => exactAcquisitionDryRunScenario;
     public bool IsExactAcquisitionDryRunFaultEligible => exactAcquisitionDryRunFaultEligible;
@@ -229,6 +240,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         LastRunDiagnosticSummary = runner.LastRunDiagnosticSummary,
         ExactAcquisitionExecution = exactAcquisitionAuthority?.State,
         ShardCheckpoint = shardCheckpoints?.Snapshot,
+        DepositCheckpoint = depositCheckpoints?.Snapshot,
         ReportBacklog = reportDispatcher.GetBacklogSnapshot(),
     };
 
@@ -323,6 +335,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ReportRouteProgress();
             }
             return UpdateStatus(alreadyMet);
+        }
+        depositCheckpointsEligible = false;
+        if (executionMode == MarketAcquisitionExecutionMode.Live && depositCheckpoints is not null)
+        {
+            // Local routes only: a cross-regional shopper hauls and stows through its own cycles; exact plans keep their caps.
+            var deposit = depositCheckpoints.Prepare(routePlan, state.ProgressNonce,
+                stowAfterDelivery: crossRegionBaseline is null && exactAcquisitionContract is null && workbenchDocument?.StowAfterDelivery == true);
+            depositCheckpointsEligible = deposit.Enabled;
         }
         if (executionMode == MarketAcquisitionExecutionMode.Live && shardCheckpoints is not null)
         {
@@ -521,6 +541,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (shardCheckpoints?.IsActive == true)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 $"Route resume is locked while purchased shards are being reconciled: {shardCheckpoints.Snapshot.Message}"));
+        if (depositCheckpoints?.IsActive == true)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
+                $"Route resume is locked while purchases are being stowed: {depositCheckpoints.Snapshot.Message}"));
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure, allowIdleResolution: true))
         {
             var blocked = runner.RecordTravelRecoveryBlocked(reconciliationFailure);
@@ -560,6 +583,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public MarketAcquisitionRouteActionResult Stop()
     {
         userPaused = false;
+        depositCheckpoints?.Withdraw("The route was stopped.");
         CaptureManualRecoverySafetyBlock();
         evidence.Flush();
         uiAutomation.TryCloseMarketBoardWindows();
@@ -591,6 +615,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (shardCheckpoints?.IsActive == true)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 $"Route recovery is locked while purchased shards are being reconciled: {shardCheckpoints.Snapshot.Message}"));
+        if (depositCheckpoints?.IsActive == true)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
+                $"Route recovery is locked while purchases are being stowed: {depositCheckpoints.Snapshot.Message}"));
         if (!context.IsCurrentWorldAvailable)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
                 "Route recovery is waiting for the current world to become available."));
@@ -718,6 +745,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public void Reset(string status)
     {
+        depositCheckpoints?.Reset();
+        depositCheckpointsEligible = false;
         CleanupOwnedTravel("Reset");
         CancelActiveOperation(status);
         runner.Reset(status);
@@ -863,7 +892,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             : state.ManualRecoveryBlockedReason != null || purchaseEvidenceRouteBlocked ||
               exactAcquisitionAuthority?.State.Phase == ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded ||
               (!userPaused && (exactAcquisitionAuthority?.State.Phase == ExactAcquisitionRouteAuthorityPhase.Paused ||
-                               (runner.IsPaused && shardCheckpoints?.IsActive != true)))
+                               (runner.IsPaused && shardCheckpoints?.IsActive != true && depositCheckpoints?.IsActive != true)))
                 ? "Blocked" : runner.State == "Completed" ? "Completed" : null;
         if (feedbackState == lastFeedbackState)
             return;
@@ -904,6 +933,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 ? MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc)
                 : MarketAcquisitionRouteEngineTickResult.Idle(state.AcquisitionStatus);
         }
+
+        if (depositCheckpoints?.IsActive == true)
+            return TickDepositCheckpoint();
 
         if (TryFailExpiredOperation())
         {
@@ -2007,6 +2039,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     var lineId = activeStop.ActiveItemSubtask?.LineId ?? activeLine.Id;
                     var container = nextCandidate.ItemId is >= 2 and <= 19 ? "crystal pouch" : "player bags";
                     var detail = $"SkippedInventoryFull: {activeLine.ItemName}, {container} can fit {capacity.Value.Units:N0} units; listing has {nextCandidate.Quantity:N0}.";
+                    if (TryBeginDepositCheckpoint(nextCandidate.ItemId,
+                            $"Bags full: {container} can fit {capacity.Value.Units:N0} {activeLine.ItemName}, listing has {nextCandidate.Quantity:N0}. Returning home to stow purchases."))
+                        return;
                     inventoryFullLines[lineId] = detail;
                     MarkUnfittableRemainingLines(activeStop);
                     var hasOtherLine = runner.Stops.SkipWhile(stop => !ReferenceEquals(stop, activeStop))
@@ -2659,6 +2694,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 EvaluateExactAcquisitionRouteCompletion(force: true);
                 state.AcquisitionStatus = completionDetail ?? result.Message;
                 shardCheckpoints?.RequestFinalCheckpoint();
+                RequestFinalDepositCheckpoint();
                 return;
             }
 
@@ -2685,7 +2721,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             ReportRouteProgress();
             EvaluateExactAcquisitionRouteCompletion();
             if (runner.ActiveStop is null)
+            {
                 shardCheckpoints?.RequestFinalCheckpoint();
+                RequestFinalDepositCheckpoint();
+            }
             if (result.Success &&
                 runner.LatestWorldCompletionSummary?.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) == true)
             {
@@ -2846,6 +2885,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             {
                 runner.RecordLineProgress(receiptLineId, activeSubtask?.ItemName, "Running", linePurchasedQuantity,
                     lineSpentGil, $"Purchased {candidate.Quantity:N0} on {receiptWorld} for {candidate.TotalGil:N0} gil.", activeSubtask?.Source);
+                failureStage = "confirmed-purchase.deposit-checkpoint";
+                RecordDepositPurchase(candidate, activeSubtask?.ItemName);
                 failureStage = "confirmed-purchase.shard-checkpoint";
                 return shardCheckpoints?.RecordConfirmedPurchase(candidate) == true;
             }
@@ -2859,6 +2900,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             failureStage = "confirmed-purchase.receipt-reporting";
             ReportPurchaseAudit(claimed, lineId, activeSubtask.ItemName, candidate, worldName, message);
             ReportLineProgress(claimed, lineId, activeSubtask.ItemName, "Running", linePurchasedQuantity, lineSpentGil, message, null);
+            failureStage = "confirmed-purchase.deposit-checkpoint";
+            RecordDepositPurchase(candidate, activeSubtask.ItemName);
             failureStage = "confirmed-purchase.shard-checkpoint";
             return shardCheckpoints?.RecordConfirmedPurchase(candidate) == true;
         }
@@ -2892,6 +2935,91 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.AcquisitionStatus = pause.Success
             ? shardCheckpoints?.Snapshot.Message ?? "Shard storage checkpoint started."
             : pause.Message;
+    }
+
+    // ---- Storage checkpoints (local routes) ------------------------------------------------------
+
+    private bool DepositCheckpointsApply =>
+        depositCheckpoints is not null && depositCheckpointsEligible && crossRegionBaseline is null &&
+        exactAcquisitionAuthority is null && state.ExecutionMode == MarketAcquisitionExecutionMode.Live;
+
+    private void RecordDepositPurchase(MarketBoardPurchaseCandidate candidate, string? itemName)
+    {
+        if (DepositCheckpointsApply)
+            depositCheckpoints!.RecordConfirmedPurchase(candidate, itemName);
+    }
+
+    /// <summary>
+    /// The bags cannot take the next listing: instead of skipping the line, pause and stow what this run bought, then
+    /// come back for the rest. Shards stay with the shard checkpoint; with nothing bought yet there is nothing to stow.
+    /// </summary>
+    private bool TryBeginDepositCheckpoint(uint itemId, string reason)
+    {
+        if (itemId <= 19 || !DepositCheckpointsApply || !runner.IsRunning ||
+            !depositCheckpoints!.RequestCheckpoint(isFinal: false, reason))
+            return false;
+        CleanupOwnedTravel("DepositCheckpoint");
+        CancelActiveOperation("Route paused for a storage checkpoint.");
+        var pause = runner.Pause(reason);
+        state.AcquisitionStatus = pause.Success ? reason : pause.Message;
+        ReportRouteProgress();
+        return true;
+    }
+
+    private void RequestFinalDepositCheckpoint()
+    {
+        if (DepositCheckpointsApply)
+            depositCheckpoints!.RequestCheckpoint(isFinal: true, "Route finished; returning home to stow purchases.");
+    }
+
+    private MarketAcquisitionRouteEngineTickResult TickDepositCheckpoint()
+    {
+        var checkpoint = depositCheckpoints!.Tick();
+        state.AcquisitionStatus = checkpoint.Message;
+        if (checkpoint.Failed)
+        {
+            if (runner.IsRunning || runner.IsPaused)
+                UpdateStatus(FailRoute(checkpoint.Message));
+        }
+        else if (checkpoint.Completed && runner.IsPaused)
+        {
+            if (!checkpoint.ResumeRoute && runner.ActiveStop is { ActiveItemSubtask: { } stuck } stuckStop)
+            {
+                // I3: the stow made no room, so the full line is skipped as before and the route ends on its own terms.
+                inventoryFullLines[stuck.LineId] = $"SkippedInventoryFull: {stuck.ItemName}, {checkpoint.Message}";
+                MarkUnfittableRemainingLines(stuckStop);
+            }
+            ResumeAfterDepositCheckpoint(checkpoint.Message);
+        }
+        ReportRouteProgress();
+        return checkpoint.Worked
+            ? MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc)
+            : MarketAcquisitionRouteEngineTickResult.Idle(state.AcquisitionStatus);
+    }
+
+    /// <summary>
+    /// Back to the stop the bags filled on. Line purchase totals and the stop's reconciled inventory carry over: units
+    /// the checkpoint moved are added back to observed stock, so nothing already bought is bought again.
+    /// </summary>
+    private void ResumeAfterDepositCheckpoint(string message)
+    {
+        if (!context.IsCurrentWorldAvailable)
+        {
+            state.AcquisitionStatus = $"{message} Waiting for the current world before resuming.";
+            return;
+        }
+        var reconciled = runner.ReconcileInterruptedTravel(context.GetCurrentWorldName());
+        if (!reconciled.Success)
+        {
+            UpdateStatus(reconciled);
+            return;
+        }
+        travelInterruptedByCleanup = false;
+        var resumed = runner.Resume();
+        if (resumed.Success)
+            ResetMarketBoardStateForNextRouteItem();
+        UpdateStatus(resumed);
+        state.AcquisitionStatus = message;
     }
 
     private void ReportAcquisitionLineProgress(MarketAcquisitionWorldItemSubtask subtask, string status, uint purchasedQuantity, uint spentGil, string message)
@@ -3356,7 +3484,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (inventoryObserver is null)
             return null;
         if (crossRegionBaseline is not { } crossRegion)
-            return inventoryObserver.Observe(itemId, hqPolicy, targetBasis);
+        {
+            var observed = inventoryObserver.Observe(itemId, hqPolicy, targetBasis);
+            // Units a storage checkpoint moved still count toward the target: stowed units only where the basis does not
+            // already see the owner's retainers, forwarded units always.
+            var moved = observed.IsAvailable && DepositCheckpointsApply
+                ? depositCheckpoints!.MovedUnits(itemId, hqPolicy,
+                    includeStowed: MarketAcquisitionTargetBases.Normalize(targetBasis) != MarketAcquisitionTargetBases.OnHandIncludingRetainers)
+                : 0u;
+            return moved == 0 ? observed : observed with { Quantity = checked(observed.Quantity + moved) };
+        }
         var carried = inventoryObserver.Observe(itemId, hqPolicy);
         if (!carried.IsAvailable)
             return carried;

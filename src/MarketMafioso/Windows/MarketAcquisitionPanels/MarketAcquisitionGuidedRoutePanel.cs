@@ -116,6 +116,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                             snapshot.CompletedOrProbedStopCount > 0;
         DrawExactAcquisitionExecution(snapshot, inlineRetry: drawPipelineActions is not null);
         DrawShardStorageCheckpoint(snapshot);
+        DrawDepositCheckpoint(snapshot);
         if (!DrawTerminalPurchaseRecovery(snapshot))
         {
             if (drawPipelineActions is not null)
@@ -446,6 +447,27 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             "Forget the purchased-shard storage ledger",
             true,
             forgetShardLedger);
+    }
+
+    /// <summary>Quiet until a mid-route stow runs or has run: the cycle, what it moved, and a failure when it gave up.</summary>
+    private static void DrawDepositCheckpoint(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        if (snapshot.DepositCheckpoint is not { IsEnabled: true } checkpoint)
+            return;
+        var failed = checkpoint.Phase == MarketAcquisitionDepositCheckpointPhase.Failed;
+        var moved = checkpoint.StowedUnits + checkpoint.ForwardedUnits;
+        if (!checkpoint.IsActive && !failed && moved == 0)
+            return;
+        ImGui.AlignTextToFramePadding();
+        if (checkpoint.IsActive || failed)
+        {
+            ImGui.TextColored(failed ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Header,
+                $"Cycle {checkpoint.Cycle} · Stowing {checkpoint.UnstowedUnits:N0} purchased item(s): {checkpoint.Message}");
+            return;
+        }
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+            $"Cycle {checkpoint.Cycle} · Stowed {checkpoint.StowedUnits:N0}" +
+            (checkpoint.ForwardedUnits > 0 ? $" · Forwarded {checkpoint.ForwardedUnits:N0}" : string.Empty));
     }
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)

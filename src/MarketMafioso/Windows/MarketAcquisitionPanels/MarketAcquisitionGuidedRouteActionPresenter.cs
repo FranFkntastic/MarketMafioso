@@ -16,7 +16,7 @@ public static class MarketAcquisitionGuidedRouteActionPresenter
 {
     public static MarketAcquisitionGuidedRoutePrimaryAction Resolve(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
-        if (snapshot.ShardCheckpoint?.IsActive == true)
+        if (snapshot.ShardCheckpoint?.IsActive == true || snapshot.DepositCheckpoint?.IsActive == true)
             return MarketAcquisitionGuidedRoutePrimaryAction.None;
         var phase = snapshot.ExactAcquisitionExecution?.Phase;
         if (phase == ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded ||
