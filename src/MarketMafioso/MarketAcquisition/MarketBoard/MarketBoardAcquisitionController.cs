@@ -174,9 +174,7 @@ internal sealed class MarketBoardAcquisitionController : IDisposable
 
     public bool IsListingPurchaseActive => purchaseCoordinator.IsActive;
 
-    public bool IsAvailable =>
-        MarketAcquisitionUnlock.IsUnlocked(configuration) &&
-        configuration.EnableMarketListingPurchases;
+    public bool IsAvailable => configuration.EnableMarketListingPurchases;
 
     public void Dispose()
     {

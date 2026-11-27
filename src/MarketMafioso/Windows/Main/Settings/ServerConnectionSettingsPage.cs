@@ -54,7 +54,6 @@ internal sealed class ServerConnectionSettingsPage
     private void Draw(SettingsPageContext context)
     {
         CompletePairingIfFinished();
-        var marketAcquisitionUnlocked = MarketAcquisitionUnlock.IsUnlocked(config);
         if (context.Matches("Connect with code", "connection code", "pairing code", "dashboard code"))
             DrawConnectWithCode();
 
@@ -64,7 +63,7 @@ internal sealed class ServerConnectionSettingsPage
             if (context.IsFiltering)
                 ImGui.SetNextItemOpen(true, ImGuiCond.Always);
             if (ImGui.CollapsingHeader("Manual setup##serverManualSetup"))
-                DrawManualSetup(context, marketAcquisitionUnlocked);
+                DrawManualSetup(context);
         }
 
         if (context.Matches("Dashboard URL", "open dashboard", "receiver dashboard"))
@@ -159,7 +158,7 @@ internal sealed class ServerConnectionSettingsPage
         log.Information($"[MarketMafioso] Connected to Workshop Host {host} with a connection code.");
     }
 
-    private void DrawManualSetup(SettingsPageContext context, bool marketAcquisitionUnlocked)
+    private void DrawManualSetup(SettingsPageContext context)
     {
         if (context.Matches("Server URL", "receiver endpoint", "local receiver", "development server"))
         {
@@ -202,15 +201,13 @@ internal sealed class ServerConnectionSettingsPage
             else if (WorkshopHostApiKeyRouting.IsCraftArchitectKey(apiKeyBuffer))
                 ImGui.TextColored(
                     MarketMafiosoUiTheme.Error,
-                    marketAcquisitionUnlocked
-                        ? "This is a Craft Architect key. It cannot upload inventory and belongs in the Acquisition Key field below."
-                        : "This is a Craft Architect key and cannot upload inventory.");
+                    "This is a Craft Architect key. It cannot upload inventory and belongs in the Acquisition Key field below.");
             else if (endpoint.RequiresApiKey && string.IsNullOrWhiteSpace(apiKeyBuffer))
                 ImGui.TextColored(MarketMafiosoUiTheme.Error, "This endpoint requires a MarketMafioso Client Key before inventory can be sent.");
             else if (endpoint.Kind == ReceiverEndpointKind.CustomRemote)
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Custom remote endpoint. A client key is required by default.");
 
-            if (marketAcquisitionUnlocked && WorkshopHostApiKeyRouting.IsCraftArchitectKey(apiKeyBuffer))
+            if (WorkshopHostApiKeyRouting.IsCraftArchitectKey(apiKeyBuffer))
             {
                 var canMove = string.IsNullOrWhiteSpace(acquisitionApiKeyBuffer);
                 if (ImGuiUi.Button("Move to Acquisition Key", new Vector2(190, 0), canMove))
@@ -229,36 +226,31 @@ internal sealed class ServerConnectionSettingsPage
                 }
             }
 
-            if (marketAcquisitionUnlocked)
+            ImGui.Spacing();
+            ImGui.Text("Craft Architect Acquisition Key (optional):");
+            ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 70);
+            var acquisitionFlags = showAcquisitionApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
+            if (ImGui.InputText("##acquisitionApiKey", ref acquisitionApiKeyBuffer, 256, acquisitionFlags))
             {
-                ImGui.Spacing();
-                ImGui.Text("Craft Architect Acquisition Key (optional):");
-                ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 70);
-                var acquisitionFlags = showAcquisitionApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
-                if (ImGui.InputText("##acquisitionApiKey", ref acquisitionApiKeyBuffer, 256, acquisitionFlags))
-                {
-                    config.CommandPickupApiKey = acquisitionApiKeyBuffer;
-                    config.Save();
-                }
-                ImGui.SameLine();
-                if (ImGui.Button(showAcquisitionApiKey ? "Hide##ak" : "Show##ak", new Vector2(60, 0))) showAcquisitionApiKey = !showAcquisitionApiKey;
-
-                if (string.IsNullOrWhiteSpace(acquisitionApiKeyBuffer))
-                    ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Market Acquisition will use the full MarketMafioso Client Key above.");
-                else if (WorkshopHostApiKeyRouting.IsMarketMafiosoClientKey(acquisitionApiKeyBuffer))
-                    ImGui.TextColored(MarketMafiosoUiTheme.Muted, "A full MarketMafioso Client Key is valid here, but leaving this blank uses the key above automatically.");
-                else
-                    ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Used only for Market Acquisition queue, claim, progress, and audit requests.");
+                config.CommandPickupApiKey = acquisitionApiKeyBuffer;
+                config.Save();
             }
+            ImGui.SameLine();
+            if (ImGui.Button(showAcquisitionApiKey ? "Hide##ak" : "Show##ak", new Vector2(60, 0))) showAcquisitionApiKey = !showAcquisitionApiKey;
+
+            if (string.IsNullOrWhiteSpace(acquisitionApiKeyBuffer))
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Market Acquisition will use the full MarketMafioso Client Key above.");
+            else if (WorkshopHostApiKeyRouting.IsMarketMafiosoClientKey(acquisitionApiKeyBuffer))
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "A full MarketMafioso Client Key is valid here, but leaving this blank uses the key above automatically.");
+            else
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Used only for Market Acquisition queue, claim, progress, and audit requests.");
 
             var keyManagerUrl = ReceiverEndpointClassifier.BuildClientKeyManagerUrl(urlBuffer);
             if (endpoint.RequiresApiKey && !string.IsNullOrWhiteSpace(keyManagerUrl))
             {
                 ImGui.TextColored(
                     MarketMafiosoUiTheme.Muted,
-                    marketAcquisitionUnlocked
-                        ? "Both key types are issued and revoked in the authenticated server dashboard."
-                        : "Client keys are issued and revoked in the authenticated server dashboard.");
+                    "Both key types are issued and revoked in the authenticated server dashboard.");
                 if (ImGui.Button("Manage Client Keys")) OpenExternalUrl(keyManagerUrl, "client key manager");
             }
             ImGui.Spacing();

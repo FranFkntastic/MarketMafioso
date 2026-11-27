@@ -28,12 +28,12 @@ internal sealed class MarketAcquisitionSettingsPages
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         Descriptors =
         [
-            new("market.operation", "Market Acquisition / Operation", DrawOperation, 30, IsUnlocked,
-                ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases", "Ul'dah", "aethernet", "world travel"]),
-            new("market.diagnostics", "Market Acquisition / Diagnostics", DrawDiagnostics, 31, IsUnlocked,
-                ["route diagnostic packages", "route log", "observed listings", "purchase records", "archive", "retention", "hot shelf", "keep raw", "exhaustive research", "early leaving"]),
-            new("retainer-listings.refresh", "Retainer Listings / Price Refresh", DrawRetainerListingRefresh, 32, IsUnlocked,
-                ["retainer listing refresh", "Universalis", "remote market board", "background", "retainer menu", "force retry", "lockout", "relog"]),
+            new("market.operation", "Market Acquisition / Operation", DrawOperation, 30,
+                searchTerms: ["opportunistic world checks", "recent world TTL", "full resweep", "listing purchases", "Ul'dah", "aethernet", "world travel"]),
+            new("market.diagnostics", "Market Acquisition / Diagnostics", DrawDiagnostics, 31,
+                searchTerms: ["route diagnostic packages", "route log", "observed listings", "purchase records", "archive", "retention", "hot shelf", "keep raw", "exhaustive research", "early leaving"]),
+            new("retainer-listings.refresh", "Retainer Listings / Price Refresh", DrawRetainerListingRefresh, 32,
+                searchTerms: ["retainer listing refresh", "Universalis", "remote market board", "background", "retainer menu", "force retry", "lockout", "relog"]),
         ];
     }
 
@@ -287,6 +287,4 @@ internal sealed class MarketAcquisitionSettingsPages
         MarketAcquisitionRouteDiagnosticsLevel.FullTrace => "Full trace",
         _ => "Summary",
     };
-
-    private bool IsUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
 }

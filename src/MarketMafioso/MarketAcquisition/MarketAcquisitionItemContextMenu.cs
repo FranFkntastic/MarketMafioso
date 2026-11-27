@@ -12,7 +12,6 @@ internal sealed class MarketAcquisitionItemContextMenu : IDisposable
     private readonly IDataManager dataManager;
     private readonly IFramework framework;
     private readonly IChatGui chatGui;
-    private readonly Func<bool> isAvailable;
     private readonly Func<bool> canStage;
     private readonly Func<uint, string, string> stage;
 
@@ -22,7 +21,6 @@ internal sealed class MarketAcquisitionItemContextMenu : IDisposable
         IDataManager dataManager,
         IFramework framework,
         IChatGui chatGui,
-        Func<bool> isAvailable,
         Func<bool> canStage,
         Func<uint, string, string> stage)
     {
@@ -31,7 +29,6 @@ internal sealed class MarketAcquisitionItemContextMenu : IDisposable
         this.dataManager = dataManager ?? throw new ArgumentNullException(nameof(dataManager));
         this.framework = framework ?? throw new ArgumentNullException(nameof(framework));
         this.chatGui = chatGui ?? throw new ArgumentNullException(nameof(chatGui));
-        this.isAvailable = isAvailable ?? throw new ArgumentNullException(nameof(isAvailable));
         this.canStage = canStage ?? throw new ArgumentNullException(nameof(canStage));
         this.stage = stage ?? throw new ArgumentNullException(nameof(stage));
 
@@ -42,7 +39,7 @@ internal sealed class MarketAcquisitionItemContextMenu : IDisposable
 
     private void OnMenuOpened(IMenuOpenedArgs args)
     {
-        if (!isAvailable() || !TryResolveItem(args, out var itemId, out var itemName))
+        if (!TryResolveItem(args, out var itemId, out var itemName))
             return;
 
         args.AddMenuItem(new MenuItem

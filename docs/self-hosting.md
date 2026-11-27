@@ -2,7 +2,7 @@
 
 Workshop Host is MarketMafioso's private ASP.NET Core backend with a bundled dashboard and a local SQLite database. It is meant for self-hosted or small trusted deployments, not public multi-user hosting.
 
-Workshop Host enables persistent inventory snapshots, the inventory browser, diagnostics, and private suite integrations. The in-game plugin can still run without it, but server-backed inventory history and dashboard features will be unavailable.
+Workshop Host enables persistent inventory snapshots, the inventory browser, Market Acquisition work orders, diagnostics, and private suite integrations. The in-game plugin, including Market Acquisition buying runs, works without it; server-backed inventory history, work orders, and dashboard features need it.
 
 The current package still keeps receiver-era names in scripts, routes, Docker image, and some setting filenames for compatibility.
 

@@ -61,9 +61,7 @@ internal sealed class RetainerListingRefreshCoordinator
         NormalizePersistedState();
     }
 
-    public bool IsEnabled =>
-        MarketAcquisitionUnlock.IsUnlocked(config) &&
-        config.EnableRetainerListingRefresh;
+    public bool IsEnabled => config.EnableRetainerListingRefresh;
 
     public void Tick(
         DateTimeOffset nowUtc,

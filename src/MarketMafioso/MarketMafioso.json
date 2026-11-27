@@ -2,7 +2,7 @@
   "Author": "FranFkntastic",
   "Name": "MarketMafioso",
   "Punchline": "Player handoff, cross-world market buying, and Free Company workshop production.",
-  "Description": "Player handoff, cross-world market buying, and Free Company workshop production. Hand items to another player through the Trade Queue, and plan workshop projects and their materials across bags and retainers. An optional self-hosted Workshop Host unlocks Market Acquisition buying runs and inventory history. Use /mmf to open MarketMafioso.",
+  "Description": "Player handoff, cross-world market buying, and Free Company workshop production. Hand items to another player through the Trade Queue, turn a shopping list into a cross-world buying run with Market Acquisition, and plan workshop projects and their materials across bags and retainers. An optional self-hosted Workshop Host adds inventory history, a browser dashboard, and work orders. Use /mmf to open MarketMafioso.",
   "InternalName": "MarketMafioso",
   "AssemblyVersion": "1.4.1.0",
   "DalamudApiLevel": 15,

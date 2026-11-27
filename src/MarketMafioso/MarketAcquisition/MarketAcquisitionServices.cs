@@ -92,7 +92,8 @@ internal sealed class MarketAcquisitionServices : IDisposable
             Plugin.PluginInterface.GetPluginConfigDirectory(),
             ex => log.Warning(ex, "[MarketMafioso] Market intelligence reporting requires attention."),
             message => log.Information("[MarketMafioso] {Message}", message),
-            (exception, message) => log.Warning(exception, "[MarketMafioso] {Message}", message));
+            (exception, message) => log.Warning(exception, "[MarketMafioso] {Message}", message),
+            () => Plugin.Instance.HostReachability.Status == WorkshopHostReachability.Reachable);
         var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient)
         {
             Warn = message => log.Warning("{Message}", message),
@@ -290,13 +291,6 @@ internal sealed class MarketAcquisitionServices : IDisposable
         LastTickTimings.Start();
         WorldVisitCatalog.Tick();
         LastTickTimings.Mark("worldVisitCatalog");
-
-        if (!IsMarketAcquisitionUnlocked())
-        {
-            LastTickTimings.Mark("unlockCheck");
-            return;
-        }
-        LastTickTimings.Mark("unlockCheck");
 
         WorkbenchStock.Tick();
         LastTickTimings.Mark("workbenchStock");
@@ -662,8 +656,6 @@ internal sealed class MarketAcquisitionServices : IDisposable
 
         return playerState.CurrentWorld.Value.Name.ToString();
     }
-
-    internal bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
 
     internal AgentBridgeMarketActorCapabilityTruth GetMarketActorCapabilityTruth() =>
         CreateMarketActorCapabilityTruth(ReadCurrentMarketActorBook());

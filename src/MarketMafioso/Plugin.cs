@@ -98,7 +98,7 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>Workshop Host delivery for split saved-job shares.</summary>
     public IWorkshopHandoffService WorkshopHandoffService { get; }
-    internal MarketAcquisitionHostCheck AcquisitionHostCheck { get; }
+    internal WorkshopHostReachabilityCheck HostReachability { get; }
     private readonly MarketAcquisitionItemContextMenu marketAcquisitionItemContextMenu;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
@@ -162,7 +162,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Configuration.LoadRuntimeState(PluginInterface.GetPluginConfigDirectory());
-        AcquisitionHostCheck = new(Configuration, Framework, Log);
+        HostReachability = new(Configuration, Framework, Log);
         WorkshopHandoffService = new HostWorkshopHandoffService(Configuration, PlayerState, ClientState, Framework, Log);
         profileDataCenterCoordinator = new ProfileDataCenterCoordinator(
             PluginInterface.GetPluginConfigDirectory(), new DalamudDataCenterConnection(DataManager, ClientState, ObjectTable, GameGui));
@@ -447,7 +447,6 @@ public sealed class Plugin : IDalamudPlugin
             DataManager,
             Framework,
             ChatGui,
-            () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
             mainWindow.CanStageContextMenuItemToWorkbench,
             mainWindow.StageContextMenuItemToWorkbench);
 
@@ -479,7 +478,6 @@ public sealed class Plugin : IDalamudPlugin
                 acquisitionServices.BeginControlledMarketActorListing,
                 acquisitionServices.RemoveControlledMarketActorListing,
                 acquisitionServices.BeginControlledMarketActorBrowse,
-                () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
                 mainWindow.AgentReviewRegistry),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
@@ -526,7 +524,7 @@ public sealed class Plugin : IDalamudPlugin
 
         StartTimer();
         sharedObservationClient.Start();
-        AcquisitionHostCheck.Start();
+        HostReachability.Start();
         Log.Information("[MarketMafioso] Plugin loaded. Use /mmf to open settings.");
 
         try
@@ -1131,7 +1129,7 @@ public sealed class Plugin : IDalamudPlugin
                 PluginInterface.RelinquishData(AutoRetainerHolderRegistry.Key);
             }),
 
-            ("acquisition host check", () => AcquisitionHostCheck.Dispose()),
+            ("host reachability check", () => HostReachability.Dispose()),
             ("auto-send timer", StopTimer),
             ("item context menu", () => marketAcquisitionItemContextMenu.Dispose()),
             ("exact acquisition IPC", () => exactAcquisitionIpc.Dispose()),

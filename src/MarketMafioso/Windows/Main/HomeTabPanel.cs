@@ -41,9 +41,6 @@ internal sealed record HomeTradeFacts(
     int RemainingUnits);
 
 internal sealed record HomeMarketFacts(
-    bool Unlocked,
-    bool LockedByUser,
-    bool HostOffersAcquisition,
     int BuyListLines,
     int InboxCount,
     bool RouteActive,
@@ -291,25 +288,16 @@ internal sealed class HomeTabPanel : IDisposable
                             IsBuyListStarted(snapshot) ? "✓ Buy list started" : null,
                             () =>
                             {
-                                if (snapshot.Market.Unlocked)
-                                {
-                                    if (ImGui.Button("Open Market Acquisition##homeStep2"))
-                                        actions.OpenTab("Market Acquisition");
-                                    RegisterLast("home.getting-started.market", "Open Market Acquisition", () => actions.OpenTab("Market Acquisition"));
-                                }
-                                else
-                                {
-                                    if (ImGui.Button("Set up Workshop Host##homeStep2"))
-                                        actions.OpenServerSettings();
-                                    RegisterLast("home.getting-started.market-host", "Open Settings > Server Connection to set up a Workshop Host", actions.OpenServerSettings);
-                                }
+                                if (ImGui.Button("Open Market Acquisition##homeStep2"))
+                                    actions.OpenTab("Market Acquisition");
+                                RegisterLast("home.getting-started.market", "Open Market Acquisition", () => actions.OpenTab("Market Acquisition"));
                             });
                         break;
                     default:
                         DrawStep(
                             3,
                             "Optional: connect a Workshop Host",
-                            "A self-hosted helper that unlocks Market Acquisition and keeps inventory history. Everything else works without it.",
+                            "A self-hosted helper that keeps inventory history, serves a browser dashboard, and takes work orders. Everything else works without it.",
                             snapshot.Host.Connection == HomeHostConnection.Connected ? "✓ Connected" : null,
                             () =>
                             {
@@ -369,7 +357,7 @@ internal sealed class HomeTabPanel : IDisposable
         ImGui.TableNextColumn();
         DrawTradeCard(snapshot.Trade, topRowHeight);
         ImGui.TableNextColumn();
-        DrawMarketCard(snapshot.Market, snapshot.Host, topRowHeight);
+        DrawMarketCard(snapshot.Market, topRowHeight);
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
         DrawWorkshopCard(snapshot.Workshop, bottomRowHeight);
@@ -467,15 +455,12 @@ internal sealed class HomeTabPanel : IDisposable
         EndCard();
     }
 
-    private void DrawMarketCard(HomeMarketFacts market, HomeHostFacts host, float height)
+    private void DrawMarketCard(HomeMarketFacts market, float height)
     {
         if (BeginCard("##homeMarket", height))
         {
             var (pill, tone) = market switch
             {
-                { Unlocked: false } => (host.Connection == HomeHostConnection.Connected && !market.HostOffersAcquisition
-                    ? "Not offered by host"
-                    : market.LockedByUser && market.HostOffersAcquisition ? "Locked" : "Needs Workshop Host", DalamudUiTone.Neutral),
                 { RouteActive: true } => ("Route running", DalamudUiTone.Accent),
                 { PlanLines: not null, PlanStale: false } => ("Plan ready", DalamudUiTone.Success),
                 { BuyListLines: > 0 } => ("Buy list open", DalamudUiTone.Accent),
@@ -484,47 +469,35 @@ internal sealed class HomeTabPanel : IDisposable
             DrawCardTitle("Market Acquisition", pill, tone);
             DrawDescription("Turn a shopping list into a buying run. MMF compares listings across worlds, plans the route, travels, and buys under the price ceiling you set.");
 
-            if (market.Unlocked)
+            if (market.RouteActive)
             {
-                if (market.RouteActive)
-                {
-                    DrawFact(market.RouteStops > 0
-                        ? $"Route: {market.RouteStopsDone:N0} of {Plural(market.RouteStops, "world")} done"
-                        : "Route running");
-                    if (!string.IsNullOrWhiteSpace(market.RouteStatus))
-                        DrawFact(market.RouteStatus, MarketMafiosoUiTheme.Muted);
-                }
-                else if (market.PlanLines is { } planLines)
-                {
-                    DrawFact($"Plan: {Plural(planLines, "item")} · {Plural(market.PlanWorlds ?? 0, "world")}");
-                    var age = market.PlanPreparedAt is { } preparedAt ? DescribeAge(preparedAt) : null;
-                    DrawFactParts(
-                        ($"Planned {market.PlanGil ?? 0:N0} gil", TextColor),
-                        (age is null ? string.Empty : $" · prices {age}", MarketMafiosoUiTheme.Muted),
-                        (market.PlanStale ? " · buy list changed" : string.Empty, MarketMafiosoUiTheme.Warning));
-                }
-                else if (market.BuyListLines > 0)
-                {
-                    DrawFact($"Buy list: {Plural(market.BuyListLines, "item")}, not finalized");
-                }
-
-                if (market.InboxCount > 0)
-                    DrawFact($"Inbox: {Plural(market.InboxCount, "work order")}");
+                DrawFact(market.RouteStops > 0
+                    ? $"Route: {market.RouteStopsDone:N0} of {Plural(market.RouteStops, "world")} done"
+                    : "Route running");
+                if (!string.IsNullOrWhiteSpace(market.RouteStatus))
+                    DrawFact(market.RouteStatus, MarketMafiosoUiTheme.Muted);
             }
+            else if (market.PlanLines is { } planLines)
+            {
+                DrawFact($"Plan: {Plural(planLines, "item")} · {Plural(market.PlanWorlds ?? 0, "world")}");
+                var age = market.PlanPreparedAt is { } preparedAt ? DescribeAge(preparedAt) : null;
+                DrawFactParts(
+                    ($"Planned {market.PlanGil ?? 0:N0} gil", TextColor),
+                    (age is null ? string.Empty : $" · prices {age}", MarketMafiosoUiTheme.Muted),
+                    (market.PlanStale ? " · buy list changed" : string.Empty, MarketMafiosoUiTheme.Warning));
+            }
+            else if (market.BuyListLines > 0)
+            {
+                DrawFact($"Buy list: {Plural(market.BuyListLines, "item")}, not finalized");
+            }
+
+            if (market.InboxCount > 0)
+                DrawFact($"Inbox: {Plural(market.InboxCount, "work order")}");
 
             BeginCardFooter(height);
-            if (market.Unlocked)
-            {
-                if (ImGui.Button("Open Market Acquisition##home"))
-                    actions.OpenTab("Market Acquisition");
-                RegisterLast("home.market.open", "Open Market Acquisition", () => actions.OpenTab("Market Acquisition"));
-            }
-            else
-            {
-                if (SecondaryButton("Set up Workshop Host##homeMarket"))
-                    actions.OpenServerSettings();
-                RegisterLast("home.market.setup-host", "Open Settings > Server Connection to set up a Workshop Host", actions.OpenServerSettings);
-            }
+            if (ImGui.Button("Open Market Acquisition##home"))
+                actions.OpenTab("Market Acquisition");
+            RegisterLast("home.market.open", "Open Market Acquisition", () => actions.OpenTab("Market Acquisition"));
         }
 
         EndCard();
@@ -607,7 +580,7 @@ internal sealed class HomeTabPanel : IDisposable
                     break;
                 default:
                     DrawStatusLine(MarketMafiosoUiTheme.Muted, "Not connected");
-                    DrawDescription("Optional. Run it on your PC or a server to unlock Market Acquisition and Inventory History.");
+                    DrawDescription("Optional. Run it on your PC or a server for inventory history, a browser dashboard, and work orders.");
                     break;
             }
 
@@ -816,7 +789,7 @@ internal sealed class HomeTabPanel : IDisposable
     private static readonly HomeSnapshot EmptySnapshot = new(
         new HomeWorkshopFacts(0, 0, [], 0, 0, false, false, string.Empty, 0, 0),
         new HomeTradeFacts(0, 0, null, false, false, string.Empty, 0),
-        new HomeMarketFacts(false, false, false, 0, 0, false, string.Empty, 0, 0, null, null, null, null, false),
+        new HomeMarketFacts(0, 0, false, string.Empty, 0, 0, null, null, null, null, false),
         new HomeHostFacts(HomeHostConnection.NotConnected, string.Empty, null, false, string.Empty, null, false, 0),
         null);
 

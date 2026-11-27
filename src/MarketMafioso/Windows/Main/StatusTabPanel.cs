@@ -44,11 +44,8 @@ internal sealed class StatusTabPanel
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Status: {reporter.LastStatus}");
         }
 
-        if (!MarketAcquisition.MarketAcquisitionUnlock.IsUnlocked(config) ||
-            !config.EnableRetainerListingRefresh)
-        {
+        if (!config.EnableRetainerListingRefresh)
             return;
-        }
 
         ImGui.Spacing();
         var refresh = config.RetainerListingRefresh;
