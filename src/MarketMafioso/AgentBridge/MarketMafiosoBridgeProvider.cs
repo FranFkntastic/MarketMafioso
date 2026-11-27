@@ -37,6 +37,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
 
     private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> PublicReviewSurfaces =
     [
+        new("home", "Home", "select-main-tab", "Home", 30),
         new("workshop-logistics", "Workshop Logistics", "select-main-tab", "Workshop Logistics", 40),
         new("workshop-logistics.combined", "Workshop Logistics - Queue and Materials", "select-main-tab", "Workshop Logistics/Combined", 41),
         new("workshop-logistics.queue", "Workshop Logistics - Queue", "select-main-tab", "Workshop Logistics/Queue", 42),

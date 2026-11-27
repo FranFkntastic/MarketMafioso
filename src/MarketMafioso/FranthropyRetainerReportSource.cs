@@ -37,6 +37,26 @@ public sealed class FranthropyRetainerReportSource(DalamudSharedObservationClien
             out reports);
     }
 
+    /// <summary>How many of the owner's home-world retainers the shared observation roster has seen.</summary>
+    public bool TryCountRetainers(ObservationOwner owner, out int count)
+    {
+        count = 0;
+        if (!client.TryGetRetainers(owner, out var snapshot) || snapshot is null)
+            return false;
+
+        var rosterObservation = snapshot.Observations
+            .Where(observation => observation.Scope.Container == ObservationContainerKind.RetainerRoster)
+            .MaxBy(observation => observation.Revision);
+        if (rosterObservation is null)
+            return false;
+
+        var roster = rosterObservation.Payload.Deserialize<RetainerRosterPayload>(
+            ObservationPayloadContracts.RetainerRoster,
+            ObservationPayloadContracts.Version);
+        count = roster.Retainers.Count(retainer => retainer.WorldId == snapshot.Owner.HomeWorldId);
+        return true;
+    }
+
     public static bool TryBuildReports(
         SharedRetainerObservationSnapshot snapshot,
         string? characterName,

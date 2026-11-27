@@ -1,8 +1,8 @@
 {
   "Author": "FranFkntastic",
   "Name": "MarketMafioso",
-  "Punchline": "Workshop logistics, market acquisition, and inventory history.",
-  "Description": "FFXIV workshop logistics, market acquisition, and optional receiver-backed inventory history. Use /mmf to open settings.",
+  "Punchline": "Player handoff, cross-world market buying, and Free Company workshop production.",
+  "Description": "Player handoff, cross-world market buying, and Free Company workshop production. Hand items to another player through the Trade Queue, and plan workshop projects and their materials across bags and retainers. An optional self-hosted Workshop Host unlocks Market Acquisition buying runs and inventory history. Use /mmf to open MarketMafioso.",
   "InternalName": "MarketMafioso",
   "AssemblyVersion": "1.4.1.0",
   "DalamudApiLevel": 15,
@@ -14,6 +14,8 @@
     "viwi",
     "utility",
     "qol",
+    "trade",
+    "marketboard",
     "export",
     "json"
   ],

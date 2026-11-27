@@ -66,6 +66,7 @@ public partial class MainWindow : Window, IDisposable
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly StatusTabPanel statusTab;
     private readonly SettingsTabPanel settingsTab;
+    private readonly HomeTabPanel homeTab;
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel;
     private readonly MarketAcquisitionRequestPickupPanel marketAcquisitionRequestPickupPanel;
     private readonly MarketAcquisitionDiagnosticsPanel marketAcquisitionDiagnosticsPanel;
@@ -101,7 +102,7 @@ public partial class MainWindow : Window, IDisposable
     public MarketMafiosoCaptureRegion? AgentCaptureRegion { get; private set; }
     public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
 
-    private const string ProductSummary = "Workshop logistics, direct trade handoff, and self-hosted inventory history.";
+    internal const string ProductTagline = "Player handoff, cross-world market buying, and Free Company workshop production.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, material shortages, Quartermaster requests, handoff, and assembly.";
 
     internal static readonly Vector4 ColHeader = MarketMafiosoUiTheme.Header;
@@ -399,6 +400,7 @@ public partial class MainWindow : Window, IDisposable
             Plugin.Instance.RestartTimer,
             AgentReviewRegistry,
             marketIntelligencePassiveReporter.CreateStatus);
+        homeTab = CreateHomeTab();
 
         acquisitionWorkspace.RestoreClaimIntoBuilder();
         acquisitionWorkspace.RestoreFinalizedDryRunPlan(
@@ -820,48 +822,65 @@ public partial class MainWindow : Window, IDisposable
 
             if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
             {
-                if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
+                if (ImGui.BeginTabItem(HomeTabPanel.TabName, GetMainTabFlags(HomeTabPanel.TabName)))
                 {
-                    DrawWorkshopPrepTab();
+                    ObserveOpenMainTab(HomeTabPanel.TabName);
+                    homeTab.Draw();
                     ImGui.EndTabItem();
                 }
 
-                if (ImGui.BeginTabItem("Trade Queue", GetAgentTabFlags("Trade Queue")))
+                if (ImGui.BeginTabItem("Trade Queue", GetMainTabFlags("Trade Queue")))
                 {
+                    ObserveOpenMainTab("Trade Queue");
                     tradeQueuePanel.Draw();
                     ImGui.EndTabItem();
                 }
 
-                if (acquisitionServices.IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
+                if (acquisitionServices.IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetMainTabFlags("Market Acquisition")))
                 {
+                    ObserveOpenMainTab("Market Acquisition");
                     DrawMarketAcquisitionTab();
                     ImGui.EndTabItem();
                 }
 
-                if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
+                if (ImGui.BeginTabItem("Workshop Logistics", GetMainTabFlags("Workshop Logistics")))
                 {
+                    ObserveOpenMainTab("Workshop Logistics");
+                    DrawWorkshopPrepTab();
+                    ImGui.EndTabItem();
+                }
+
+                if (ImGui.BeginTabItem("Diagnostics", GetMainTabFlags("Diagnostics")))
+                {
+                    ObserveOpenMainTab("Diagnostics");
                     marketAcquisitionDiagnosticsPanel.Draw();
                     ImGui.EndTabItem();
                 }
 
-                if (ImGui.BeginTabItem("Settings", GetAgentTabFlags("Settings")))
+                if (ImGui.BeginTabItem("Settings", GetMainTabFlags("Settings")))
                 {
+                    ObserveOpenMainTab("Settings");
                     settingsTab.Draw();
                     ImGui.EndTabItem();
                 }
 
-                if (ImGui.BeginTabItem("Status", GetAgentTabFlags("Status")))
+                if (ImGui.BeginTabItem("Status", GetMainTabFlags("Status")))
                 {
+                    ObserveOpenMainTab("Status");
                     statusTab.Draw();
                     ImGui.EndTabItem();
                 }
 
                 ImGui.EndTabBar();
-                if (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc)
+                EndMainTabFrame();
+                var frameHoldExpired = homeSelectionFramesRemaining > 0 && --homeSelectionFramesRemaining == 0;
+                if (frameHoldExpired ||
+                    (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc))
                 {
                     agentRequestedTab = null;
                     agentRequestedWorkspaceView = null;
                     agentSelectionHoldUntilUtc = default;
+                    homeSelectionFramesRemaining = 0;
                 }
             }
     }
@@ -890,7 +909,7 @@ public partial class MainWindow : Window, IDisposable
 
         var allowed = mainTab switch
         {
-            "Workshop Logistics" or "Trade Queue" or "Settings" or "Status" => true,
+            "Home" or "Workshop Logistics" or "Trade Queue" or "Settings" or "Status" => true,
             "Diagnostics" => true,
             "Market Acquisition" => acquisitionServices.IsMarketAcquisitionUnlocked(),
             _ => false,
@@ -1024,6 +1043,7 @@ public partial class MainWindow : Window, IDisposable
         // ImGui commits SetSelected at the end of a tab bar. Hold the semantic request long enough for
         // both a parent and nested tab bar to render, independent of the client's current frame rate.
         agentSelectionHoldUntilUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+        homeSelectionFramesRemaining = 0;
     }
 
     private static bool IsAllowedWorkspaceView(string mainTab, string? workspaceView) =>
@@ -1074,20 +1094,14 @@ public partial class MainWindow : Window, IDisposable
             uiStateCapture.Mark("agent-bridge-capture-input-state");
     }
 
-    private ImGuiTabItemFlags GetAgentTabFlags(string tabName) =>
-        string.Equals(agentRequestedTab, tabName, StringComparison.Ordinal)
-            ? ImGuiTabItemFlags.SetSelected
-            : ImGuiTabItemFlags.None;
-
     private void DrawHeader()
     {
         ImGui.TextColored(ColHeader, "MarketMafioso");
-        ImGui.TextWrapped(ProductSummary);
-        ImGui.TextColored(
-            ColMuted,
-            acquisitionServices.IsMarketAcquisitionUnlocked()
-                ? "Utilities: Workshop Logistics, Trade Queue, Market Acquisition. Inventory reporting lives under Settings."
-                : "Utilities: Workshop Logistics and Trade Queue. Inventory reporting lives under Settings.");
+        ImGui.SameLine();
+        ImGui.TextUnformatted(ProductTagline);
+        var version = $"v{PluginBuildInfo.DisplayVersion.Split('+')[0]} · /mmf";
+        ImGuiUi.SameLineRight(ImGui.CalcTextSize(version).X);
+        ImGui.TextColored(ColMuted, version);
     }
 
     private void DrawWorkshopPrepTab()
@@ -2217,6 +2231,7 @@ public partial class MainWindow : Window, IDisposable
         AgentCaptureTransactions.CancelActive();
 
         uiStateCapture.Dispose();
+        homeTab.Dispose();
         craftQuoteHttpClient.Dispose();
         FrozenQueueBrowser.Dispose();
     }
