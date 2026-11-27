@@ -27,6 +27,11 @@ public partial class MainWindow
     private string? restoreMainTab;
     private bool mainTabSelectionForced;
 
+    // Home's buttons are user clicks: hold the selection for a few frames (parent and nested tab bars commit
+    // SetSelected a frame apart), not the agent path's 2-second hold that would swallow the user's next tab click.
+    private const int HomeSelectionHoldFrames = 3;
+    private int homeSelectionFramesRemaining;
+
     private HomeTabPanel CreateHomeTab() =>
         new(
             config,
@@ -93,19 +98,27 @@ public partial class MainWindow
     {
         if (!IsMainTabAvailable(mainTab))
             return;
-        QueueAgentTabSelection(mainTab);
+        QueueHomeTabSelection(mainTab);
     }
 
     private void ResumeWorkshopAssemblyFromHome()
     {
         workshopStatus = workshopAssemblyRunner.Resume().Message;
-        QueueAgentTabSelection("Workshop Logistics", "Assembly");
+        QueueHomeTabSelection("Workshop Logistics", "Assembly");
     }
 
     private void OpenServerConnectionSettings()
     {
         settingsTab.ShowPage(ServerConnectionSettingsPageId);
-        QueueAgentTabSelection("Settings");
+        QueueHomeTabSelection("Settings");
+    }
+
+    private void QueueHomeTabSelection(string mainTab, string? workspaceView = null)
+    {
+        agentRequestedTab = mainTab;
+        agentRequestedWorkspaceView = workspaceView;
+        agentSelectionHoldUntilUtc = default;
+        homeSelectionFramesRemaining = HomeSelectionHoldFrames;
     }
 
     private void OpenHomeUrl(string url)

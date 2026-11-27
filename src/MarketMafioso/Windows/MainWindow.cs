@@ -873,11 +873,14 @@ public partial class MainWindow : Window, IDisposable
 
                 ImGui.EndTabBar();
                 EndMainTabFrame();
-                if (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc)
+                var frameHoldExpired = homeSelectionFramesRemaining > 0 && --homeSelectionFramesRemaining == 0;
+                if (frameHoldExpired ||
+                    (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc))
                 {
                     agentRequestedTab = null;
                     agentRequestedWorkspaceView = null;
                     agentSelectionHoldUntilUtc = default;
+                    homeSelectionFramesRemaining = 0;
                 }
             }
     }
@@ -1040,6 +1043,7 @@ public partial class MainWindow : Window, IDisposable
         // ImGui commits SetSelected at the end of a tab bar. Hold the semantic request long enough for
         // both a parent and nested tab bar to render, independent of the client's current frame rate.
         agentSelectionHoldUntilUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+        homeSelectionFramesRemaining = 0;
     }
 
     private static bool IsAllowedWorkspaceView(string mainTab, string? workspaceView) =>

@@ -125,6 +125,12 @@ internal sealed class HomeTabPanel : IDisposable
     private readonly IPluginLog log;
     private string? lastSnapshotFailure;
 
+    // Dalamud's ImGui bindings have no auto-resizing child windows, so each card is sized from the content
+    // height it measured on the previous frame (the first frame uses an estimate).
+    private readonly Dictionary<string, float> measuredCardHeights = new(StringComparer.Ordinal);
+    private string? currentCardId;
+    private bool currentCardMeasured;
+
     public HomeTabPanel(
         Configuration config,
         AgentBridgeUiReviewRegistry reviewRegistry,
@@ -222,10 +228,11 @@ internal sealed class HomeTabPanel : IDisposable
 
     private void DrawGettingStarted(HomeSnapshot snapshot)
     {
+        const string id = "##mmfHomeGettingStarted";
         var lineHeight = ImGui.GetTextLineHeightWithSpacing();
-        var height = (lineHeight * 7f) + ImGui.GetFrameHeightWithSpacing();
+        var height = CardHeight((lineHeight * 7f) + ImGui.GetFrameHeightWithSpacing(), id);
         var start = ImGui.GetCursorScreenPos();
-        if (BeginCard("##mmfHomeGettingStarted", height))
+        if (BeginCard(id, height))
         {
             ImGui.TextColored(TextColor, "Getting started");
             ImGuiUi.SameLineRight(ButtonWidth("Hide"));
@@ -233,42 +240,62 @@ internal sealed class HomeTabPanel : IDisposable
                 HideGettingStarted();
             RegisterLast("home.getting-started.hide", "Hide the Getting started steps", HideGettingStarted);
 
-            if (ImGui.BeginTable("##mmfHomeSteps", 3, ImGuiTableFlags.SizingStretchSame))
+            // Three equal columns laid out by hand so every step header shares one baseline.
+            var spacing = ImGui.GetStyle().ItemSpacing.X * 3f;
+            var origin = ImGui.GetCursorPos();
+            var columnWidth = (ImGui.GetContentRegionAvail().X - (spacing * 2f)) / 3f;
+            var bottom = origin.Y;
+            for (var step = 1; step <= 3; step++)
             {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                DrawStep(
-                    1,
-                    "Pick a workshop project",
-                    "Open Workshop Logistics, add the airship or submarine parts your company is building, and MMF works out every material you need.",
-                    snapshot.Workshop.ProjectCount > 0 ? $"✓ {Plural(snapshot.Workshop.ProjectCount, "project")} queued" : null,
-                    () =>
-                    {
-                        if (ImGui.Button("Open Workshop Logistics##homeStep1"))
-                            actions.OpenTab("Workshop Logistics");
-                        RegisterLast("home.getting-started.workshop", "Open Workshop Logistics", () => actions.OpenTab("Workshop Logistics"));
-                    });
-                ImGui.TableNextColumn();
-                DrawStep(
-                    2,
-                    "Check your stock",
-                    "Visit a summoning bell once. MMF remembers what your retainers hold, so shortages count everything you own.",
-                    snapshot.RetainersSeen is > 0 ? $"✓ {Plural(snapshot.RetainersSeen.Value, "retainer")} seen" : null,
-                    null);
-                ImGui.TableNextColumn();
-                DrawStep(
-                    3,
-                    "Optional: connect a Workshop Host",
-                    "A self-hosted helper that unlocks Market Acquisition and keeps inventory history. Everything else works without it.",
-                    snapshot.Host.Connection == HomeHostConnection.Connected ? "✓ Connected" : null,
-                    () =>
-                    {
-                        if (ImGui.Button("Connect with code##homeStep3"))
-                            actions.OpenServerSettings();
-                        RegisterLast("home.getting-started.connect", "Open Settings > Server Connection to connect with a code", actions.OpenServerSettings);
-                    });
-                ImGui.EndTable();
+                var x = origin.X + ((step - 1) * (columnWidth + spacing));
+                ImGui.SetCursorPos(new Vector2(x, origin.Y));
+                ImGui.BeginGroup();
+                ImGui.PushTextWrapPos(x + columnWidth);
+                switch (step)
+                {
+                    case 1:
+                        DrawStep(
+                            1,
+                            "Pick a workshop project",
+                            "Open Workshop Logistics, add the airship or submarine parts your company is building, and MMF works out every material you need.",
+                            snapshot.Workshop.ProjectCount > 0 ? $"✓ {Plural(snapshot.Workshop.ProjectCount, "project")} queued" : null,
+                            () =>
+                            {
+                                if (ImGui.Button("Open Workshop Logistics##homeStep1"))
+                                    actions.OpenTab("Workshop Logistics");
+                                RegisterLast("home.getting-started.workshop", "Open Workshop Logistics", () => actions.OpenTab("Workshop Logistics"));
+                            });
+                        break;
+                    case 2:
+                        DrawStep(
+                            2,
+                            "Check your stock",
+                            "Visit a summoning bell once. MMF remembers what your retainers hold, so shortages count everything you own.",
+                            snapshot.RetainersSeen is > 0 ? $"✓ {Plural(snapshot.RetainersSeen.Value, "retainer")} seen" : null,
+                            null);
+                        break;
+                    default:
+                        DrawStep(
+                            3,
+                            "Optional: connect a Workshop Host",
+                            "A self-hosted helper that unlocks Market Acquisition and keeps inventory history. Everything else works without it.",
+                            snapshot.Host.Connection == HomeHostConnection.Connected ? "✓ Connected" : null,
+                            () =>
+                            {
+                                if (ImGui.Button("Connect with code##homeStep3"))
+                                    actions.OpenServerSettings();
+                                RegisterLast("home.getting-started.connect", "Open Settings > Server Connection to connect with a code", actions.OpenServerSettings);
+                            });
+                        break;
+                }
+
+                ImGui.PopTextWrapPos();
+                ImGui.EndGroup();
+                bottom = MathF.Max(bottom, ImGui.GetCursorPosY());
             }
+
+            ImGui.SetCursorPos(new Vector2(origin.X, bottom));
+            ImGui.Dummy(Vector2.Zero);
         }
 
         EndCard();
@@ -284,7 +311,7 @@ internal sealed class HomeTabPanel : IDisposable
         ImGui.SameLine();
         ImGui.TextColored(TextColor, title);
         ImGui.PushStyleColor(ImGuiCol.Text, DescriptionColor);
-        ImGui.TextWrapped(body);
+        ImGui.TextUnformatted(body);
         ImGui.PopStyleColor();
         if (done is not null)
             ImGui.TextColored(MarketMafiosoUiTheme.Success, done);
@@ -301,20 +328,22 @@ internal sealed class HomeTabPanel : IDisposable
     private void DrawModuleCards(HomeSnapshot snapshot)
     {
         var lineHeight = ImGui.GetTextLineHeightWithSpacing();
-        var cardHeight = (lineHeight * 8.2f) + ImGui.GetFrameHeightWithSpacing();
+        var estimate = (lineHeight * 6f) + ImGui.GetFrameHeightWithSpacing();
+        var topRowHeight = CardHeight(estimate, "##homeWorkshop", "##homeTrade");
+        var bottomRowHeight = CardHeight(estimate, "##homeMarket", "##homeInventory");
         if (!ImGui.BeginTable("##mmfHomeCards", 2, ImGuiTableFlags.SizingStretchSame | ImGuiTableFlags.NoPadOuterX))
             return;
 
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
-        DrawWorkshopCard(snapshot.Workshop, cardHeight);
+        DrawWorkshopCard(snapshot.Workshop, topRowHeight);
         ImGui.TableNextColumn();
-        DrawTradeCard(snapshot.Trade, cardHeight);
+        DrawTradeCard(snapshot.Trade, topRowHeight);
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
-        DrawMarketCard(snapshot.Market, snapshot.Host, cardHeight);
+        DrawMarketCard(snapshot.Market, snapshot.Host, bottomRowHeight);
         ImGui.TableNextColumn();
-        DrawInventoryCard(snapshot.Host, snapshot.RetainersSeen, cardHeight);
+        DrawInventoryCard(snapshot.Host, snapshot.RetainersSeen, bottomRowHeight);
         ImGui.EndTable();
     }
 
@@ -525,7 +554,7 @@ internal sealed class HomeTabPanel : IDisposable
     {
         var lineHeight = ImGui.GetTextLineHeightWithSpacing();
         var connected = host.Connection == HomeHostConnection.Connected;
-        var height = (lineHeight * (connected ? 3.4f : 5.4f)) + ImGui.GetFrameHeightWithSpacing();
+        var height = CardHeight((lineHeight * (connected ? 3.4f : 5.4f)) + ImGui.GetFrameHeightWithSpacing(), "##homeHost");
         if (BeginCard("##homeHost", height))
         {
             DrawSubheading("Workshop Host");
@@ -573,10 +602,10 @@ internal sealed class HomeTabPanel : IDisposable
         EndCard();
     }
 
-    private static void DrawCompanionsCard(bool[] loaded)
+    private void DrawCompanionsCard(bool[] loaded)
     {
         var lineHeight = ImGui.GetTextLineHeightWithSpacing();
-        var height = (lineHeight * ((Companions.Length * 2) + 1.6f)) + ImGui.GetStyle().WindowPadding.Y;
+        var height = CardHeight((lineHeight * ((Companions.Length * 2) + 1.6f)) + ImGui.GetStyle().WindowPadding.Y, "##homeCompanions");
         if (BeginCard("##homeCompanions", height))
         {
             DrawSubheading("Works with");
@@ -608,28 +637,61 @@ internal sealed class HomeTabPanel : IDisposable
     private void RegisterLast(string id, string label, Action invoke) =>
         reviewRegistry.RegisterLastItem(id, label, AgentBridgeUiControlKind.Button, true, false, null, invoke);
 
-    private static bool BeginCard(string id, float height)
+    /// <summary>The tallest measured content among cards sharing a row, or the estimate before any was measured.</summary>
+    private float CardHeight(float estimate, params string[] ids)
     {
+        var measured = 0f;
+        foreach (var id in ids)
+        {
+            if (measuredCardHeights.TryGetValue(id, out var height))
+                measured = MathF.Max(measured, height);
+        }
+
+        return measured > 0f ? measured : estimate;
+    }
+
+    private bool BeginCard(string id, float height)
+    {
+        currentCardId = id;
+        currentCardMeasured = false;
         ImGui.PushStyleColor(ImGuiCol.ChildBg, Palette.SurfaceRaised);
         ImGui.PushStyleColor(ImGuiCol.Border, Palette.Border);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 4f);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(10f, 8f));
-        return ImGui.BeginChild(id, new Vector2(0f, height), true);
+        var visible = ImGui.BeginChild(id, new Vector2(0f, height), true);
+        // A clipped child draws nothing; measuring it would shrink the card to its padding.
+        currentCardMeasured = !visible;
+        return visible;
     }
 
-    private static void EndCard()
+    private void EndCard()
     {
+        if (!currentCardMeasured)
+            RecordCardHeight(ImGui.GetCursorPosY() - ImGui.GetStyle().ItemSpacing.Y + ImGui.GetStyle().WindowPadding.Y);
+        currentCardId = null;
         ImGui.EndChild();
         ImGui.PopStyleVar(2);
         ImGui.PopStyleColor(2);
     }
 
     /// <summary>Pins the card's buttons to its bottom edge when the facts leave room; otherwise they follow the facts.</summary>
-    private static void BeginCardFooter(float cardHeight)
+    private void BeginCardFooter(float cardHeight)
     {
+        RecordCardHeight(ImGui.GetCursorPosY() + ImGui.GetFrameHeight() + ImGui.GetStyle().WindowPadding.Y);
         var footerY = cardHeight - ImGui.GetFrameHeight() - ImGui.GetStyle().WindowPadding.Y;
         if (ImGui.GetCursorPosY() < footerY)
             ImGui.SetCursorPosY(footerY);
+    }
+
+    /// <summary>Content height measured before the footer is pinned, so the pin never feeds back into the size.</summary>
+    private void RecordCardHeight(float contentHeight)
+    {
+        if (currentCardId is null)
+            return;
+
+        // Two pixels of slack keep the bordered child from showing a scrollbar on rounding.
+        measuredCardHeights[currentCardId] = MathF.Ceiling(contentHeight) + 2f;
+        currentCardMeasured = true;
     }
 
     private static void DrawCardTitle(string title, string pill, DalamudUiTone tone)
