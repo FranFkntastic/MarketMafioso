@@ -320,8 +320,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGuiUi.SectionHeader("external exact-acquisition solution", MainWindow.ColHeader);
         if (!authority.IsLineageValid)
         {
-            ImGui.TextColored(MainWindow.ColError, authority.InvalidationReason ?? "The selected gear solution changed; return to Advisor.");
-            ImGui.TextColored(MainWindow.ColMuted, "Historical Advisor lineage is retained, but this Workbench cannot be finalized as that solution.");
+            ImGui.TextColored(MainWindow.ColError, authority.InvalidationReason ?? "The selected external solution changed; restage the plan from its source.");
+            ImGui.TextColored(MainWindow.ColMuted, "Historical source lineage is retained, but this Workbench cannot be finalized as that solution.");
             ImGui.Spacing();
             return;
         }

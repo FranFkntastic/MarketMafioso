@@ -29,7 +29,7 @@ using MarketMafioso.MarketDiagnostics;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.ProfileLogin;
 using MarketMafioso.WorkshopPrep;
-using MarketMafioso.SquireIntegration;
+using MarketMafioso.MarketAcquisition.Ipc;
 using MarketMafioso.TradeQueue;
 using MarketMafioso.Windows;
 
@@ -93,7 +93,6 @@ public sealed class Plugin : IDalamudPlugin
     private readonly RemoteMarketProbeWindow remoteMarketProbeWindow;
     private readonly QuartermasterIpcClient quartermaster;
     private readonly QuartermasterCancelOutbox quartermasterCancels;
-    private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
     private readonly WorkshopSavedJobIpcProvider workshopSavedJobIpc;
 
@@ -204,7 +203,6 @@ public sealed class Plugin : IDalamudPlugin
             },
         });
         retainerReports = new FranthropyRetainerReportSource(sharedObservationClient);
-        standaloneSquire = new StandaloneSquireIpcClient(new DalamudStandaloneSquireIpcAdapter(PluginInterface));
         reporter = new HttpReporter(
             Configuration,
             PlayerState,
@@ -426,7 +424,6 @@ public sealed class Plugin : IDalamudPlugin
             scanner,
             retainerReports,
             quartermaster,
-            standaloneSquire,
             workshopCatalog,
             viwiWorkshoppaIpc,
             workshopAssemblyRunner,

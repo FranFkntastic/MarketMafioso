@@ -186,7 +186,7 @@ public sealed class ExactAcquisitionRouteAuthoritySession
     {
         ArgumentNullException.ThrowIfNull(document);
         ValidateDocumentIntent(contract, document, warn,
-            "Workbench changed after External plan confirmation; return through Advisor and finalize a new contract.");
+            "Workbench changed after External plan confirmation; restage the plan from its source and finalize a new contract.");
     }
 
     internal bool IsSunkListing(MarketBoardLiveListing listing)
@@ -332,7 +332,7 @@ public sealed class ExactAcquisitionRouteAuthoritySession
             LastRecoveryPlanSignature = signature,
             SpendAtLastRecovery = State.TotalSpentGil,
             Message = repeatedWithoutProgress
-                ? "Recovery produced the same exhausted route without progress; review or return to Advisor."
+                ? "Recovery produced the same exhausted route without progress; review or restage the plan from its source."
                 : "The planned rows were exhausted; refreshing and optimizing the complete remaining exact-quality route.",
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         });

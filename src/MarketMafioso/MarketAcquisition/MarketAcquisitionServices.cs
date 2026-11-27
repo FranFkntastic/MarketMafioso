@@ -334,7 +334,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
             if (RouteEngine.ConsumeNoViableExactAcquisitionDryRunScenario())
             {
                 RouteEngine.PauseExactAcquisitionRecovery(
-                    "Diagnostic no-viable recovery: no exact-quality row remains inside the confirmed caps. Retry or return to Advisor.");
+                    "Diagnostic no-viable recovery: no exact-quality row remains inside the confirmed caps. Retry or restage the plan from its source.");
                 RouteEngine.ReportRouteProgress();
                 return;
             }
@@ -352,14 +352,14 @@ internal sealed class MarketAcquisitionServices : IDisposable
             catch (Exception exception)
             {
                 RouteEngine.PauseExactAcquisitionRecovery(
-                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor.");
+                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or restage the plan from its source.");
                 RouteEngine.ReportRouteProgress();
                 return;
             }
             if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
             {
                 RouteEngine.PauseExactAcquisitionRecovery(
-                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings or return to Advisor.");
+                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings or restage the plan from its source.");
                 return;
             }
 
@@ -479,7 +479,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
                 exactAutoResumePreparationFailures = 0;
                 ExactStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
                     persisted,
-                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor."));
+                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or restage the plan from its source."));
                 return;
             }
             exactAutoResumePreparationFailures = 0;
@@ -487,7 +487,7 @@ internal sealed class MarketAcquisitionServices : IDisposable
             {
                 ExactStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
                     persisted,
-                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings, retry recovery, or return to Advisor."));
+                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings, retry recovery, or restage the plan from its source."));
                 return;
             }
             var start = RouteEngine.Start(

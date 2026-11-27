@@ -4,7 +4,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using MarketMafioso.MarketAcquisition.ExactAuthority;
 
-namespace MarketMafioso.SquireIntegration;
+namespace MarketMafioso.MarketAcquisition.Ipc;
 
 public sealed class ExactAcquisitionIpcProvider : IDisposable
 {

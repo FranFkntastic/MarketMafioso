@@ -200,8 +200,6 @@ public class Configuration : IPluginConfiguration
     public bool ShouldSerializeLegacyActiveWorkshopVendorRestock() => false;
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
-    [JsonProperty("Squire")]
-    public Newtonsoft.Json.Linq.JObject? LegacySquireConfiguration { get; set; }
 
     private sealed class RuntimeState
     {

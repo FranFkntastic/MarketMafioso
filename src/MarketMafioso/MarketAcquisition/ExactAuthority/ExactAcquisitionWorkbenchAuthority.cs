@@ -116,7 +116,7 @@ public static class ExactAcquisitionWorkbenchAuthorityService
         var authority = document.ExactAcquisitionAuthority ??
             throw new InvalidOperationException("No External plan ExactAcquisition solution is attached to this Workbench.");
         if (!authority.IsLineageValid)
-            throw new InvalidOperationException("Return to Advisor before changing caps on an invalidated solution.");
+            throw new InvalidOperationException("Restage the plan from its source before changing caps on an invalidated solution.");
 
         var envelopes = BuildEnvelopes(authority.Transfer, priceFlexPercent);
         var replacements = envelopes.ToDictionary(LineKey);
@@ -172,7 +172,7 @@ public static class ExactAcquisitionWorkbenchAuthorityService
         if (authority is null)
             return ExactAcquisitionWorkbenchAuthorityValidation.Valid;
         if (!authority.IsLineageValid)
-            return new(false, authority.InvalidationReason ?? "The selected external exact-acquisition solution changed; return to Advisor.");
+            return new(false, authority.InvalidationReason ?? "The selected external exact-acquisition solution changed; restage the plan from its source.");
         if (!string.Equals(authority.RecoveryPolicyId, ExactAcquisitionWorkbenchAuthority.CrossWorldExactQualityV1, StringComparison.Ordinal))
             return new(false, "The exact-acquisition recovery policy is not an approved version.");
         var lineage = ValidateLineage(document.Lines, authority);

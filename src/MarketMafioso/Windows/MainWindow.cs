@@ -16,7 +16,6 @@ using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.MarketAcquisition.MarketBoard;
 using MarketMafioso.Quartermaster;
-using MarketMafioso.SquireIntegration;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.Windows.MarketAcquisitionPanels;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
@@ -47,7 +46,6 @@ public partial class MainWindow : Window, IDisposable
     private readonly InventoryScanner scanner;
     private readonly FranthropyRetainerReportSource retainerReports;
     private readonly QuartermasterIpcClient quartermaster;
-    private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
@@ -66,7 +64,6 @@ public partial class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionRouteEngine routeEngine;
     private readonly ConfigurationExactAcquisitionRouteExecutionStateStore exactAcquisitionRouteStateStore;
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
-    private readonly StandaloneSquirePanel squirePanel;
     private readonly StatusTabPanel statusTab;
     private readonly SettingsTabPanel settingsTab;
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel;
@@ -119,7 +116,6 @@ public partial class MainWindow : Window, IDisposable
         InventoryScanner scanner,
         FranthropyRetainerReportSource retainerReports,
         QuartermasterIpcClient quartermaster,
-        StandaloneSquireIpcClient standaloneSquire,
         WorkshopProjectCatalog workshopCatalog,
         VIWIWorkshoppaIpc viwiWorkshoppaIpc,
         WorkshopAssemblyRunner workshopAssemblyRunner,
@@ -145,7 +141,6 @@ public partial class MainWindow : Window, IDisposable
         this.scanner = scanner;
         this.retainerReports = retainerReports;
         this.quartermaster = quartermaster;
-        this.standaloneSquire = standaloneSquire;
         this.workshopCatalog = workshopCatalog;
         this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
         this.workshopAssemblyRunner = workshopAssemblyRunner;
@@ -198,7 +193,6 @@ public partial class MainWindow : Window, IDisposable
             Plugin.Framework,
             Plugin.Condition,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "ui-state-captures"));
-        squirePanel = new StandaloneSquirePanel(standaloneSquire, AgentReviewRegistry);
         statusTab = new StatusTabPanel(config, reporter);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
@@ -387,7 +381,6 @@ public partial class MainWindow : Window, IDisposable
                     ? "The user confirmed that the submitted purchase completed."
                     : "The user confirmed that the submitted purchase did not complete."),
             () => routeEngine.RequestExactAcquisitionRecovery(acquisitionRequestBuilder.CurrentDocument),
-            ReturnToExactAcquisitionAdvisor,
             marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary,
             marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary,
             DrawMarketBoardProbeStatus,
@@ -827,12 +820,6 @@ public partial class MainWindow : Window, IDisposable
 
             if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
             {
-                if (ImGui.BeginTabItem("Squire", GetAgentTabFlags("Squire")))
-                {
-                    squirePanel.Draw();
-                    ImGui.EndTabItem();
-                }
-
                 if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
                 {
                     DrawWorkshopPrepTab();
@@ -903,7 +890,7 @@ public partial class MainWindow : Window, IDisposable
 
         var allowed = mainTab switch
         {
-            "Squire" or "Workshop Logistics" or "Trade Queue" or "Settings" or "Status" => true,
+            "Workshop Logistics" or "Trade Queue" or "Settings" or "Status" => true,
             "Diagnostics" => true,
             "Market Acquisition" => acquisitionServices.IsMarketAcquisitionUnlocked(),
             _ => false,
@@ -915,13 +902,6 @@ public partial class MainWindow : Window, IDisposable
         AgentOpenForReview();
         return true;
     }
-
-#if DEBUG
-    public bool TryOpenSyntheticAdvisorReview()
-    {
-        return standaloneSquire.TryOpen(out _);
-    }
-#endif
 
     public void StageExternalExactAcquisition(ExactAcquisitionWorkbenchTransfer transfer)
     {
@@ -1106,8 +1086,8 @@ public partial class MainWindow : Window, IDisposable
         ImGui.TextColored(
             ColMuted,
             acquisitionServices.IsMarketAcquisitionUnlocked()
-                ? "Utilities: Squire, Workshop Logistics, Trade Queue, Market Acquisition. Inventory reporting lives under Settings."
-                : "Utilities: Squire, Workshop Logistics, and Trade Queue. Inventory reporting lives under Settings.");
+                ? "Utilities: Workshop Logistics, Trade Queue, Market Acquisition. Inventory reporting lives under Settings."
+                : "Utilities: Workshop Logistics and Trade Queue. Inventory reporting lives under Settings.");
     }
 
     private void DrawWorkshopPrepTab()
@@ -2018,11 +1998,6 @@ public partial class MainWindow : Window, IDisposable
         return result.Message;
     }
 #endif
-
-    private void ReturnToExactAcquisitionAdvisor()
-    {
-        standaloneSquire.TryOpen(out _);
-    }
 
     private void CaptureMarketBoardInputState()
     {
