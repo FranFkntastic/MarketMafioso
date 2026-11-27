@@ -120,6 +120,9 @@ public class Configuration : IPluginConfiguration
     public string CraftArchitectQuoteFilePath { get; set; } = string.Empty;
     public string SettingsSelectedPageId { get; set; } = "general.server";
     public List<string> SettingsExpandedFolderPaths { get; set; } = ["General", "Inventory Reporter", "Advanced"];
+    /// <summary>The main tab the user last had selected; null until a tab is chosen, which lands on Home.</summary>
+    public string? LastMainTab { get; set; }
+    public bool HomeGettingStartedHidden { get; set; }
 
     public bool IncludeArmoury { get; set; } = false;
     public bool IncludeCrystals { get; set; } = true;
