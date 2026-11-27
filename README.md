@@ -12,7 +12,7 @@ Most users only need two steps:
 https://raw.githubusercontent.com/FranFkntastic/DalamudPlugins/main/pluginmaster.json
 ```
 
-2. **Optional Workshop Host dashboard:** download `marketmafioso-self-host-<version>.zip` from the GitHub [Releases](https://github.com/FranFkntastic/MarketMafioso/releases) page, extract it somewhere permanent, install Docker Desktop if needed, then double-click `Install Workshop Host.bat`.
+2. **Optional Workshop Host dashboard:** download `marketmafioso-self-host-<version>.zip` from the GitHub [Releases](https://github.com/FranFkntastic/MarketMafioso/releases) page, extract it somewhere permanent, then follow the [Workshop Host quickstart](docs/workshop-host-quickstart.md).
 
 Full step-by-step instructions live in [docs/installation.md](docs/installation.md).
 
@@ -46,7 +46,7 @@ Retainer inventory is only as fresh as the last cache refresh or retainer window
 
 Workshop Host can be run privately or self-hosted from the server package. MarketMafioso does not provide public multi-user inventory hosting; users who want persistent hosted inventory storage should run their own host instance.
 
-Installation notes for the plugin and optional Workshop Host live in [docs/installation.md](docs/installation.md). Self-hosting notes live in [docs/self-hosting.md](docs/self-hosting.md).
+Installation notes for the plugin and optional Workshop Host live in [docs/installation.md](docs/installation.md). To set up Workshop Host, follow the [Workshop Host quickstart](docs/workshop-host-quickstart.md); the full reference is [docs/self-hosting.md](docs/self-hosting.md).
 
 ## Acknowledgements
 
