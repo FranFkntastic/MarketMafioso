@@ -25,7 +25,6 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action reprepareRoute;
     private readonly Func<bool, MarketPurchaseTerminalResolutionResult> reconcileTerminalPurchase;
     private readonly Action retryExactAcquisitionRecovery;
-    private readonly Action returnToExactAcquisitionAdvisor;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus;
@@ -54,7 +53,6 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action reprepareRoute,
         Func<bool, MarketPurchaseTerminalResolutionResult> reconcileTerminalPurchase,
         Action retryExactAcquisitionRecovery,
-        Action returnToExactAcquisitionAdvisor,
         Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus,
@@ -80,7 +78,6 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.reprepareRoute = reprepareRoute ?? throw new ArgumentNullException(nameof(reprepareRoute));
         this.reconcileTerminalPurchase = reconcileTerminalPurchase ?? throw new ArgumentNullException(nameof(reconcileTerminalPurchase));
         this.retryExactAcquisitionRecovery = retryExactAcquisitionRecovery ?? throw new ArgumentNullException(nameof(retryExactAcquisitionRecovery));
-        this.returnToExactAcquisitionAdvisor = returnToExactAcquisitionAdvisor ?? throw new ArgumentNullException(nameof(returnToExactAcquisitionAdvisor));
         this.drawPostRunDiagnosticSummary = drawPostRunDiagnosticSummary ?? throw new ArgumentNullException(nameof(drawPostRunDiagnosticSummary));
         this.drawLatestWorldCompletionSummary = drawLatestWorldCompletionSummary ?? throw new ArgumentNullException(nameof(drawLatestWorldCompletionSummary));
         this.drawMarketBoardProbeStatus = drawMarketBoardProbeStatus ?? throw new ArgumentNullException(nameof(drawMarketBoardProbeStatus));
@@ -247,14 +244,6 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                 "Refresh and optimize the remaining exact-quality External plan route",
                 true,
                 retryExactAcquisitionRecovery);
-            ImGui.SameLine();
-            if (ImGuiUi.Button("Return to Advisor##ExactAcquisitionReturnToAdvisor", true))
-                returnToExactAcquisitionAdvisor();
-            RegisterLastControl(
-                "acquisition.route.exactAcquisition.return-to-advisor",
-                "Return to the planning plugin without broadening the paused contract",
-                true,
-                returnToExactAcquisitionAdvisor);
             return;
         }
         if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.ResumeManualPause)

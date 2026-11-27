@@ -15,11 +15,10 @@
     "utility",
     "qol",
     "export",
-    "json",
-    "gear"
+    "json"
   ],
   "CategoryTags": [
     "utility"
   ],
-  "Changelog": "Extracts equipment planning and reviewed cleanup into the standalone Squire plugin while retaining a versioned market-acquisition IPC handoff."
+  "Changelog": "Removes the Squire launcher tab; Squire is no longer bundled with MarketMafioso."
 }

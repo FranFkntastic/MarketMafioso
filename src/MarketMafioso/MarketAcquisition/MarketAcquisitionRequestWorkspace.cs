@@ -662,7 +662,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         {
             PreparedPlan = null;
             PreparedPlanHash = null;
-            Status = $"External plan dry-run restoration paused: {exception.Message} Return to Advisor, finalize, and prepare a new dry-run plan.";
+            Status = $"External plan dry-run restoration paused: {exception.Message} Restage the plan from its source, finalize, and prepare a new dry-run plan.";
             resetRoute!("Dry-run startup evidence did not pass exact restoration; execution remains disabled.");
             return false;
         }
