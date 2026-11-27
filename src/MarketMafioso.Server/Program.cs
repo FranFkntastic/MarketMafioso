@@ -1,3 +1,4 @@
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.Server;
 using MarketMafioso.Server.Inventory;
 using MarketMafioso.Server.Auth;
@@ -12,6 +13,11 @@ using Microsoft.Data.Sqlite;
 
 var builder = WebApplication.CreateBuilder(args);
 const string workshopHostBrowserCorsPolicy = "WorkshopHostBrowserClients";
+const string privateNetworkAccessRequestHeader = "Access-Control-Request-Private-Network";
+const string privateNetworkAccessResponseHeader = "Access-Control-Allow-Private-Network";
+var craftAppraisal = WorkshopHostCraftAppraisalSettings.FromConfiguration(
+    builder.Configuration,
+    builder.Environment);
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(workshopHostBrowserCorsPolicy, policy =>
@@ -19,6 +25,11 @@ builder.Services.AddCors(options =>
             .SetIsOriginAllowed(origin => IsAllowedWorkshopHostBrowserOrigin(builder.Configuration, origin))
             .AllowAnyHeader()
             .AllowAnyMethod());
+    options.AddPolicy(WorkshopHostCraftAppraisalSettings.PlanSnapshotCorsPolicy, policy =>
+        policy
+            .WithOrigins(craftAppraisal.AppOrigin)
+            .WithMethods(HttpMethods.Get)
+            .AllowAnyHeader());
 });
 builder.Services.AddSingleton<SqliteConnectionFactory>();
 builder.Services.AddSingleton<SqliteSchemaMigrator>();
@@ -42,11 +53,28 @@ builder.Services.AddSingleton<MarketIntelligenceStore>();
 builder.Services.AddHostedService<MarketIntelligenceProjectionWorker>();
 if (builder.Configuration.GetValue<bool>("MarketMafioso:MarketDiagnostics:Enabled"))
     builder.Services.AddHostedService<MarketDiagnosticBackgroundService>();
-builder.Services.AddHttpClient<IWorkshopHostCraftQuoteService, CraftArchitectWorkshopHostCraftQuoteService>(
-    client => client.Timeout = TimeSpan.FromSeconds(60));
+builder.Services.AddSingleton(craftAppraisal);
+builder.Services.AddHostedCraftAppraisal(craftAppraisal.Options, builder.Environment.ContentRootPath);
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
+app.Logger.LogInformation(
+    "Craft appraisal runs in-process: plan snapshots at {PlanDirectory}, market cache at {CacheDirectory}, plan links open {AppOrigin} with snapshots served from {SnapshotOrigin}.",
+    craftAppraisal.Options.PlanDirectory,
+    craftAppraisal.Options.CacheDirectory,
+    craftAppraisal.AppOrigin,
+    craftAppraisal.PublicOriginConfigured
+        ? craftAppraisal.Options.PublicApiOrigin + WorkshopHostCraftAppraisalSettings.PlanSnapshotPath
+        : "the request host (MarketMafioso:PublicOrigin is not set)");
+foreach (var retiredSetting in new[] { "CraftArchitectAppraiseUrl", "XivDataBaseUrl" })
+{
+    if (!string.IsNullOrWhiteSpace(app.Configuration[$"MarketMafioso:{retiredSetting}"]))
+    {
+        app.Logger.LogWarning(
+            "MarketMafioso:{RetiredSetting} is set but no longer used: craft quotes and item search now run inside Workshop Host. Remove it from your configuration.",
+            retiredSetting);
+    }
+}
 await app.Services.GetRequiredService<SqliteSchemaMigrator>().MigrateAsync(CancellationToken.None);
 await app.Services.GetRequiredService<ReceiverBootstrapper>().BootstrapAsync(CancellationToken.None);
 await app.Services.GetRequiredService<JsonSnapshotImporter>().ImportAsync(CancellationToken.None);
@@ -62,9 +90,6 @@ var configuredBasePath = NormalizeConfiguredBasePath(basePath);
 var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
 var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
 var enableMarketAcquisition = app.Configuration.GetValue("MarketMafioso:EnableMarketAcquisition", true);
-var xivDataBaseUrl = NormalizeXivDataBaseUrl(FirstConfigured(
-    app.Configuration["MarketMafioso:XivDataBaseUrl"],
-    DefaultXivDataBaseUrl(publicOrigin)));
 
 if (configuredBasePath.HasValue)
 {
@@ -74,6 +99,22 @@ if (configuredBasePath.HasValue)
 app.UseDashboardStaticAssets();
 app.UseStaticFiles();
 app.UseRouting();
+// A public HTTPS Craft Architect page fetching a plan snapshot from a host on localhost or a
+// LAN address triggers a private-network preflight; answer it for the plan route only.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Headers.ContainsKey(privateNetworkAccessRequestHeader) &&
+        context.Request.Path.StartsWithSegments(WorkshopHostCraftAppraisalSettings.PlanSnapshotPath, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            context.Request.Headers.Origin.ToString().TrimEnd('/'),
+            craftAppraisal.AppOrigin,
+            StringComparison.OrdinalIgnoreCase))
+    {
+        context.Response.Headers[privateNetworkAccessResponseHeader] = "true";
+    }
+
+    await next(context);
+});
 app.UseCors(workshopHostBrowserCorsPolicy);
 
 app.Use(async (context, next) =>
@@ -140,7 +181,7 @@ app.MapDashboardClientCredentialEndpoints();
 app.MapClientPairingEndpoints();
 
 app.MapInventoryReportEndpoints(requireApiKey, publicOrigin);
-app.MapXivDataProxyEndpoints(xivDataBaseUrl);
+app.MapXivDataEndpoints();
 
 app.MapDashboardShellEndpoints(enableMarketAcquisition);
 
@@ -245,18 +286,5 @@ static Task WriteUnauthorizedAsync(HttpContext context)
 
 static string? FirstConfigured(params string?[] values) =>
     values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-
-static string NormalizeXivDataBaseUrl(string? value) =>
-    string.IsNullOrWhiteSpace(value)
-        ? string.Empty
-        : value.Trim().TrimEnd('/');
-
-static string DefaultXivDataBaseUrl(string? publicOrigin)
-{
-    var normalizedPublicOrigin = NormalizeXivDataBaseUrl(publicOrigin);
-    return string.IsNullOrWhiteSpace(normalizedPublicOrigin)
-        ? "https://dev.xivcraftarchitect.com/api/xivdata"
-        : $"{normalizedPublicOrigin}/api/xivdata";
-}
 
 public partial class Program;

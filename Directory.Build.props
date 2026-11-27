@@ -1,5 +1,6 @@
 <Project>
   <Import Project="eng/Franthropy.Version.props" />
+  <Import Project="eng/CraftArchitectCore.Version.props" />
   <PropertyGroup>
     <FranthropySource Condition="'$(FranthropySource)' == ''">Package</FranthropySource>
     <FranthropyFeed Condition="'$(FranthropyFeed)' == ''">$(LOCALAPPDATA)/Franthropy/packages</FranthropyFeed>

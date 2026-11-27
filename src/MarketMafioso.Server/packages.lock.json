@@ -11,6 +11,15 @@
           "Franthropy.Filtering": "0.1.0-commit.1750985334d593f4432dd6df7d7f1c3c5d4df426"
         }
       },
+      "Gooseworks.FFXIVCraftArchitect.Core": {
+        "type": "Direct",
+        "requested": "[0.1.0-dev.hostembed, 0.1.0-dev.hostembed]",
+        "resolved": "0.1.0-dev.hostembed",
+        "contentHash": "wKf9KD82rQwtAF4w1t5zXPr2L44txt4QM0e6g0ZcaRAbhshyn08bToFGJXo+hlnDtR9UuI2nYgvtXxw/P/+iKQ==",
+        "dependencies": {
+          "Franthropy.FFXIV": "[0.1.0-commit.1750985334d593f4432dd6df7d7f1c3c5d4df426]"
+        }
+      },
       "Microsoft.AspNetCore.Components.WebAssembly.Server": {
         "type": "Direct",
         "requested": "[10.0.0, )",
