@@ -814,6 +814,50 @@ public sealed class SqliteSchemaMigrator
             source_age_seconds INTEGER NULL
         );
 
+        CREATE TABLE IF NOT EXISTS market_region_competitor_listings (
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            region TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            listing_id TEXT NOT NULL,
+            item_name TEXT NULL,
+            is_hq INTEGER NOT NULL,
+            world_name TEXT NULL,
+            world_id INTEGER NULL,
+            retainer_id TEXT NULL,
+            retainer_name TEXT NULL,
+            unit_price INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            reviewed_at_utc TEXT NULL,
+            first_seen_at_utc TEXT NOT NULL,
+            last_seen_at_utc TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            disappeared_at_utc TEXT NULL,
+            PRIMARY KEY (account_id, region, item_id, listing_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_region_competitor_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            region TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            item_name TEXT NULL,
+            is_hq INTEGER NOT NULL,
+            world_name TEXT NULL,
+            listing_id TEXT NOT NULL,
+            retainer_id TEXT NULL,
+            retainer_name TEXT NULL,
+            event_type TEXT NOT NULL,
+            previous_unit_price INTEGER NULL,
+            unit_price INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            own_floor_price INTEGER NULL,
+            is_undercutting_own INTEGER NOT NULL DEFAULT 0,
+            delta_vs_own INTEGER NULL,
+            exact_one_gil INTEGER NOT NULL DEFAULT 0,
+            reviewed_at_utc TEXT NULL,
+            observed_at_utc TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS market_evidence_payloads (
             payload_hash TEXT PRIMARY KEY,
             listing_count INTEGER NOT NULL,
@@ -983,6 +1027,12 @@ public sealed class SqliteSchemaMigrator
             ON market_region_observations(account_id, region, observed_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_market_region_observations_item
             ON market_region_observations(account_id, item_id, is_hq, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_region_competitor_listings_active
+            ON market_region_competitor_listings(account_id, region, is_active, item_id);
+        CREATE INDEX IF NOT EXISTS idx_market_region_competitor_events_item
+            ON market_region_competitor_events(account_id, item_id, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_region_competitor_events_retainer
+            ON market_region_competitor_events(account_id, retainer_name, observed_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_market_evidence_market_time
             ON market_evidence_observations(account_id, world_name, item_id, observed_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_market_evidence_occurrence

@@ -40,6 +40,20 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
         return Parse(document.RootElement);
     }
 
+    public Task<IReadOnlyDictionary<uint, UniversalisItemEvidence>> FetchRegionListingsAsync(
+        string region,
+        IReadOnlyCollection<uint> itemIds,
+        int listingLimit,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(region))
+            throw new InvalidOperationException("A region is required for a regional listings request.");
+
+        // Same {scope}/{items}?listings=N&entries=0 request as a world fetch (and the same
+        // rate-limit gate); for a region scope Universalis tags each listing with worldName/worldID.
+        return FetchWorldAsync(region, itemIds, listingLimit, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<RegionMarketCondition>> FetchRegionConditionsAsync(
         string region,
         IReadOnlyCollection<uint> itemIds,
@@ -330,6 +344,8 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
                     Quantity = quantity,
                     IsHq = isHq,
                     ReviewedAtUtc = DateTimeOffset.FromUnixTimeSeconds(reviewSeconds),
+                    WorldName = ReadOptionalString(listing, "worldName"),
+                    WorldId = TryReadUInt(listing, "worldID", out var worldId) ? worldId : null,
                 });
             }
         }
