@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dalamud.Plugin;
@@ -92,7 +91,6 @@ public sealed class ProfileLoginCoordinator
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    private readonly string root;
     private readonly ICharacterLoginDriver driver;
     private readonly Func<DateTimeOffset> utcNow;
     private readonly Func<int> processId;
@@ -100,6 +98,11 @@ public sealed class ProfileLoginCoordinator
     private readonly Func<(bool LoggedIn, string Name, string HomeWorld)> identity;
     private readonly Action<string, Exception?> diagnostic;
     private DateTimeOffset nextPollUtc;
+    private static readonly TimeSpan RacyStampWindow = TimeSpan.FromSeconds(2);
+    private readonly string bindingPath;
+    private readonly string operationsRoot;
+    private readonly Dictionary<string, CachedRead> reads = new(StringComparer.Ordinal);
+    private long readGeneration;
 
     public ProfileLoginCoordinator(
         string pluginConfigDirectory,
@@ -110,7 +113,9 @@ public sealed class ProfileLoginCoordinator
         Func<int>? processId = null,
         Func<DateTimeOffset>? processStartUtc = null)
     {
-        root = Path.Combine(pluginConfigDirectory, "profile-manager-login");
+        var root = Path.Combine(pluginConfigDirectory, "profile-manager-login");
+        bindingPath = Path.Combine(root, "provider-binding-v1.json");
+        operationsRoot = Path.Combine(root, "operations");
         this.driver = driver;
         this.identity = identity;
         this.diagnostic = diagnostic;
@@ -132,23 +137,30 @@ public sealed class ProfileLoginCoordinator
 
     internal void TickCore(DateTimeOffset now)
     {
-        var binding = Read<ProfileLoginBinding>(Path.Combine(root, "provider-binding-v1.json"));
+        readGeneration++;
+        try { TickFiles(now); }
+        finally { SweepUnreadFiles(); }
+    }
+
+    private void TickFiles(DateTimeOffset now)
+    {
+        var binding = Read<ProfileLoginBinding>(bindingPath);
         if (binding is null || binding.SchemaVersion != 1 || binding.Provider != "MarketMafioso" || string.IsNullOrWhiteSpace(binding.ProfileId)) return;
 
-        var operationsRoot = Path.Combine(root, "operations");
         if (!Directory.Exists(operationsRoot)) return;
-        var requests = Directory.EnumerateFiles(operationsRoot, "request.json", SearchOption.AllDirectories)
-            .Select(path => (Path: path, Request: Read<ProfileLoginRequest>(path)))
-            .Where(item => item.Request is not null)
-            .OrderByDescending(item => item.Request!.RequestedAtUtc);
-        foreach (var item in requests)
+        // Newest eligible request wins; among equal timestamps the first enumerated wins, as a stable sort would pick.
+        string? newestPath = null;
+        ProfileLoginRequest? newest = null;
+        foreach (var path in Directory.EnumerateFiles(operationsRoot, "request.json", SearchOption.AllDirectories))
         {
-            var request = item.Request!;
-            if (request.SchemaVersion is not (1 or 2) || request.Provider != "MarketMafioso" ||
+            var request = Read<ProfileLoginRequest>(path);
+            if (request is null || request.SchemaVersion is not (1 or 2) || request.Provider != "MarketMafioso" ||
                 request.ProfileId != binding.ProfileId || string.IsNullOrWhiteSpace(request.OperationId)) continue;
-            Process(item.Path, request, now);
-            return;
+            if (newest is not null && request.RequestedAtUtc <= newest.RequestedAtUtc) continue;
+            newest = request;
+            newestPath = path;
         }
+        if (newest is not null) Process(newestPath!, newest, now);
     }
 
     private void Process(string requestPath, ProfileLoginRequest request, DateTimeOffset now)
@@ -267,10 +279,64 @@ public sealed class ProfileLoginCoordinator
         SubmissionMode = submissionMode,
     };
 
-    private static T? Read<T>(string path)
+    /// <summary>
+    /// Parses a coordination file, reusing the previous parse while its last-write time and length are unchanged.
+    /// The binding and every historical request are polled twice a second but change only when the profile manager
+    /// (or this coordinator) rewrites them, so the steady state is a metadata check instead of a read and a parse.
+    /// A file written within <see cref="RacyStampWindow"/> of now is never cached, because a second write landing in
+    /// the same timestamp tick with an equal length would be invisible to the stamp check. Parsed objects are shared
+    /// across polls and must not be mutated.
+    /// </summary>
+    private T? Read<T>(string path) where T : class
     {
-        try { return File.Exists(path) ? JsonSerializer.Deserialize<T>(File.ReadAllText(path), JsonOptions) : default; }
-        catch { return default; }
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists)
+            {
+                reads.Remove(path);
+                return null;
+            }
+            var lastWriteUtc = info.LastWriteTimeUtc;
+            var length = info.Length;
+            if (reads.TryGetValue(path, out var cached) && cached.LastWriteUtc == lastWriteUtc && cached.Length == length)
+            {
+                cached.Generation = readGeneration;
+                return cached.Value as T;
+            }
+
+            var text = File.ReadAllText(path);
+            T? value;
+            try { value = JsonSerializer.Deserialize<T>(text, JsonOptions); }
+            catch (JsonException) { value = null; }
+            if (DateTime.UtcNow - lastWriteUtc > RacyStampWindow && text.Length > 0)
+                reads[path] = new CachedRead(lastWriteUtc, length, value) { Generation = readGeneration };
+            else
+                reads.Remove(path);
+            return value;
+        }
+        catch
+        {
+            reads.Remove(path);
+            return null;
+        }
+    }
+
+    /// <summary>Drops cached parses for files this poll did not read, so retired operations do not accumulate.</summary>
+    private void SweepUnreadFiles()
+    {
+        foreach (var (path, cached) in reads)
+        {
+            if (cached.Generation != readGeneration) reads.Remove(path);
+        }
+    }
+
+    private sealed class CachedRead(DateTime lastWriteUtc, long length, object? value)
+    {
+        public DateTime LastWriteUtc { get; } = lastWriteUtc;
+        public long Length { get; } = length;
+        public object? Value { get; } = value;
+        public long Generation { get; set; }
     }
 
     internal static void Write<T>(string path, T value)

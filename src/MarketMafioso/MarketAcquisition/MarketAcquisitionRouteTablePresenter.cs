@@ -12,10 +12,10 @@ public static class MarketAcquisitionRouteTablePresenter
     {
         ArgumentNullException.ThrowIfNull(stops);
 
-        return stops.Select(BuildStopRow).ToArray();
+        return stops.Select(BuildRow).ToArray();
     }
 
-    private static MarketAcquisitionRouteStopRow BuildStopRow(MarketAcquisitionGuidedRouteStop stop)
+    internal static MarketAcquisitionRouteStopRow BuildRow(MarketAcquisitionGuidedRouteStop stop)
     {
         var lines = stop.LineStates
             .Select(BuildLineRow)
@@ -26,6 +26,7 @@ public static class MarketAcquisitionRouteTablePresenter
         {
             WorldName = stop.WorldName,
             DataCenter = stop.DataCenter,
+            Key = $"{stop.WorldName}|{stop.DataCenter}",
             RouteLines = FormatContribution(stop),
             LineMix = FormatLineMix(stop.LineStates),
             State = aggregate.State,
@@ -37,10 +38,13 @@ public static class MarketAcquisitionRouteTablePresenter
         };
     }
 
-    private static MarketAcquisitionRouteLineRow BuildLineRow(MarketAcquisitionRouteLineState line) =>
-        new()
+    private static MarketAcquisitionRouteLineRow BuildLineRow(MarketAcquisitionRouteLineState line)
+    {
+        var item = FormatItem(line.ItemName, line.ItemId);
+        return new()
         {
-            Item = FormatItem(line.ItemName, line.ItemId),
+            Item = item,
+            ItemLabel = "  " + item,
             Source = line.Source == "Opportunistic" ? "Extra check" : string.IsNullOrWhiteSpace(line.Source) ? "Planned" : line.Source,
             State = line.Status == "Failed" ? "Failed" : line.Status == "Complete" ? line.LatestMessage ?? "Bought" : line.Outcome ?? FormatState(line.Status),
             Planned = line.PlannedQuantity == 0 && line.PlannedGil == 0
@@ -55,6 +59,7 @@ public static class MarketAcquisitionRouteTablePresenter
                 : FormatQuantityGil(line.PurchasedQuantity, line.SpentGil),
             Notes = FormatLineNotes(line),
         };
+    }
 
     private static MarketAcquisitionRouteStopAggregate BuildAggregate(MarketAcquisitionGuidedRouteStop stop)
     {
@@ -240,10 +245,145 @@ public static class MarketAcquisitionRouteTablePresenter
         line.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase);
 }
 
+/// <summary>
+/// Per-window memo of <see cref="MarketAcquisitionRouteTablePresenter.BuildRows"/>. Route stops and line states are
+/// mutated in place by the route engine and carry no revision, so each stop row is keyed on a field-by-field
+/// signature of exactly what the presenter's formatters read. Checking that signature allocates nothing; a stop
+/// row is rebuilt only when one of its inputs changes. Strings compare by reference: a reassigned string with equal
+/// text only costs a rebuild, never staleness.
+/// </summary>
+public sealed class MarketAcquisitionRouteTableRowCache
+{
+    private StopEntry[] entries = [];
+    private IReadOnlyList<MarketAcquisitionRouteStopRow> rows = [];
+
+    public IReadOnlyList<MarketAcquisitionRouteStopRow> GetRows(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
+    {
+        ArgumentNullException.ThrowIfNull(stops);
+
+        var changed = stops.Count != entries.Length;
+        if (changed)
+            Array.Resize(ref entries, stops.Count);
+
+        for (var index = 0; index < stops.Count; index++)
+        {
+            var stop = stops[index];
+            var entry = entries[index];
+            if (entry is not null && entry.Matches(stop))
+                continue;
+
+            entries[index] = StopEntry.Capture(stop);
+            changed = true;
+        }
+
+        if (changed)
+        {
+            var built = new MarketAcquisitionRouteStopRow[entries.Length];
+            for (var index = 0; index < entries.Length; index++)
+                built[index] = entries[index].Row;
+            rows = built;
+        }
+
+        return rows;
+    }
+
+    /// <summary>Every stop member the presenter reads: identity, WorldName, DataCenter, Status and the line list.</summary>
+    private sealed class StopEntry
+    {
+        private readonly MarketAcquisitionGuidedRouteStop stop;
+        private readonly IReadOnlyList<MarketAcquisitionRouteLineState> lineList;
+        private readonly string worldName;
+        private readonly string dataCenter;
+        private readonly string status;
+        private readonly LineSignature[] lines;
+
+        private StopEntry(MarketAcquisitionGuidedRouteStop stop)
+        {
+            this.stop = stop;
+            lineList = stop.LineStates;
+            worldName = stop.WorldName;
+            dataCenter = stop.DataCenter;
+            status = stop.Status;
+            lines = new LineSignature[lineList.Count];
+            for (var index = 0; index < lines.Length; index++)
+                lines[index] = new LineSignature(lineList[index]);
+            Row = MarketAcquisitionRouteTablePresenter.BuildRow(stop);
+        }
+
+        public MarketAcquisitionRouteStopRow Row { get; }
+
+        public static StopEntry Capture(MarketAcquisitionGuidedRouteStop stop) => new(stop);
+
+        public bool Matches(MarketAcquisitionGuidedRouteStop current)
+        {
+            if (!ReferenceEquals(stop, current) ||
+                !ReferenceEquals(lineList, current.LineStates) ||
+                !ReferenceEquals(worldName, current.WorldName) ||
+                !ReferenceEquals(dataCenter, current.DataCenter) ||
+                !ReferenceEquals(status, current.Status) ||
+                lines.Length != lineList.Count)
+                return false;
+
+            for (var index = 0; index < lines.Length; index++)
+            {
+                if (!lines[index].Matches(lineList[index]))
+                    return false;
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Every <see cref="MarketAcquisitionRouteLineState"/> member the presenter reads. When a formatter starts reading
+    /// another member, add it here or the table can show stale purchase progress. Members the presenter does not read:
+    /// LineId, LiveReadableListingCount, LiveReportedListingCount, WouldSpendGil.
+    /// </summary>
+    private readonly struct LineSignature(MarketAcquisitionRouteLineState line)
+    {
+        private readonly MarketAcquisitionRouteLineState line = line;
+        private readonly string? itemName = line.ItemName;
+        private readonly string source = line.Source;
+        private readonly string status = line.Status;
+        private readonly string? outcome = line.Outcome;
+        private readonly string? latestMessage = line.LatestMessage;
+        private readonly string? liveCandidateStatus = line.LiveCandidateStatus;
+        private readonly uint itemId = line.ItemId;
+        private readonly uint remainingNeed = line.RemainingNeed;
+        private readonly uint plannedQuantity = line.PlannedQuantity;
+        private readonly uint plannedGil = line.PlannedGil;
+        private readonly uint purchasedQuantity = line.PurchasedQuantity;
+        private readonly uint spentGil = line.SpentGil;
+        private readonly uint liveObservedQuantity = line.LiveObservedQuantity;
+        private readonly ulong liveObservedGil = line.LiveObservedGil;
+        private readonly uint wouldBuyQuantity = line.WouldBuyQuantity;
+
+        public bool Matches(MarketAcquisitionRouteLineState current) =>
+            ReferenceEquals(line, current) &&
+            ReferenceEquals(itemName, current.ItemName) &&
+            ReferenceEquals(source, current.Source) &&
+            ReferenceEquals(status, current.Status) &&
+            ReferenceEquals(outcome, current.Outcome) &&
+            ReferenceEquals(latestMessage, current.LatestMessage) &&
+            ReferenceEquals(liveCandidateStatus, current.LiveCandidateStatus) &&
+            itemId == current.ItemId &&
+            remainingNeed == current.RemainingNeed &&
+            plannedQuantity == current.PlannedQuantity &&
+            plannedGil == current.PlannedGil &&
+            purchasedQuantity == current.PurchasedQuantity &&
+            spentGil == current.SpentGil &&
+            liveObservedQuantity == current.LiveObservedQuantity &&
+            liveObservedGil == current.LiveObservedGil &&
+            wouldBuyQuantity == current.WouldBuyQuantity;
+    }
+}
+
 public sealed record MarketAcquisitionRouteStopRow
 {
     public string WorldName { get; init; } = string.Empty;
     public string DataCenter { get; init; } = string.Empty;
+    /// <summary>Stable expand/collapse key for this stop.</summary>
+    public string Key { get; init; } = string.Empty;
     public string RouteLines { get; init; } = string.Empty;
     public string LineMix { get; init; } = string.Empty;
     public string State { get; init; } = string.Empty;
@@ -257,6 +397,8 @@ public sealed record MarketAcquisitionRouteStopRow
 public sealed record MarketAcquisitionRouteLineRow
 {
     public string Item { get; init; } = string.Empty;
+    /// <summary>Item name indented for the nested detail table.</summary>
+    public string ItemLabel { get; init; } = string.Empty;
     public string Source { get; init; } = string.Empty;
     public string State { get; init; } = string.Empty;
     public string Planned { get; init; } = string.Empty;
