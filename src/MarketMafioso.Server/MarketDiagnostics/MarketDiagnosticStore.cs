@@ -827,6 +827,416 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         return conditions;
     }
 
+    public async Task<RegionCompetitorRecordResult> RecordRegionCompetitorListingsAsync(
+        long accountId,
+        string region,
+        IReadOnlyCollection<RegionCompetitorItemSnapshot> items,
+        IReadOnlyDictionary<(uint ItemId, bool IsHq), uint> ownFloors,
+        int listingLimit,
+        DateTimeOffset observedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        if (items.Count == 0)
+            return new RegionCompetitorRecordResult(0, 0, 0);
+
+        var appeared = 0;
+        var repriced = 0;
+        var disappeared = 0;
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        using var write = connectionFactory.BeginWrite(connection);
+        var transaction = write.Transaction;
+        foreach (var item in items)
+        {
+            var existing = new Dictionary<string, ActiveRegionCompetitor>(StringComparer.Ordinal);
+            await using (var select = connection.CreateCommand())
+            {
+                select.Transaction = transaction;
+                select.CommandText = """
+                    SELECT listing_id, is_hq, world_name, retainer_id, retainer_name, unit_price, quantity, reviewed_at_utc, item_name
+                    FROM market_region_competitor_listings
+                    WHERE account_id = $accountId
+                      AND region = $region
+                      AND item_id = $itemId
+                      AND is_active = 1;
+                    """;
+                select.Parameters.AddWithValue("$accountId", accountId);
+                select.Parameters.AddWithValue("$region", region);
+                select.Parameters.AddWithValue("$itemId", item.ItemId);
+                await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    existing[reader.GetString(0)] = new ActiveRegionCompetitor(
+                        IsHq: reader.GetInt64(1) != 0,
+                        WorldName: reader.IsDBNull(2) ? null : reader.GetString(2),
+                        RetainerId: reader.IsDBNull(3) ? null : reader.GetString(3),
+                        RetainerName: reader.IsDBNull(4) ? null : reader.GetString(4),
+                        UnitPrice: checked((uint)reader.GetInt64(5)),
+                        Quantity: checked((uint)reader.GetInt64(6)),
+                        ReviewedAtUtc: reader.IsDBNull(7) ? null : ParseRequired(reader.GetString(7)),
+                        ItemName: reader.IsDBNull(8) ? null : reader.GetString(8));
+                }
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var listing in item.Competitors)
+            {
+                if (string.IsNullOrWhiteSpace(listing.ListingId) || !seen.Add(listing.ListingId))
+                    continue;
+
+                uint? ownFloor = ownFloors.TryGetValue((item.ItemId, listing.IsHq), out var floorValue)
+                    ? floorValue
+                    : null;
+                if (!existing.TryGetValue(listing.ListingId, out var previous))
+                {
+                    await UpsertRegionCompetitorAsync(connection, transaction, accountId, region, item, listing, observedAtUtc, cancellationToken);
+                    await InsertRegionCompetitorEventAsync(
+                        connection, transaction, accountId, region, item.ItemId, item.ItemName, listing.IsHq,
+                        listing.WorldName, listing.ListingId, listing.RetainerId, listing.RetainerName,
+                        "Appeared", previousUnitPrice: null, listing.UnitPrice, listing.Quantity, ownFloor,
+                        listing.ReviewedAtUtc, observedAtUtc, cancellationToken);
+                    appeared++;
+                }
+                else if (previous.UnitPrice != listing.UnitPrice || previous.Quantity != listing.Quantity)
+                {
+                    await UpsertRegionCompetitorAsync(connection, transaction, accountId, region, item, listing, observedAtUtc, cancellationToken);
+                    await InsertRegionCompetitorEventAsync(
+                        connection, transaction, accountId, region, item.ItemId, item.ItemName, listing.IsHq,
+                        listing.WorldName, listing.ListingId, listing.RetainerId, listing.RetainerName,
+                        "Repriced", previous.UnitPrice, listing.UnitPrice, listing.Quantity, ownFloor,
+                        listing.ReviewedAtUtc, observedAtUtc, cancellationToken);
+                    repriced++;
+                }
+                else
+                {
+                    await using var touch = connection.CreateCommand();
+                    touch.Transaction = transaction;
+                    touch.CommandText = """
+                        UPDATE market_region_competitor_listings
+                        SET last_seen_at_utc = $observedAt,
+                            reviewed_at_utc = $reviewedAt
+                        WHERE account_id = $accountId
+                          AND region = $region
+                          AND item_id = $itemId
+                          AND listing_id = $listingId;
+                        """;
+                    touch.Parameters.AddWithValue("$observedAt", Format(observedAtUtc));
+                    touch.Parameters.AddWithValue("$reviewedAt", Format(listing.ReviewedAtUtc));
+                    touch.Parameters.AddWithValue("$accountId", accountId);
+                    touch.Parameters.AddWithValue("$region", region);
+                    touch.Parameters.AddWithValue("$itemId", item.ItemId);
+                    touch.Parameters.AddWithValue("$listingId", listing.ListingId);
+                    await touch.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
+
+            // A missing listing only counts as gone when the response could have shown it:
+            // either the response was not truncated, or the listing was cheaper than something
+            // that did make the cut. Otherwise it was merely pushed past the listing limit.
+            var responseComplete = item.TotalListingCount < listingLimit;
+            foreach (var (listingId, previous) in existing)
+            {
+                if (seen.Contains(listingId))
+                    continue;
+
+                var maximumPrice = previous.IsHq ? item.MaximumHqUnitPrice : item.MaximumNqUnitPrice;
+                if (!responseComplete && !(maximumPrice is { } max && previous.UnitPrice < max))
+                    continue;
+
+                await using (var close = connection.CreateCommand())
+                {
+                    close.Transaction = transaction;
+                    close.CommandText = """
+                        UPDATE market_region_competitor_listings
+                        SET is_active = 0,
+                            disappeared_at_utc = $observedAt
+                        WHERE account_id = $accountId
+                          AND region = $region
+                          AND item_id = $itemId
+                          AND listing_id = $listingId;
+                        """;
+                    close.Parameters.AddWithValue("$observedAt", Format(observedAtUtc));
+                    close.Parameters.AddWithValue("$accountId", accountId);
+                    close.Parameters.AddWithValue("$region", region);
+                    close.Parameters.AddWithValue("$itemId", item.ItemId);
+                    close.Parameters.AddWithValue("$listingId", listingId);
+                    await close.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                uint? ownFloor = ownFloors.TryGetValue((item.ItemId, previous.IsHq), out var floor) ? floor : null;
+                await InsertRegionCompetitorEventAsync(
+                    connection, transaction, accountId, region, item.ItemId, item.ItemName ?? previous.ItemName,
+                    previous.IsHq, previous.WorldName, listingId, previous.RetainerId, previous.RetainerName,
+                    "Disappeared", previousUnitPrice: previous.UnitPrice, previous.UnitPrice, previous.Quantity,
+                    ownFloor, previous.ReviewedAtUtc, observedAtUtc, cancellationToken);
+                disappeared++;
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new RegionCompetitorRecordResult(appeared, repriced, disappeared);
+    }
+
+    public async Task<RegionCompetitorsView> ListRegionCompetitorsAsync(
+        IReadOnlyList<long> accountIds,
+        uint? itemId,
+        string? world,
+        string? retainerName,
+        bool undercutOnly,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (accountIds.Count == 0)
+            return new RegionCompetitorsView();
+
+        limit = Math.Clamp(limit, 1, 1000);
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        var accountParameters = accountIds.Select((_, index) => $"$account{index}").ToArray();
+        var accountList = string.Join(", ", accountParameters);
+
+        void AddFilters(SqliteCommand command)
+        {
+            for (var index = 0; index < accountIds.Count; index++)
+                command.Parameters.AddWithValue(accountParameters[index], accountIds[index]);
+            command.Parameters.AddWithValue("$itemId", itemId is null ? DBNull.Value : itemId.Value);
+            command.Parameters.AddWithValue("$world", string.IsNullOrWhiteSpace(world) ? DBNull.Value : world.Trim());
+            command.Parameters.AddWithValue(
+                "$retainerName",
+                string.IsNullOrWhiteSpace(retainerName) ? DBNull.Value : retainerName.Trim());
+            command.Parameters.AddWithValue("$undercutOnly", undercutOnly ? 1 : 0);
+            command.Parameters.AddWithValue("$limit", limit);
+        }
+
+        var listings = new List<RegionCompetitorListingView>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = $"""
+                SELECT account_id, region, item_id, item_name, is_hq, listing_id, world_name, world_id,
+                       retainer_id, retainer_name, unit_price, quantity, reviewed_at_utc,
+                       first_seen_at_utc, last_seen_at_utc, own_floor_price
+                FROM (
+                    SELECT competitor.*,
+                        (SELECT MIN(owned.unit_price)
+                         FROM market_owned_listing_versions owned
+                         WHERE owned.account_id = competitor.account_id
+                           AND owned.item_id = competitor.item_id
+                           AND owned.is_hq = competitor.is_hq
+                           AND owned.is_active = 1) AS own_floor_price
+                    FROM market_region_competitor_listings competitor
+                    WHERE competitor.account_id IN ({accountList})
+                      AND competitor.is_active = 1
+                      AND ($itemId IS NULL OR competitor.item_id = $itemId)
+                      AND ($world IS NULL OR competitor.world_name = $world COLLATE NOCASE)
+                      AND ($retainerName IS NULL OR competitor.retainer_name = $retainerName COLLATE NOCASE)
+                )
+                WHERE $undercutOnly = 0 OR (own_floor_price IS NOT NULL AND unit_price < own_floor_price)
+                ORDER BY item_id, is_hq, unit_price, listing_id
+                LIMIT $limit;
+                """;
+            AddFilters(command);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var unitPrice = checked((uint)reader.GetInt64(10));
+                uint? ownFloor = reader.IsDBNull(15) ? null : checked((uint)reader.GetInt64(15));
+                listings.Add(new RegionCompetitorListingView
+                {
+                    AccountId = reader.GetInt64(0),
+                    Region = reader.GetString(1),
+                    ItemId = checked((uint)reader.GetInt64(2)),
+                    ItemName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    IsHq = reader.GetInt64(4) != 0,
+                    ListingId = reader.GetString(5),
+                    WorldName = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    WorldId = reader.IsDBNull(7) ? null : checked((uint)reader.GetInt64(7)),
+                    RetainerId = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    RetainerName = reader.IsDBNull(9) ? null : reader.GetString(9),
+                    UnitPrice = unitPrice,
+                    Quantity = checked((uint)reader.GetInt64(11)),
+                    ReviewedAtUtc = reader.IsDBNull(12) ? null : ParseRequired(reader.GetString(12)),
+                    FirstSeenAtUtc = ParseRequired(reader.GetString(13)),
+                    LastSeenAtUtc = ParseRequired(reader.GetString(14)),
+                    OwnFloorPrice = ownFloor,
+                    IsUndercuttingOwn = ownFloor is { } floor && unitPrice < floor,
+                    DeltaVsOwn = ownFloor is { } own ? (long)own - unitPrice : null,
+                });
+            }
+        }
+
+        var events = new List<RegionCompetitorEventView>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = $"""
+                SELECT id, account_id, region, item_id, item_name, is_hq, world_name, listing_id,
+                       retainer_id, retainer_name, event_type, previous_unit_price, unit_price, quantity,
+                       own_floor_price, is_undercutting_own, delta_vs_own, exact_one_gil,
+                       reviewed_at_utc, observed_at_utc
+                FROM market_region_competitor_events
+                WHERE account_id IN ({accountList})
+                  AND ($itemId IS NULL OR item_id = $itemId)
+                  AND ($world IS NULL OR world_name = $world COLLATE NOCASE)
+                  AND ($retainerName IS NULL OR retainer_name = $retainerName COLLATE NOCASE)
+                  AND ($undercutOnly = 0 OR is_undercutting_own = 1)
+                ORDER BY observed_at_utc DESC, id DESC
+                LIMIT $limit;
+                """;
+            AddFilters(command);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                events.Add(new RegionCompetitorEventView
+                {
+                    Id = reader.GetInt64(0),
+                    AccountId = reader.GetInt64(1),
+                    Region = reader.GetString(2),
+                    ItemId = checked((uint)reader.GetInt64(3)),
+                    ItemName = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    IsHq = reader.GetInt64(5) != 0,
+                    WorldName = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    ListingId = reader.GetString(7),
+                    RetainerId = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    RetainerName = reader.IsDBNull(9) ? null : reader.GetString(9),
+                    EventType = reader.GetString(10),
+                    PreviousUnitPrice = reader.IsDBNull(11) ? null : checked((uint)reader.GetInt64(11)),
+                    UnitPrice = checked((uint)reader.GetInt64(12)),
+                    Quantity = checked((uint)reader.GetInt64(13)),
+                    OwnFloorPrice = reader.IsDBNull(14) ? null : checked((uint)reader.GetInt64(14)),
+                    IsUndercuttingOwn = reader.GetInt64(15) != 0,
+                    DeltaVsOwn = reader.IsDBNull(16) ? null : reader.GetInt64(16),
+                    ExactOneGil = reader.GetInt64(17) != 0,
+                    ReviewedAtUtc = reader.IsDBNull(18) ? null : ParseRequired(reader.GetString(18)),
+                    ObservedAtUtc = ParseRequired(reader.GetString(19)),
+                });
+            }
+        }
+
+        return new RegionCompetitorsView { Listings = listings, Events = events };
+    }
+
+    private static async Task UpsertRegionCompetitorAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        string region,
+        RegionCompetitorItemSnapshot item,
+        UniversalisListingEvidence listing,
+        DateTimeOffset observedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO market_region_competitor_listings (
+                account_id, region, item_id, listing_id, item_name, is_hq, world_name, world_id,
+                retainer_id, retainer_name, unit_price, quantity, reviewed_at_utc,
+                first_seen_at_utc, last_seen_at_utc, is_active, disappeared_at_utc
+            )
+            VALUES (
+                $accountId, $region, $itemId, $listingId, $itemName, $isHq, $worldName, $worldId,
+                $retainerId, $retainerName, $unitPrice, $quantity, $reviewedAt,
+                $observedAt, $observedAt, 1, NULL
+            )
+            ON CONFLICT (account_id, region, item_id, listing_id) DO UPDATE SET
+                item_name = COALESCE(excluded.item_name, market_region_competitor_listings.item_name),
+                is_hq = excluded.is_hq,
+                world_name = COALESCE(excluded.world_name, market_region_competitor_listings.world_name),
+                world_id = COALESCE(excluded.world_id, market_region_competitor_listings.world_id),
+                retainer_id = COALESCE(excluded.retainer_id, market_region_competitor_listings.retainer_id),
+                retainer_name = COALESCE(excluded.retainer_name, market_region_competitor_listings.retainer_name),
+                unit_price = excluded.unit_price,
+                quantity = excluded.quantity,
+                reviewed_at_utc = excluded.reviewed_at_utc,
+                last_seen_at_utc = excluded.last_seen_at_utc,
+                is_active = 1,
+                disappeared_at_utc = NULL;
+            """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$region", region);
+        command.Parameters.AddWithValue("$itemId", item.ItemId);
+        command.Parameters.AddWithValue("$listingId", listing.ListingId);
+        command.Parameters.AddWithValue("$itemName", Db(item.ItemName));
+        command.Parameters.AddWithValue("$isHq", listing.IsHq ? 1 : 0);
+        command.Parameters.AddWithValue("$worldName", Db(NullIfBlank(listing.WorldName)));
+        command.Parameters.AddWithValue("$worldId", Db(listing.WorldId));
+        command.Parameters.AddWithValue("$retainerId", Db(NullIfBlank(listing.RetainerId)));
+        command.Parameters.AddWithValue("$retainerName", Db(NullIfBlank(listing.RetainerName)));
+        command.Parameters.AddWithValue("$unitPrice", listing.UnitPrice);
+        command.Parameters.AddWithValue("$quantity", listing.Quantity);
+        command.Parameters.AddWithValue("$reviewedAt", Format(listing.ReviewedAtUtc));
+        command.Parameters.AddWithValue("$observedAt", Format(observedAtUtc));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InsertRegionCompetitorEventAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        string region,
+        uint itemId,
+        string? itemName,
+        bool isHq,
+        string? worldName,
+        string listingId,
+        string? retainerId,
+        string? retainerName,
+        string eventType,
+        uint? previousUnitPrice,
+        uint unitPrice,
+        uint quantity,
+        uint? ownFloorPrice,
+        DateTimeOffset? reviewedAtUtc,
+        DateTimeOffset observedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        long? delta = ownFloorPrice is { } floor ? (long)floor - unitPrice : null;
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO market_region_competitor_events (
+                account_id, region, item_id, item_name, is_hq, world_name, listing_id, retainer_id,
+                retainer_name, event_type, previous_unit_price, unit_price, quantity, own_floor_price,
+                is_undercutting_own, delta_vs_own, exact_one_gil, reviewed_at_utc, observed_at_utc
+            )
+            VALUES (
+                $accountId, $region, $itemId, $itemName, $isHq, $worldName, $listingId, $retainerId,
+                $retainerName, $eventType, $previousUnitPrice, $unitPrice, $quantity, $ownFloorPrice,
+                $isUndercuttingOwn, $deltaVsOwn, $exactOneGil, $reviewedAt, $observedAt
+            );
+            """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$region", region);
+        command.Parameters.AddWithValue("$itemId", itemId);
+        command.Parameters.AddWithValue("$itemName", Db(itemName));
+        command.Parameters.AddWithValue("$isHq", isHq ? 1 : 0);
+        command.Parameters.AddWithValue("$worldName", Db(NullIfBlank(worldName)));
+        command.Parameters.AddWithValue("$listingId", listingId);
+        command.Parameters.AddWithValue("$retainerId", Db(NullIfBlank(retainerId)));
+        command.Parameters.AddWithValue("$retainerName", Db(NullIfBlank(retainerName)));
+        command.Parameters.AddWithValue("$eventType", eventType);
+        command.Parameters.AddWithValue("$previousUnitPrice", Db(previousUnitPrice));
+        command.Parameters.AddWithValue("$unitPrice", unitPrice);
+        command.Parameters.AddWithValue("$quantity", quantity);
+        command.Parameters.AddWithValue("$ownFloorPrice", Db(ownFloorPrice));
+        command.Parameters.AddWithValue("$isUndercuttingOwn", delta > 0 ? 1 : 0);
+        command.Parameters.AddWithValue("$deltaVsOwn", Db(delta));
+        command.Parameters.AddWithValue("$exactOneGil", delta == 1 ? 1 : 0);
+        command.Parameters.AddWithValue("$reviewedAt", Db(reviewedAtUtc));
+        command.Parameters.AddWithValue("$observedAt", Format(observedAtUtc));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static string? NullIfBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private sealed record ActiveRegionCompetitor(
+        bool IsHq,
+        string? WorldName,
+        string? RetainerId,
+        string? RetainerName,
+        uint UnitPrice,
+        uint Quantity,
+        DateTimeOffset? ReviewedAtUtc,
+        string? ItemName);
+
     public async Task<IReadOnlyList<RetainerSaleEventView>> ListSaleEventsAsync(
         IReadOnlyList<long> accountIds,
         string? confidence,
@@ -1274,11 +1684,23 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
     {
         await PruneObservationTableAsync("market_observations", observedAtUtc - worldRetention, cancellationToken);
         await PruneObservationTableAsync("market_region_observations", observedAtUtc - regionRetention, cancellationToken);
+        await PruneObservationTableAsync("market_region_competitor_events", observedAtUtc - regionRetention, cancellationToken);
+        await PruneObservationTableAsync(
+            "market_region_competitor_listings",
+            observedAtUtc - regionRetention,
+            cancellationToken,
+            idColumn: "rowid",
+            predicate: "is_active = 0 AND disappeared_at_utc < $cutoff");
     }
 
-    private async Task PruneObservationTableAsync(string table, DateTimeOffset cutoff, CancellationToken token)
+    private async Task PruneObservationTableAsync(
+        string table,
+        DateTimeOffset cutoff,
+        CancellationToken token,
+        string idColumn = "id",
+        string predicate = "observed_at_utc < $cutoff")
     {
-        // Only the two fixed table names above are used. Do the potentially unindexed
+        // Only the fixed table/column/predicate strings above are used. Do the potentially unindexed
         // time-window scan before acquiring the writer lock; delete by primary key.
         var elapsed = Stopwatch.StartNew();
         do
@@ -1289,7 +1711,7 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
                 connection.DefaultTimeout = 1;
                 await using (var select = connection.CreateCommand())
                 {
-                    select.CommandText = $"SELECT id FROM {table} WHERE observed_at_utc < $cutoff LIMIT 100";
+                    select.CommandText = $"SELECT {idColumn} FROM {table} WHERE {predicate} LIMIT 100";
                     select.Parameters.AddWithValue("$cutoff", Format(cutoff));
                     await using var reader = await select.ExecuteReaderAsync(token);
                     while (await reader.ReadAsync(token)) ids.Add(reader.GetInt64(0));
@@ -1300,7 +1722,7 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
                 await using var delete = connection.CreateCommand();
                 delete.Transaction = write.Transaction;
                 var parameters = ids.Select((_, index) => "$id" + index).ToArray();
-                delete.CommandText = $"DELETE FROM {table} WHERE observed_at_utc < $cutoff AND id IN ({string.Join(",", parameters)})";
+                delete.CommandText = $"DELETE FROM {table} WHERE {predicate} AND {idColumn} IN ({string.Join(",", parameters)})";
                 delete.Parameters.AddWithValue("$cutoff", Format(cutoff));
                 for (var index = 0; index < ids.Count; index++)
                     delete.Parameters.AddWithValue(parameters[index], ids[index]);

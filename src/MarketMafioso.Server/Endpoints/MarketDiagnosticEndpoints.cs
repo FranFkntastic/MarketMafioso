@@ -15,6 +15,7 @@ internal static class MarketDiagnosticEndpoints
         app.MapGet("/api/market-diagnostics/listings/{listingId:long}", GetListingDetail);
         app.MapGet("/api/market-diagnostics/episodes", ListEpisodes);
         app.MapGet("/api/market-diagnostics/region-conditions", ListRegionConditions);
+        app.MapGet("/api/market-diagnostics/region-competitors", ListRegionCompetitors);
         app.MapGet("/api/market-diagnostics/sales", ListSales);
         app.MapPost("/api/market-diagnostics/sales", RecordSale);
     }
@@ -171,6 +172,28 @@ internal static class MarketDiagnosticEndpoints
             accountIds,
             itemId,
             limit ?? 1000,
+            token));
+    }
+
+    private static async Task<IResult> ListRegionCompetitors(
+        HttpContext context,
+        MarketDiagnosticStore store,
+        SqliteConnectionFactory connectionFactory,
+        uint? itemId,
+        string? world,
+        string? retainerName,
+        bool? undercutOnly,
+        int? limit,
+        CancellationToken token)
+    {
+        var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
+        return Results.Ok(await store.ListRegionCompetitorsAsync(
+            accountIds,
+            itemId,
+            world,
+            retainerName,
+            undercutOnly ?? false,
+            limit ?? 200,
             token));
     }
 

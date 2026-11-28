@@ -35,6 +35,8 @@ public sealed record UniversalisListingEvidence
     public uint Quantity { get; init; }
     public bool IsHq { get; init; }
     public DateTimeOffset ReviewedAtUtc { get; init; }
+    public string? WorldName { get; init; }
+    public uint? WorldId { get; init; }
 }
 
 public sealed record UniversalisItemEvidence
@@ -86,6 +88,75 @@ public sealed record RegionMarketConditionView : RegionMarketCondition
     public string? ItemName { get; init; }
     public DateTimeOffset ObservedAtUtc { get; init; }
     public long? SourceAgeSeconds { get; init; }
+}
+
+/// <summary>
+/// One item's slice of a regional listings response with owned retainers removed.
+/// TotalListingCount and the maximum prices describe the unfiltered response so the
+/// store can tell a pulled or sold listing apart from one pushed past the listing limit.
+/// </summary>
+public sealed record RegionCompetitorItemSnapshot
+{
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public int TotalListingCount { get; init; }
+    public uint? MaximumNqUnitPrice { get; init; }
+    public uint? MaximumHqUnitPrice { get; init; }
+    public IReadOnlyList<UniversalisListingEvidence> Competitors { get; init; } = [];
+}
+
+public sealed record RegionCompetitorListingView
+{
+    public long AccountId { get; init; }
+    public string Region { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public bool IsHq { get; init; }
+    public string ListingId { get; init; } = string.Empty;
+    public string? WorldName { get; init; }
+    public uint? WorldId { get; init; }
+    public string? RetainerId { get; init; }
+    public string? RetainerName { get; init; }
+    public uint UnitPrice { get; init; }
+    public uint Quantity { get; init; }
+    public uint? OwnFloorPrice { get; init; }
+    public bool IsUndercuttingOwn { get; init; }
+    public long? DeltaVsOwn { get; init; }
+    public DateTimeOffset? ReviewedAtUtc { get; init; }
+    public DateTimeOffset FirstSeenAtUtc { get; init; }
+    public DateTimeOffset LastSeenAtUtc { get; init; }
+}
+
+public sealed record RegionCompetitorEventView
+{
+    public long Id { get; init; }
+    public long AccountId { get; init; }
+    public string Region { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public bool IsHq { get; init; }
+    public string? WorldName { get; init; }
+    public string ListingId { get; init; } = string.Empty;
+    public string? RetainerId { get; init; }
+    public string? RetainerName { get; init; }
+    public string EventType { get; init; } = string.Empty;
+    public uint? PreviousUnitPrice { get; init; }
+    public uint UnitPrice { get; init; }
+    public uint Quantity { get; init; }
+    public uint? OwnFloorPrice { get; init; }
+    public bool IsUndercuttingOwn { get; init; }
+    public long? DeltaVsOwn { get; init; }
+    public bool ExactOneGil { get; init; }
+    public DateTimeOffset? ReviewedAtUtc { get; init; }
+    public DateTimeOffset ObservedAtUtc { get; init; }
+}
+
+public sealed record RegionCompetitorRecordResult(int Appeared, int Repriced, int Disappeared);
+
+public sealed record RegionCompetitorsView
+{
+    public IReadOnlyList<RegionCompetitorListingView> Listings { get; init; } = [];
+    public IReadOnlyList<RegionCompetitorEventView> Events { get; init; } = [];
 }
 
 public sealed record RetainerSaleEventView

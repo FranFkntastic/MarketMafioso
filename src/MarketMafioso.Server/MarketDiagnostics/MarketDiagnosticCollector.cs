@@ -294,6 +294,122 @@ public sealed class MarketDiagnosticCollector(
                     observedAt,
                     cancellationToken);
             }
+
+            await CollectRegionCompetitorsAsync(
+                account.Key,
+                region,
+                account.ToArray(),
+                itemNames,
+                cancellationToken);
+        }
+    }
+
+    private async Task CollectRegionCompetitorsAsync(
+        long accountId,
+        string region,
+        IReadOnlyList<OwnedMarketListing> accountListings,
+        IReadOnlyDictionary<uint, string?> itemNames,
+        CancellationToken cancellationToken)
+    {
+        var listingLimit = Math.Clamp(
+            configuration.GetValue("MarketMafioso:MarketDiagnostics:RegionListingLimit", 30),
+            1,
+            100);
+        // Every owned retainer on the account, across all worlds, is excluded so cross-world
+        // alts never show up as competitors.
+        var ownedRetainerNames = accountListings
+            .Select(listing => listing.RetainerName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ownedRetainerIds = accountListings
+            .Where(listing => listing.RetainerId != 0)
+            .Select(listing => listing.RetainerId.ToString())
+            .ToHashSet(StringComparer.Ordinal);
+        var ownFloors = accountListings
+            .GroupBy(listing => (listing.ItemId, listing.IsHq))
+            .ToDictionary(group => group.Key, group => group.Min(listing => listing.UnitPrice));
+
+        foreach (var batch in itemNames.Keys.Chunk(100))
+        {
+            IReadOnlyDictionary<uint, UniversalisItemEvidence> evidence;
+            try
+            {
+                evidence = await universalis.FetchRegionListingsAsync(
+                    region,
+                    batch,
+                    listingLimit,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (
+                exception is HttpRequestException or
+                JsonException or
+                InvalidOperationException)
+            {
+                log.LogWarning(
+                    exception,
+                    "Universalis regional listings request failed for {Region}.",
+                    region);
+                await diagnosticEvents.WriteAsync(
+                    new DiagnosticEventCreate
+                    {
+                        Source = "WorkshopHost",
+                        Category = "MarketDiagnostics",
+                        Type = "UniversalisRegionListingsFetchFailed",
+                        Severity = "Warning",
+                        Outcome = "Unknown",
+                        Message =
+                            $"Universalis regional listings request failed for {region}; " +
+                            $"competitor tracking skipped {batch.Length} item(s) this poll.",
+                        AccountId = accountId,
+                        ExceptionType = exception.GetType().Name,
+                        ExceptionMessage = exception.Message,
+                    },
+                    cancellationToken);
+                continue;
+            }
+
+            // Items absent from the response are skipped entirely so a partial response
+            // never reads as every competitor disappearing.
+            var snapshots = evidence.Values
+                .Select(item => new RegionCompetitorItemSnapshot
+                {
+                    ItemId = item.ItemId,
+                    ItemName = itemNames.TryGetValue(item.ItemId, out var name) ? name : null,
+                    TotalListingCount = item.Listings.Count,
+                    MaximumNqUnitPrice = item.Listings
+                        .Where(listing => !listing.IsHq)
+                        .Select(listing => (uint?)listing.UnitPrice)
+                        .Max(),
+                    MaximumHqUnitPrice = item.Listings
+                        .Where(listing => listing.IsHq)
+                        .Select(listing => (uint?)listing.UnitPrice)
+                        .Max(),
+                    Competitors = item.Listings
+                        .Where(listing =>
+                            !ownedRetainerNames.Contains(listing.RetainerName) &&
+                            !ownedRetainerIds.Contains(listing.RetainerId))
+                        .ToArray(),
+                })
+                .ToArray();
+            var result = await store.RecordRegionCompetitorListingsAsync(
+                accountId,
+                region,
+                snapshots,
+                ownFloors,
+                listingLimit,
+                DateTimeOffset.UtcNow,
+                cancellationToken);
+            if (result.Appeared + result.Repriced + result.Disappeared > 0)
+            {
+                log.LogInformation(
+                    "Regional competitors for account {AccountId} in {Region}: {Appeared} appeared, {Repriced} repriced, {Disappeared} disappeared across {ItemCount} item(s).",
+                    accountId,
+                    region,
+                    result.Appeared,
+                    result.Repriced,
+                    result.Disappeared,
+                    snapshots.Length);
+            }
         }
     }
 
