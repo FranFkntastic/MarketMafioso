@@ -34,6 +34,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action? discardRecoveryBlock;
     private readonly Action? forgetTravelLease;
     private readonly DalamudExpandableRows expandedStops = new();
+    private readonly MarketAcquisitionRouteTableRowCache routeTableRows = new();
     private Action? confirmedEvidenceRefresh;
     private string evidenceRefreshWorlds = string.Empty;
     private bool openEvidenceRefreshConfirmation;
@@ -472,7 +473,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
     {
-        var rows = MarketAcquisitionRouteTablePresenter.BuildRows(stops);
+        var rows = routeTableRows.GetRows(stops);
         if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 7,
                 DalamudNestedTableFlags.Parent(resizable: true) | ImGuiTableFlags.Reorderable | ImGuiTableFlags.Hideable))
         {
@@ -489,7 +490,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                expandedStops.DrawToggle(GetGuidedRouteStopKey(row));
+                expandedStops.DrawToggle(row.Key);
                 ImGui.SameLine();
                 ImGui.TextUnformatted(row.WorldName);
                 ImGui.TableNextColumn();
@@ -512,7 +513,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                 ImGui.TextColored(row.Aggregate.FailedLineCount > 0 ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted, row.Notes);
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip(row.Notes);
 
-                expandedStops.DrawDetail(GetGuidedRouteStopKey(row), () => DrawGuidedRouteStopLineRows(row));
+                expandedStops.DrawDetail(row.Key, () => DrawGuidedRouteStopLineRows(row));
             }
 
             ImGui.EndTable();
@@ -530,7 +531,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"  {line.Item}");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, line.ItemLabel);
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, line.Source);
             ImGui.TableNextColumn();
@@ -591,9 +592,6 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                    state.Equals("Blocked", StringComparison.OrdinalIgnoreCase) => MarketMafiosoUiTheme.Error,
             _ => MarketMafiosoUiTheme.Header,
         };
-
-    private static string GetGuidedRouteStopKey(MarketAcquisitionRouteStopRow row) =>
-        $"{row.WorldName}|{row.DataCenter}";
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
 
