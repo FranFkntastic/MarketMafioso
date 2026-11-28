@@ -312,7 +312,7 @@ public sealed class MarketDiagnosticCollector(
         CancellationToken cancellationToken)
     {
         var listingLimit = Math.Clamp(
-            configuration.GetValue("MarketMafioso:MarketDiagnostics:RegionListingLimit", 30),
+            configuration.GetValue("MarketMafioso:MarketDiagnostics:RegionListingLimit", 60),
             1,
             100);
         // Every owned retainer on the account, across all worlds, is excluded so cross-world

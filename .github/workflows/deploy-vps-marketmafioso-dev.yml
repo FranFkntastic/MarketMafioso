@@ -138,6 +138,8 @@ jobs:
           MarketMafioso__RequireDashboardAuth=true
           MarketMafioso__DashboardBootstrapUsername=marketmafioso
           MarketMafioso__DashboardBootstrapPassword=$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD
+          MarketMafioso__MarketDiagnostics__Enabled=true
+          MarketMafioso__MarketDiagnostics__RegionListingLimit=60
           ENV
           chmod 600 marketmafioso-dev.env
           cat > marketmafioso-dev.caddy <<CADDY
